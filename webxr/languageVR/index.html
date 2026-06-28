@@ -3128,6 +3128,67 @@
         
         // Add keyboard listeners for PC testing (50% accuracy answers)
         this.setupKeyboardTesting();
+        // Spacebar = push-to-talk on desktop (mirrors the controller trigger)
+        this.setupKeyboardPushToTalk();
+        // Show controls text that matches the platform (VR trigger vs desktop Spacebar)
+        this.setupPlatformText();
+      },
+
+      setupKeyboardPushToTalk() {
+        // Hold Spacebar to record (desktop equivalent of the controller trigger).
+        document.addEventListener('keydown', (e) => {
+          if (e.code !== 'Space' && e.key !== ' ') return;
+          if (e.repeat || this.spaceHeld) return; // ignore key auto-repeat
+          // Don't hijack Space while typing into a field.
+          const tag = (e.target && e.target.tagName) || '';
+          if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+          if (!this.inConversationMode || this.isProcessing) return;
+          e.preventDefault();
+          this.spaceHeld = true;
+          console.log('[DutchApp] Spacebar pressed - starting mic');
+          this.startListening();
+        });
+        document.addEventListener('keyup', (e) => {
+          if (e.code !== 'Space' && e.key !== ' ') return;
+          if (!this.spaceHeld) return;
+          this.spaceHeld = false;
+          e.preventDefault();
+          if (VoskRecognizer.isListening) {
+            console.log('[DutchApp] Spacebar released - stopping mic');
+            this.stopListening();
+          }
+        });
+        console.log('[DutchApp] ✓ Spacebar push-to-talk enabled (desktop)');
+      },
+
+      // True when the headset is presenting (so we show "trigger" vs "Spacebar").
+      isVRMode() {
+        const s = document.querySelector('a-scene');
+        return !!(s && s.is && s.is('vr-mode'));
+      },
+
+      inputVerb() {
+        return this.isVRMode() ? 'Hold trigger' : 'Hold Spacebar';
+      },
+
+      updateInstructionText() {
+        const verb = this.inputVerb();
+        const css = document.getElementById('instructions');
+        if (css) css.textContent = `${verb} to speak • Hover to see translations`;
+        const ui = document.getElementById('ui-instructions');
+        if (ui) {
+          const t = ui.querySelector('a-text');
+          if (t) t.setAttribute('value', `${verb} to speak`);
+        }
+      },
+
+      setupPlatformText() {
+        const scene = document.querySelector('a-scene');
+        this.updateInstructionText();
+        if (scene) {
+          scene.addEventListener('enter-vr', () => this.updateInstructionText());
+          scene.addEventListener('exit-vr', () => this.updateInstructionText());
+        }
       },
       
       setupKeyboardTesting() {
@@ -3726,7 +3787,7 @@
             setTimeout(() => {
               if (recognitionText) recognitionText.setAttribute('value', 'Try again!');
               if (accuracyText) {
-                accuracyText.setAttribute('value', 'Hold trigger and speak clearly');
+                accuracyText.setAttribute('value', `${this.inputVerb()} and speak clearly`);
                 accuracyText.setAttribute('color', '#FFD700');
               }
               this.showUIElement('ui-recognition-result');

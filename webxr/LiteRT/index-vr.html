@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- index-vr.html: WebXR (A-Frame) in-world chat demo for the LiteRT-LM runtime.
+     Same litert-engine.js as the flat demo. Works flat in the browser AND in VR
+     (Quest / WebXR headsets). Load the model on the flat overlay first, then
+     "Enter VR"; in-world buttons drive generation and responses stream onto a
+     floating panel. -->
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LiteRT-LM · Gemma in WebXR</title>
+  <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+  <style>
+    :root { --accent:#6ea8fe; --accent-2:#59e0b0; --panel:#141b29; --line:#2a3650; --text:#e7edf7; --muted:#93a1bd; }
+    body { margin: 0; font: 15px/1.5 system-ui, sans-serif; color: var(--text); }
+    /* Flat setup overlay (shown before VR / model load) */
+    .overlay { position: fixed; inset: 0; background: rgba(4,7,12,.9); display: grid; place-items: center; z-index: 9999; padding: 16px; }
+    .overlay[hidden] { display: none; }
+    .card { width: min(560px,100%); background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 22px; max-height: 92dvh; overflow: auto; }
+    .card h2 { margin: 0 0 4px; } .card p.lead { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+    label { display:block; font-size:13px; color:var(--muted); margin: 12px 0 6px; }
+    select, input[type=url] { width:100%; background:#1c2638; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font:inherit; }
+    .tabs { display:flex; gap:6px; margin:12px 0; }
+    .tab { flex:1; text-align:center; padding:8px; border-radius:10px; border:1px solid var(--line); background:#1c2638; color:var(--muted); cursor:pointer; font-size:13px; }
+    .tab.active { color:#08111f; background:var(--accent); border-color:transparent; font-weight:700; }
+    .src { display:none; } .src.active { display:block; }
+    .filebtn { display:inline-flex; align-items:center; padding:10px 14px; border:1px solid var(--line); border-radius:10px; cursor:pointer; }
+    .filebtn input { display:none; }
+    button { cursor:pointer; font:inherit; border:none; border-radius:10px; padding:12px 16px; font-weight:700; }
+    button.primary { background:var(--accent); color:#08111f; } button.primary:disabled{opacity:.45;cursor:not-allowed;}
+    .hint { font-size:12px; color:var(--muted); margin-top:6px; }
+    .status { font-size:13px; color:var(--muted); margin-top:12px; min-height:18px; }
+    .danger { color:#ff8a8a; }
+    .progress { height:8px; background:#1c2638; border-radius:999px; overflow:hidden; margin-top:12px; display:none; }
+    .progress.show { display:block; }
+    .progress > i { display:block; height:100%; width:0%; background:linear-gradient(90deg,var(--accent),var(--accent-2)); transition:width .15s; }
+  </style>
+</head>
+<body>
+  <!-- Setup overlay -->
+  <div class="overlay" id="setup">
+    <div class="card">
+      <h2>LiteRT-LM in WebXR</h2>
+      <p class="lead">Load Gemma on-device, then enter VR. The same engine powers the flat and VR UIs.</p>
+      <label for="preset">Model preset</label>
+      <select id="preset"></select>
+      <div class="hint" id="preset-note"></div>
+      <div class="tabs">
+        <div class="tab active" data-src="file">Bundled / file</div>
+        <div class="tab" data-src="url">URL</div>
+      </div>
+      <div class="src active" data-src="file">
+        <div class="hint" style="margin-bottom:8px;">Press <b>Load model</b> to use the pre-downloaded bundled Gemma 4 E2B — fully offline.</div>
+        <label class="filebtn">…or choose another .task file<input type="file" id="model-file" accept=".task,.litertlm,.bin" /></label>
+        <div class="hint" id="file-name">Using bundled model.</div>
+      </div>
+      <div class="src" data-src="url">
+        <input type="url" id="model-url" placeholder="https://…/gemma-4-…-web.task" />
+        <div class="hint">Streamed by the runtime. Gated/CORS files will fail; prefer the bundled model.</div>
+      </div>
+      <div style="margin-top:16px; display:flex; gap:10px;">
+        <button class="primary" id="load-btn">Load model</button>
+      </div>
+      <div class="progress" id="progress"><i></i></div>
+      <div class="status" id="status">Checking WebGPU…</div>
+    </div>
+  </div>
+
+  <a-scene background="color: #0b0f17" renderer="colorManagement: true; antialias: true">
+    <a-assets></a-assets>
+
+    <!-- Player rig -->
+    <a-entity id="rig" position="0 0 0">
+      <a-camera id="cam" position="0 1.6 0" wasd-controls look-controls>
+        <!-- Desktop gaze cursor -->
+        <a-cursor color="#6ea8fe" raycaster="objects: .clickable" fuse="false"></a-cursor>
+      </a-camera>
+      <!-- VR controllers with laser pointers -->
+      <a-entity laser-controls="hand: left"  raycaster="objects: .clickable; lineColor: #59e0b0; lineOpacity: 0.8"></a-entity>
+      <a-entity laser-controls="hand: right" raycaster="objects: .clickable; lineColor: #6ea8fe; lineOpacity: 0.9"></a-entity>
+    </a-entity>
+
+    <!-- Floor & lighting -->
+    <a-entity light="type: ambient; intensity: 0.8"></a-entity>
+    <a-entity light="type: directional; intensity: 0.6" position="2 4 1"></a-entity>
+    <a-circle rotation="-90 0 0" radius="6" color="#10182a" position="0 0 0"></a-circle>
+    <a-ring rotation="-90 0 0" radius-inner="5.9" radius-outer="6" color="#2a3650" position="0 0.01 0"></a-ring>
+
+    <!-- Avatar = spatial sound source. The AI voice emanates from here. -->
+    <a-entity id="avatar" position="0 1.95 -1.8">
+      <a-sphere radius="0.13" color="#6ea8fe" material="shader: flat; emissive: #6ea8fe; emissiveIntensity: 0.6"></a-sphere>
+      <a-ring id="avatar-ring" radius-inner="0.16" radius-outer="0.19" color="#59e0b0" material="shader: flat" visible="false"></a-ring>
+    </a-entity>
+
+    <!-- Chat panel -->
+    <a-entity id="panel" position="0 1.55 -1.8">
+      <a-plane width="2.0" height="1.15" color="#141b29" opacity="0.96"
+               material="shader: flat" position="0 0 0"></a-plane>
+      <a-plane width="2.0" height="0.001" color="#2a3650" position="0 0.575 0.001"></a-plane>
+      <a-text id="title-text" value="LiteRT-LM · Gemma on-device"
+              color="#6ea8fe" width="1.9" anchor="center" align="center"
+              position="0 0.50 0.01"></a-text>
+      <a-text id="convo-text" value="Loading…" color="#e7edf7" width="1.85"
+              anchor="center" align="left" baseline="top" wrap-count="46"
+              position="-0.92 0.42 0.01"></a-text>
+      <a-text id="status-text" value="" color="#59e0b0" width="1.9" anchor="center"
+              align="center" position="0 -0.52 0.01"></a-text>
+    </a-entity>
+
+    <!-- Suggestion buttons -->
+    <a-entity id="buttons" position="0 0.95 -1.7"></a-entity>
+
+    <!-- Mic toggle (push-to-talk: click once to start, again to send) -->
+    <a-entity class="clickable" id="mic-btn" position="-0.85 0.6 -1.7"
+              geometry="primitive: plane; width: 0.5; height: 0.16"
+              material="color: #1c2638; shader: flat">
+      <a-text id="mic-label" value="🎤 Talk" color="#59e0b0" align="center" width="1.6" position="0 0 0.01"></a-text>
+    </a-entity>
+
+    <!-- Reset button -->
+    <a-entity class="clickable" id="reset-btn" position="0.85 0.6 -1.7"
+              geometry="primitive: plane; width: 0.5; height: 0.16"
+              material="color: #1c2638; shader: flat">
+      <a-text value="↺ New chat" color="#93a1bd" align="center" width="1.6" position="0 0 0.01"></a-text>
+    </a-entity>
+
+    <!-- Replay last reply -->
+    <a-entity class="clickable" id="replay-btn" position="-0.85 0.4 -1.7"
+              geometry="primitive: plane; width: 0.5; height: 0.16"
+              material="color: #1c2638; shader: flat" visible="false">
+      <a-text value="🔁 Replay" color="#e7edf7" align="center" width="1.6" position="0 0 0.01"></a-text>
+    </a-entity>
+
+    <!-- Stop voice -->
+    <a-entity class="clickable" id="stop-btn" position="0.85 0.4 -1.7"
+              geometry="primitive: plane; width: 0.5; height: 0.16"
+              material="color: #1c2638; shader: flat" visible="false">
+      <a-text value="⏹ Stop" color="#ff8a95" align="center" width="1.6" position="0 0 0.01"></a-text>
+    </a-entity>
+  </a-scene>
+
+  <script type="module">
+    import { LiteRTEngine } from './litert-engine.js';
+    import { MODEL_PRESETS, getPreset } from './models.js';
+    import { MicRecorder, Transcriber, SpatialSpeaker } from './voice.js';
+
+    const $ = (s) => document.querySelector(s);
+    const engine = new LiteRTEngine();
+    let systemPrompt = 'You are a concise assistant inside a VR app. Keep answers short (under 40 words). Reply in plain spoken sentences — do not use markdown, asterisks, bullet points, or headings.';
+
+    // On-device voice (no cloud, no Web Speech API — Quest-compatible):
+    // Whisper = mic→text, Kokoro = text→speech spatialized at the avatar.
+    const mic = new MicRecorder();
+    const transcriber = new Transcriber(); // device:'auto' (WebGPU when available)
+    let whisperLoaded = false;
+    const speaker = new SpatialSpeaker({ spatial: true, voice: 'af_heart',
+                                         position: { x: 0, y: 1.95, z: -1.8 } });
+
+    // Warm the voice models (download + compile kernels) once, as early as
+    // possible, so the first spoken turn has nothing to load. Idempotent.
+    let voiceWarm = null;
+    function warmVoice() {
+      if (voiceWarm) return voiceWarm;
+      const tasks = [];
+      if (MicRecorder.isSupported()) {
+        tasks.push(transcriber.warmup().then(() => { whisperLoaded = true; }).catch(() => {}));
+      }
+      if (SpatialSpeaker.isSupported()) {
+        tasks.push(speaker.warmup().catch(() => {}));
+      }
+      voiceWarm = Promise.all(tasks);
+      return voiceWarm;
+    }
+
+    // Voice-output state: interrupt current speech, replay last reply.
+    let currentSpeech = null;
+    let ttsPlaying = false;
+    let lastReply = '';
+    function refreshVoiceButtons() {
+      const stop = document.getElementById('stop-btn');
+      const replay = document.getElementById('replay-btn');
+      if (stop) stop.setAttribute('visible', ttsPlaying || !!currentSpeech);
+      if (replay) replay.setAttribute('visible', !!lastReply);
+    }
+    function stopVoice() {
+      if (currentSpeech) { currentSpeech.cancel(); currentSpeech = null; }
+      speaker.stop();
+      refreshVoiceButtons();
+    }
+    speaker.onPlaying = (p) => { ttsPlaying = p; refreshVoiceButtons(); };
+
+    const SUGGESTIONS = [
+      'Greet me in Dutch',
+      'A short sci-fi tank taunt',
+      'Tip for VR comfort',
+      'Tell me a 1-line fun fact',
+    ];
+
+    // ---- Setup overlay logic (mirrors the flat demo) ----
+    const presetSel = $('#preset');
+    MODEL_PRESETS.forEach((p) => { const o=document.createElement('option'); o.value=p.id; o.textContent=`${p.label} (~${(p.sizeMB/1000).toFixed(2)} GB)`; presetSel.appendChild(o); });
+    const refreshNote = () => { const p=getPreset(presetSel.value); $('#preset-note').textContent=p?p.note:''; if(p&&p.url)$('#model-url').value=p.url; };
+    presetSel.addEventListener('change', refreshNote); refreshNote();
+    document.querySelectorAll('.tab').forEach((t)=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===t));document.querySelectorAll('.src').forEach(s=>s.classList.toggle('active',s.dataset.src===t.dataset.src));}));
+    let chosenFile=null; $('#model-file').addEventListener('change',(e)=>{chosenFile=e.target.files[0]||null;$('#file-name').textContent=chosenFile?`${chosenFile.name} (${(chosenFile.size/1e9).toFixed(2)} GB)`:'Using bundled model.';});
+
+    const statusEl=$('#status'), progEl=$('#progress'), progBar=progEl.querySelector('i');
+    const setStatus=(m,d=false)=>{statusEl.textContent=m;statusEl.classList.toggle('danger',d);};
+    const fmtBytes=(n)=>{if(!n)return'0 B';const u=['B','KB','MB','GB'];const i=Math.floor(Math.log(n)/Math.log(1024));return`${(n/Math.pow(1024,i)).toFixed(1)} ${u[i]}`;};
+
+    async function doLoad() {
+      const preset=getPreset(presetSel.value);
+      const activeTab=document.querySelector('.tab.active').dataset.src;
+      const btn=$('#load-btn'); btn.disabled=true;
+      const onProgress=(p)=>{
+        if(p.stage==='init-runtime')setStatus('Loading LiteRT-LM runtime…');
+        else if(p.stage==='reading-file'){setStatus(`Reading file… ${fmtBytes(p.loaded)}/${fmtBytes(p.total)}`);if(p.total){progEl.classList.add('show');progBar.style.width=`${(p.loaded/p.total*100)|0}%`;}}
+        else if(p.stage==='downloading'){ if(p.streaming){setStatus('Loading model (streamed)…');} else {setStatus(`Downloading… ${fmtBytes(p.loaded)}/${fmtBytes(p.total)}`);if(p.total){progEl.classList.add('show');progBar.style.width=`${(p.loaded/p.total*100)|0}%`;}} }
+        else if(p.stage==='creating-session'){setStatus('Loading & compiling for WebGPU (~2 GB, please wait)…');progEl.classList.add('show');progBar.style.width='100%';}
+        else if(p.stage==='ready')setStatus('Ready!');
+      };
+      try {
+        const args={preset,onProgress,system:systemPrompt};
+        if(activeTab==='file' && chosenFile){ args.modelFile=chosenFile; }
+        else if(activeTab==='url'){ const u=$('#model-url').value.trim(); if(!u)throw new Error('Enter a model URL.'); args.modelUrl=u; args.buffered=false; }
+        else if(preset && preset.local){ args.modelUrl=preset.local; args.buffered=false; }
+        else { throw new Error('Choose a file, or pick the bundled E2B preset.'); }
+        await engine.load(args);
+        startVRApp();
+      } catch(err){ console.error(err); setStatus(err.message||String(err),true); progEl.classList.remove('show'); btn.disabled=false; }
+    }
+    $('#load-btn').addEventListener('click', doLoad);
+
+    // Begin warming voice models immediately, in parallel with the LLM load.
+    warmVoice();
+
+    // Auto-load the bundled model on startup — no selection step.
+    (async () => {
+      if (!(await LiteRTEngine.isSupported())) { setStatus(LiteRTEngine.unsupportedReason(), true); return; }
+      doLoad();
+    })();
+
+    // ---- VR app ----
+    function startVRApp() {
+      $('#setup').hidden = true;
+      buildButtons();
+      wireMic();
+      startListenerTracking();
+      // Ensure voice models are warming (no-op if already started at boot).
+      warmVoice();
+      const voiceOk = MicRecorder.isSupported();
+      setConvo(voiceOk
+        ? 'Ready. Press “🎤 Talk” to speak (on-device Whisper), or pick a button. The reply is spoken from the avatar in 3D.'
+        : 'Ready. Point at a button and press trigger. (No microphone in this browser.)');
+      setVRStatus('Idle');
+      if (!voiceOk) {
+        const lbl = document.getElementById('mic-label');
+        lbl.setAttribute('value', '🎤 n/a'); lbl.setAttribute('color', '#93a1bd');
+      }
+    }
+
+    // In-world push-to-talk: first click starts, second click stops & sends.
+    let vrRecording = false;
+    function wireMic() {
+      const btn = document.getElementById('mic-btn');
+      const lbl = document.getElementById('mic-label');
+      const enabled = MicRecorder.isSupported();
+      btn.addEventListener('mouseenter', () => btn.setAttribute('material', 'color: #2a3650; shader: flat'));
+      btn.addEventListener('mouseleave', () => btn.setAttribute('material', `color: ${vrRecording ? '#5a2030' : '#1c2638'}; shader: flat`));
+      btn.addEventListener('click', async () => {
+        if (!enabled || engine.busy) return;
+        if (!vrRecording) {
+          try {
+            stopVoice(); // interrupt any current TTS before listening
+            await mic.start();
+            vrRecording = true;
+            lbl.setAttribute('value', '⏺ Stop');
+            btn.setAttribute('material', 'color: #5a2030; shader: flat');
+            setVRStatus('Listening…');
+          } catch (err) { setVRStatus(`Mic error: ${err.message || err}`); }
+        } else {
+          vrRecording = false;
+          lbl.setAttribute('value', '🎤 Talk');
+          btn.setAttribute('material', 'color: #1c2638; shader: flat');
+          try {
+            const audioBuf = await mic.stop();
+            if (!whisperLoaded) { setVRStatus('Finishing Whisper warm-up…'); await warmVoice(); }
+            setVRStatus('Transcribing (Whisper)…');
+            const text = await transcriber.transcribe(audioBuf);
+            if (!text) { setVRStatus('Didn’t catch that — try again.'); return; }
+            await ask(text);
+          } catch (err) { setVRStatus(`Voice error: ${err.message || err}`); }
+        }
+      });
+    }
+
+    // Keep the Web Audio listener locked to the camera so the AI voice is
+    // correctly spatialized as you move/turn your head in VR.
+    function startListenerTracking() {
+      const cam = document.getElementById('cam');
+      if (!cam || !window.THREE) return;
+      const obj = cam.object3D;
+      const pos = new THREE.Vector3(), q = new THREE.Quaternion();
+      const F = new THREE.Vector3(), U = new THREE.Vector3();
+      const tick = () => {
+        if (speaker.ctx && obj) {
+          obj.getWorldPosition(pos); obj.getWorldQuaternion(q);
+          F.set(0, 0, -1).applyQuaternion(q); U.set(0, 1, 0).applyQuaternion(q);
+          speaker.updateListener({ px: pos.x, py: pos.y, pz: pos.z, fx: F.x, fy: F.y, fz: F.z, ux: U.x, uy: U.y, uz: U.z });
+        }
+        requestAnimationFrame(tick);
+      };
+      tick();
+    }
+
+    const convoText = () => document.getElementById('convo-text');
+    const statusText = () => document.getElementById('status-text');
+    function setConvo(t){ convoText().setAttribute('value', t); }
+    function setVRStatus(t){ statusText().setAttribute('value', t); }
+
+    function buildButtons() {
+      const wrap = document.getElementById('buttons');
+      const cols = 2, w = 0.92, h = 0.18, gapX = 0.04, gapY = 0.04;
+      SUGGESTIONS.forEach((label, i) => {
+        const col = i % cols, row = Math.floor(i / cols);
+        const x = (col - 0.5) * (w + gapX);
+        const y = -row * (h + gapY);
+        const btn = document.createElement('a-entity');
+        btn.setAttribute('class', 'clickable');
+        btn.setAttribute('geometry', `primitive: plane; width: ${w}; height: ${h}`);
+        btn.setAttribute('material', 'color: #1c2638; shader: flat');
+        btn.setAttribute('position', `${x} ${y} 0`);
+        const txt = document.createElement('a-text');
+        txt.setAttribute('value', label);
+        txt.setAttribute('align', 'center'); txt.setAttribute('color', '#e7edf7');
+        txt.setAttribute('width', '1.7'); txt.setAttribute('position', '0 0 0.01');
+        btn.appendChild(txt);
+        btn.addEventListener('mouseenter', () => btn.setAttribute('material', 'color: #2a3650; shader: flat'));
+        btn.addEventListener('mouseleave', () => btn.setAttribute('material', 'color: #1c2638; shader: flat'));
+        btn.addEventListener('click', () => ask(label));
+        wrap.appendChild(btn);
+      });
+      const reset = document.getElementById('reset-btn');
+      reset.addEventListener('click', () => {
+        engine.reset(); stopVoice(); lastReply = ''; refreshVoiceButtons();
+        setConvo('New conversation started.'); setVRStatus('Idle');
+      });
+
+      const replayBtn = document.getElementById('replay-btn');
+      replayBtn.addEventListener('click', () => {
+        if (!lastReply) return;
+        stopVoice();
+        speaker.speak(lastReply, { force: true });
+      });
+      const stopBtn = document.getElementById('stop-btn');
+      stopBtn.addEventListener('click', stopVoice);
+      [replayBtn, stopBtn].forEach((b) => {
+        b.addEventListener('mouseenter', () => b.setAttribute('material', 'color: #2a3650; shader: flat'));
+        b.addEventListener('mouseleave', () => b.setAttribute('material', 'color: #1c2638; shader: flat'));
+      });
+    }
+
+    async function ask(prompt) {
+      if (engine.busy) return;
+      await runVRTurn(prompt, (onToken) => engine.generate(prompt, { system: systemPrompt, onToken }));
+    }
+
+    async function runVRTurn(label, generator) {
+      setConvo(`You: ${clip(label, 120)}\n\nGemma: `);
+      setVRStatus('Thinking…');
+      const ring = document.getElementById('avatar-ring');
+      ring && ring.setAttribute('visible', true);
+      const speech = speaker.enabled !== false ? speaker.stream() : null;
+      currentSpeech = speech;
+      refreshVoiceButtons();
+      try {
+        const res = await generator((_d, f) => {
+          setConvo(`You: ${clip(label, 120)}\n\nGemma: ${clip(f, 360)}`);
+          speech && speech.push(f);
+        });
+        setConvo(`You: ${clip(label, 120)}\n\nGemma: ${clip(res.text, 380)}`);
+        speech && speech.flush(res.text);
+        lastReply = res.text || '';
+        setVRStatus(`${res.tokensPerSec.toFixed(1)} tok/s · TTFT ${Math.round(res.ttftMs)} ms · 🔊 spatial`);
+      } catch (err) {
+        setConvo(`Error: ${err.message || err}`);
+        setVRStatus('Error');
+      } finally {
+        currentSpeech = null;
+        refreshVoiceButtons();
+        ring && ring.setAttribute('visible', false);
+      }
+    }
+
+    function clip(t, n){ return t.length > n ? t.slice(0, n - 1) + '…' : t; }
+  </script>
+</body>
+</html>

@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- index.html: Flat-screen responsive chat demo for the LiteRT-LM web runtime.
+     Works on Chrome desktop / laptop / tablet / mobile (WebGPU required).
+     Shares litert-engine.js with the VR demo (index-vr.html). -->
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>LiteRT-LM · Gemma on-device chat</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #141b29;
+      --panel-2: #1c2638;
+      --line: #2a3650;
+      --text: #e7edf7;
+      --muted: #93a1bd;
+      --accent: #6ea8fe;
+      --accent-2: #59e0b0;
+      --user: #2b3b5c;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: radial-gradient(1200px 800px at 70% -10%, #16203a 0%, var(--bg) 60%);
+      color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      display: flex; flex-direction: column;
+      height: 100dvh;
+    }
+    header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; border-bottom: 1px solid var(--line);
+      background: rgba(10,14,22,.7); backdrop-filter: blur(8px);
+    }
+    header .logo {
+      width: 34px; height: 34px; border-radius: 9px; flex: none;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      display: grid; place-items: center; color: #08111f; font-weight: 800;
+    }
+    header h1 { font-size: 15px; margin: 0; font-weight: 700; }
+    header .sub { font-size: 12px; color: var(--muted); margin: 0; }
+    header .spacer { flex: 1; }
+    .pill {
+      font-size: 12px; padding: 4px 10px; border-radius: 999px;
+      border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+    }
+    .pill.ok { color: #08111f; background: var(--accent-2); border-color: transparent; font-weight: 700; }
+    .pill.warn { color: #08111f; background: #ffcf6e; border-color: transparent; font-weight: 700; }
+
+    main { flex: 1; display: flex; min-height: 0; }
+    .chat-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+    #messages {
+      flex: 1; overflow-y: auto; padding: 18px clamp(12px, 5vw, 40px);
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .msg { max-width: min(760px, 92%); padding: 11px 14px; border-radius: var(--radius); white-space: pre-wrap; word-wrap: break-word; }
+    .msg.user { align-self: flex-end; background: var(--user); border: 1px solid var(--line); }
+    .msg.bot  { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+    .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+    .msg.bot .meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
+    .msg.bot .actions { margin-top: 8px; }
+    .tts-btn { font-size: 12px; padding: 4px 10px; border-radius: 8px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); cursor: pointer; }
+    .tts-btn:hover { border-color: var(--muted); }
+    .cursor::after { content: '▌'; color: var(--accent); animation: blink 1s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .empty { margin: auto; text-align: center; color: var(--muted); max-width: 460px; padding: 24px; }
+    .empty h2 { color: var(--text); font-size: 18px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
+    .chip { cursor: pointer; font-size: 13px; padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
+    .chip:hover { border-color: var(--accent); }
+
+    .composer { border-top: 1px solid var(--line); padding: 12px clamp(12px, 5vw, 40px); padding-bottom: max(12px, env(safe-area-inset-bottom)); background: rgba(10,14,22,.6); }
+    .composer .row { display: flex; gap: 10px; align-items: flex-end; max-width: 860px; margin: 0 auto; }
+    textarea#input {
+      flex: 1; resize: none; min-height: 46px; max-height: 160px;
+      background: var(--panel); color: var(--text); border: 1px solid var(--line);
+      border-radius: 12px; padding: 12px 14px; font: inherit;
+    }
+    textarea#input:focus { outline: none; border-color: var(--accent); }
+    button { cursor: pointer; font: inherit; border: none; border-radius: 12px; }
+    button.primary { background: var(--accent); color: #08111f; font-weight: 700; padding: 0 18px; height: 46px; }
+    button.primary:disabled { opacity: .45; cursor: not-allowed; }
+    button.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); height: 46px; padding: 0 14px; }
+    button.icon { width: 46px; height: 46px; display: grid; place-items: center; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); font-size: 18px; }
+    button.icon:disabled { opacity: .4; cursor: not-allowed; }
+    button.icon.rec { background: #ff5d6c; border-color: transparent; color: #fff; animation: pulse 1.1s infinite; }
+    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,93,108,.6);} 50% { box-shadow: 0 0 0 8px rgba(255,93,108,0);} }
+    .toolbar { display: flex; gap: 10px; align-items: center; max-width: 860px; margin: 0 auto 8px; font-size: 12px; color: var(--muted); }
+    .toolbar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+
+    /* Setup modal */
+    .overlay { position: fixed; inset: 0; background: rgba(4,7,12,.78); display: grid; place-items: center; z-index: 50; padding: 16px; }
+    .overlay[hidden] { display: none; }
+    .card { position: relative; width: min(560px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 22px; max-height: 90dvh; overflow:auto; }
+    .card h2 { margin: 0 0 4px; }
+    .card p.lead { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 13px; margin-bottom: 6px; color: var(--muted); }
+    select, input[type=url] {
+      width: 100%; background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit;
+    }
+    .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+    .tab { flex: 1; text-align: center; padding: 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); cursor: pointer; font-size: 13px; }
+    .tab.active { color: #08111f; background: var(--accent); border-color: transparent; font-weight: 700; }
+    .src { display: none; } .src.active { display: block; }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .progress { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 12px; display:none; }
+    .progress.show { display: block; }
+    .progress > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .15s; }
+    .status { font-size: 13px; color: var(--muted); margin-top: 10px; min-height: 18px; }
+    .danger { color: #ff8a8a; }
+    .filebtn { display: inline-block; }
+    .filebtn input { display: none; }
+    .row2 { display: flex; gap: 10px; }
+    .row2 > * { flex: 1; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">LR</div>
+    <div>
+      <h1>LiteRT-LM · On-device Gemma</h1>
+      <p class="sub">WebGPU · runs locally in your browser</p>
+    </div>
+    <div class="spacer"></div>
+    <span id="model-pill" class="pill">No model</span>
+    <button id="settings-btn" class="ghost" style="padding:0 12px;">⚙</button>
+  </header>
+
+  <main>
+    <div class="chat-wrap">
+      <div id="messages">
+        <div class="empty" id="empty">
+          <h2>Local Gemma, no server.</h2>
+          <p>Everything runs on this device via the LiteRT-LM web runtime. Load a model to begin.</p>
+          <div class="chips" id="starter-chips" hidden>
+            <span class="chip">Explain WebXR in one sentence.</span>
+            <span class="chip">Give me 3 Dutch greetings with English meanings.</span>
+            <span class="chip">Write a short battle taunt for a sci-fi tank game.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="toolbar">
+          <label><input type="checkbox" id="speak-toggle" /> 🔊 Speak replies</label>
+          <button id="tts-stop" class="tts-btn" hidden>⏹ Stop voice</button>
+          <span id="voice-note"></span>
+        </div>
+        <div class="row">
+          <button id="mic" class="icon" title="Hold to talk (or click to toggle)" disabled>🎤</button>
+          <textarea id="input" placeholder="Load a model first…" disabled></textarea>
+          <button id="send" class="primary" disabled>Send</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Boot overlay (auto-loads the bundled model — no selection needed) -->
+  <div class="overlay" id="boot">
+    <div class="card" style="text-align:center;">
+      <div class="logo" style="margin:0 auto 12px;width:42px;height:42px;">LR</div>
+      <h2 style="margin:0 0 6px;">Loading Gemma 4…</h2>
+      <p class="lead" style="margin:0 0 14px;">100% on-device (WebGPU) — no cloud. First load compiles the ~2 GB model; this can take a little while.</p>
+      <div class="progress show" id="boot-progress"><i></i></div>
+      <div class="status" id="boot-status">Starting…</div>
+      <div style="margin-top:14px;display:none;" id="boot-actions">
+        <button class="ghost" id="boot-settings" style="height:42px;padding:0 16px;">Open model settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Setup modal (model switching; opened from the gear button) -->
+  <div class="overlay" id="setup" hidden>
+    <div class="card">
+      <button id="x-setup" aria-label="Close" title="Close"
+              style="position:absolute;top:10px;right:14px;background:transparent;border:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;">✕</button>
+      <h2>Switch model</h2>
+      <p class="lead">Runs 100% on-device (WebGPU) — no cloud. Voice in = on-device Whisper, voice out = on-device Kokoro. Press Load to use the bundled model.</p>
+
+      <div class="field">
+        <label for="preset">Model preset</label>
+        <select id="preset"></select>
+        <div class="hint" id="preset-note"></div>
+      </div>
+
+      <div class="tabs">
+        <div class="tab active" data-src="file">Bundled / file</div>
+        <div class="tab" data-src="url">URL</div>
+      </div>
+
+      <div class="src active" data-src="file">
+        <div class="hint" style="margin-bottom:8px;">Just press <b>Load model</b> to use the pre-downloaded <code>./models/gemma-4-E2B-it-web.task</code> — fully offline, no cloud.</div>
+        <label class="filebtn ghost" style="display:inline-flex;align-items:center;padding:10px 14px;border:1px solid var(--line);border-radius:10px;">
+          …or choose another .task file
+          <input type="file" id="model-file" accept=".task,.litertlm,.bin" />
+        </label>
+        <div class="hint" id="file-name">Using bundled model.</div>
+      </div>
+
+      <div class="src" data-src="url">
+        <input type="url" id="model-url" placeholder="https://…/gemma-4-…-web.task" />
+        <div class="hint">Direct link (streamed by the runtime). Gated/CORS files will fail — use the bundled model instead.</div>
+      </div>
+
+      <div class="field" style="margin-top:14px;">
+        <label for="system">System prompt (optional)</label>
+        <input type="text" id="system" placeholder="You are a concise, friendly assistant." style="font-family:inherit;" />
+      </div>
+
+      <div class="row2">
+        <button class="primary" id="load-btn" style="height:46px;">Load model</button>
+        <button class="ghost" id="close-setup" style="height:46px;">Cancel</button>
+      </div>
+
+      <div class="progress" id="progress"><i></i></div>
+      <div class="status" id="status">Checking WebGPU support…</div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { LiteRTEngine } from './litert-engine.js';
+    import { MODEL_PRESETS, getPreset } from './models.js';
+    import { MicRecorder, Transcriber, SpatialSpeaker } from './voice.js';
+
+    const $ = (s) => document.querySelector(s);
+    const engine = new LiteRTEngine();
+    let systemPrompt = '';
+
+    // On-device voice: Whisper (mic→text) + Kokoro (text→speech). No Web Speech API.
+    // device:'auto' uses WebGPU when available (much faster than WASM/CPU).
+    const speaker = new SpatialSpeaker({ spatial: false });
+    // Tracks the in-flight streaming-speech handle for the current reply so it
+    // can be interrupted (cancel stops both pending synthesis and playback).
+    let currentSpeech = null;
+    let ttsPlaying = false;
+    speaker.enabled = false; // toggled on by the checkbox
+    const mic = new MicRecorder();
+    const transcriber = new Transcriber();
+    let whisperLoaded = false;
+
+    // Warm the voice models (Whisper + Kokoro) once, as early as possible, so the
+    // first time the user speaks there's nothing to download or compile. This runs
+    // in parallel with the LLM load and is safe to call repeatedly (idempotent).
+    let voiceWarm = null;
+    function warmVoice() {
+      if (voiceWarm) return voiceWarm;
+      const tasks = [];
+      if (MicRecorder.isSupported()) {
+        tasks.push(transcriber.warmup().then(() => { whisperLoaded = true; }).catch(() => {}));
+      }
+      if (SpatialSpeaker.isSupported()) {
+        tasks.push(speaker.warmup().catch(() => {}));
+      }
+      voiceWarm = Promise.all(tasks);
+      return voiceWarm;
+    }
+
+    // --- Setup UI ---------------------------------------------------------
+    const presetSel = $('#preset');
+    MODEL_PRESETS.forEach((p) => {
+      const o = document.createElement('option');
+      o.value = p.id; o.textContent = `${p.label}  (~${(p.sizeMB/1000).toFixed(2)} GB)`;
+      presetSel.appendChild(o);
+    });
+    const refreshNote = () => {
+      const p = getPreset(presetSel.value);
+      $('#preset-note').textContent = p ? p.note : '';
+      if (p && p.url) $('#model-url').value = p.url;
+    };
+    presetSel.addEventListener('change', refreshNote);
+    refreshNote();
+
+    document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === t));
+      document.querySelectorAll('.src').forEach((s) => s.classList.toggle('active', s.dataset.src === t.dataset.src));
+    }));
+
+    let chosenFile = null;
+    $('#model-file').addEventListener('change', (e) => {
+      chosenFile = e.target.files[0] || null;
+      $('#file-name').textContent = chosenFile ? `${chosenFile.name} (${(chosenFile.size/1e9).toFixed(2)} GB)` : 'Using bundled model.';
+    });
+
+    const statusEl = $('#status');
+    const progEl = $('#progress');
+    const progBar = progEl.querySelector('i');
+    const setStatus = (msg, danger = false) => { statusEl.textContent = msg; statusEl.classList.toggle('danger', danger); };
+    const setProgress = (frac) => {
+      if (frac == null) { progEl.classList.remove('show'); return; }
+      progEl.classList.add('show'); progBar.style.width = `${Math.round(frac * 100)}%`;
+    };
+
+    // Boot overlay (auto-load) progress helpers.
+    const boot = $('#boot');
+    const bootProgEl = $('#boot-progress');
+    const bootBar = bootProgEl.querySelector('i');
+    const setBoot = (msg, danger = false) => { $('#boot-status').textContent = msg; $('#boot-status').classList.toggle('danger', danger); };
+    const setBootProg = (frac) => { if (frac == null) { bootProgEl.classList.remove('show'); } else { bootProgEl.classList.add('show'); bootBar.style.width = `${Math.round(frac*100)}%`; } };
+
+    // Maps engine load stages to a status/progress UI (boot or setup).
+    function makeOnProgress(setS, setP, pin) {
+      return (p) => {
+        if (p.stage === 'init-runtime') setS('Loading LiteRT-LM runtime…');
+        else if (p.stage === 'reading-file') { setS(`Reading model file… ${fmtBytes(p.loaded)} / ${fmtBytes(p.total)}`); if (p.total) setP(p.loaded / p.total); }
+        else if (p.stage === 'downloading') {
+          if (p.streaming) { setS('Loading model (streamed by runtime)…'); setP(null); }
+          else { setS(`Downloading model… ${fmtBytes(p.loaded)} / ${fmtBytes(p.total)}`); if (p.total) setP(p.loaded / p.total); }
+        } else if (p.stage === 'creating-session') { setS('Loading & compiling model for WebGPU (~2 GB, please wait)…'); pin(); }
+        else if (p.stage === 'ready') setS('Ready!');
+      };
+    }
+
+    // Resolve which model source to load from the chooser state.
+    function buildLoadArgs(onProgress) {
+      const preset = getPreset(presetSel.value);
+      const activeTab = document.querySelector('.tab.active').dataset.src;
+      systemPrompt = $('#system').value.trim();
+      const args = { preset, system: systemPrompt, onProgress };
+      if (activeTab === 'file' && chosenFile) {
+        args.modelFile = chosenFile;
+      } else if (activeTab === 'url') {
+        const url = $('#model-url').value.trim();
+        if (!url) throw new Error('Enter a model URL.');
+        args.modelUrl = url; args.buffered = false;
+      } else if (preset && preset.local) {
+        args.modelUrl = preset.local; args.buffered = false; // bundled, streamed
+      } else {
+        throw new Error('Choose a model file, or pick the bundled E2B preset.');
+      }
+      return { args, preset };
+    }
+
+    // Start downloading/compiling the voice models immediately, in parallel with
+    // the LLM, so voice input/output is ready by the time the user needs it.
+    warmVoice();
+
+    // Auto-load the bundled model on startup — no selection step.
+    (async () => {
+      if (!(await LiteRTEngine.isSupported())) {
+        setBoot(LiteRTEngine.unsupportedReason(), true);
+        setBootProg(null);
+        $('#boot-actions').style.display = 'block';
+        return;
+      }
+      try {
+        const onP = makeOnProgress(setBoot, setBootProg, () => { bootProgEl.classList.add('show'); bootBar.style.width = '100%'; });
+        const { args, preset } = buildLoadArgs(onP);
+        await engine.load(args);
+        boot.hidden = true;
+        onModelReady(preset);
+      } catch (err) {
+        console.error(err);
+        setBoot(`${err.message || err} — open settings to load manually.`, true);
+        setBootProg(null);
+        $('#boot-actions').style.display = 'block';
+      }
+    })();
+
+    function openSetup() {
+      $('#load-btn').disabled = false;
+      setStatus('Press Load to use the bundled model, or choose a file / URL.');
+      setProgress(null);
+      $('#setup').hidden = false;
+    }
+    function closeSetup() { $('#setup').hidden = true; }
+
+    $('#boot-settings').addEventListener('click', () => { boot.hidden = true; openSetup(); });
+    $('#settings-btn').addEventListener('click', openSetup);
+    $('#close-setup').addEventListener('click', closeSetup);
+    $('#x-setup').addEventListener('click', closeSetup);
+    $('#setup').addEventListener('click', (e) => { if (e.target.id === 'setup') closeSetup(); }); // click backdrop
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#setup').hidden) closeSetup(); });
+
+    $('#load-btn').addEventListener('click', async () => {
+      const loadBtn = $('#load-btn');
+      loadBtn.disabled = true;
+      setStatus('Initializing runtime…');
+      setProgress(0);
+      try {
+        const onP = makeOnProgress(setStatus, setProgress, () => { progEl.classList.add('show'); progBar.style.width = '100%'; });
+        const { args, preset } = buildLoadArgs(onP);
+        await engine.load(args);
+        onModelReady(preset);
+      } catch (err) {
+        console.error(err);
+        setStatus(err.message || String(err), true);
+        setProgress(null);
+        loadBtn.disabled = false;
+      }
+    });
+
+    function onModelReady(preset) {
+      $('#setup').hidden = true;
+      $('#model-pill').textContent = preset ? preset.label.split(' — ')[0] : 'Custom model';
+      $('#model-pill').className = 'pill ok';
+      $('#input').disabled = false;
+      $('#input').placeholder = 'Type a message…';
+      $('#send').disabled = false;
+      $('#starter-chips').hidden = false;
+      $('#input').focus();
+
+      // Voice input via on-device Whisper (works regardless of the LLM, no cloud).
+      const canMic = MicRecorder.isSupported();
+      const note = $('#voice-note');
+      if (canMic) {
+        $('#mic').disabled = false;
+        note.textContent = '🎙 Voice input: on-device Whisper. Replies: on-device Kokoro.';
+      } else {
+        $('#mic').disabled = true;
+        note.textContent = 'Microphone not available in this browser.';
+      }
+      if (!SpatialSpeaker.isSupported()) $('#speak-toggle').disabled = true;
+
+      // Ensure voice models are warming (no-op if already started at boot).
+      warmVoice();
+    }
+
+    // --- Chat UI ----------------------------------------------------------
+    const messages = $('#messages');
+    const input = $('#input');
+
+    function addMessage(who, text) {
+      $('#empty')?.remove();
+      const el = document.createElement('div');
+      el.className = `msg ${who}`;
+      el.innerHTML = `<div class="who">${who === 'user' ? 'You' : 'Gemma'}</div><div class="body"></div>`;
+      el.querySelector('.body').textContent = text;
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
+      return el;
+    }
+
+    // Shared response handler for both typed and spoken turns.
+    async function runTurn(generator, userLabel) {
+      addMessage('user', userLabel);
+      const botEl = addMessage('bot', '');
+      const body = botEl.querySelector('.body');
+      body.classList.add('cursor');
+      $('#send').disabled = true; input.disabled = true; $('#mic').disabled = true;
+
+      const speech = speaker.enabled ? speaker.stream() : null;
+      currentSpeech = speech;
+      refreshStopBtn();
+      try {
+        const res = await generator((_delta, full) => {
+          body.textContent = full;
+          if (speech) speech.push(full);
+          messages.scrollTop = messages.scrollHeight;
+        });
+        body.classList.remove('cursor');
+        if (speech) speech.flush(res.text);
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = `${res.tokensPerSec.toFixed(1)} tok/s · TTFT ${Math.round(res.ttftMs)} ms · ${Math.round(res.totalMs)} ms total`;
+        botEl.appendChild(meta);
+        addReplayButton(botEl, res.text);
+      } catch (err) {
+        body.classList.remove('cursor');
+        body.textContent = `⚠ ${err.message || err}`;
+      } finally {
+        currentSpeech = null;
+        refreshStopBtn();
+        $('#send').disabled = false; input.disabled = false;
+        $('#mic').disabled = !MicRecorder.isSupported();
+        input.focus();
+      }
+    }
+
+    // Adds a "Replay" button under a bot reply that re-speaks it on demand,
+    // even when "Speak replies" is off (explicit user action).
+    function addReplayButton(botEl, text) {
+      if (!SpatialSpeaker.isSupported() || !text || !text.trim()) return;
+      const row = document.createElement('div');
+      row.className = 'actions';
+      const btn = document.createElement('button');
+      btn.className = 'tts-btn';
+      btn.textContent = '🔁 Replay';
+      btn.addEventListener('click', () => {
+        stopVoice();            // interrupt anything currently speaking
+        speaker.speak(text, { force: true });
+      });
+      row.appendChild(btn);
+      botEl.appendChild(row);
+    }
+
+    async function send() {
+      const text = input.value.trim();
+      if (!text || engine.busy) return;
+      input.value = ''; autosize();
+      await runTurn(
+        (onToken) => engine.generate(text, { system: systemPrompt, onToken }),
+        text
+      );
+    }
+
+    // --- Voice output controls (stop / replay) ---
+    function refreshStopBtn() { $('#tts-stop').hidden = !(ttsPlaying || !!currentSpeech); }
+    function stopVoice() {
+      if (currentSpeech) { currentSpeech.cancel(); currentSpeech = null; }
+      speaker.stop();
+      refreshStopBtn();
+    }
+    speaker.onPlaying = (p) => { ttsPlaying = p; refreshStopBtn(); };
+    $('#tts-stop').addEventListener('click', stopVoice);
+
+    // --- Voice input (push-to-talk / toggle) ---
+    $('#speak-toggle').addEventListener('change', (e) => {
+      speaker.enabled = e.target.checked;
+      if (!speaker.enabled) stopVoice();
+    });
+
+    let recording = false;
+    async function startRec() {
+      if (recording || engine.busy || $('#mic').disabled) return;
+      stopVoice(); // interrupt any current TTS before listening
+      try {
+        await mic.start();
+        recording = true;
+        $('#mic').classList.add('rec'); $('#mic').textContent = '⏺';
+        $('#voice-note').textContent = 'Listening… release to send.';
+      } catch (err) {
+        $('#voice-note').textContent = `Mic error: ${err.message || err}`;
+      }
+    }
+    async function stopRec() {
+      if (!recording) return;
+      recording = false;
+      $('#mic').classList.remove('rec'); $('#mic').textContent = '🎤';
+      try {
+        const audioBuf = await mic.stop();
+        if (!whisperLoaded) {
+          $('#voice-note').textContent = 'Finishing on-device Whisper warm-up…';
+          await warmVoice();
+        }
+        $('#voice-note').textContent = 'Transcribing (Whisper, on-device)…';
+        const text = await transcriber.transcribe(audioBuf);
+        $('#voice-note').textContent = '🎙 Voice input: on-device Whisper. Replies: on-device Kokoro.';
+        if (!text) { $('#voice-note').textContent = 'Didn’t catch that — try again.'; return; }
+        await runTurn(
+          (onToken) => engine.generate(text, { system: systemPrompt, onToken }),
+          `🎤 ${text}`
+        );
+      } catch (err) {
+        $('#voice-note').textContent = `Voice error: ${err.message || err}`;
+      }
+    }
+    const micBtn = $('#mic');
+    // Hold-to-talk (pointer) with click-toggle fallback.
+    micBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startRec(); });
+    micBtn.addEventListener('pointerup', (e) => { e.preventDefault(); stopRec(); });
+    micBtn.addEventListener('pointerleave', () => { if (recording) stopRec(); });
+
+    $('#send').addEventListener('click', send);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+    function autosize() { input.style.height = 'auto'; input.style.height = Math.min(160, input.scrollHeight) + 'px'; }
+    input.addEventListener('input', autosize);
+
+    document.addEventListener('click', (e) => {
+      if (e.target.classList.contains('chip')) { input.value = e.target.textContent; autosize(); input.focus(); }
+    });
+
+    function fmtBytes(n) { if (!n) return '0 B'; const u = ['B','KB','MB','GB']; const i = Math.floor(Math.log(n)/Math.log(1024)); return `${(n/Math.pow(1024,i)).toFixed(1)} ${u[i]}`; }
+  </script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+# LiteRT — On-device Gemma 4 voice assistant for Web & WebXR
+
+A self-contained prototype that runs **Gemma 4** locally in the browser via the
+**LiteRT-LM web runtime** (Google's `@mediapipe/tasks-genai`, WebGPU), with a
+**100% on-device voice loop** — mic in, GPU processes the tensors locally, voice
+comes out — **no cloud, and no Web Speech API**, so it works in the **Meta Quest
+browser** as well as Chrome on desktop / laptop / tablet / mobile.
+
+It's built as a small reusable engine + voice layer that drops into other
+projects in this repo (`languageVR`, `BattleVR`, …).
+
+```
+ getUserMedia (raw PCM)
+        │  mono 16 kHz
+        ▼
+  Whisper  (on-device ASR, Transformers.js · WASM/WebGPU)   ── speech → text
+        │
+        ▼
+  Gemma 4 E2B  (LiteRT-LM · WebGPU)                          ── text → text
+        │  streamed tokens
+        ▼
+  Kokoro TTS  (on-device, Transformers.js · WASM/WebGPU)     ── text → audio
+        │
+        ▼
+  Web Audio PannerNode  → 3D spatial voice at an (X,Y,Z) in the WebXR scene
+```
+
+> **Why three models?** Gemma 4's **web** `.task` is **text-only** (the vision/
+> audio encoders only load on the native Android/iOS/desktop builds — see the
+> [model card](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm):
+> *"Web on LiteRT-LM uses a specially optimized model for Web … Currently the
+> model is text-only"*). And no Gemma variant **emits** audio — they are
+> text-output models. So on the web, hearing is done by a small local Whisper and
+> speaking by a small local Kokoro. Everything still runs **on-device**.
+
+---
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `litert-engine.js` | **Reusable LLM engine.** Wraps MediaPipe `LlmInference`: WebGPU detection, model loading (bundled path / file / URL / buffer, memory-friendly streaming for the ~2 GB model), streaming generation, multi-turn history, the official Gemma 4 prompt template + token cleanup. DOM-free. |
+| `voice.js` | **Reusable voice layer.** `MicRecorder` (PCM → mono 16 kHz), `Transcriber` (on-device Whisper STT), `SpatialSpeaker` (on-device Kokoro TTS → Web Audio `PannerNode` for 3D spatial output). No Web Speech API. |
+| `models.js` | Gemma 4 presets (E2B default = bundled local file; E4B optional) + Gemma 4 chat template. |
+| `models/gemma-4-E2B-it-web.task` | The pre-downloaded **Gemma 4 E2B** model (~1.9 GB) so the demos work right away. |
+| `index.html` | Responsive flat chat demo (desktop / laptop / tablet / mobile): one-click bundled model, mic push-to-talk, spoken replies. |
+| `index-vr.html` | A-Frame **WebXR** demo: in-world panel, laser-clickable prompts, 🎤 talk button, and the AI voice **spatialized from an in-world avatar**. |
+
+---
+
+## Quick start
+
+Served over HTTP (ES modules + fetch need it). From the repo root:
+
+```bash
+npx vite
+# Flat: http://localhost:5173/LiteRT/index.html
+# VR:   http://localhost:5173/LiteRT/index-vr.html
+```
+
+1. Press **Load model** → it loads the bundled `./models/gemma-4-E2B-it-web.task`
+   (no network). First load compiles the ~2 GB model for WebGPU — give it a bit.
+2. Type, or hold **🎤** (flat) / click **🎤 Talk** (VR) to speak.
+3. Toggle **🔊 Speak replies** (flat) — in VR the reply is spoken automatically
+   and spatialized from the avatar.
+
+First voice use downloads **Whisper** and **Kokoro** once (then cached offline).
+Both default to `device: 'auto'` → **WebGPU** when available (Kokoro on CPU/WASM
+is several × slower than real-time, which is why TTS feels sluggish without a
+GPU). The demos warm up both models in the background after the LLM loads.
+
+### Re-downloading / updating the model
+
+```bash
+curl.exe -L -C - -o "LiteRT/models/gemma-4-E2B-it-web.task" \
+  "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task?download=true"
+```
+
+---
+
+## Using it in another project
+
+The engine and the voice layer are independent and DOM-free, so the same calls
+work in a flat page or inside an A-Frame/WebXR scene.
+
+```js
+import { LiteRTEngine } from '../LiteRT/litert-engine.js';
+import { getPreset }   from '../LiteRT/models.js';
+import { MicRecorder, Transcriber, SpatialSpeaker } from '../LiteRT/voice.js';
+
+// 1) LLM (text)
+const engine = new LiteRTEngine();
+await engine.load({ preset: getPreset('gemma4-e2b-web'),
+                    modelUrl: '../LiteRT/models/gemma-4-E2B-it-web.task',
+                    buffered: false });   // stream the big file (low memory)
+
+// 2) Voice layer (all on-device)
+const mic = new MicRecorder();
+const asr = new Transcriber({ device: 'wasm' });               // Whisper
+const tts = new SpatialSpeaker({ device: 'wasm', spatial: true,
+                                 position: { x: 0, y: 1.6, z: -2 } }); // Kokoro + Panner
+
+// LISTEN → THINK → SPEAK (spatial)
+await mic.start(); /* user speaks */ const audio = await mic.stop();
+const userText = await asr.transcribe(audio);                  // speech → text
+const speech = tts.stream();                                   // talk while generating
+await engine.generate(userText, {
+  system: 'You are a concise VR assistant.',
+  onToken: (_d, full) => speech.push(full),
+}).then((res) => speech.flush(res.text));
+```
+
+### API summary
+
+**`litert-engine.js`**
+- `LiteRTEngine.isSupported()` / `.unsupportedReason()` — WebGPU check.
+- `engine.load({ preset?, modelFile?, modelUrl?, modelBuffer?, buffered?, onProgress? })`
+  — `buffered:false` streams the file via the runtime (use for the ~2 GB model).
+- `engine.generate(prompt, { system?, onToken?, includeHistory?, remember? })`
+  → `{ text, ttftMs, totalMs, tokensApprox, tokensPerSec }`.
+- `engine.reset()` / `engine.dispose()`.
+- (`engine.generateFromAudio(...)` is kept for the day a multimodal Gemma **web**
+  build ships; it throws on text-only models.)
+
+**`voice.js`**
+- `MicRecorder` — `.start()`, `.stop()` → mono 16 kHz `AudioBuffer`, `.dispose()`.
+- `Transcriber({ modelId?, device?, dtype?, language? })` — `.load()`,
+  `.transcribe(audio)` → text. Default `onnx-community/whisper-base`.
+- `SpatialSpeaker({ modelId?, device?, dtype?, voice?, spatial?, position? })` —
+  `.speak(text)`, `.stream()` → `{push, flush, cancel}`, `.setPosition(x,y,z)`,
+  `.updateListener({px,py,pz,fx,fy,fz,ux,uy,uz})` (lock to the camera),
+  `.stop()`, `.listVoices()`. Default `onnx-community/Kokoro-82M-v1.0-ONNX`.
+
+---
+
+## Meta Quest 3 notes
+
+- Gemma 4 E2B web (~2 GB) is sized for on-device web use and runs on Quest 3.
+- `getUserMedia`, WebGPU/WASM, and Web Audio `PannerNode` all work in the Quest
+  browser. The Web Speech API does **not** — which is exactly why STT/TTS here
+  are local models, not `SpeechRecognition`/`speechSynthesis`.
+- Performance: Whisper and Kokoro default to **`device: 'auto'`** — they use
+  **WebGPU** when available (much faster; Kokoro on CPU/WASM is several × slower
+  than real-time) and fall back to **WASM** otherwise. On memory-constrained
+  devices you can force `device: 'wasm'` to keep GPU memory for Gemma.
+- Keep responses short (low `maxTokens` / a "be brief" system prompt) for
+  responsive VR turns. The demos show `tok/s` + TTFT.
+
+## Spatial audio (the WebXR win)
+
+`SpatialSpeaker` routes Kokoro's audio through `GainNode → PannerNode →
+destination` (HRTF). In `index-vr.html` the panner sits at the avatar's position
+and the Web Audio **listener is locked to the camera every frame**, so the AI's
+voice convincingly comes from the avatar as you move and turn your head.
+
+---
+
+## Integration notes
+
+### languageVR
+`languageVR/index-gemma.html` uses Transformers.js + ONNX Gemma for ASR. This
+package gives a cleaner, unified on-device loop: `Transcriber` (Whisper) →
+`LiteRTEngine` (Gemma 4 tutor replies) → `SpatialSpeaker` (Kokoro), streamed into
+the existing `a-text` panels — multilingual via `new Transcriber({ language:'nl' })`.
+
+### BattleVR
+Give each NPC its own `LiteRTEngine` (or one engine with distinct `system`
+prompts + histories) for taunts/briefings. Players issue **spoken commands**
+(`MicRecorder` + `Transcriber`), and units **talk back** via `SpatialSpeaker`
+positioned at each unit so chatter comes from the right place in the arena.
+
+---
+
+## Caveats
+
+- **WebGPU required** for Gemma (GPU-only; no CPU path in the browser).
+- **Web Gemma 4 is text-only**; native audio-in / audio-out aren't available in
+  the web build, hence the local Whisper + Kokoro. If a multimodal Gemma web
+  build ships later, `engine.generateFromAudio()` is ready to use it.
+- **First-run downloads:** Whisper + Kokoro fetch their weights once (cached
+  afterward). The Gemma model is pre-bundled in `./models`.
+- MediaPipe's LLM Inference API is in maintenance mode (Google is focusing on
+  LiteRT-LM); the web package remains the supported runtime. Pinned:
+  `@mediapipe/tasks-genai@0.10.27`, `@huggingface/transformers@3.7.5`,
+  `kokoro-js@1.2.1`.
