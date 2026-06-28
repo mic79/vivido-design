@@ -138,11 +138,14 @@ await tts.speak(res.text);                                    // speak the WHOLE
   browser. The Web Speech API does **not** — which is exactly why STT/TTS here
   are local models, not `SpeechRecognition`/`speechSynthesis`.
 - Performance / scheduling: STT and TTS run in a **Web Worker** (`voice-worker.js`)
-  so they never jank the render loop. **TTS defaults to WebGPU** (`Kokoro` q8) —
+  so they never jank the render loop. **TTS defaults to WebGPU with `fp16`** —
   speech is synthesized **after** the LLM finishes generating, so there's no GPU
   compute contention, and one WebGPU pass speaks the whole reply in ~1–3 s. If a
-  headset can't run WebGPU in a worker, it **auto-falls back to WASM/CPU**. STT
-  (`whisper-tiny`) stays on WASM (runs once, before generation).
+  headset can't run WebGPU in a worker, it **auto-falls back to WASM/CPU with q8**.
+  STT (`whisper-tiny`) stays on WASM (runs once, before generation). The worker
+  logs and reports the real backend (e.g. `webgpu/fp16`), shown in the demos.
+  ⚠ Never use `q8` on WebGPU for Kokoro — onnxruntime-web mis-runs uint8 ops there,
+  producing slow, garbled (wrong-language) audio; `fp16` is the correct GPU dtype.
 - Whole-reply speech: the demos generate the full text first, then synthesize and
   speak it in **one pass** (no per-sentence loading/gaps) with a
   "Generating speech…" indicator. Keep responses short (a "be brief" system

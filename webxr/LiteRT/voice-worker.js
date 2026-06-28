@@ -18,6 +18,7 @@ const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers
 const KOKORO_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js';
 
 let _tf = null, _kokoro = null, asr = null, tts = null;
+let ttsBackend = '', asrBackend = ''; // which device/dtype actually loaded (diagnostics)
 async function tf() {
   if (!_tf) {
     _tf = await import(TRANSFORMERS_URL);
@@ -32,31 +33,49 @@ async function tf() {
 }
 async function kk() { if (!_kokoro) _kokoro = await import(KOKORO_URL); return _kokoro; }
 
+// Try each {device,dtype} in order until one loads. We report which one won so
+// the UI/console can show the real backend (no more guessing why it's slow).
+async function loadFirst(label, candidates, make) {
+  let lastErr;
+  for (const c of candidates) {
+    try {
+      const inst = await make(c);
+      const backend = `${c.device}/${c.dtype}`;
+      console.log(`[voice-worker] ${label} loaded on ${backend}`);
+      return { inst, backend };
+    } catch (e) {
+      lastErr = e;
+      console.warn(`[voice-worker] ${label} on ${c.device}/${c.dtype} failed: ${e && e.message}`);
+    }
+  }
+  throw lastErr || new Error(`${label}: no backend available`);
+}
+
 async function ensureAsr(cfg) {
   if (asr) return asr;
   const { pipeline } = await tf();
-  try {
-    asr = await pipeline('automatic-speech-recognition', cfg.modelId, { device: cfg.device, dtype: cfg.dtype });
-  } catch (e) {
-    if (cfg.device !== 'wasm') {
-      asr = await pipeline('automatic-speech-recognition', cfg.modelId, { device: 'wasm', dtype: 'fp32' });
-    } else throw e;
-  }
+  const r = await loadFirst('ASR', [
+    { device: cfg.device, dtype: cfg.dtype },
+    { device: 'wasm', dtype: 'fp32' },
+  ], (c) => pipeline('automatic-speech-recognition', cfg.modelId, { device: c.device, dtype: c.dtype }));
+  asr = r.inst; asrBackend = r.backend;
   return asr;
 }
 
 async function ensureTts(cfg) {
   if (tts) return tts;
-  await tf(); // make sure WASM threading is configured for the fallback path
+  await tf(); // configure WASM threading for the fallback path
   const { KokoroTTS } = await kk();
-  try {
-    tts = await KokoroTTS.from_pretrained(cfg.modelId, { device: cfg.device, dtype: cfg.dtype });
-  } catch (e) {
-    // WebGPU unavailable in this worker/headset → fall back to CPU.
-    if (cfg.device !== 'wasm') {
-      tts = await KokoroTTS.from_pretrained(cfg.modelId, { device: 'wasm', dtype: 'q8' });
-    } else throw e;
-  }
+  // IMPORTANT: never use q8 on WebGPU — onnxruntime-web's WebGPU backend produces
+  // garbled / wrong-language audio for uint8-quantized Kokoro. fp16 is correct and
+  // fast on WebGPU; q8 is fine (and small) on WASM/CPU as the fallback.
+  const wantGpu = cfg.device && cfg.device !== 'wasm';
+  const candidates = wantGpu
+    ? [{ device: cfg.device, dtype: 'fp16' }, { device: cfg.device, dtype: 'fp32' }, { device: 'wasm', dtype: 'q8' }]
+    : [{ device: 'wasm', dtype: cfg.dtype || 'q8' }];
+  const r = await loadFirst('TTS', candidates,
+    (c) => KokoroTTS.from_pretrained(cfg.modelId, { device: c.device, dtype: c.dtype }));
+  tts = r.inst; ttsBackend = r.backend;
   return tts;
 }
 
@@ -71,10 +90,10 @@ async function handle(msg) {
   try {
     if (type === 'warm-asr') {
       await ensureAsr(payload.cfg);
-      reply(id, 'ok');
+      reply(id, 'ok', { backend: asrBackend });
     } else if (type === 'warm-tts') {
       await ensureTts(payload.cfg);
-      reply(id, 'ok');
+      reply(id, 'ok', { backend: ttsBackend });
     } else if (type === 'asr') {
       await ensureAsr(payload.cfg);
       const out = await asr(payload.audio, {

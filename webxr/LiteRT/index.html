@@ -497,8 +497,9 @@
       synthesizing = true; refreshStopBtn();
       const note = $('#voice-note');
       const prev = note.textContent;
-      note.textContent = '🗣 Generating speech…';
       try {
+        if (!speaker.ready) { note.textContent = '🗣 Loading voice model (first use)…'; await speaker.load(); }
+        note.textContent = `🗣 Generating speech… (${speaker.backend || '?'})`;
         await speaker.speak(text);
         note.textContent = prev;
       } catch (err) {

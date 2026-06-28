@@ -260,11 +260,11 @@ export class Transcriber {
 export class SpatialSpeaker {
   constructor({
     modelId = 'onnx-community/Kokoro-82M-v1.0-ONNX',
-    dtype = 'q8',           // q8 keeps GPU/CPU memory small (~80-90 MB)
-    // WebGPU for speed: TTS runs AFTER the LLM finishes generating, so there's
-    // no GPU compute contention. The worker auto-falls back to WASM/CPU if a
-    // headset can't do WebGPU in a worker. q8 keeps the footprint tiny so it
-    // fits in GPU memory alongside the resident LLM.
+    // fp16 on WebGPU is correct AND fast. (q8 on WebGPU is the trap: it loads but
+    // the onnxruntime-web WebGPU backend mis-runs uint8 ops → slow + garbled,
+    // wrong-language audio. The worker forces fp16 on GPU and only uses q8 on the
+    // CPU/WASM fallback, where q8 is correct and keeps memory tiny.)
+    dtype = 'fp16',
     device = 'webgpu',
     voice = 'af_heart',
     spatial = true,
@@ -303,12 +303,16 @@ export class SpatialSpeaker {
   async load() {
     if (this.ready) return this;
     if (this._useWorker) {
-      await vwCall('warm-tts', { cfg: this.cfg });
+      const r = await vwCall('warm-tts', { cfg: this.cfg });
+      this.backend = (r && r.backend) || `${this.cfg.device}/${this.cfg.dtype}`;
     } else {
+      // Inline (no Worker): still avoid q8 on WebGPU for the reasons above.
+      const dtype = (this.cfg.device !== 'wasm') ? 'fp16' : (this.cfg.dtype || 'q8');
       const { KokoroTTS } = await importKokoro();
-      this._tts = await KokoroTTS.from_pretrained(this.cfg.modelId,
-        { dtype: this.cfg.dtype, device: this.cfg.device });
+      this._tts = await KokoroTTS.from_pretrained(this.cfg.modelId, { dtype, device: this.cfg.device });
+      this.backend = `${this.cfg.device}/${dtype}`;
     }
+    console.log('[voice] TTS backend:', this.backend);
     this._initAudioGraph(); // audio graph stays on the main thread
     this.ready = true;
     return this;

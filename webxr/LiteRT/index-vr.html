@@ -105,6 +105,8 @@
               position="-0.92 0.42 0.01"></a-text>
       <a-text id="status-text" value="" color="#59e0b0" width="1.9" anchor="center"
               align="center" position="0 -0.52 0.01"></a-text>
+      <a-text id="voice-backend-text" value="voice: (not loaded)" color="#93a1bd" width="1.6"
+              anchor="center" align="center" position="0 -0.565 0.01"></a-text>
     </a-entity>
 
     <!-- Suggestion buttons -->
@@ -168,7 +170,7 @@
           try { await transcriber.warmup(); whisperLoaded = true; } catch (_) {}
         }
         if (SpatialSpeaker.isSupported()) {
-          try { await speaker.warmup(); } catch (_) {}
+          try { await speaker.warmup(); setVoiceBackend(); } catch (_) {}
         }
       })();
       return voiceWarm;
@@ -353,6 +355,17 @@
     const statusText = () => document.getElementById('status-text');
     function setConvo(t){ convoText().setAttribute('value', t); }
     function setVRStatus(t){ statusText().setAttribute('value', t); }
+    // Persistent backend label so the real STT/TTS engine is visible inside VR
+    // (no console in the headset). Turns green for the fast GPU path, amber if it
+    // fell back to CPU/WASM (which is the slow path).
+    function setVoiceBackend() {
+      const el = document.getElementById('voice-backend-text');
+      if (!el) return;
+      const tts = (speaker && speaker.backend) || '(not loaded)';
+      const fast = /webgpu/i.test(tts);
+      el.setAttribute('value', `voice: ${tts}${fast ? '  ✓ GPU' : '  ⚠ CPU (slow)'}`);
+      el.setAttribute('color', fast ? '#59e0b0' : '#ffcc66');
+    }
 
     function buildButtons() {
       const wrap = document.getElementById('buttons');
@@ -422,7 +435,6 @@
 
         // 2) Synthesize the WHOLE reply in one pass, then speak it continuously.
         if (speaker.enabled !== false && res.text) {
-          setVRStatus('Generating speech…');
           await speakWhole(res.text); // resolves once playback has started
         } else {
           setVRStatus(`${res.tokensPerSec.toFixed(1)} tok/s · 🔇`);
@@ -441,6 +453,8 @@
     async function speakWhole(text) {
       synthesizing = true; refreshVoiceButtons();
       try {
+        if (!speaker.ready) { setVRStatus('Loading voice model (first use)…'); await speaker.load(); setVoiceBackend(); }
+        setVRStatus(`Generating speech… (${speaker.backend || '?'})`);
         await speaker.speak(text);     // one worker round-trip, then queued
       } catch (err) {
         setVRStatus(`Voice error: ${err.message || err}`);
