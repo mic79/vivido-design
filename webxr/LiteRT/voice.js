@@ -29,22 +29,39 @@ async function importKokoro() {
   return _kokoro;
 }
 
-/** Resolve a Transformers.js device: 'auto' -> 'webgpu' if usable, else 'wasm'. */
-let _webgpuOk = null;
-async function pickDevice(preferred = 'auto') {
-  if (preferred && preferred !== 'auto') return preferred;
-  if (_webgpuOk === null) {
-    try {
-      _webgpuOk = !!(navigator.gpu && (await navigator.gpu.requestAdapter()));
-    } catch { _webgpuOk = false; }
-  }
-  return _webgpuOk ? 'webgpu' : 'wasm';
+// ---------------------------------------------------------------------------
+// Shared voice worker — runs Whisper (ASR) + Kokoro (TTS) off the main thread.
+// On Quest this is what keeps the render loop from freezing during voice work,
+// and (paired with WASM/CPU + small quantized models) stops the voice models
+// from fighting the ~2 GB LLM for GPU memory and crashing the tab.
+// ---------------------------------------------------------------------------
+let _vw = null, _vwId = 0;
+const _vwPending = new Map();
+function workerSupported() { try { return typeof Worker !== 'undefined'; } catch { return false; } }
+function voiceWorker() {
+  if (_vw) return _vw;
+  _vw = new Worker(new URL('./voice-worker.js', import.meta.url), { type: 'module' });
+  _vw.onmessage = (e) => {
+    const { id, type, payload } = e.data || {};
+    const p = _vwPending.get(id);
+    if (!p) return;
+    _vwPending.delete(id);
+    if (type === 'error') p.reject(new Error(payload && payload.message));
+    else p.resolve(payload || {});
+  };
+  _vw.onerror = (err) => {
+    for (const [, p] of _vwPending) p.reject(err.error || new Error('Voice worker failed'));
+    _vwPending.clear();
+  };
+  return _vw;
 }
-/** Default dtype per kind. Whisper MUST be fp32 — q8 produces garbled,
- *  repeating, multilingual hallucinations. Kokoro is fine at fp32 too. */
-function defaultDtype(device, kind) {
-  if (kind === 'asr') return 'fp32';
-  return device === 'webgpu' ? 'fp32' : 'q8';
+function vwCall(type, payload, transfer) {
+  const w = voiceWorker();
+  const id = ++_vwId;
+  return new Promise((resolve, reject) => {
+    _vwPending.set(id, { resolve, reject });
+    w.postMessage({ id, type, payload }, transfer || []);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -171,76 +188,65 @@ export function collapseRepeats(text) {
 // ---------------------------------------------------------------------------
 
 export class Transcriber {
-  constructor({ modelId = 'onnx-community/whisper-base', device = 'auto', dtype = null, language = null } = {}) {
-    this.modelId = modelId;
-    this.device = device;   // 'auto' | 'webgpu' | 'wasm'
-    this.dtype = dtype;     // null = auto per device
+  // Defaults tuned for memory-constrained headsets: a small model on WASM/CPU so
+  // it neither competes with the LLM for GPU memory nor freezes the render loop
+  // (the actual work runs in voice-worker.js). 'whisper-tiny' keeps the download
+  // and RAM footprint small; pass a bigger modelId on desktop if you want.
+  constructor({ modelId = 'onnx-community/whisper-tiny', device = 'wasm', dtype = 'fp32', language = null } = {}) {
+    this.cfg = { modelId, device, dtype };
     this.language = language; // null = auto-detect; or e.g. 'en', 'nl'
-    this.asr = null;
     this.ready = false;
+    this._warmed = false;
+    this._useWorker = workerSupported();
+    this._asr = null; // inline fallback pipeline (only if Workers unavailable)
   }
 
   static isSupported() { return MicRecorder.isSupported(); }
 
-  async load(onProgress = null) {
+  async load() {
     if (this.ready) return this;
-    const device = await pickDevice(this.device);
-    const dtype = this.dtype || defaultDtype(device, 'asr');
-    const { pipeline } = await importTransformers();
-    this.asr = await pipeline('automatic-speech-recognition', this.modelId, {
-      device,
-      dtype,
-      progress_callback: onProgress || undefined,
-    });
-    this.resolvedDevice = device;
+    if (this._useWorker) {
+      await vwCall('warm-asr', { cfg: this.cfg });
+    } else {
+      const { pipeline } = await importTransformers();
+      this._asr = await pipeline('automatic-speech-recognition', this.cfg.modelId,
+        { device: this.cfg.device, dtype: this.cfg.dtype });
+    }
     this.ready = true;
     return this;
   }
 
-  /**
-   * Fully prepare the model so the first real transcription is fast: this both
-   * downloads/instantiates the pipeline AND runs one dummy inference, which is
-   * what actually compiles the WebGPU shaders / WASM kernels (load() alone does
-   * not). Call this at app start, not on first mic use.
-   */
-  async warmup(onProgress = null) {
+  /** Download + instantiate the model so first real use isn't slow. */
+  async warmup() {
     if (this._warmed) return this;
-    await this.load(onProgress);
-    try {
-      // ~1s of low-level noise; goes straight through the pipeline (bypassing
-      // the silence guard in transcribe) purely to trigger kernel compilation.
-      const data = new Float32Array(TARGET_SR);
-      for (let i = 0; i < data.length; i++) data[i] = (Math.random() - 0.5) * 0.02;
-      await this.asr(data, {
-        task: 'transcribe',
-        language: this.language || undefined,
-        chunk_length_s: 30,
-        return_timestamps: false,
-        temperature: 0,
-      });
-    } catch (_) {}
+    await this.load();
     this._warmed = true;
     return this;
   }
 
   /** Transcribe a mono 16 kHz AudioBuffer / Float32Array to text. */
-  async transcribe(audio, { onProgress = null } = {}) {
-    if (!this.ready) await this.load(onProgress);
-    const data = toFloat32(audio);
+  async transcribe(audio) {
+    if (!this.ready) await this.load();
+    const data0 = toFloat32(audio);
 
     // Guard against empty/silent clips — Whisper hallucinates loops on silence.
-    const seconds = data.length / TARGET_SR;
+    const seconds = data0.length / TARGET_SR;
     let sum = 0;
-    for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-    const rms = Math.sqrt(sum / Math.max(1, data.length));
+    for (let i = 0; i < data0.length; i++) sum += data0[i] * data0[i];
+    const rms = Math.sqrt(sum / Math.max(1, data0.length));
     if (seconds < 0.3 || rms < 0.005) return '';
 
-    const out = await this.asr(data, {
+    if (this._useWorker) {
+      const data = new Float32Array(data0); // standalone buffer we can transfer
+      const out = await vwCall('asr', { cfg: this.cfg, audio: data, language: this.language }, [data.buffer]);
+      return collapseRepeats(((out && out.text) || '').trim());
+    }
+    const out = await this._asr(data0, {
       task: 'transcribe',
       language: this.language || undefined,
       chunk_length_s: 30,
       return_timestamps: false,
-      no_repeat_ngram_size: 3, // discourage repetition loops
+      no_repeat_ngram_size: 3,
       temperature: 0,
     });
     return collapseRepeats(((out && out.text) || '').trim());
@@ -254,21 +260,21 @@ export class Transcriber {
 export class SpatialSpeaker {
   constructor({
     modelId = 'onnx-community/Kokoro-82M-v1.0-ONNX',
-    dtype = null,           // null = auto (fp32 on webgpu, q8 on wasm)
-    device = 'auto',        // 'auto' | 'webgpu' | 'wasm'
+    dtype = 'q8',           // q8 keeps memory small (~80 MB) for headsets
+    device = 'wasm',        // WASM/CPU so it doesn't fight the LLM for the GPU
     voice = 'af_heart',
     spatial = true,
     position = { x: 0, y: 1.6, z: -1.8 },
   } = {}) {
-    this.modelId = modelId;
-    this.dtype = dtype;
-    this.device = device;
+    this.cfg = { modelId, device, dtype };
     this.voice = voice;
     this.spatial = spatial;
     this.position = position;
     this.enabled = true;
-    this.tts = null;
     this.ready = false;
+    this._warmed = false;
+    this._useWorker = workerSupported();
+    this._tts = null; // inline fallback (only if Workers unavailable)
 
     this.ctx = null;
     this.panner = null;
@@ -290,31 +296,24 @@ export class SpatialSpeaker {
     return typeof (window.AudioContext || window.webkitAudioContext) !== 'undefined';
   }
 
-  async load(onProgress = null) {
+  async load() {
     if (this.ready) return this;
-    const device = await pickDevice(this.device);
-    const dtype = this.dtype || defaultDtype(device, 'tts');
-    const { KokoroTTS } = await importKokoro();
-    this.tts = await KokoroTTS.from_pretrained(this.modelId, {
-      dtype,
-      device,
-      progress_callback: onProgress || undefined,
-    });
-    this.resolvedDevice = device;
-    this._initAudioGraph();
+    if (this._useWorker) {
+      await vwCall('warm-tts', { cfg: this.cfg });
+    } else {
+      const { KokoroTTS } = await importKokoro();
+      this._tts = await KokoroTTS.from_pretrained(this.cfg.modelId,
+        { dtype: this.cfg.dtype, device: this.cfg.device });
+    }
+    this._initAudioGraph(); // audio graph stays on the main thread
     this.ready = true;
     return this;
   }
 
-  /**
-   * Prepare TTS so the first spoken reply is fast: downloads/instantiates the
-   * model AND synthesizes a tiny phrase (compiling the kernels). The audio is
-   * generated but never enqueued/played, so it's silent. Call this at app start.
-   */
-  async warmup(onProgress = null) {
+  /** Download + instantiate the TTS model so the first spoken reply isn't slow. */
+  async warmup() {
     if (this._warmed) return this;
-    await this.load(onProgress);
-    try { await this.tts.generate('Ready.', { voice: this.voice }); } catch (_) {}
+    await this.load();
     this._warmed = true;
     return this;
   }
@@ -369,10 +368,15 @@ export class SpatialSpeaker {
   async _synth(text) {
     const clean = cleanForSpeech(text);
     if (!clean) return null;
-    const audio = await this.tts.generate(clean, { voice: this.voice });
-    // RawAudio: .audio (Float32Array), .sampling_rate (e.g. 24000)
-    const data = audio.audio || audio.data;
-    const rate = audio.sampling_rate || audio.sampleRate || 24000;
+    let data, rate;
+    if (this._useWorker) {
+      const out = await vwCall('tts', { cfg: this.cfg, text: clean, voice: this.voice });
+      data = out.audio; rate = out.rate || 24000;
+    } else {
+      const audio = await this._tts.generate(clean, { voice: this.voice });
+      data = audio.audio || audio.data;
+      rate = audio.sampling_rate || audio.sampleRate || 24000;
+    }
     const buf = this.ctx.createBuffer(1, data.length, rate);
     buf.copyToChannel ? buf.copyToChannel(data, 0) : buf.getChannelData(0).set(data);
     return buf;
@@ -457,7 +461,6 @@ export class SpatialSpeaker {
   }
 
   async listVoices() {
-    if (!this.ready) await this.load();
-    try { return this.tts.list_voices ? this.tts.list_voices() : []; } catch { return []; }
+    try { return this._tts && this._tts.list_voices ? this._tts.list_voices() : []; } catch { return []; }
   }
 }
