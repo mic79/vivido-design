@@ -152,16 +152,18 @@
       <a-text id="voice-mode-label" value="Voice: Stable (CPU)" color="#cdd6e6" align="center" width="2.0" position="0 0 0.01"></a-text>
     </a-entity>
 
+    <!-- Settings flanking the panel (clearly visible, out of the way of the
+         action buttons below). Left = spoken language, right = LLM model. -->
     <!-- Spoken language (Supertonic): cycle en/nl/fr/de/es/it/pt. -->
-    <a-entity class="clickable" id="lang-btn" position="-0.55 -0.18 -1.7"
-              geometry="primitive: plane; width: 0.62; height: 0.16"
+    <a-entity class="clickable" id="lang-btn" position="-1.32 1.75 -1.7"
+              geometry="primitive: plane; width: 0.6; height: 0.18"
               material="color: #1c2638; shader: flat">
       <a-text id="lang-label" value="Lang: EN" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
     </a-entity>
 
     <!-- LLM model: cycle the presets and reload in place (progress on status). -->
-    <a-entity class="clickable" id="model-btn" position="0.55 -0.18 -1.7"
-              geometry="primitive: plane; width: 0.62; height: 0.16"
+    <a-entity class="clickable" id="model-btn" position="1.32 1.75 -1.7"
+              geometry="primitive: plane; width: 0.6; height: 0.18"
               material="color: #1c2638; shader: flat">
       <a-text id="model-label" value="Model: …" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
     </a-entity>
@@ -240,17 +242,19 @@
     // Warm the voice models (download + compile kernels) once, as early as
     // possible, so the first spoken turn has nothing to load. Idempotent.
     let voiceWarm = null;
+    let voiceWarming = false; // true while the background preload is downloading
     function warmVoice() {
       if (voiceWarm) return voiceWarm;
+      voiceWarming = true; setVoiceBackend();
       // Load sequentially (not Promise.all) to keep peak memory low on Quest.
       voiceWarm = (async () => {
         if (MicRecorder.isSupported()) {
           try { await transcriber.warmup(); whisperLoaded = true; } catch (_) {}
         }
         if (SpatialSpeaker.isSupported()) {
-          try { await speaker.warmup(); setVoiceBackend(); } catch (_) {}
+          try { await speaker.warmup(); } catch (_) {}
         }
-      })();
+      })().finally(() => { voiceWarming = false; setVoiceBackend(); });
       return voiceWarm;
     }
 
@@ -462,8 +466,15 @@
     function setVoiceBackend() {
       const el = document.getElementById('voice-backend-text');
       if (!el) return;
-      const tts = (speaker && speaker.backend) || '(not loaded)';
       const audio = speaker ? speaker.audioState() : 'none';
+      // While the background preload is still downloading/compiling, don't show
+      // "(not loaded)" — say so explicitly so it doesn't look broken.
+      if (voiceWarming && !(speaker && speaker.backend)) {
+        el.setAttribute('value', `voice: loading… (first run) · audio: ${audio}`);
+        el.setAttribute('color', '#ffcc66');
+        return;
+      }
+      const tts = (speaker && speaker.backend) || '(not loaded)';
       // The audio state is what matters for "is there sound": running = good.
       const ok = audio === 'running';
       el.setAttribute('value', `voice: ${tts} · audio: ${audio}`);
