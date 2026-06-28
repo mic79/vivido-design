@@ -138,13 +138,21 @@ await tts.speak(res.text);                                    // speak the WHOLE
   browser. The Web Speech API does **not** — which is exactly why STT/TTS here
   are local models, not `SpeechRecognition`/`speechSynthesis`.
 - Performance / scheduling: STT and TTS run in a **Web Worker** (`voice-worker.js`)
-  so they never jank the render loop. **TTS defaults to WebGPU with `fp16`** —
-  speech is synthesized **after** the LLM finishes generating, so there's no GPU
-  compute contention, and one WebGPU pass speaks the whole reply in ~1–3 s. If a
-  headset can't run WebGPU in a worker, it **auto-falls back to WASM/CPU with q8**.
-  STT (`whisper-tiny`) stays on WASM (runs once, before generation). The worker
-  logs and reports the real backend (e.g. `webgpu/fp16`), shown in the demos.
-  ⚠ Never use `q8` on WebGPU for Kokoro — onnxruntime-web mis-runs uint8 ops there,
+  so they never jank the render loop. **In VR, TTS runs on WASM/CPU** on purpose:
+  WebGPU synthesis fights the headset's single shared GPU for the render loop and
+  freezes the view, so we keep the GPU 100% for rendering and synthesize on the CPU.
+  (On the flat/desktop page TTS can use WebGPU `fp16` since the GPU isn't rendering
+  a headset.) STT (`whisper-tiny`) also runs on WASM. The worker reports the real
+  backend + thread count (e.g. `wasm/q8 x4`), shown in the demos.
+- ⚡ **Cross-origin isolation for fast CPU synth** (`coi-serviceworker.js`, loaded
+  first in both pages): WASM is only multi-threaded when the page is
+  `crossOriginIsolated` (needs `SharedArrayBuffer`, which needs COOP/COEP headers).
+  A plain file server doesn't send those, so this service worker injects them
+  (COEP `credentialless`, so the CDN/model fetches still work) — turning slow
+  `1-thread` WASM into `x4`+ threads. It reloads the page once on first load. This
+  is what makes on-device Whisper/Kokoro fast **without** a GPU and **without**
+  server config. Requires a secure context (HTTPS or localhost).
+- ⚠ Never use `q8` on WebGPU for Kokoro — onnxruntime-web mis-runs uint8 ops there,
   producing slow, garbled (wrong-language) audio; `fp16` is the correct GPU dtype.
 - Whole-reply speech: the demos generate the full text first, then synthesize and
   speak it in **one pass** (no per-sentence loading/gaps) with a

@@ -8,6 +8,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- MUST be first: makes the page cross-origin isolated (via a service worker)
+       so WASM can use multiple CPU threads → much faster on-device Whisper/Kokoro.
+       Reloads the page once on first visit, then is silent. -->
+  <script src="coi-serviceworker.js"></script>
   <title>LiteRT-LM · Gemma in WebXR</title>
   <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
   <style>
@@ -109,32 +113,33 @@
               anchor="center" align="center" position="0 -0.565 0.01"></a-text>
     </a-entity>
 
-    <!-- Suggestion buttons -->
-    <a-entity id="buttons" position="0 0.95 -1.7"></a-entity>
+    <!-- Suggestion buttons (kept below the panel's bottom edge so they don't
+         overlap the status / voice readout lines) -->
+    <a-entity id="buttons" position="0 0.82 -1.7"></a-entity>
 
     <!-- Mic toggle (push-to-talk: click once to start, again to send) -->
-    <a-entity class="clickable" id="mic-btn" position="-0.85 0.6 -1.7"
+    <a-entity class="clickable" id="mic-btn" position="-0.85 0.42 -1.7"
               geometry="primitive: plane; width: 0.5; height: 0.16"
               material="color: #1c2638; shader: flat">
       <a-text id="mic-label" value="🎤 Talk" color="#59e0b0" align="center" width="1.6" position="0 0 0.01"></a-text>
     </a-entity>
 
     <!-- Reset button -->
-    <a-entity class="clickable" id="reset-btn" position="0.85 0.6 -1.7"
+    <a-entity class="clickable" id="reset-btn" position="0.85 0.42 -1.7"
               geometry="primitive: plane; width: 0.5; height: 0.16"
               material="color: #1c2638; shader: flat">
       <a-text value="↺ New chat" color="#93a1bd" align="center" width="1.6" position="0 0 0.01"></a-text>
     </a-entity>
 
     <!-- Replay last reply -->
-    <a-entity class="clickable" id="replay-btn" position="-0.85 0.4 -1.7"
+    <a-entity class="clickable" id="replay-btn" position="-0.85 0.22 -1.7"
               geometry="primitive: plane; width: 0.5; height: 0.16"
               material="color: #1c2638; shader: flat" visible="false">
       <a-text value="🔁 Replay" color="#e7edf7" align="center" width="1.6" position="0 0 0.01"></a-text>
     </a-entity>
 
     <!-- Stop voice -->
-    <a-entity class="clickable" id="stop-btn" position="0.85 0.4 -1.7"
+    <a-entity class="clickable" id="stop-btn" position="0.85 0.22 -1.7"
               geometry="primitive: plane; width: 0.5; height: 0.16"
               material="color: #1c2638; shader: flat" visible="false">
       <a-text value="⏹ Stop" color="#ff8a95" align="center" width="1.6" position="0 0 0.01"></a-text>

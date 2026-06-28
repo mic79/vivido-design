@@ -23,10 +23,12 @@ async function tf() {
   if (!_tf) {
     _tf = await import(TRANSFORMERS_URL);
     // Use multiple CPU cores for the WASM backend when the page allows it
-    // (requires cross-origin isolation for threads; otherwise stays single-thread).
+    // (requires cross-origin isolation for SharedArrayBuffer; otherwise it stays
+    // single-thread). Leave ~2 cores for the render/main thread so the headset
+    // stays smooth while synthesizing.
     try {
-      const n = Math.min(4, (self.navigator && navigator.hardwareConcurrency) || 1);
-      _tf.env.backends.onnx.wasm.numThreads = n;
+      const hc = (self.navigator && navigator.hardwareConcurrency) || 4;
+      _tf.env.backends.onnx.wasm.numThreads = Math.max(2, Math.min(6, hc - 2));
     } catch (_) {}
   }
   return _tf;

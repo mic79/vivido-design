@@ -6,6 +6,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <!-- MUST be first: cross-origin isolation (service worker) so WASM can use
+       multiple CPU threads → much faster on-device Whisper/Kokoro. -->
+  <script src="coi-serviceworker.js"></script>
   <title>LiteRT-LM · Gemma on-device chat</title>
   <style>
     :root {
