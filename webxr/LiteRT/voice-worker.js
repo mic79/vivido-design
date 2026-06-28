@@ -7,10 +7,15 @@
 // the LLM.
 //
 // TTS engines (cfg.engine):
-//   'kokoro'     — Kokoro-82M (kokoro-js). Fast on WebGPU, slow on CPU.
-//   'supertonic' — Supertonic 2 (transformers.js text-to-speech pipeline). Tuned
-//                  for CPU: fast on WASM AND no GPU contention → smooth on Quest.
-//                  Quality/speed dial = num_inference_steps (cfg.steps, ~5 fast).
+//   'kokoro'      — Kokoro-82M (kokoro-js). Fast on WebGPU, slow on CPU.
+//   'supertonic'  — Supertonic 2 (transformers.js text-to-speech pipeline). Tuned
+//                   for CPU: fast on WASM AND no GPU contention → smooth on Quest.
+//                   Quality/speed dial = num_inference_steps (cfg.steps, ~5 fast).
+//                   Languages: en, ko, es, pt, fr.
+//   'supertonic3' — Supertonic 3 (./supertonic3.js, our ONNX-Runtime-Web port of
+//                   Supertone's 4-graph v3 pipeline). Same CPU/WASM strengths,
+//                   but 31 languages incl. Dutch + Italian. cfg.steps = denoise
+//                   steps (speed/quality dial).
 //
 // Protocol (postMessage):
 //   in : { id, type:'warm-asr'|'warm-tts', payload:{ cfg } }
@@ -27,10 +32,12 @@ const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers
 const KOKORO_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js';
 
 let _tf = null, _kokoro = null, asr = null, tts = null;
+let _st3 = null;                      // Supertonic3 engine instance (./supertonic3.js)
 let ttsBackend = '', asrBackend = ''; // which device/dtype actually loaded (diagnostics)
-let ttsEngine = '';                   // 'kokoro' | 'supertonic' currently loaded
+let ttsEngine = '';                   // 'kokoro' | 'supertonic' | 'supertonic3' loaded
 const _spkCache = new Map();          // Supertonic speaker-embedding cache (per voice)
 const isSupertonic = (cfg) => !!(cfg && cfg.engine === 'supertonic');
+const isSupertonic3 = (cfg) => !!(cfg && cfg.engine === 'supertonic3');
 async function tf() {
   if (!_tf) {
     _tf = await import(TRANSFORMERS_URL);
@@ -101,8 +108,31 @@ async function producesAudio(inst, voice) {
 // engine matches; switching engines goes through 'reset-tts' first.
 async function ensureTts(cfg) {
   if (tts && ttsEngine === (cfg.engine || 'kokoro')) return tts;
+  if (isSupertonic3(cfg)) return ensureSupertonic3(cfg);
   if (isSupertonic(cfg)) return ensureSupertonic(cfg);
   return ensureKokoro(cfg);
+}
+
+// Supertonic 3: our own ONNX-Runtime-Web port (4-graph flow-matching pipeline)
+// running on WASM/CPU. 31 languages incl. Dutch + Italian; keeps the GPU free
+// for the LLM/compositor. Weights are cached in the Cache API after first load.
+async function ensureSupertonic3(cfg) {
+  if (tts && ttsEngine === 'supertonic3') return tts;
+  const { Supertonic3 } = await import('./supertonic3.js');
+  const hc = (self.navigator && navigator.hardwareConcurrency) || 4;
+  _st3 = new Supertonic3({
+    repo: cfg.modelId || 'Supertone/supertonic-3',
+    voice: cfg.voice || 'F1',
+    lang: cfg.lang || 'en',
+    steps: cfg.steps || 8,
+    speed: cfg.speed || 1.05,
+    numThreads: Math.max(2, Math.min(8, hc - 1)),
+  });
+  await _st3.load();
+  tts = _st3; ttsEngine = 'supertonic3';
+  ttsBackend = _st3.backend;
+  console.log(`[voice-worker] TTS using ${ttsBackend}`);
+  return tts;
 }
 
 // Load (and cache) a Supertonic speaker embedding (.bin = raw float32) so we
@@ -187,7 +217,7 @@ async function handle(msg) {
     } else if (type === 'reset-tts') {
       // Drop the cached model so the next warm/synth reloads on a new device or
       // engine (used by the voice toggle). Frees the previous backend's memory.
-      tts = null; ttsBackend = ''; ttsEngine = '';
+      tts = null; ttsBackend = ''; ttsEngine = ''; _st3 = null;
       reply(id, 'ok');
     } else if (type === 'asr') {
       await ensureAsr(payload.cfg);
@@ -204,7 +234,16 @@ async function handle(msg) {
       const cfg = payload.cfg || {};
       await ensureTts(cfg);
       let src, rate;
-      if (isSupertonic(cfg)) {
+      if (isSupertonic3(cfg)) {
+        const out = await _st3.synth(payload.text, {
+          voice: payload.voice || cfg.voice || 'F1',
+          lang: cfg.lang || 'en',
+          steps: cfg.steps || 8,
+          speed: cfg.speed || 1.05,
+        });
+        src = out.audio;
+        rate = out.rate || 44100;
+      } else if (isSupertonic(cfg)) {
         const voice = payload.voice || cfg.voice || 'F1';
         const emb = await supertonicEmbedding(cfg.modelId, voice);
         // Supertonic 2 REQUIRES a language tag around the text (e.g. "<en>...</en>").

@@ -170,16 +170,25 @@
     let whisperLoaded = false;
     // Voice (TTS) engines — cycle with the in-VR voice button. Ordered best-first
     // for a headset:
-    //   1) Supertonic (WASM/CPU): a ~99M model tuned for CPU → fast synth AND no
-    //      GPU contention with the LLM/compositor (smooth render). `steps` is the
-    //      quality/speed dial (5 = fast). This is the default.
-    //   2) Kokoro (WebGPU): fastest synth, but the GPU job fights the compositor
+    //   1) Supertonic 3 INT8 (WASM/CPU): ~99M model, int8-quantized (~98 MB) so it
+    //      runs fast on the Quest CPU → fast synth AND no GPU contention with the
+    //      LLM/compositor (smooth render). 31 languages (incl. Dutch + Italian).
+    //      `steps` is the quality/speed dial. Default.
+    //   2) Supertonic 3 HQ (WASM/CPU): the official fp32 weights (~380 MB) — best
+    //      quality, but heavier per step (desktop / strong CPU).
+    //   3) Kokoro (WebGPU): fastest synth, but the GPU job fights the compositor
     //      → stutter, and needs spare GPU memory (pair with a small LLM).
-    //   3) Kokoro (CPU): rock-solid + smooth, but slow synth (last resort).
+    //   4) Kokoro (CPU): rock-solid + smooth, but slow synth (last resort).
+    // All three v3 repos share the same ONNX layout, so they're drop-in. Set
+    // `lang` to the language you want spoken (Supertonic needs it; e.g. 'nl',
+    // 'fr', 'it', 'pt'). Voices: F1–F5 / M1–M5. Lower `steps` for more speed.
     const VOICE_MODES = [
-      { id: 'supertonic', engine: 'supertonic', modelId: 'onnx-community/Supertonic-TTS-2-ONNX',
-        device: 'wasm', dtype: 'fp32', voice: 'F1', steps: 5, speed: 1.0, lang: 'en', gpu: false,
-        label: 'Voice: Supertonic (fast, CPU)' },
+      { id: 'supertonic3', engine: 'supertonic3', modelId: 'soniqo/Supertonic-3-ONNX-INT8',
+        device: 'wasm', dtype: 'q8', voice: 'F1', steps: 8, speed: 1.05, lang: 'en', gpu: false,
+        label: 'Voice: Supertonic 3 (31 langs, fast CPU)' },
+      { id: 'supertonic3-hq', engine: 'supertonic3', modelId: 'Supertone/supertonic-3',
+        device: 'wasm', dtype: 'fp32', voice: 'F1', steps: 8, speed: 1.05, lang: 'en', gpu: false,
+        label: 'Voice: Supertonic 3 HQ (fp32, CPU)' },
       { id: 'kokoro-gpu', engine: 'kokoro', modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
         device: 'webgpu', dtype: 'fp32', voice: 'af_heart', gpu: true,
         label: 'Voice: Kokoro (GPU)' },
@@ -192,7 +201,7 @@
     // you can't get trapped in a reload→crash loop. Cleared after a successful GPU
     // synth (Supertonic is CPU so it never sets the marker).
     const GPU_VOICE_CRASH_KEY = 'litert-gpu-voice-crashed';
-    let voiceModeIdx = 0; // default: Supertonic (CPU) — fast + smooth on Quest
+    let voiceModeIdx = 0; // default: Supertonic 3 (CPU) — fast + smooth on Quest
     try { sessionStorage.removeItem(GPU_VOICE_CRASH_KEY); } catch (_) {}
     const _vm = VOICE_MODES[voiceModeIdx];
     // Smaller chunks → first words play sooner (streamed), and each synth burst is
@@ -200,7 +209,7 @@
     // balance; bump up on desktop if you prefer fewer seams.
     const speaker = new SpatialSpeaker({ engine: _vm.engine, modelId: _vm.modelId,
                                          device: _vm.device, dtype: _vm.dtype, voice: _vm.voice,
-                                         steps: _vm.steps, speed: _vm.speed, chunkChars: 70,
+                                         steps: _vm.steps, speed: _vm.speed, lang: _vm.lang, chunkChars: 70,
                                          spatial: true, position: { x: 0, y: 1.95, z: -1.8 } });
 
     // Warm the voice models (download + compile kernels) once, as early as

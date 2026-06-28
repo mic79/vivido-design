@@ -14,7 +14,8 @@
 // All classes are DOM-free; they work in flat pages and inside A-Frame/WebXR.
 
 // CDN module sources (pinned for reproducibility). transformers.js 4.x is needed
-// for the Supertonic text-to-speech pipeline; the Whisper ASR API is unchanged.
+// for the Supertonic 2 text-to-speech pipeline; the Whisper ASR API is unchanged.
+// Supertonic 3 lives in ./supertonic3.js (its own ONNX-Runtime-Web pipeline).
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
 const KOKORO_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js';
 const TARGET_SR = 16000; // Whisper / Gemma audio frontends expect 16 kHz mono
@@ -282,23 +283,28 @@ export class Transcriber {
 
 export class SpatialSpeaker {
   constructor({
-    // TTS engine: 'kokoro' (Kokoro-82M, fast on GPU) or 'supertonic' (Supertonic 2
-    // via transformers.js, fast on CPU/WASM → no GPU contention; quality/speed dial
-    // = `steps`, the "5-step" Supertonic setting).
+    // TTS engine:
+    //   'kokoro'      — Kokoro-82M, fast on GPU.
+    //   'supertonic'  — Supertonic 2 (transformers.js pipeline), CPU/WASM, en/ko/
+    //                   es/pt/fr. quality/speed dial = `steps`.
+    //   'supertonic3' — Supertonic 3 (./supertonic3.js ONNX-Runtime-Web port),
+    //                   CPU/WASM, 31 languages incl. Dutch + Italian.
     engine = 'kokoro',
-    modelId = (engine === 'supertonic'
-      ? 'onnx-community/Supertonic-TTS-2-ONNX'
-      : 'onnx-community/Kokoro-82M-v1.0-ONNX'),
+    modelId = (engine === 'supertonic3'
+      ? 'Supertone/supertonic-3'
+      : engine === 'supertonic'
+        ? 'onnx-community/Supertonic-TTS-2-ONNX'
+        : 'onnx-community/Kokoro-82M-v1.0-ONNX'),
     // Kokoro: fp16 on WebGPU is correct AND fast. (q8 on WebGPU is the trap: it
     // loads but the onnxruntime-web WebGPU backend mis-runs uint8 ops → slow +
     // garbled. The worker forces fp16 on GPU and q8 only on CPU.) Supertonic ships
     // fp32 only and runs on WASM/CPU.
-    dtype = (engine === 'supertonic' ? 'fp32' : 'fp16'),
-    device = (engine === 'supertonic' ? 'wasm' : 'webgpu'),
-    voice = (engine === 'supertonic' ? 'F1' : 'af_heart'),
+    dtype = (engine.startsWith('supertonic') ? 'fp32' : 'fp16'),
+    device = (engine.startsWith('supertonic') ? 'wasm' : 'webgpu'),
+    voice = (engine.startsWith('supertonic') ? 'F1' : 'af_heart'),
     steps = 5,        // Supertonic denoising steps (5 = fast, 12 = best quality)
     speed = 1.0,      // Supertonic speech speed factor
-    lang = 'en',      // Supertonic 2 language tag (en/ko/es/pt/fr)
+    lang = 'en',      // Supertonic language tag (v2: en/ko/es/pt/fr; v3: 31 langs)
     spatial = true,
     position = { x: 0, y: 1.6, z: -1.8 },
     chunkChars = 140, // synth chunk size: smaller = first audio sooner (streaming)
@@ -313,6 +319,7 @@ export class SpatialSpeaker {
     this._warmed = false;
     this._useWorker = workerSupported();
     this._tts = null; // inline fallback (only if Workers unavailable)
+    this._st3 = null; // inline Supertonic 3 engine (only if Workers unavailable)
 
     this.ctx = null;
     this.panner = null;
@@ -347,6 +354,16 @@ export class SpatialSpeaker {
     if (this._useWorker) {
       const r = await vwCall('warm-tts', { cfg: this.cfg });
       this.backend = (r && r.backend) || `${this.cfg.device}/${this.cfg.dtype}`;
+    } else if (this.cfg.engine === 'supertonic3') {
+      // Inline (no Worker): Supertonic 3 via our ONNX-Runtime-Web port on CPU.
+      const { Supertonic3 } = await import(/* @vite-ignore */ './supertonic3.js');
+      this._st3 = new Supertonic3({
+        repo: this.cfg.modelId, voice: this.voice, lang: this.cfg.lang,
+        steps: this.cfg.steps, speed: this.cfg.speed,
+      });
+      await this._st3.load();
+      this._tts = this._st3;
+      this.backend = this._st3.backend;
     } else if (this.cfg.engine === 'supertonic') {
       // Inline (no Worker): Supertonic via the transformers.js TTS pipeline on CPU.
       const { pipeline } = await importTransformers();
@@ -388,7 +405,7 @@ export class SpatialSpeaker {
     this._lastText = '';
     this._lastBuffers = null;
     if (this._useWorker) { try { await vwCall('reset-tts'); } catch (_) {} }
-    else { this._tts = null; }
+    else { this._tts = null; this._st3 = null; }
   }
 
   /**
@@ -410,7 +427,7 @@ export class SpatialSpeaker {
     this._lastText = '';
     this._lastBuffers = null;
     if (this._useWorker) { try { await vwCall('reset-tts'); } catch (_) {} }
-    else { this._tts = null; }
+    else { this._tts = null; this._st3 = null; }
   }
 
   _initAudioGraph() {
@@ -472,6 +489,12 @@ export class SpatialSpeaker {
     if (this._useWorker) {
       const out = await vwCall('tts', { cfg: this.cfg, text: clean, voice: this.voice });
       data = out.audio; rate = out.rate || 24000;
+    } else if (this.cfg.engine === 'supertonic3') {
+      const out = await this._st3.synth(clean, {
+        voice: this.voice, lang: this.cfg.lang,
+        steps: this.cfg.steps, speed: this.cfg.speed,
+      });
+      data = out.audio; rate = out.rate || 44100;
     } else if (this.cfg.engine === 'supertonic') {
       // Supertonic 2 needs a language tag ("<en>...</en>") or it garbles/repeats.
       const lang = this.cfg.lang || 'en';
