@@ -28,7 +28,7 @@ async function tf() {
     // stays smooth while synthesizing.
     try {
       const hc = (self.navigator && navigator.hardwareConcurrency) || 4;
-      _tf.env.backends.onnx.wasm.numThreads = Math.max(2, Math.min(6, hc - 2));
+      _tf.env.backends.onnx.wasm.numThreads = Math.max(2, Math.min(8, hc - 1));
     } catch (_) {}
   }
   return _tf;
@@ -64,27 +64,59 @@ async function ensureAsr(cfg) {
   return asr;
 }
 
+// Some GPU/dtype combos LOAD fine but emit silence or NaN — most notably fp16 on
+// GPUs without the WebGPU `shader-f16` feature (e.g. Meta Quest), and uint8 (q8)
+// on WebGPU. So we don't trust a backend until it has actually produced audible
+// samples from a tiny probe synth. This is what stops the device guessing-game.
+async function producesAudio(inst, voice) {
+  try {
+    const out = await inst.generate('Test.', { voice: voice || 'af_heart' });
+    const data = out.audio || out.data;
+    if (!data || !data.length) return false;
+    let max = 0;
+    const step = Math.max(1, (data.length / 4000) | 0);
+    for (let i = 0; i < data.length; i += step) {
+      const v = data[i];
+      if (Number.isNaN(v)) return false;
+      const a = Math.abs(v);
+      if (a > max) max = a;
+    }
+    return max > 1e-4; // non-silent
+  } catch (_) { return false; }
+}
+
 async function ensureTts(cfg) {
   if (tts) return tts;
-  await tf(); // configure WASM threading for the fallback path
+  await tf(); // configure WASM threading for the CPU path
   const { KokoroTTS } = await kk();
-  // IMPORTANT: never use q8 on WebGPU — onnxruntime-web's WebGPU backend produces
-  // garbled / wrong-language audio for uint8-quantized Kokoro. fp16 is correct and
-  // fast on WebGPU; q8 is fine (and small) on WASM/CPU as the fallback.
+  // GPU: prefer fp32 (works without shader-f16, unlike fp16; q8 is broken on GPU).
+  // CPU: q8 (correct + small). Each candidate must PASS the audio probe to be used.
   const wantGpu = cfg.device && cfg.device !== 'wasm';
   const candidates = wantGpu
-    ? [{ device: cfg.device, dtype: 'fp16' }, { device: cfg.device, dtype: 'fp32' }, { device: 'wasm', dtype: 'q8' }]
+    ? [{ device: cfg.device, dtype: 'fp32' }, { device: cfg.device, dtype: 'fp16' }, { device: 'wasm', dtype: 'q8' }]
     : [{ device: 'wasm', dtype: cfg.dtype || 'q8' }];
-  const r = await loadFirst('TTS', candidates,
-    (c) => KokoroTTS.from_pretrained(cfg.modelId, { device: c.device, dtype: c.dtype }));
-  tts = r.inst;
-  // For the CPU path, speed depends entirely on WASM threads, which need
-  // cross-origin isolation. Report it so the UI can explain slow synth.
-  const threads = /wasm/i.test(r.backend)
-    ? (self.crossOriginIsolated ? `x${_tf.env.backends.onnx.wasm.numThreads}` : '1-thread')
-    : '';
-  ttsBackend = threads ? `${r.backend} ${threads}` : r.backend;
-  return tts;
+
+  let lastErr;
+  for (const c of candidates) {
+    try {
+      const inst = await KokoroTTS.from_pretrained(cfg.modelId, { device: c.device, dtype: c.dtype });
+      if (!(await producesAudio(inst, cfg.voice))) {
+        console.warn(`[voice-worker] TTS ${c.device}/${c.dtype} loaded but produced silent/NaN audio — trying next backend`);
+        continue;
+      }
+      tts = inst;
+      const threads = /wasm/i.test(c.device)
+        ? (self.crossOriginIsolated ? `x${_tf.env.backends.onnx.wasm.numThreads}` : '1-thread')
+        : '';
+      ttsBackend = `${c.device}/${c.dtype}${threads ? ' ' + threads : ''}`;
+      console.log(`[voice-worker] TTS using ${ttsBackend}`);
+      return tts;
+    } catch (e) {
+      lastErr = e;
+      console.warn(`[voice-worker] TTS ${c.device}/${c.dtype} failed to load: ${e && e.message}`);
+    }
+  }
+  throw lastErr || new Error('TTS: no working backend (all produced silence or failed)');
 }
 
 // Process messages strictly one-at-a-time. The worker has a single CPU budget,

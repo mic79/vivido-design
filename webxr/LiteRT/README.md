@@ -152,8 +152,11 @@ await tts.speak(res.text);                                    // speak the WHOLE
   `1-thread` WASM into `x4`+ threads. It reloads the page once on first load. This
   is what makes on-device Whisper/Kokoro fast **without** a GPU and **without**
   server config. Requires a secure context (HTTPS or localhost).
-- ⚠ Never use `q8` on WebGPU for Kokoro — onnxruntime-web mis-runs uint8 ops there,
-  producing slow, garbled (wrong-language) audio; `fp16` is the correct GPU dtype.
+- ⚠ Kokoro on WebGPU: use **`fp32`**. `q8` is garbled (uint8 ops), and `fp16`
+  emits **silence/NaN** on GPUs without the `shader-f16` feature (e.g. Meta Quest).
+  The worker **probes each backend** (synthesizes a test clip and checks it isn't
+  silent) and only keeps one that actually produces sound — otherwise it falls
+  back to `wasm/q8`. So `webgpu/fp32` is preferred, CPU is the safety net.
 - Whole-reply speech: the demos generate the full text first, then synthesize and
   speak it in **one pass** (no per-sentence loading/gaps) with a
   "Generating speech…" indicator. Keep responses short (a "be brief" system

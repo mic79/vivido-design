@@ -292,7 +292,7 @@ export class SpatialSpeaker {
     spatial = true,
     position = { x: 0, y: 1.6, z: -1.8 },
   } = {}) {
-    this.cfg = { modelId, device, dtype };
+    this.cfg = { modelId, device, dtype, voice };
     this.voice = voice;
     this.spatial = spatial;
     this.position = position;
