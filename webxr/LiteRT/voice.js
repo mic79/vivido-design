@@ -318,6 +318,7 @@ export class SpatialSpeaker {
     this.gain = null;
     this.queue = [];
     this.playing = false;
+    this._starting = false;    // a start() is pending behind ctx.resume() (race guard)
     this.current = null;       // currently-playing AudioBufferSourceNode
     this.onPlaying = null;     // optional cb(isPlaying) for UI (stop button, etc.)
     this.onState = null;       // optional cb(audioContextState) for UI diagnostics
@@ -494,10 +495,17 @@ export class SpatialSpeaker {
   }
 
   _playNext() {
+    if (this._starting) return; // a start() is already pending behind resume()
     if (!this.queue.length) { this.current = null; this._setPlaying(false); return; }
+    // Reserve the player SYNCHRONOUSLY. Otherwise, when the context is suspended
+    // (common on Quest), each rapid _enqueue() — fast CPU synth queues several at
+    // once — would schedule its own resume().then(start), and when resume()
+    // resolves ALL of them fire together and play on top of each other. Setting
+    // `playing` now makes _enqueue's guard skip re-triggering.
+    this._setPlaying(true);
     const start = () => {
+      this._starting = false;
       if (!this.queue.length) { this.current = null; this._setPlaying(false); return; }
-      this._setPlaying(true);
       const buf = this.queue.shift();
       const src = this.ctx.createBufferSource();
       src.buffer = buf;
@@ -510,6 +518,7 @@ export class SpatialSpeaker {
     // (the clock is frozen) — the classic "shows Speaking but no sound". Make
     // sure the context is running first.
     if (this.ctx.state !== 'running') {
+      this._starting = true;
       this.ctx.resume().then(start).catch(start);
     } else {
       start();
@@ -616,6 +625,7 @@ export class SpatialSpeaker {
   stop() {
     this._gen++; // cancel any in-flight chunked synth
     this.queue = [];
+    this._starting = false; // drop any start() pending behind a resume()
     try { if (this.current) { this.current.onended = null; this.current.stop(); } } catch (_) {}
     this.current = null;
     this._setPlaying(false);
