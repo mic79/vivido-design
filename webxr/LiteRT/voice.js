@@ -13,8 +13,9 @@
 //
 // All classes are DOM-free; they work in flat pages and inside A-Frame/WebXR.
 
-// CDN module sources (pinned for reproducibility).
-const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5';
+// CDN module sources (pinned for reproducibility). transformers.js 4.x is needed
+// for the Supertonic text-to-speech pipeline; the Whisper ASR API is unchanged.
+const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
 const KOKORO_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js';
 const TARGET_SR = 16000; // Whisper / Gemma audio frontends expect 16 kHz mono
 
@@ -281,19 +282,27 @@ export class Transcriber {
 
 export class SpatialSpeaker {
   constructor({
-    modelId = 'onnx-community/Kokoro-82M-v1.0-ONNX',
-    // fp16 on WebGPU is correct AND fast. (q8 on WebGPU is the trap: it loads but
-    // the onnxruntime-web WebGPU backend mis-runs uint8 ops → slow + garbled,
-    // wrong-language audio. The worker forces fp16 on GPU and only uses q8 on the
-    // CPU/WASM fallback, where q8 is correct and keeps memory tiny.)
-    dtype = 'fp16',
-    device = 'webgpu',
-    voice = 'af_heart',
+    // TTS engine: 'kokoro' (Kokoro-82M, fast on GPU) or 'supertonic' (Supertonic 2
+    // via transformers.js, fast on CPU/WASM → no GPU contention; quality/speed dial
+    // = `steps`, the "5-step" Supertonic setting).
+    engine = 'kokoro',
+    modelId = (engine === 'supertonic'
+      ? 'onnx-community/Supertonic-TTS-2-ONNX'
+      : 'onnx-community/Kokoro-82M-v1.0-ONNX'),
+    // Kokoro: fp16 on WebGPU is correct AND fast. (q8 on WebGPU is the trap: it
+    // loads but the onnxruntime-web WebGPU backend mis-runs uint8 ops → slow +
+    // garbled. The worker forces fp16 on GPU and q8 only on CPU.) Supertonic ships
+    // fp32 only and runs on WASM/CPU.
+    dtype = (engine === 'supertonic' ? 'fp32' : 'fp16'),
+    device = (engine === 'supertonic' ? 'wasm' : 'webgpu'),
+    voice = (engine === 'supertonic' ? 'F1' : 'af_heart'),
+    steps = 5,        // Supertonic denoising steps (5 = fast, 12 = best quality)
+    speed = 1.0,      // Supertonic speech speed factor
     spatial = true,
     position = { x: 0, y: 1.6, z: -1.8 },
     chunkChars = 140, // synth chunk size: smaller = first audio sooner (streaming)
   } = {}) {
-    this.cfg = { modelId, device, dtype, voice };
+    this.cfg = { engine, modelId, device, dtype, voice, steps, speed };
     this.voice = voice;
     this.chunkChars = chunkChars;
     this.spatial = spatial;
@@ -336,6 +345,11 @@ export class SpatialSpeaker {
     if (this._useWorker) {
       const r = await vwCall('warm-tts', { cfg: this.cfg });
       this.backend = (r && r.backend) || `${this.cfg.device}/${this.cfg.dtype}`;
+    } else if (this.cfg.engine === 'supertonic') {
+      // Inline (no Worker): Supertonic via the transformers.js TTS pipeline on CPU.
+      const { pipeline } = await importTransformers();
+      this._tts = await pipeline('text-to-speech', this.cfg.modelId, { device: 'wasm', dtype: 'fp32' });
+      this.backend = `supertonic wasm/fp32`;
     } else {
       // Inline (no Worker): still avoid q8 on WebGPU for the reasons above.
       const dtype = (this.cfg.device !== 'wasm') ? 'fp16' : (this.cfg.dtype || 'q8');
@@ -366,6 +380,28 @@ export class SpatialSpeaker {
     this.stop();
     this.cfg.device = device;
     this.cfg.dtype = dtype;
+    this.ready = false;
+    this._warmed = false;
+    this.backend = '';
+    this._lastText = '';
+    this._lastBuffers = null;
+    if (this._useWorker) { try { await vwCall('reset-tts'); } catch (_) {} }
+    else { this._tts = null; }
+  }
+
+  /**
+   * Switch the whole TTS engine at runtime (Kokoro <-> Supertonic, plus its
+   * device/dtype/voice/steps). Stops playback, drops the old model and reloads
+   * on next use. `cfg` may include { engine, modelId, device, dtype, voice,
+   * steps, speed }.
+   */
+  async setEngine(cfg = {}) {
+    const unchanged = ['engine', 'modelId', 'device', 'dtype'].every(
+      (k) => cfg[k] === undefined || cfg[k] === this.cfg[k]);
+    Object.assign(this.cfg, cfg);
+    if (cfg.voice) this.voice = cfg.voice;
+    if (unchanged && this.ready) return; // only voice/steps/speed tweaked
+    this.stop();
     this.ready = false;
     this._warmed = false;
     this.backend = '';
@@ -434,6 +470,14 @@ export class SpatialSpeaker {
     if (this._useWorker) {
       const out = await vwCall('tts', { cfg: this.cfg, text: clean, voice: this.voice });
       data = out.audio; rate = out.rate || 24000;
+    } else if (this.cfg.engine === 'supertonic') {
+      const out = await this._tts(clean, {
+        speaker_embeddings: `https://huggingface.co/${this.cfg.modelId}/resolve/main/voices/${this.voice}.bin`,
+        num_inference_steps: this.cfg.steps || 5,
+        speed: this.cfg.speed || 1.0,
+      });
+      data = out.audio || out.data;
+      rate = out.sampling_rate || out.sampleRate || 44100;
     } else {
       const audio = await this._tts.generate(clean, { voice: this.voice });
       data = audio.audio || audio.data;

@@ -168,36 +168,40 @@
     const mic = new MicRecorder();
     const transcriber = new Transcriber(); // device:'auto' (WebGPU when available)
     let whisperLoaded = false;
-    // Voice synthesis tradeoff on a headset's single shared GPU:
-    //   • GPU (webgpu/fp32): fast synth. Needs ~330 MB of GPU memory.
-    //   • CPU (wasm/q8): rock-solid + smooth render, but slower synth.
-    // The bundled default LLM (Gemma 4 E2B) fills most of the headset's shared
-    // GPU (~2 GB), leaving little room for a GPU TTS model — running both there
-    // OOMs/crashes Quest. So we DEFAULT to the CPU voice (rock-solid + smooth
-    // render). Toggle to GPU only with a small LLM that frees GPU memory.
-    const VOICE_MODES = {
-      cpu: { device: 'wasm', dtype: 'q8', label: 'Voice: Stable (CPU)' },
-      gpu: { device: 'webgpu', dtype: 'fp32', label: 'Voice: Fast (GPU)' },
-    };
+    // Voice (TTS) engines — cycle with the in-VR voice button. Ordered best-first
+    // for a headset:
+    //   1) Supertonic (WASM/CPU): a ~99M model tuned for CPU → fast synth AND no
+    //      GPU contention with the LLM/compositor (smooth render). `steps` is the
+    //      quality/speed dial (5 = fast). This is the default.
+    //   2) Kokoro (WebGPU): fastest synth, but the GPU job fights the compositor
+    //      → stutter, and needs spare GPU memory (pair with a small LLM).
+    //   3) Kokoro (CPU): rock-solid + smooth, but slow synth (last resort).
+    const VOICE_MODES = [
+      { id: 'supertonic', engine: 'supertonic', modelId: 'onnx-community/Supertonic-TTS-2-ONNX',
+        device: 'wasm', dtype: 'fp32', voice: 'F1', steps: 5, speed: 1.0, gpu: false,
+        label: 'Voice: Supertonic (fast, CPU)' },
+      { id: 'kokoro-gpu', engine: 'kokoro', modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
+        device: 'webgpu', dtype: 'fp32', voice: 'af_heart', gpu: true,
+        label: 'Voice: Kokoro (GPU)' },
+      { id: 'kokoro-cpu', engine: 'kokoro', modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
+        device: 'wasm', dtype: 'q8', voice: 'af_heart', gpu: false,
+        label: 'Voice: Kokoro (stable, CPU)' },
+    ];
     // Safety net: if a previous GPU-voice run crashed the tab, the crash marker
-    // below is still set on the next load → stay on CPU once so you can't get
-    // trapped in a reload→crash loop. Cleared after a successful GPU synth.
+    // below is still set on the next load → start on the CPU Supertonic engine so
+    // you can't get trapped in a reload→crash loop. Cleared after a successful GPU
+    // synth (Supertonic is CPU so it never sets the marker).
     const GPU_VOICE_CRASH_KEY = 'litert-gpu-voice-crashed';
-    // Default to Fast (GPU) voice: the default LLM (Gemma 3 270M, ~250 MB) leaves
-    // plenty of GPU headroom. If you switch to a big model (Gemma 4 E2B/E4B),
-    // toggle voice back to Stable (CPU) to avoid OOM.
-    let voiceMode = 'gpu';
-    try {
-      if (sessionStorage.getItem(GPU_VOICE_CRASH_KEY) === '1') {
-        voiceMode = 'cpu';
-        sessionStorage.removeItem(GPU_VOICE_CRASH_KEY);
-      }
-    } catch (_) {}
-    const _vm = VOICE_MODES[voiceMode];
-    // Smaller chunks → first words play sooner (streamed), and on GPU each burst
-    // is smaller so the render hitches less.
-    const speaker = new SpatialSpeaker({ device: _vm.device, dtype: _vm.dtype, chunkChars: 110,
-                                         spatial: true, voice: 'af_heart', position: { x: 0, y: 1.95, z: -1.8 } });
+    let voiceModeIdx = 0; // default: Supertonic (CPU) — fast + smooth on Quest
+    try { sessionStorage.removeItem(GPU_VOICE_CRASH_KEY); } catch (_) {}
+    const _vm = VOICE_MODES[voiceModeIdx];
+    // Smaller chunks → first words play sooner (streamed), and each synth burst is
+    // a smaller job so the WebXR compositor stalls less. 70 is a good Quest
+    // balance; bump up on desktop if you prefer fewer seams.
+    const speaker = new SpatialSpeaker({ engine: _vm.engine, modelId: _vm.modelId,
+                                         device: _vm.device, dtype: _vm.dtype, voice: _vm.voice,
+                                         steps: _vm.steps, speed: _vm.speed, chunkChars: 70,
+                                         spatial: true, position: { x: 0, y: 1.95, z: -1.8 } });
 
     // Warm the voice models (download + compile kernels) once, as early as
     // possible, so the first spoken turn has nothing to load. Idempotent.
@@ -474,13 +478,13 @@
       modeBtn.addEventListener('mouseenter', () => modeBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
       modeBtn.addEventListener('mouseleave', () => modeBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
       modeBtn.addEventListener('click', async () => {
-        voiceMode = voiceMode === 'cpu' ? 'gpu' : 'cpu';
-        const m = VOICE_MODES[voiceMode];
+        voiceModeIdx = (voiceModeIdx + 1) % VOICE_MODES.length;
+        const m = VOICE_MODES[voiceModeIdx];
         updateVoiceModeLabel();
-        setVRStatus(`Switching voice to ${voiceMode.toUpperCase()}…`);
+        setVRStatus(`Switching voice to ${m.label.replace('Voice: ', '')}…`);
         try {
           await speaker.unlock();
-          await speaker.setBackend(m.device, m.dtype); // reloads on next reply
+          await speaker.setEngine(m); // swaps engine/device; reloads on next reply
           setVoiceBackend();
           setVRStatus('Idle');
         } catch (err) { setVRStatus(`Voice switch error: ${err.message || err}`); }
@@ -489,7 +493,7 @@
 
     function updateVoiceModeLabel() {
       const el = document.getElementById('voice-mode-label');
-      if (el) el.setAttribute('value', VOICE_MODES[voiceMode].label);
+      if (el) el.setAttribute('value', VOICE_MODES[voiceModeIdx].label);
     }
 
     async function ask(prompt) {
@@ -538,7 +542,7 @@
       // Arm the GPU crash marker around the risky GPU work. If the tab survives
       // (success OR a catchable error), we clear it; only an actual hard crash
       // leaves it set, which makes the NEXT load fall back to CPU automatically.
-      const guardGpu = voiceMode === 'gpu';
+      const guardGpu = !!VOICE_MODES[voiceModeIdx].gpu;
       if (guardGpu) { try { sessionStorage.setItem(GPU_VOICE_CRASH_KEY, '1'); } catch (_) {} }
       try {
         if (!speaker.ready) { setVRStatus('Loading voice model (first use)…'); await speaker.load(); setVoiceBackend(); }

@@ -1,9 +1,16 @@
 // voice-worker.js
-// Runs on-device speech-to-text (Whisper) and text-to-speech (Kokoro) OFF the
-// main thread. This is critical on Meta Quest: doing this compute on the UI
-// thread froze the render loop, and doing it on WebGPU fought the ~2 GB LLM for
-// GPU memory and crashed the tab. Here it runs on WASM/CPU in a Worker, so the
-// headset keeps rendering smoothly and the GPU stays reserved for the LLM.
+// Runs on-device speech-to-text (Whisper) and text-to-speech (Kokoro OR
+// Supertonic) OFF the main thread. This is critical on Meta Quest: doing this
+// compute on the UI thread froze the render loop, and doing it on WebGPU fought
+// the LLM for GPU memory and crashed the tab. Here it runs on WASM/CPU in a
+// Worker, so the headset keeps rendering smoothly and the GPU stays reserved for
+// the LLM.
+//
+// TTS engines (cfg.engine):
+//   'kokoro'     — Kokoro-82M (kokoro-js). Fast on WebGPU, slow on CPU.
+//   'supertonic' — Supertonic 2 (transformers.js text-to-speech pipeline). Tuned
+//                  for CPU: fast on WASM AND no GPU contention → smooth on Quest.
+//                  Quality/speed dial = num_inference_steps (cfg.steps, ~5 fast).
 //
 // Protocol (postMessage):
 //   in : { id, type:'warm-asr'|'warm-tts', payload:{ cfg } }
@@ -14,11 +21,16 @@
 //        { id, type:'tts-result', payload:{ audio:Float32Array, rate } }
 //        { id, type:'error', payload:{ message } }
 
-const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5';
+// 4.x is required for the Supertonic text-to-speech pipeline (added in v4); the
+// Whisper ASR pipeline API is unchanged from 3.x, so STT keeps working.
+const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
 const KOKORO_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js';
 
 let _tf = null, _kokoro = null, asr = null, tts = null;
 let ttsBackend = '', asrBackend = ''; // which device/dtype actually loaded (diagnostics)
+let ttsEngine = '';                   // 'kokoro' | 'supertonic' currently loaded
+const _spkCache = new Map();          // Supertonic speaker-embedding cache (per voice)
+const isSupertonic = (cfg) => !!(cfg && cfg.engine === 'supertonic');
 async function tf() {
   if (!_tf) {
     _tf = await import(TRANSFORMERS_URL);
@@ -85,8 +97,44 @@ async function producesAudio(inst, voice) {
   } catch (_) { return false; }
 }
 
+// Dispatch to the requested TTS engine. Reuses a loaded instance only when the
+// engine matches; switching engines goes through 'reset-tts' first.
 async function ensureTts(cfg) {
-  if (tts) return tts;
+  if (tts && ttsEngine === (cfg.engine || 'kokoro')) return tts;
+  if (isSupertonic(cfg)) return ensureSupertonic(cfg);
+  return ensureKokoro(cfg);
+}
+
+// Load (and cache) a Supertonic speaker embedding (.bin = raw float32) so we
+// don't refetch it on every sentence.
+async function supertonicEmbedding(modelId, voice) {
+  const key = `${modelId}/${voice}`;
+  if (_spkCache.has(key)) return _spkCache.get(key);
+  const url = `https://huggingface.co/${modelId}/resolve/main/voices/${voice}.bin`;
+  const buf = await (await fetch(url)).arrayBuffer();
+  const emb = new Float32Array(buf);
+  _spkCache.set(key, emb);
+  return emb;
+}
+
+async function ensureSupertonic(cfg) {
+  if (tts && ttsEngine === 'supertonic') return tts;
+  const { pipeline } = await tf();
+  // Supertonic ships fp32 only and is tuned for CPU (upstream marks GPU mode
+  // "not tested"), so we run it on WASM/CPU — its strength — which also keeps the
+  // GPU free for the LLM and the WebXR compositor (no stutter).
+  const r = await loadFirst('Supertonic', [
+    { device: 'wasm', dtype: 'fp32' },
+  ], (c) => pipeline('text-to-speech', cfg.modelId, { device: c.device, dtype: c.dtype }));
+  tts = r.inst; ttsEngine = 'supertonic';
+  const threads = self.crossOriginIsolated ? `x${_tf.env.backends.onnx.wasm.numThreads}` : '1-thread';
+  ttsBackend = `supertonic ${r.backend} ${threads}`;
+  console.log(`[voice-worker] TTS using ${ttsBackend}`);
+  return tts;
+}
+
+async function ensureKokoro(cfg) {
+  if (tts && ttsEngine === 'kokoro') return tts;
   await tf(); // configure WASM threading for the CPU path
   const { KokoroTTS } = await kk();
   // GPU: prefer fp32 (works without shader-f16, unlike fp16; q8 is broken on GPU).
@@ -106,7 +154,7 @@ async function ensureTts(cfg) {
         console.warn(`[voice-worker] TTS ${c.device}/${c.dtype} loaded but produced silent/NaN audio — trying next backend`);
         continue;
       }
-      tts = inst;
+      tts = inst; ttsEngine = 'kokoro';
       const threads = /wasm/i.test(c.device)
         ? (self.crossOriginIsolated ? `x${_tf.env.backends.onnx.wasm.numThreads}` : '1-thread')
         : '';
@@ -137,9 +185,9 @@ async function handle(msg) {
       await ensureTts(payload.cfg);
       reply(id, 'ok', { backend: ttsBackend });
     } else if (type === 'reset-tts') {
-      // Drop the cached model so the next warm/synth reloads on a new device
-      // (used by the CPU/GPU voice toggle). Frees the previous backend's memory.
-      tts = null; ttsBackend = '';
+      // Drop the cached model so the next warm/synth reloads on a new device or
+      // engine (used by the voice toggle). Frees the previous backend's memory.
+      tts = null; ttsBackend = ''; ttsEngine = '';
       reply(id, 'ok');
     } else if (type === 'asr') {
       await ensureAsr(payload.cfg);
@@ -153,10 +201,24 @@ async function handle(msg) {
       });
       reply(id, 'asr-result', { text: ((out && out.text) || '').trim() });
     } else if (type === 'tts') {
-      await ensureTts(payload.cfg);
-      const audio = await tts.generate(payload.text, { voice: payload.voice });
-      const src = audio.audio || audio.data;
-      const rate = audio.sampling_rate || audio.sampleRate || 24000;
+      const cfg = payload.cfg || {};
+      await ensureTts(cfg);
+      let src, rate;
+      if (isSupertonic(cfg)) {
+        const voice = payload.voice || cfg.voice || 'F1';
+        const emb = await supertonicEmbedding(cfg.modelId, voice);
+        const out = await tts(payload.text, {
+          speaker_embeddings: emb,
+          num_inference_steps: cfg.steps || 5, // the "5-step" speed/quality dial
+          speed: cfg.speed || 1.0,
+        });
+        src = out.audio || out.data;
+        rate = out.sampling_rate || out.sampleRate || 44100;
+      } else {
+        const audio = await tts.generate(payload.text, { voice: payload.voice });
+        src = audio.audio || audio.data;
+        rate = audio.sampling_rate || audio.sampleRate || 24000;
+      }
       const copy = new Float32Array(src); // standalone, transferable buffer
       reply(id, 'tts-result', { audio: copy, rate }, [copy.buffer]);
     } else {
