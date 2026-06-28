@@ -169,6 +169,28 @@ export function cleanForSpeech(text) {
   return s.trim();
 }
 
+/**
+ * Split text into synthesis chunks (~sentence-sized, merged up to `target`
+ * chars). Smaller GPU jobs keep the WebXR compositor from freezing during a big
+ * one-shot synth, and let the first chunk start playing sooner — while the queue
+ * still plays them back-to-back with no audible gaps.
+ */
+export function splitForSynth(text, target = 160) {
+  const clean = (text || '').trim();
+  if (!clean) return [];
+  const parts = clean.match(/[^.!?。！？\n]+[.!?。！？]*\s*/g) || [clean];
+  const chunks = [];
+  let buf = '';
+  for (const p of parts) {
+    const piece = p.trim();
+    if (!piece) continue;
+    if (buf && (buf.length + 1 + piece.length) > target) { chunks.push(buf); buf = piece; }
+    else buf = buf ? `${buf} ${piece}` : piece;
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
+}
+
 /** Safety net: collapse a phrase that repeats back-to-back (hallucination). */
 export function collapseRepeats(text) {
   if (!text) return '';
@@ -287,6 +309,9 @@ export class SpatialSpeaker {
     this.playing = false;
     this.current = null;       // currently-playing AudioBufferSourceNode
     this.onPlaying = null;     // optional cb(isPlaying) for UI (stop button, etc.)
+    this._gen = 0;             // bumped to cancel an in-flight chunked speak()
+    this._lastText = '';       // cached reply text + audio for instant replay
+    this._lastBuffers = null;
   }
 
   /** Fire the onPlaying callback only on actual state transitions. */
@@ -327,6 +352,7 @@ export class SpatialSpeaker {
   }
 
   _initAudioGraph() {
+    if (this.ctx) return; // build the graph once
     const AC = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AC();
     this.gain = this.ctx.createGain();
@@ -408,16 +434,60 @@ export class SpatialSpeaker {
   }
 
   /**
-   * Synthesize + speak a full string (queued behind anything already playing).
-   * Pass { force: true } to speak even when `enabled` is off (e.g. an explicit
-   * "replay this reply" action).
+   * Create the audio graph and resume the AudioContext. MUST be called from a
+   * real user gesture (button press / controller select). On Quest, generation
+   * can take several seconds, so the click's transient activation expires before
+   * speak() runs — if we only resume() then, the context stays suspended and
+   * there's NO SOUND. Calling unlock() up-front on the gesture fixes that.
+   */
+  async unlock() {
+    this._initAudioGraph();
+    if (this.ctx && this.ctx.state === 'suspended') {
+      try { await this.ctx.resume(); } catch (_) {}
+    }
+  }
+
+  /**
+   * Synthesize + speak a full string. The text is split into ~sentence chunks
+   * that are synthesized in order and queued back-to-back (gapless), so the
+   * first words start sooner and each GPU job is small enough not to freeze the
+   * VR render. The synthesized buffers are cached so replay() needs no re-synth.
+   * Pass { force: true } to speak even when `enabled` is off.
    */
   async speak(text, { force = false } = {}) {
     if ((!this.enabled && !force) || !text || !text.trim()) return;
     if (!this.ready) await this.load();
-    if (this.ctx.state === 'suspended') { try { await this.ctx.resume(); } catch (_) {} }
-    const buf = await this._synth(text);
-    if (buf) this._enqueue(buf);
+    await this.unlock();
+    const myGen = ++this._gen; // lets stop()/a newer speak() cancel this run
+    const chunks = splitForSynth(text);
+    const buffers = [];
+    for (const chunk of chunks) {
+      const buf = await this._synth(chunk);
+      if (this._gen !== myGen) return; // superseded/stopped while synthesizing
+      if (buf) { buffers.push(buf); this._enqueue(buf); }
+      // Yield a macrotask so the WebXR compositor can present a frame between
+      // GPU synth jobs (reduces the stutter during long replies).
+      await new Promise((r) => setTimeout(r, 0));
+      if (this._gen !== myGen) return;
+    }
+    this._lastText = text;
+    this._lastBuffers = buffers;
+  }
+
+  /**
+   * Replay a reply WITHOUT re-synthesizing when it's the one we just spoke:
+   * re-queues the cached audio buffers (instant, no GPU). Falls back to a fresh
+   * synth only for text we don't have cached.
+   */
+  async replay(text) {
+    await this.unlock();
+    if (text && this._lastText === text && this._lastBuffers && this._lastBuffers.length) {
+      this._gen++; // take over playback
+      for (const b of this._lastBuffers) this._enqueue(b);
+      return true;
+    }
+    await this.speak(text, { force: true });
+    return false;
   }
 
   /**
@@ -458,14 +528,14 @@ export class SpatialSpeaker {
     };
   }
 
-  /** Stop playback immediately and clear the queue. */
+  /** Stop playback immediately and clear the queue (keeps the context running so
+   *  the next reply still has sound — do NOT suspend here). */
   stop() {
+    this._gen++; // cancel any in-flight chunked synth
     this.queue = [];
     try { if (this.current) { this.current.onended = null; this.current.stop(); } } catch (_) {}
     this.current = null;
     this._setPlaying(false);
-    try { this.ctx && this.ctx.suspend(); } catch (_) {}
-    try { this.ctx && this.ctx.resume(); } catch (_) {}
   }
 
   async listVoices() {

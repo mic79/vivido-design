@@ -520,11 +520,12 @@
       btn.textContent = '🔁 Replay';
       btn.addEventListener('click', async () => {
         stopVoice();            // interrupt anything currently speaking
-        synthesizing = true; refreshStopBtn();
         const note = $('#voice-note');
         const prev = note.textContent;
-        note.textContent = '🗣 Generating speech…';
-        try { await speaker.speak(text, { force: true }); note.textContent = prev; }
+        // Re-queue cached audio instantly when it's the same reply (no re-synth).
+        const cached = speaker._lastText === text && speaker._lastBuffers && speaker._lastBuffers.length;
+        if (!cached) { synthesizing = true; refreshStopBtn(); note.textContent = '🗣 Generating speech…'; }
+        try { await speaker.replay(text); note.textContent = prev; }
         catch (err) { note.textContent = `Voice error: ${err.message || err}`; }
         finally { synthesizing = false; refreshStopBtn(); }
       });
@@ -535,6 +536,7 @@
     async function send() {
       const text = input.value.trim();
       if (!text || engine.busy) return;
+      try { await speaker.unlock(); } catch (_) {} // resume audio within the gesture
       input.value = ''; autosize();
       await runTurn(
         (onToken) => engine.generate(text, { system: systemPrompt, onToken }),
@@ -561,6 +563,7 @@
     let recording = false;
     async function startRec() {
       if (recording || engine.busy || $('#mic').disabled) return;
+      try { await speaker.unlock(); } catch (_) {} // resume audio within the gesture
       stopVoice(); // interrupt any current TTS before listening
       try {
         await mic.start();

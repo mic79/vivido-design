@@ -285,6 +285,14 @@
       buildButtons();
       wireMic();
       startListenerTracking();
+      // Resume the audio context when entering/interacting with the immersive
+      // session (Quest suspends audio until a session gesture).
+      const scene = document.querySelector('a-scene');
+      if (scene) {
+        const resume = () => { speaker.unlock().catch(() => {}); };
+        scene.addEventListener('enter-vr', resume);
+        scene.addEventListener('click', resume);
+      }
       // Voice models load lazily on first mic use (keeps memory free for the LLM).
       const voiceOk = MicRecorder.isSupported();
       setConvo(voiceOk
@@ -307,6 +315,7 @@
       btn.addEventListener('mouseleave', () => btn.setAttribute('material', `color: ${vrRecording ? '#5a2030' : '#1c2638'}; shader: flat`));
       btn.addEventListener('click', async () => {
         if (!enabled || engine.busy) return;
+        try { await speaker.unlock(); } catch (_) {} // resume audio within the gesture
         if (!vrRecording) {
           try {
             stopVoice(); // interrupt any current TTS before listening
@@ -399,9 +408,11 @@
       replayBtn.addEventListener('click', async () => {
         if (!lastReply) return;
         stopVoice();
-        setVRStatus('Generating speech…');
-        synthesizing = true; refreshVoiceButtons();
-        try { await speaker.speak(lastReply, { force: true }); }
+        // replay() re-queues the cached audio instantly when it's the same reply
+        // (no re-synth, no GPU). It only synthesizes if nothing is cached.
+        const cached = speaker._lastText === lastReply && speaker._lastBuffers && speaker._lastBuffers.length;
+        if (!cached) { setVRStatus('Generating speech…'); synthesizing = true; refreshVoiceButtons(); }
+        try { await speaker.replay(lastReply); }
         catch (err) { setVRStatus(`Voice error: ${err.message || err}`); }
         finally { synthesizing = false; refreshVoiceButtons(); }
       });
@@ -415,6 +426,10 @@
 
     async function ask(prompt) {
       if (engine.busy) return;
+      // Resume audio NOW (we're inside the click/select gesture). Generation can
+      // take seconds, after which the gesture's activation has expired and a late
+      // resume() would be ignored → silent playback.
+      try { await speaker.unlock(); } catch (_) {}
       await runVRTurn(prompt, (onToken) => engine.generate(prompt, { system: systemPrompt, onToken }));
     }
 
