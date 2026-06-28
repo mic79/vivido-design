@@ -102,17 +102,18 @@ export class LiteRTEngine {
     this.genai = await FilesetResolver.forGenAiTasks(WASM_ROOT);
 
     const baseOptions = {};
-    if (modelFile || modelBuffer) {
-      // In-memory load — most reliable (no CORS/auth). Best for VR/offline.
-      let buffer = modelBuffer;
-      if (modelFile) {
-        report('reading-file', { name: modelFile.name, size: modelFile.size });
-        buffer = await readFileWithProgress(modelFile, (loaded, total) =>
-          report('reading-file', { loaded, total })
-        );
-      }
+    if (modelFile) {
+      // Stream the file straight into the runtime (disk -> WASM) instead of
+      // reading the whole ~2 GB into a JS ArrayBuffer first. This keeps the JS
+      // heap tiny, which is what prevents out-of-memory crashes on Quest when
+      // loading a cached/picked model. (No CORS/auth concerns — it's local.)
+      report('reading-file', { name: modelFile.name, size: modelFile.size, loaded: 0, total: modelFile.size });
+      baseOptions.modelAssetBuffer = await streamFileReader(modelFile, (loaded, total) =>
+        report('reading-file', { loaded, total, name: modelFile.name })
+      );
+    } else if (modelBuffer) {
       baseOptions.modelAssetBuffer = new Uint8Array(
-        buffer instanceof Uint8Array ? buffer.buffer : buffer
+        modelBuffer instanceof Uint8Array ? modelBuffer.buffer : modelBuffer
       );
     } else if (modelUrl) {
       // Download the model OURSELVES so we can (a) report real byte-level
@@ -158,13 +159,17 @@ export class LiteRTEngine {
       this.llm = await LlmInference.createFromOptions(this.genai, createOpts);
     } catch (e) {
       // Some runtime/browser combos may not accept a stream reader. Fall back to
-      // letting MediaPipe fetch the URL itself (no progress, but may still work).
-      const usedReader = modelUrl && baseOptions.modelAssetBuffer &&
+      // a concrete source (no progress, higher peak memory, but may still work).
+      const usedReader = baseOptions.modelAssetBuffer &&
         !(baseOptions.modelAssetBuffer instanceof Uint8Array);
-      if (usedReader) {
+      if (usedReader && modelUrl) {
         report('creating-session', { fallback: true });
         delete baseOptions.modelAssetBuffer;
         baseOptions.modelAssetPath = modelUrl;
+        this.llm = await LlmInference.createFromOptions(this.genai, { ...createOpts, baseOptions });
+      } else if (usedReader && modelFile) {
+        report('creating-session', { fallback: true });
+        baseOptions.modelAssetBuffer = new Uint8Array(await modelFile.arrayBuffer());
         this.llm = await LlmInference.createFromOptions(this.genai, { ...createOpts, baseOptions });
       } else {
         throw e;
@@ -328,14 +333,35 @@ function cleanResponse(text) {
   return out.trim();
 }
 
-function readFileWithProgress(file, onProgress) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onprogress = (e) => e.lengthComputable && onProgress(e.loaded, e.total);
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error || new Error('File read failed'));
-    reader.readAsArrayBuffer(file);
+/**
+ * Stream a File/Blob (e.g. from the OPFS cache or a file picker) into a
+ * ReadableStreamDefaultReader the runtime can consume incrementally, so the
+ * whole file is never resident in the JS heap. Reports (loaded, total) bytes.
+ */
+async function streamFileReader(file, onProgress) {
+  if (!file.stream || typeof file.stream !== 'function') {
+    const buf = await file.arrayBuffer();
+    onProgress(buf.byteLength, buf.byteLength);
+    return new Uint8Array(buf);
+  }
+  const total = file.size || 0;
+  const src = file.stream().getReader();
+  let loaded = 0;
+  const progressed = new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await src.read();
+        if (done) { controller.close(); return; }
+        loaded += value.byteLength;
+        try { onProgress(loaded, total); } catch (_) {}
+        controller.enqueue(value);
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    cancel(reason) { try { src.cancel(reason); } catch (_) {} },
   });
+  return progressed.getReader();
 }
 
 /**
