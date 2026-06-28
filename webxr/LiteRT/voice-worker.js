@@ -18,24 +18,45 @@ const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers
 const KOKORO_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js';
 
 let _tf = null, _kokoro = null, asr = null, tts = null;
-async function tf() { if (!_tf) _tf = await import(TRANSFORMERS_URL); return _tf; }
+async function tf() {
+  if (!_tf) {
+    _tf = await import(TRANSFORMERS_URL);
+    // Use multiple CPU cores for the WASM backend when the page allows it
+    // (requires cross-origin isolation for threads; otherwise stays single-thread).
+    try {
+      const n = Math.min(4, (self.navigator && navigator.hardwareConcurrency) || 1);
+      _tf.env.backends.onnx.wasm.numThreads = n;
+    } catch (_) {}
+  }
+  return _tf;
+}
 async function kk() { if (!_kokoro) _kokoro = await import(KOKORO_URL); return _kokoro; }
 
 async function ensureAsr(cfg) {
   if (asr) return asr;
   const { pipeline } = await tf();
-  asr = await pipeline('automatic-speech-recognition', cfg.modelId, {
-    device: cfg.device, dtype: cfg.dtype,
-  });
+  try {
+    asr = await pipeline('automatic-speech-recognition', cfg.modelId, { device: cfg.device, dtype: cfg.dtype });
+  } catch (e) {
+    if (cfg.device !== 'wasm') {
+      asr = await pipeline('automatic-speech-recognition', cfg.modelId, { device: 'wasm', dtype: 'fp32' });
+    } else throw e;
+  }
   return asr;
 }
 
 async function ensureTts(cfg) {
   if (tts) return tts;
+  await tf(); // make sure WASM threading is configured for the fallback path
   const { KokoroTTS } = await kk();
-  tts = await KokoroTTS.from_pretrained(cfg.modelId, {
-    device: cfg.device, dtype: cfg.dtype,
-  });
+  try {
+    tts = await KokoroTTS.from_pretrained(cfg.modelId, { device: cfg.device, dtype: cfg.dtype });
+  } catch (e) {
+    // WebGPU unavailable in this worker/headset → fall back to CPU.
+    if (cfg.device !== 'wasm') {
+      tts = await KokoroTTS.from_pretrained(cfg.modelId, { device: 'wasm', dtype: 'q8' });
+    } else throw e;
+  }
   return tts;
 }
 

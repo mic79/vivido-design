@@ -260,8 +260,12 @@ export class Transcriber {
 export class SpatialSpeaker {
   constructor({
     modelId = 'onnx-community/Kokoro-82M-v1.0-ONNX',
-    dtype = 'q8',           // q8 keeps memory small (~80 MB) for headsets
-    device = 'wasm',        // WASM/CPU so it doesn't fight the LLM for the GPU
+    dtype = 'q8',           // q8 keeps GPU/CPU memory small (~80-90 MB)
+    // WebGPU for speed: TTS runs AFTER the LLM finishes generating, so there's
+    // no GPU compute contention. The worker auto-falls back to WASM/CPU if a
+    // headset can't do WebGPU in a worker. q8 keeps the footprint tiny so it
+    // fits in GPU memory alongside the resident LLM.
+    device = 'webgpu',
     voice = 'af_heart',
     spatial = true,
     position = { x: 0, y: 1.6, z: -1.8 },

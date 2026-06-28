@@ -175,21 +175,25 @@
     }
 
     // Voice-output state: interrupt current speech, replay last reply.
-    let currentSpeech = null;
     let ttsPlaying = false;
+    let synthesizing = false; // true while the whole reply is being synthesized
     let lastReply = '';
     function refreshVoiceButtons() {
       const stop = document.getElementById('stop-btn');
       const replay = document.getElementById('replay-btn');
-      if (stop) stop.setAttribute('visible', ttsPlaying || !!currentSpeech);
+      if (stop) stop.setAttribute('visible', ttsPlaying || synthesizing);
       if (replay) replay.setAttribute('visible', !!lastReply);
     }
     function stopVoice() {
-      if (currentSpeech) { currentSpeech.cancel(); currentSpeech = null; }
+      synthesizing = false;
       speaker.stop();
       refreshVoiceButtons();
     }
-    speaker.onPlaying = (p) => { ttsPlaying = p; refreshVoiceButtons(); };
+    speaker.onPlaying = (p) => {
+      ttsPlaying = p;
+      refreshVoiceButtons();
+      setVRStatus(p ? 'Speaking…' : 'Idle');
+    };
 
     const SUGGESTIONS = [
       'Greet me in Dutch',
@@ -379,10 +383,14 @@
       });
 
       const replayBtn = document.getElementById('replay-btn');
-      replayBtn.addEventListener('click', () => {
+      replayBtn.addEventListener('click', async () => {
         if (!lastReply) return;
         stopVoice();
-        speaker.speak(lastReply, { force: true });
+        setVRStatus('Generating speech…');
+        synthesizing = true; refreshVoiceButtons();
+        try { await speaker.speak(lastReply, { force: true }); }
+        catch (err) { setVRStatus(`Voice error: ${err.message || err}`); }
+        finally { synthesizing = false; refreshVoiceButtons(); }
       });
       const stopBtn = document.getElementById('stop-btn');
       stopBtn.addEventListener('click', stopVoice);
@@ -402,25 +410,42 @@
       setVRStatus('Thinking…');
       const ring = document.getElementById('avatar-ring');
       ring && ring.setAttribute('visible', true);
-      const speech = speaker.enabled !== false ? speaker.stream() : null;
-      currentSpeech = speech;
-      refreshVoiceButtons();
       try {
+        // 1) Generate the full text first (no speech yet — keeps the GPU free
+        //    for the LLM, then free for one fast TTS pass afterwards).
         const res = await generator((_d, f) => {
           setConvo(`You: ${clip(label, 120)}\n\nGemma: ${clip(f, 360)}`);
-          speech && speech.push(f);
         });
         setConvo(`You: ${clip(label, 120)}\n\nGemma: ${clip(res.text, 380)}`);
-        speech && speech.flush(res.text);
         lastReply = res.text || '';
-        setVRStatus(`${res.tokensPerSec.toFixed(1)} tok/s · TTFT ${Math.round(res.ttftMs)} ms · 🔊 spatial`);
+        refreshVoiceButtons();
+
+        // 2) Synthesize the WHOLE reply in one pass, then speak it continuously.
+        if (speaker.enabled !== false && res.text) {
+          setVRStatus('Generating speech…');
+          await speakWhole(res.text); // resolves once playback has started
+        } else {
+          setVRStatus(`${res.tokensPerSec.toFixed(1)} tok/s · 🔇`);
+        }
       } catch (err) {
         setConvo(`Error: ${err.message || err}`);
         setVRStatus('Error');
       } finally {
-        currentSpeech = null;
-        refreshVoiceButtons();
         ring && ring.setAttribute('visible', false);
+      }
+    }
+
+    // Speak an entire response as one utterance (single synth, no per-sentence
+    // gaps). Shows "Generating speech…" during synthesis and "Speaking…" while
+    // it plays (driven by speaker.onPlaying).
+    async function speakWhole(text) {
+      synthesizing = true; refreshVoiceButtons();
+      try {
+        await speaker.speak(text);     // one worker round-trip, then queued
+      } catch (err) {
+        setVRStatus(`Voice error: ${err.message || err}`);
+      } finally {
+        synthesizing = false; refreshVoiceButtons();
       }
     }
 

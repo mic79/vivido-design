@@ -64,10 +64,9 @@ npx vite
 3. Toggle **🔊 Speak replies** (flat) — in VR the reply is spoken automatically
    and spatialized from the avatar.
 
-First voice use downloads **Whisper** and **Kokoro** once (then cached offline).
-Both default to `device: 'auto'` → **WebGPU** when available (Kokoro on CPU/WASM
-is several × slower than real-time, which is why TTS feels sluggish without a
-GPU). The demos warm up both models in the background after the LLM loads.
+First voice use downloads **Whisper** and **Kokoro** once (then cached offline),
+loaded lazily so they don't compete with the LLM during startup. Both run in a
+**Web Worker**: TTS on **WebGPU** (auto-falls back to WASM), STT on **WASM**.
 
 ### Re-downloading / updating the model
 
@@ -96,18 +95,17 @@ await engine.load({ preset: getPreset('gemma4-e2b-web'),
 
 // 2) Voice layer (all on-device)
 const mic = new MicRecorder();
-const asr = new Transcriber({ device: 'wasm' });               // Whisper
-const tts = new SpatialSpeaker({ device: 'wasm', spatial: true,
+const asr = new Transcriber({ device: 'wasm' });               // Whisper (CPU)
+const tts = new SpatialSpeaker({ device: 'webgpu', spatial: true,
                                  position: { x: 0, y: 1.6, z: -2 } }); // Kokoro + Panner
 
 // LISTEN → THINK → SPEAK (spatial)
 await mic.start(); /* user speaks */ const audio = await mic.stop();
 const userText = await asr.transcribe(audio);                  // speech → text
-const speech = tts.stream();                                   // talk while generating
-await engine.generate(userText, {
+const res = await engine.generate(userText, {                 // generate full reply
   system: 'You are a concise VR assistant.',
-  onToken: (_d, full) => speech.push(full),
-}).then((res) => speech.flush(res.text));
+});
+await tts.speak(res.text);                                    // speak the WHOLE reply once
 ```
 
 ### API summary
@@ -139,12 +137,16 @@ await engine.generate(userText, {
 - `getUserMedia`, WebGPU/WASM, and Web Audio `PannerNode` all work in the Quest
   browser. The Web Speech API does **not** — which is exactly why STT/TTS here
   are local models, not `SpeechRecognition`/`speechSynthesis`.
-- Performance: Whisper and Kokoro default to **`device: 'auto'`** — they use
-  **WebGPU** when available (much faster; Kokoro on CPU/WASM is several × slower
-  than real-time) and fall back to **WASM** otherwise. On memory-constrained
-  devices you can force `device: 'wasm'` to keep GPU memory for Gemma.
-- Keep responses short (low `maxTokens` / a "be brief" system prompt) for
-  responsive VR turns. The demos show `tok/s` + TTFT.
+- Performance / scheduling: STT and TTS run in a **Web Worker** (`voice-worker.js`)
+  so they never jank the render loop. **TTS defaults to WebGPU** (`Kokoro` q8) —
+  speech is synthesized **after** the LLM finishes generating, so there's no GPU
+  compute contention, and one WebGPU pass speaks the whole reply in ~1–3 s. If a
+  headset can't run WebGPU in a worker, it **auto-falls back to WASM/CPU**. STT
+  (`whisper-tiny`) stays on WASM (runs once, before generation).
+- Whole-reply speech: the demos generate the full text first, then synthesize and
+  speak it in **one pass** (no per-sentence loading/gaps) with a
+  "Generating speech…" indicator. Keep responses short (a "be brief" system
+  prompt) so the single synth stays well under a few seconds.
 
 ## Spatial audio (the WebXR win)
 

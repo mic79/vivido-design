@@ -237,9 +237,9 @@
     // On-device voice: Whisper (mic→text) + Kokoro (text→speech). No Web Speech API.
     // device:'auto' uses WebGPU when available (much faster than WASM/CPU).
     const speaker = new SpatialSpeaker({ spatial: false });
-    // Tracks the in-flight streaming-speech handle for the current reply so it
-    // can be interrupted (cancel stops both pending synthesis and playback).
-    let currentSpeech = null;
+    // Voice-output state. Speech is synthesized whole-reply (one pass), so we
+    // just track whether we're mid-synthesis or mid-playback for the Stop button.
+    let synthesizing = false;
     let ttsPlaying = false;
     speaker.enabled = false; // toggled on by the checkbox
     const mic = new MicRecorder();
@@ -464,31 +464,47 @@
       body.classList.add('cursor');
       $('#send').disabled = true; input.disabled = true; $('#mic').disabled = true;
 
-      const speech = speaker.enabled ? speaker.stream() : null;
-      currentSpeech = speech;
-      refreshStopBtn();
       try {
+        // 1) Generate the full reply first (text streams to the screen). No
+        //    speech yet, so the GPU is free for the LLM and then for one fast
+        //    TTS pass right after.
         const res = await generator((_delta, full) => {
           body.textContent = full;
-          if (speech) speech.push(full);
           messages.scrollTop = messages.scrollHeight;
         });
         body.classList.remove('cursor');
-        if (speech) speech.flush(res.text);
         const meta = document.createElement('div');
         meta.className = 'meta';
         meta.textContent = `${res.tokensPerSec.toFixed(1)} tok/s · TTFT ${Math.round(res.ttftMs)} ms · ${Math.round(res.totalMs)} ms total`;
         botEl.appendChild(meta);
         addReplayButton(botEl, res.text);
+
+        // 2) Speak the WHOLE reply in a single pass (no per-sentence gaps).
+        if (speaker.enabled && res.text) await speakWhole(res.text);
       } catch (err) {
         body.classList.remove('cursor');
         body.textContent = `⚠ ${err.message || err}`;
       } finally {
-        currentSpeech = null;
-        refreshStopBtn();
         $('#send').disabled = false; input.disabled = false;
         $('#mic').disabled = !MicRecorder.isSupported();
         input.focus();
+      }
+    }
+
+    // Synthesize + speak an entire reply as one utterance, showing a clear
+    // "Generating speech…" indicator during the (one-time) synthesis.
+    async function speakWhole(text) {
+      synthesizing = true; refreshStopBtn();
+      const note = $('#voice-note');
+      const prev = note.textContent;
+      note.textContent = '🗣 Generating speech…';
+      try {
+        await speaker.speak(text);
+        note.textContent = prev;
+      } catch (err) {
+        note.textContent = `Voice error: ${err.message || err}`;
+      } finally {
+        synthesizing = false; refreshStopBtn();
       }
     }
 
@@ -501,9 +517,15 @@
       const btn = document.createElement('button');
       btn.className = 'tts-btn';
       btn.textContent = '🔁 Replay';
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         stopVoice();            // interrupt anything currently speaking
-        speaker.speak(text, { force: true });
+        synthesizing = true; refreshStopBtn();
+        const note = $('#voice-note');
+        const prev = note.textContent;
+        note.textContent = '🗣 Generating speech…';
+        try { await speaker.speak(text, { force: true }); note.textContent = prev; }
+        catch (err) { note.textContent = `Voice error: ${err.message || err}`; }
+        finally { synthesizing = false; refreshStopBtn(); }
       });
       row.appendChild(btn);
       botEl.appendChild(row);
@@ -520,9 +542,9 @@
     }
 
     // --- Voice output controls (stop / replay) ---
-    function refreshStopBtn() { $('#tts-stop').hidden = !(ttsPlaying || !!currentSpeech); }
+    function refreshStopBtn() { $('#tts-stop').hidden = !(ttsPlaying || synthesizing); }
     function stopVoice() {
-      if (currentSpeech) { currentSpeech.cancel(); currentSpeech = null; }
+      synthesizing = false;
       speaker.stop();
       refreshStopBtn();
     }
