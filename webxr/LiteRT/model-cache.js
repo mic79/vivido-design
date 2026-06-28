@@ -13,15 +13,23 @@
 const DIR = 'litert-models';
 
 export const ModelCache = {
-  /** OPFS + module Workers are required (Quest Browser / modern Chromium have them). */
-  isSupported() {
-    try {
-      return !!(navigator.storage && navigator.storage.getDirectory &&
-                typeof Worker !== 'undefined' &&
-                typeof FileSystemFileHandle !== 'undefined' &&
-                FileSystemFileHandle.prototype.createSyncAccessHandle);
-    } catch { return false; }
+  /**
+   * Why the on-disk cache can/can't be used. NOTE: we deliberately do NOT probe
+   * createSyncAccessHandle here — that API only exists inside a Worker, so
+   * checking it on the main thread wrongly disables caching. The worker does the
+   * real capability check and falls back to createWritable if needed.
+   */
+  support() {
+    if (typeof navigator === 'undefined' || !navigator.storage || !navigator.storage.getDirectory)
+      return { ok: false, reason: 'OPFS unavailable (navigator.storage.getDirectory missing)' };
+    if (typeof Worker === 'undefined')
+      return { ok: false, reason: 'Web Workers unavailable' };
+    if (typeof window !== 'undefined' && window.isSecureContext === false)
+      return { ok: false, reason: 'insecure context — serve over HTTPS (or localhost)' };
+    return { ok: true, reason: '' };
   },
+
+  isSupported() { return this.support().ok; },
 
   /** Stable, filesystem-safe key for a URL (so the same model resolves to one file). */
   keyFor(url) {
@@ -38,22 +46,23 @@ export const ModelCache = {
    */
   async getFile(url, { onProgress = null, signal = null } = {}) {
     const key = this.keyFor(url);
-    await new Promise((resolve, reject) => {
+    const done = await new Promise((resolve, reject) => {
       let worker;
       try {
         worker = new Worker(new URL('./model-cache-worker.js', import.meta.url), { type: 'module' });
-      } catch (e) { reject(e); return; }
+      } catch (e) { console.error('[ModelCache] worker spawn failed:', e); reject(e); return; }
       const cleanup = () => { try { worker.terminate(); } catch (_) {} };
       if (signal) signal.addEventListener('abort', () => { cleanup(); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
       worker.onmessage = (ev) => {
         const m = ev.data || {};
         if (m.type === 'progress') { if (onProgress) onProgress(m.loaded, m.total); }
-        else if (m.type === 'done') { cleanup(); resolve(); }
+        else if (m.type === 'done') { cleanup(); resolve(m); }
         else if (m.type === 'error') { cleanup(); reject(new Error(m.message)); }
       };
       worker.onerror = (err) => { cleanup(); reject(err.error || new Error(err.message || 'Worker failed')); };
       worker.postMessage({ url, key });
     });
+    console.log(`[ModelCache] ready via "${done.writer}" writer, ${done.size} bytes on disk.`);
 
     const root = await navigator.storage.getDirectory();
     const dir = await root.getDirectoryHandle(DIR, { create: true });

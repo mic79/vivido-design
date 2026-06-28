@@ -311,7 +311,8 @@
         if (p.stage === 'init-runtime') setS('Loading LiteRT-LM runtime…');
         else if (p.stage === 'reading-file') { setS(`Loading model into runtime… ${fmtBytes(p.loaded)} / ${fmtBytes(p.total)}`); if (p.total) setP(p.loaded / p.total); }
         else if (p.stage === 'downloading') {
-          const verb = p.resumed ? 'Resuming download' : 'Downloading model';
+          const where = p.viaCache ? ' [on-disk cache]' : ' [direct]';
+          const verb = (p.resumed ? 'Resuming download' : 'Downloading model') + where;
           if (p.total) { setS(`${verb}… ${fmtBytes(p.loaded || 0)} / ${fmtBytes(p.total)} (${((p.loaded || 0) / p.total * 100) | 0}%)`); setP((p.loaded || 0) / p.total); }
           else { setS(`${verb}… ${fmtBytes(p.loaded || 0)}`); setP(null); }
         } else if (p.stage === 'creating-session') { setS(p.fallback ? 'Retrying load — initializing…' : 'Initializing & compiling for WebGPU — this can take a minute…'); pin(); }
@@ -322,20 +323,22 @@
     // Download a model into the on-disk cache (resumable, off the main thread,
     // low memory) and return it as a File. Returns null if OPFS isn't available,
     // so the caller can fall back to streaming directly from the URL.
-    async function acquireModel(url, onProgress) {
-      if (!ModelCache.isSupported()) return null;
-      // Same-origin (bundled) files are already on disk — stream them directly
-      // instead of duplicating ~2 GB into OPFS. Cache only remote downloads.
-      try { if (new URL(url, location.href).origin === location.origin) return null; } catch (_) {}
+    async function acquireModel(url, onProgress, setS) {
+      // Only cache real remote (http/https) downloads; bundled/relative paths are
+      // already on disk and don't need duplicating into OPFS.
+      if (!/^https?:/i.test(url)) return null;
+      const sup = ModelCache.support();
+      console.log('[LiteRT] on-disk cache support:', sup);
+      if (!sup.ok) { if (setS) setS(`On-disk cache off (${sup.reason}) — streaming directly.`, true); return null; }
       const before = await ModelCache.cachedBytes(url);
-      onProgress({ stage: 'downloading', loaded: before, total: 0, streaming: true, resumed: before > 0 });
+      onProgress({ stage: 'downloading', loaded: before, total: 0, viaCache: true, resumed: before > 0 });
       return ModelCache.getFile(url, {
-        onProgress: (loaded, total) => onProgress({ stage: 'downloading', loaded, total, streaming: true, resumed: before > 0 }),
+        onProgress: (loaded, total) => onProgress({ stage: 'downloading', loaded, total, viaCache: true, resumed: before > 0 }),
       });
     }
 
     // Resolve which model source to load from the chooser state.
-    async function buildLoadArgs(onProgress) {
+    async function buildLoadArgs(onProgress, setS) {
       const preset = getPreset(presetSel.value);
       const activeTab = document.querySelector('.tab.active').dataset.src;
       systemPrompt = $('#system').value.trim();
@@ -345,10 +348,10 @@
       } else if (activeTab === 'url') {
         const url = $('#model-url').value.trim();
         if (!url) throw new Error('Enter a model URL.');
-        const f = await acquireModel(url, onProgress);
+        const f = await acquireModel(url, onProgress, setS);
         if (f) args.modelFile = f; else { args.modelUrl = url; args.buffered = false; }
       } else if (preset && preset.local) {
-        const f = await acquireModel(preset.local, onProgress);
+        const f = await acquireModel(preset.local, onProgress, setS);
         if (f) args.modelFile = f; else { args.modelUrl = preset.local; args.buffered = false; }
       } else {
         throw new Error('Choose a model file, or pick the bundled E2B preset.');
@@ -370,7 +373,7 @@
       }
       try {
         const onP = makeOnProgress(setBoot, setBootProg, () => { bootProgEl.classList.add('show'); bootBar.style.width = '100%'; });
-        const { args, preset } = await buildLoadArgs(onP);
+        const { args, preset } = await buildLoadArgs(onP, setBoot);
         await engine.load(args);
         boot.hidden = true;
         onModelReady(preset);
@@ -404,7 +407,7 @@
       setProgress(0);
       try {
         const onP = makeOnProgress(setStatus, setProgress, () => { progEl.classList.add('show'); progBar.style.width = '100%'; });
-        const { args, preset } = await buildLoadArgs(onP);
+        const { args, preset } = await buildLoadArgs(onP, setStatus);
         await engine.load(args);
         onModelReady(preset);
       } catch (err) {
