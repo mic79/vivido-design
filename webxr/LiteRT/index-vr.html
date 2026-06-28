@@ -215,8 +215,11 @@
       const onProgress=(p)=>{
         if(p.stage==='init-runtime')setStatus('Loading LiteRT-LM runtime…');
         else if(p.stage==='reading-file'){setStatus(`Reading file… ${fmtBytes(p.loaded)}/${fmtBytes(p.total)}`);if(p.total){progEl.classList.add('show');progBar.style.width=`${(p.loaded/p.total*100)|0}%`;}}
-        else if(p.stage==='downloading'){ if(p.streaming){setStatus('Loading model (streamed)…');} else {setStatus(`Downloading… ${fmtBytes(p.loaded)}/${fmtBytes(p.total)}`);if(p.total){progEl.classList.add('show');progBar.style.width=`${(p.loaded/p.total*100)|0}%`;}} }
-        else if(p.stage==='creating-session'){setStatus('Loading & compiling for WebGPU (~2 GB, please wait)…');progEl.classList.add('show');progBar.style.width='100%';}
+        else if(p.stage==='downloading'){
+          if(p.total){ setStatus(`Downloading model… ${fmtBytes(p.loaded||0)} / ${fmtBytes(p.total)} (${((p.loaded||0)/p.total*100)|0}%)`); progEl.classList.add('show'); progBar.style.width=`${((p.loaded||0)/p.total*100)|0}%`; }
+          else { setStatus(`Downloading model… ${fmtBytes(p.loaded||0)}`); progEl.classList.remove('show'); }
+        }
+        else if(p.stage==='creating-session'){setStatus(p.fallback?'Retrying via runtime fetch — initializing…':'Download complete. Initializing & compiling for WebGPU — this can take a minute…');progEl.classList.add('show');progBar.style.width='100%';}
         else if(p.stage==='ready')setStatus('Ready!');
       };
       try {

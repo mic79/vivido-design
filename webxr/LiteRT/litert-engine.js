@@ -114,18 +114,31 @@ export class LiteRTEngine {
       baseOptions.modelAssetBuffer = new Uint8Array(
         buffer instanceof Uint8Array ? buffer.buffer : buffer
       );
-    } else if (modelUrl && !buffered) {
-      // Let the runtime stream the file itself (modelAssetPath). Uses far less
-      // memory than buffering a ~2 GB file in JS — important on Quest/mobile.
-      report('downloading', { url: modelUrl, streaming: true });
-      baseOptions.modelAssetPath = modelUrl;
     } else if (modelUrl) {
-      report('downloading', { url: modelUrl });
-      // Stream the download so we can show progress, then hand over a buffer.
-      const buffer = await fetchWithProgress(modelUrl, (loaded, total) =>
-        report('downloading', { url: modelUrl, loaded, total })
-      );
-      baseOptions.modelAssetBuffer = new Uint8Array(buffer);
+      // Download the model OURSELVES so we can (a) report real byte-level
+      // progress and (b) hand the runtime a stream reader, which fills WASM
+      // memory incrementally instead of buffering the whole ~2 GB file in the
+      // JS heap. This is what keeps it from silently hanging on Quest/mobile.
+      //
+      // buffered:true forces a single in-memory ArrayBuffer (rarely needed).
+      report('downloading', { url: modelUrl, streaming: true, loaded: 0, total: 0 });
+      try {
+        if (buffered === true) {
+          const buffer = await fetchWithProgress(modelUrl, (loaded, total) =>
+            report('downloading', { url: modelUrl, loaded, total }));
+          baseOptions.modelAssetBuffer = new Uint8Array(buffer);
+        } else {
+          baseOptions.modelAssetBuffer = await streamModelReader(modelUrl, (loaded, total) =>
+            report('downloading', { url: modelUrl, loaded, total, streaming: true }));
+        }
+      } catch (e) {
+        throw new Error(
+          `Could not download the model from the URL (${e.message || e}). ` +
+          `Check the link, your connection, and that the host allows cross-origin ` +
+          `(CORS) requests — gated files (e.g. some Hugging Face URLs) will be blocked. ` +
+          `As a fallback, download the .task once and use the local-file loader.`
+        );
+      }
     } else {
       throw new Error('No model source provided (modelFile, modelBuffer or modelUrl).');
     }
@@ -141,7 +154,22 @@ export class LiteRTEngine {
     };
     if (this.audioEnabled) createOpts.supportAudio = true;
     if (maxNumImages > 0) createOpts.maxNumImages = maxNumImages;
-    this.llm = await LlmInference.createFromOptions(this.genai, createOpts);
+    try {
+      this.llm = await LlmInference.createFromOptions(this.genai, createOpts);
+    } catch (e) {
+      // Some runtime/browser combos may not accept a stream reader. Fall back to
+      // letting MediaPipe fetch the URL itself (no progress, but may still work).
+      const usedReader = modelUrl && baseOptions.modelAssetBuffer &&
+        !(baseOptions.modelAssetBuffer instanceof Uint8Array);
+      if (usedReader) {
+        report('creating-session', { fallback: true });
+        delete baseOptions.modelAssetBuffer;
+        baseOptions.modelAssetPath = modelUrl;
+        this.llm = await LlmInference.createFromOptions(this.genai, { ...createOpts, baseOptions });
+      } else {
+        throw e;
+      }
+    }
 
     this.ready = true;
     report('ready');
@@ -308,6 +336,43 @@ function readFileWithProgress(file, onProgress) {
     reader.onerror = () => reject(reader.error || new Error('File read failed'));
     reader.readAsArrayBuffer(file);
   });
+}
+
+/**
+ * Fetch `url` and return a ReadableStreamDefaultReader that reports download
+ * progress as the runtime pulls bytes from it. The whole file is never held in
+ * the JS heap — chunks are consumed (and GC'd) by MediaPipe as it reads them,
+ * which is essential for loading ~2 GB models on memory-constrained Quest.
+ * Falls back to a Uint8Array if the browser can't stream the response body.
+ */
+async function streamModelReader(url, onProgress) {
+  const res = await fetch(url, { mode: 'cors' });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText || ''}`.trim());
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    const buf = await res.arrayBuffer();
+    onProgress(buf.byteLength, buf.byteLength);
+    return new Uint8Array(buf);
+  }
+  const total = Number(res.headers.get('content-length')) || 0;
+  const src = res.body.getReader();
+  let loaded = 0;
+  // Re-wrap in a fresh stream so getReader() returns a genuine
+  // ReadableStreamDefaultReader (which MediaPipe type-checks for).
+  const progressed = new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await src.read();
+        if (done) { controller.close(); return; }
+        loaded += value.byteLength;
+        try { onProgress(loaded, total); } catch (_) {}
+        controller.enqueue(value);
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    cancel(reason) { try { src.cancel(reason); } catch (_) {} },
+  });
+  return progressed.getReader();
 }
 
 async function fetchWithProgress(url, onProgress) {

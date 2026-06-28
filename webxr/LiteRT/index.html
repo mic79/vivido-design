@@ -310,9 +310,9 @@
         if (p.stage === 'init-runtime') setS('Loading LiteRT-LM runtime…');
         else if (p.stage === 'reading-file') { setS(`Reading model file… ${fmtBytes(p.loaded)} / ${fmtBytes(p.total)}`); if (p.total) setP(p.loaded / p.total); }
         else if (p.stage === 'downloading') {
-          if (p.streaming) { setS('Loading model (streamed by runtime)…'); setP(null); }
-          else { setS(`Downloading model… ${fmtBytes(p.loaded)} / ${fmtBytes(p.total)}`); if (p.total) setP(p.loaded / p.total); }
-        } else if (p.stage === 'creating-session') { setS('Loading & compiling model for WebGPU (~2 GB, please wait)…'); pin(); }
+          if (p.total) { setS(`Downloading model… ${fmtBytes(p.loaded || 0)} / ${fmtBytes(p.total)} (${((p.loaded || 0) / p.total * 100) | 0}%)`); setP((p.loaded || 0) / p.total); }
+          else { setS(`Downloading model… ${fmtBytes(p.loaded || 0)}`); setP(null); }
+        } else if (p.stage === 'creating-session') { setS(p.fallback ? 'Retrying via runtime fetch — initializing…' : 'Download complete. Initializing & compiling for WebGPU — this can take a minute…'); pin(); }
         else if (p.stage === 'ready') setS('Ready!');
       };
     }
