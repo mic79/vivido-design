@@ -100,7 +100,9 @@ async function ensureTts(cfg) {
   for (const c of candidates) {
     try {
       const inst = await KokoroTTS.from_pretrained(cfg.modelId, { device: c.device, dtype: c.dtype });
-      if (!(await producesAudio(inst, cfg.voice))) {
+      // Probe only GPU backends (where silent/NaN happens). WASM/CPU is known-good,
+      // so skip the extra test synth to keep first-use latency down.
+      if (c.device !== 'wasm' && !(await producesAudio(inst, cfg.voice))) {
         console.warn(`[voice-worker] TTS ${c.device}/${c.dtype} loaded but produced silent/NaN audio — trying next backend`);
         continue;
       }
@@ -134,6 +136,11 @@ async function handle(msg) {
     } else if (type === 'warm-tts') {
       await ensureTts(payload.cfg);
       reply(id, 'ok', { backend: ttsBackend });
+    } else if (type === 'reset-tts') {
+      // Drop the cached model so the next warm/synth reloads on a new device
+      // (used by the CPU/GPU voice toggle). Frees the previous backend's memory.
+      tts = null; ttsBackend = '';
+      reply(id, 'ok');
     } else if (type === 'asr') {
       await ensureAsr(payload.cfg);
       const out = await asr(payload.audio, {

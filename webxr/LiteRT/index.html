@@ -353,11 +353,12 @@
         if (!url) throw new Error('Enter a model URL.');
         const f = await acquireModel(url, onProgress, setS);
         if (f) args.modelFile = f; else { args.modelUrl = url; args.buffered = false; }
-      } else if (preset && preset.local) {
-        const f = await acquireModel(preset.local, onProgress, setS);
-        if (f) args.modelFile = f; else { args.modelUrl = preset.local; args.buffered = false; }
+      } else if (preset && (preset.local || preset.url)) {
+        const src = preset.local || preset.url;
+        const f = await acquireModel(src, onProgress, setS);
+        if (f) args.modelFile = f; else { args.modelUrl = src; args.buffered = false; }
       } else {
-        throw new Error('Choose a model file, or pick the bundled E2B preset.');
+        throw new Error('Choose a model file, or pick a bundled preset.');
       }
       return { args, preset };
     }

@@ -291,9 +291,11 @@ export class SpatialSpeaker {
     voice = 'af_heart',
     spatial = true,
     position = { x: 0, y: 1.6, z: -1.8 },
+    chunkChars = 140, // synth chunk size: smaller = first audio sooner (streaming)
   } = {}) {
     this.cfg = { modelId, device, dtype, voice };
     this.voice = voice;
+    this.chunkChars = chunkChars;
     this.spatial = spatial;
     this.position = position;
     this.enabled = true;
@@ -353,6 +355,24 @@ export class SpatialSpeaker {
     await this.load();
     this._warmed = true;
     return this;
+  }
+
+  /**
+   * Switch the synthesis backend at runtime (e.g. a CPU/GPU voice toggle). Stops
+   * playback, drops the old model (freeing its memory) and reloads on next use.
+   */
+  async setBackend(device, dtype) {
+    if (this.cfg.device === device && this.cfg.dtype === dtype) return;
+    this.stop();
+    this.cfg.device = device;
+    this.cfg.dtype = dtype;
+    this.ready = false;
+    this._warmed = false;
+    this.backend = '';
+    this._lastText = '';
+    this._lastBuffers = null;
+    if (this._useWorker) { try { await vwCall('reset-tts'); } catch (_) {} }
+    else { this._tts = null; }
   }
 
   _initAudioGraph() {
@@ -478,7 +498,7 @@ export class SpatialSpeaker {
     if (!this.ready) await this.load();
     await this.unlock();
     const myGen = ++this._gen; // lets stop()/a newer speak() cancel this run
-    const chunks = splitForSynth(text);
+    const chunks = splitForSynth(text, this.chunkChars);
     const buffers = [];
     for (const chunk of chunks) {
       const buf = await this._synth(chunk);
