@@ -11,7 +11,7 @@
 //
 //   const engine = new LiteRTEngine();
 //   if (!(await LiteRTEngine.isSupported())) { /* show WebGPU warning */ }
-//   await engine.load({ preset: getPreset('gemma3-1b-web'),
+//   await engine.load({ preset: getPreset('qwen25-0_5b'),
 //                       modelFile: fileFromPicker,         // OR
 //                       modelUrl: 'https://.../model.task', // OR preset.url
 //                       onProgress: (p) => console.log(p) });
@@ -329,7 +329,11 @@ function cleanResponse(text) {
     .replace(/<turn\|>/g, '')
     .replace(/<\|channel>|<channel\|>/g, '')
     .replace(/<end_of_turn>/g, '')
-    .replace(/<start_of_turn>(user|model)?/g, '');
+    .replace(/<start_of_turn>(user|model)?/g, '')
+    // Qwen / ChatML control tokens
+    .replace(/<\|im_start\|>(system|user|assistant)?\n?/g, '')
+    .replace(/<\|im_end\|>/g, '')
+    .replace(/<\|endoftext\|>/g, '');
   return out.trim();
 }
 

@@ -16,7 +16,7 @@ projects in this repo (`languageVR`, `BattleVR`, …).
   Whisper  (on-device ASR, Transformers.js · WASM/WebGPU)   ── speech → text
         │
         ▼
-  Gemma 3 1B (default) / Gemma 4 E2B  (LiteRT-LM · WebGPU)   ── text → text
+  Qwen2.5 0.5B (default) / Gemma 4 E2B  (LiteRT-LM · WebGPU) ── text → text
         │  streamed tokens
         ▼
   Kokoro TTS  (on-device, Transformers.js · WASM/WebGPU)     ── text → audio
@@ -41,7 +41,7 @@ projects in this repo (`languageVR`, `BattleVR`, …).
 |------|---------|
 | `litert-engine.js` | **Reusable LLM engine.** Wraps MediaPipe `LlmInference`: WebGPU detection, model loading (bundled path / file / URL / buffer, memory-friendly streaming for the ~2 GB model), streaming generation, multi-turn history, the official Gemma 4 prompt template + token cleanup. DOM-free. |
 | `voice.js` | **Reusable voice layer.** `MicRecorder` (PCM → mono 16 kHz), `Transcriber` (on-device Whisper STT), `SpatialSpeaker` (on-device Kokoro TTS → Web Audio `PannerNode` for 3D spatial output). No Web Speech API. |
-| `models.js` | Model presets + chat templates. **Default = Gemma 3 1B (web, ~555 MB)** because a small LLM leaves enough GPU memory for fast, stable WebGPU voice on Quest 3. Gemma 4 E2B/E4B remain selectable for higher text quality (use the CPU voice mode with them). |
+| `models.js` | Model presets + chat templates. **Default = Qwen2.5 0.5B (~547 MB, Apache-2.0, NOT gated → no Hugging Face login / no 401)** because a small LLM leaves enough GPU memory for fast, stable WebGPU voice on Quest 3. Qwen 1.5B (better text) and Gemma 4 E2B (bundled, higher quality) are selectable too — pair the bigger ones with CPU voice. The Gemma 3 1B web preset is GATED, so use it via the Local-file loader. |
 | `models/gemma-4-E2B-it-web.task` | The pre-downloaded **Gemma 4 E2B** model (~1.9 GB) so the demos work right away. |
 | `index.html` | Responsive flat chat demo (desktop / laptop / tablet / mobile): one-click bundled model, mic push-to-talk, spoken replies. |
 | `index-vr.html` | A-Frame **WebXR** demo: in-world panel, laser-clickable prompts, 🎤 talk button, and the AI voice **spatialized from an in-world avatar**. |
@@ -136,9 +136,10 @@ await tts.speak(res.text);                                    // speak the WHOLE
 - **LLM size is the GPU-memory budget.** The voice models are separate (Whisper +
   Kokoro), so the LLM never adds STT/TTS *features* — it only competes for GPU
   memory. Gemma 4 E2B (~2 GB on GPU) leaves no room for the fp32 Kokoro TTS
-  (~330 MB) → OOM freezes/crashes on Quest. The **default is therefore Gemma 3 1B
-  (~555 MB)**, which frees ~1.4 GB so WebGPU voice runs **fast *and* stable**.
-  Gemma 4 stays selectable for higher text quality — pair it with CPU voice.
+  (~330 MB) → OOM freezes/crashes on Quest. The **default is therefore Qwen2.5
+  0.5B (~547 MB, Apache-2.0, non-gated)**, which frees ~1.4 GB so WebGPU voice
+  runs **fast *and* stable**. Bigger models (Qwen 1.5B, Gemma 4) stay selectable
+  for higher text quality — pair them with CPU voice.
 - `getUserMedia`, WebGPU/WASM, and Web Audio `PannerNode` all work in the Quest
   browser. The Web Speech API does **not** — which is exactly why STT/TTS here
   are local models, not `SpeechRecognition`/`speechSynthesis`.

@@ -171,9 +171,9 @@
     // Voice synthesis tradeoff on a headset's single shared GPU:
     //   • GPU (webgpu/fp32): fast synth. Needs ~330 MB of GPU memory.
     //   • CPU (wasm/q8): rock-solid + smooth render, but slower synth.
-    // With the small default LLM (Gemma 3 1B, ~555 MB) there's now ample GPU
+    // With the small default LLM (Qwen2.5 0.5B, ~547 MB) there's now ample GPU
     // headroom for the TTS model, so we DEFAULT to GPU (fast + stable). If you
-    // switch to the big Gemma 4 model, prefer the CPU voice path instead.
+    // switch to a big model (Gemma 4 / Qwen 1.5B), prefer the CPU voice path.
     const VOICE_MODES = {
       cpu: { device: 'wasm', dtype: 'q8', label: 'Voice: Stable (CPU)' },
       gpu: { device: 'webgpu', dtype: 'fp32', label: 'Voice: Fast (GPU)' },
@@ -498,7 +498,7 @@
     }
 
     async function runVRTurn(label, generator) {
-      setConvo(`You: ${clip(label, 120)}\n\nGemma: `);
+      setConvo(`You: ${clip(label, 120)}\n\nAI: `);
       setVRStatus('Thinking…');
       const ring = document.getElementById('avatar-ring');
       ring && ring.setAttribute('visible', true);
@@ -506,9 +506,9 @@
         // 1) Generate the full text first (no speech yet — keeps the GPU free
         //    for the LLM, then free for one fast TTS pass afterwards).
         const res = await generator((_d, f) => {
-          setConvo(`You: ${clip(label, 120)}\n\nGemma: ${clip(f, 360)}`);
+          setConvo(`You: ${clip(label, 120)}\n\nAI: ${clip(f, 360)}`);
         });
-        setConvo(`You: ${clip(label, 120)}\n\nGemma: ${clip(res.text, 380)}`);
+        setConvo(`You: ${clip(label, 120)}\n\nAI: ${clip(res.text, 380)}`);
         lastReply = res.text || '';
         refreshVoiceButtons();
 
