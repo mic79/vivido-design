@@ -246,20 +246,20 @@
     const transcriber = new Transcriber();
     let whisperLoaded = false;
 
-    // Warm the voice models (Whisper + Kokoro) once, as early as possible, so the
-    // first time the user speaks there's nothing to download or compile. This runs
-    // in parallel with the LLM load and is safe to call repeatedly (idempotent).
+    // Load the voice models (Whisper + Kokoro) lazily, sequentially, and only on
+    // first mic use. Warming them up-front (or in parallel with the ~2 GB LLM)
+    // blows the tab's memory budget on Quest and crashes the browser mid-load.
     let voiceWarm = null;
     function warmVoice() {
       if (voiceWarm) return voiceWarm;
-      const tasks = [];
-      if (MicRecorder.isSupported()) {
-        tasks.push(transcriber.warmup().then(() => { whisperLoaded = true; }).catch(() => {}));
-      }
-      if (SpatialSpeaker.isSupported()) {
-        tasks.push(speaker.warmup().catch(() => {}));
-      }
-      voiceWarm = Promise.all(tasks);
+      voiceWarm = (async () => {
+        if (MicRecorder.isSupported()) {
+          try { await transcriber.warmup(); whisperLoaded = true; } catch (_) {}
+        }
+        if (SpatialSpeaker.isSupported()) {
+          try { await speaker.warmup(); } catch (_) {}
+        }
+      })();
       return voiceWarm;
     }
 
@@ -359,9 +359,8 @@
       return { args, preset };
     }
 
-    // Start downloading/compiling the voice models immediately, in parallel with
-    // the LLM, so voice input/output is ready by the time the user needs it.
-    warmVoice();
+    // (Voice models are NOT warmed here — they load lazily on first mic use so
+    // the LLM load gets the full memory budget. See warmVoice().)
 
     // Auto-load the bundled model on startup — no selection step.
     (async () => {
@@ -439,9 +438,7 @@
         note.textContent = 'Microphone not available in this browser.';
       }
       if (!SpatialSpeaker.isSupported()) $('#speak-toggle').disabled = true;
-
-      // Ensure voice models are warming (no-op if already started at boot).
-      warmVoice();
+      // Voice models load lazily on first mic use (keeps memory free for the LLM).
     }
 
     // --- Chat UI ----------------------------------------------------------
@@ -558,7 +555,7 @@
       try {
         const audioBuf = await mic.stop();
         if (!whisperLoaded) {
-          $('#voice-note').textContent = 'Finishing on-device Whisper warm-up…';
+          $('#voice-note').textContent = 'Loading on-device voice models (first use)…';
           await warmVoice();
         }
         $('#voice-note').textContent = 'Transcribing (Whisper, on-device)…';

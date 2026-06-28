@@ -162,14 +162,15 @@
     let voiceWarm = null;
     function warmVoice() {
       if (voiceWarm) return voiceWarm;
-      const tasks = [];
-      if (MicRecorder.isSupported()) {
-        tasks.push(transcriber.warmup().then(() => { whisperLoaded = true; }).catch(() => {}));
-      }
-      if (SpatialSpeaker.isSupported()) {
-        tasks.push(speaker.warmup().catch(() => {}));
-      }
-      voiceWarm = Promise.all(tasks);
+      // Load sequentially (not Promise.all) to keep peak memory low on Quest.
+      voiceWarm = (async () => {
+        if (MicRecorder.isSupported()) {
+          try { await transcriber.warmup(); whisperLoaded = true; } catch (_) {}
+        }
+        if (SpatialSpeaker.isSupported()) {
+          try { await speaker.warmup(); } catch (_) {}
+        }
+      })();
       return voiceWarm;
     }
 
@@ -261,8 +262,10 @@
     }
     $('#load-btn').addEventListener('click', doLoad);
 
-    // Begin warming voice models immediately, in parallel with the LLM load.
-    warmVoice();
+    // NOTE: We deliberately do NOT warm the voice models here. On memory-tight
+    // devices (Quest) loading Whisper + Kokoro alongside the ~2 GB LLM blows the
+    // tab's memory budget and crashes the browser mid-load. Voice models are now
+    // loaded lazily on first mic use instead (see wireMic()).
 
     // Auto-load the bundled model on startup — no selection step.
     (async () => {
@@ -276,8 +279,7 @@
       buildButtons();
       wireMic();
       startListenerTracking();
-      // Ensure voice models are warming (no-op if already started at boot).
-      warmVoice();
+      // Voice models load lazily on first mic use (keeps memory free for the LLM).
       const voiceOk = MicRecorder.isSupported();
       setConvo(voiceOk
         ? 'Ready. Press “🎤 Talk” to speak (on-device Whisper), or pick a button. The reply is spoken from the avatar in 3D.'
@@ -314,7 +316,7 @@
           btn.setAttribute('material', 'color: #1c2638; shader: flat');
           try {
             const audioBuf = await mic.stop();
-            if (!whisperLoaded) { setVRStatus('Finishing Whisper warm-up…'); await warmVoice(); }
+            if (!whisperLoaded) { setVRStatus('Loading voice models (first use)…'); await warmVoice(); }
             setVRStatus('Transcribing (Whisper)…');
             const text = await transcriber.transcribe(audioBuf);
             if (!text) { setVRStatus('Didn’t catch that — try again.'); return; }
