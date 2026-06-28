@@ -60,95 +60,60 @@ function gemma3Template({ system, history, prompt }) {
   return out;
 }
 
-/**
- * Qwen 2.5 chat template (ChatML). Qwen supports a real system role.
- *   <|im_start|>system\n{system}<|im_end|>\n
- *   <|im_start|>user\n{user}<|im_end|>\n
- *   <|im_start|>assistant\n{model}<|im_end|>\n
- *   ...
- *   <|im_start|>assistant\n   <- generation starts here
- */
-function qwenTemplate({ system, history, prompt }) {
-  let out = '';
-  if (system && system.trim()) out += `<|im_start|>system\n${system.trim()}<|im_end|>\n`;
-  for (const turn of history || []) {
-    const role = turn.role === 'model' ? 'assistant' : turn.role;
-    out += `<|im_start|>${role}\n${turn.content}<|im_end|>\n`;
-  }
-  out += `<|im_start|>user\n${prompt}<|im_end|>\n<|im_start|>assistant\n`;
-  return out;
-}
-
 export const TEMPLATES = {
   gemma4: gemma4Template,
   gemma3: gemma3Template,
-  qwen: qwenTemplate,
 };
 
 /** Raw turn markers (used when interleaving a media chunk with text). */
 export const TURN_MARKERS = {
   gemma4: { userOpen: '<|turn>user\n', userClose: '<turn|>\n', modelOpen: '<|turn>model\n' },
   gemma3: { userOpen: '<start_of_turn>user\n', userClose: '<end_of_turn>\n', modelOpen: '<start_of_turn>model\n' },
-  qwen: { userOpen: '<|im_start|>user\n', userClose: '<|im_end|>\n', modelOpen: '<|im_start|>assistant\n' },
 };
 
-// Local file downloaded into ./models by setup (works offline / on Quest).
+// Local files in ./models (work offline / on Quest, no network at runtime).
 const LOCAL_E2B = './models/gemma-4-E2B-it-web.task';
+const LOCAL_GEMMA3_1B = './models/gemma3-1b-it-int4-web.task';
 
 /**
  * Presets. All web builds are TEXT-ONLY — voice is added by voice.js (Whisper
  * in, Kokoro out), so the choice of LLM does NOT change voice capability.
  *
- * The default is Qwen2.5 0.5B (Apache-2.0, NOT gated → no Hugging Face login or
- * 401). At ~547 MB it leaves ~1.4 GB of GPU memory free (vs ~2 GB for Gemma 4
- * E2B), which is what lets the WebGPU TTS (Kokoro fp32) run fast AND stable on
- * Quest 3 instead of OOM-crashing. The Gemma presets below are GATED on Hugging
- * Face (need a license accept + token), so use them via the "Local file" loader.
+ * IMPORTANT — web compatibility: the browser runtime can only run Google's
+ * specially **web-optimized** ".task" bundles (file names ending in "-web").
+ * Standard Android ".task" files (e.g. Qwen2.5 from litert-community) do NOT
+ * run on the WebGPU delegate — they abort with "BROADCAST_TO not supported",
+ * "RESHAPE bad input dims size: 5", "Tensor type(INT64) not supported", etc.
+ * So only Gemma "-web" builds are usable here.
+ *
+ * Default = Gemma 4 E2B (bundled local file → works offline, no Hugging Face
+ * login). It's large (~2 GB on GPU), so pair it with the "Stable (CPU)" voice
+ * mode on Quest. For fast GPU voice, use the small Gemma 3 1B (web) preset:
+ * it's gated on Hugging Face, so download it ONCE and drop it in ./models (see
+ * its note) — then it loads locally with no 401.
  */
 export const MODEL_PRESETS = [
   {
-    id: 'qwen25-0_5b',
-    label: 'Qwen2.5 0.5B — tiny + fast, frees GPU for voice, NO login (best on Quest 3)',
-    family: 'qwen',
-    template: 'qwen',
-    maxTokens: 1280,         // matches the ekv1280 build's KV cache
-    sizeMB: 547,
-    tier: 'light',
-    audio: false,            // text-only (voice = Whisper + Kokoro)
-    local: null,             // not bundled; loads from URL (cached to OPFS)
-    // Apache-2.0, public/non-gated — downloads without a Hugging Face token.
-    url: 'https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task?download=true',
-    note: 'Default. ~547 MB, no login required. Small LLM → leaves GPU room so WebGPU voice (Kokoro fp32) is fast + stable. 0.5B is best for short spoken Q&A.',
-  },
-  {
-    id: 'qwen25-1_5b',
-    label: 'Qwen2.5 1.5B — better text, NO login (tighter GPU memory)',
-    family: 'qwen',
-    template: 'qwen',
-    maxTokens: 1280,
-    sizeMB: 1600,
-    tier: 'medium',
-    audio: false,
-    local: null,
-    url: 'https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task?download=true',
-    note: 'Better answers. ~1.6 GB, no login. Heavier on the GPU — on Quest 3 prefer the “Stable (CPU)” voice mode with it.',
-  },
-  {
-    id: 'gemma3-1b-web',
-    label: 'Gemma 3 1B (web) — small, but GATED on Hugging Face (login required)',
+    id: 'gemma3-270m-web',
+    label: 'Gemma 3 270M (web) — tiny + fast GPU voice',
     family: 'gemma3',
     template: 'gemma3',
-    maxTokens: 1280,         // matches the web build's 1280 KV cache
-    sizeMB: 555,
+    maxTokens: 1280,
+    sizeMB: 249,
     tier: 'light',
     audio: false,            // web build is text-only (voice = Whisper + Kokoro)
-    local: null,             // not bundled; loads from URL (cached to OPFS)
-    url: 'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4-web.task?download=true',
-    note: 'GATED (HTTP 401 without auth). To use it: accept the Gemma license on Hugging Face and download the .task once, then load it with the “Local file” loader.',
+    // Served from public Cloudflare R2 (the HF repo is gated → 401 from the
+    // browser, and the ~250 MB LFS file can't be committed to git). Downloaded
+    // once into the OPFS on-disk cache (resumable), then loads offline on reload.
+    // NOTE: the R2 bucket MUST have a CORS policy (Access-Control-Allow-Origin)
+    // or the browser blocks this cross-origin fetch. See README.
+    local: null,
+    url: 'https://pub-65c21cd4f13345fcb1574dc28def6a19.r2.dev/gemma3-270m-it-q4_0-web.task',
+    note: 'Smallest LLM (~249 MB, q4_0 web build) → leaves the most GPU room, so WebGPU voice runs fast + stable on Quest 3. Streamed from Cloudflare R2 and cached on-device after the first load. (Source: gated litert-community/gemma-3-270m-it on Hugging Face; q8-web is a higher-quality ~276 MB alternative.)',
   },
   {
     id: 'gemma4-e2b-web',
-    label: 'Gemma 4 E2B (web) — higher quality, bundled local file',
+    label: 'Gemma 4 E2B (web) — bundled, works offline (Quest: use CPU voice)',
     family: 'gemma4',
     template: 'gemma4',
     maxTokens: 2048,
@@ -157,7 +122,20 @@ export const MODEL_PRESETS = [
     audio: false,            // web build is text-only
     local: LOCAL_E2B,        // bundled file → loads with no network
     url: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task?download=true',
-    note: 'Higher text quality. ~2 GB. Pre-downloaded to ./models. Note: on Quest 3 this leaves little GPU memory, so use the “Stable (CPU)” voice mode with it (GPU voice may OOM).',
+    note: 'Default. ~2 GB, pre-downloaded to ./models (no login). On Quest 3 it fills the GPU, so use the “Stable (CPU)” voice mode (GPU voice may OOM).',
+  },
+  {
+    id: 'gemma3-1b-web',
+    label: 'Gemma 3 1B (web) — small + fast GPU voice (one-time local download)',
+    family: 'gemma3',
+    template: 'gemma3',
+    maxTokens: 1280,         // matches the web build's 1280 KV cache
+    sizeMB: 555,
+    tier: 'light',
+    audio: false,            // web build is text-only (voice = Whisper + Kokoro)
+    local: LOCAL_GEMMA3_1B,  // loaded locally once you place the file here
+    url: 'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4-web.task?download=true',
+    note: 'Small LLM → leaves GPU room so WebGPU voice is fast + stable. The HF repo is GATED (URL gives HTTP 401), so: accept the Gemma license on Hugging Face, download gemma3-1b-it-int4-web.task once, and place it in ./models/ — it then loads locally with no login.',
   },
   {
     id: 'gemma4-e4b-web',

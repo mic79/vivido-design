@@ -171,17 +171,21 @@
     // Voice synthesis tradeoff on a headset's single shared GPU:
     //   • GPU (webgpu/fp32): fast synth. Needs ~330 MB of GPU memory.
     //   • CPU (wasm/q8): rock-solid + smooth render, but slower synth.
-    // With the small default LLM (Qwen2.5 0.5B, ~547 MB) there's now ample GPU
-    // headroom for the TTS model, so we DEFAULT to GPU (fast + stable). If you
-    // switch to a big model (Gemma 4 / Qwen 1.5B), prefer the CPU voice path.
+    // The bundled default LLM (Gemma 4 E2B) fills most of the headset's shared
+    // GPU (~2 GB), leaving little room for a GPU TTS model — running both there
+    // OOMs/crashes Quest. So we DEFAULT to the CPU voice (rock-solid + smooth
+    // render). Toggle to GPU only with a small LLM that frees GPU memory.
     const VOICE_MODES = {
       cpu: { device: 'wasm', dtype: 'q8', label: 'Voice: Stable (CPU)' },
       gpu: { device: 'webgpu', dtype: 'fp32', label: 'Voice: Fast (GPU)' },
     };
     // Safety net: if a previous GPU-voice run crashed the tab, the crash marker
-    // below is still set on the next load → fall back to CPU once so you can't
-    // get trapped in a reload→crash loop. Cleared after a successful GPU synth.
+    // below is still set on the next load → stay on CPU once so you can't get
+    // trapped in a reload→crash loop. Cleared after a successful GPU synth.
     const GPU_VOICE_CRASH_KEY = 'litert-gpu-voice-crashed';
+    // Default to Fast (GPU) voice: the default LLM (Gemma 3 270M, ~250 MB) leaves
+    // plenty of GPU headroom. If you switch to a big model (Gemma 4 E2B/E4B),
+    // toggle voice back to Stable (CPU) to avoid OOM.
     let voiceMode = 'gpu';
     try {
       if (sessionStorage.getItem(GPU_VOICE_CRASH_KEY) === '1') {
