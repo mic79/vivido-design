@@ -145,11 +145,25 @@
       <a-text value="⏹ Stop" color="#ff8a95" align="center" width="1.6" position="0 0 0.01"></a-text>
     </a-entity>
 
-    <!-- Voice backend toggle: CPU (stable) <-> GPU (fast). -->
+    <!-- Voice engine toggle: Supertonic 3 (CPU) <-> Kokoro (GPU/CPU). -->
     <a-entity class="clickable" id="voice-mode-btn" position="0 0.02 -1.7"
               geometry="primitive: plane; width: 1.1; height: 0.16"
               material="color: #1c2638; shader: flat">
       <a-text id="voice-mode-label" value="Voice: Stable (CPU)" color="#cdd6e6" align="center" width="2.0" position="0 0 0.01"></a-text>
+    </a-entity>
+
+    <!-- Spoken language (Supertonic): cycle en/nl/fr/de/es/it/pt. -->
+    <a-entity class="clickable" id="lang-btn" position="-0.55 -0.18 -1.7"
+              geometry="primitive: plane; width: 0.62; height: 0.16"
+              material="color: #1c2638; shader: flat">
+      <a-text id="lang-label" value="Lang: EN" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
+    </a-entity>
+
+    <!-- LLM model: cycle the presets and reload in place (progress on status). -->
+    <a-entity class="clickable" id="model-btn" position="0.55 -0.18 -1.7"
+              geometry="primitive: plane; width: 0.62; height: 0.16"
+              material="color: #1c2638; shader: flat">
+      <a-text id="model-label" value="Model: …" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
     </a-entity>
   </a-scene>
 
@@ -207,7 +221,21 @@
     const speaker = new SpatialSpeaker({ engine: _vm.engine, modelId: _vm.modelId,
                                          device: _vm.device, dtype: _vm.dtype, voice: _vm.voice,
                                          steps: _vm.steps, speed: _vm.speed, lang: _vm.lang, chunkChars: 70,
+                                         // Pre-synthesize 2 chunks ahead before playback starts so a
+                                         // slower-than-realtime CPU synth doesn't leave idle gaps between
+                                         // sentences (replies are short, so the extra lead is barely
+                                         // noticeable). Lower to 1 for a snappier first word.
+                                         leadChunks: 2,
                                          spatial: true, position: { x: 0, y: 1.95, z: -1.8 } });
+
+    // Spoken language for Supertonic (cycle with the in-VR Lang button). These
+    // are a handy subset of Supertonic 3's 31 languages; add more freely.
+    const LANGS = ['en', 'nl', 'fr', 'de', 'es', 'it', 'pt'];
+    let langIdx = Math.max(0, LANGS.indexOf(_vm.lang || 'en'));
+    // Which MODEL_PRESETS entry is loaded (set in startVRApp; cycled by the
+    // in-VR Model button).
+    let modelIdx = 0;
+    let switchingModel = false;
 
     // Warm the voice models (download + compile kernels) once, as early as
     // possible, so the first spoken turn has nothing to load. Idempotent.
@@ -321,10 +349,10 @@
     }
     $('#load-btn').addEventListener('click', doLoad);
 
-    // NOTE: We deliberately do NOT warm the voice models here. On memory-tight
-    // devices (Quest) loading Whisper + Kokoro alongside the ~2 GB LLM blows the
-    // tab's memory budget and crashes the browser mid-load. Voice models are now
-    // loaded lazily on first mic use instead (see wireMic()).
+    // Voice models are pre-warmed in startVRApp() right after the LLM is ready
+    // (the default LLM is small now, so there's memory headroom). Warming
+    // downloads + compiles Whisper and Supertonic in the background so the first
+    // spoken turn has nothing to load — no "first run" wait that breaks the flow.
 
     // Auto-load the bundled model on startup — no selection step.
     (async () => {
@@ -333,11 +361,22 @@
     })();
 
     // ---- VR app ----
+    let vrStarted = false;
     function startVRApp() {
       $('#setup').hidden = true;
+      // Track which preset is loaded so the in-VR model button cycles from here.
+      modelIdx = Math.max(0, MODEL_PRESETS.findIndex((p) => p.id === presetSel.value));
+      updateModelLabel();
+      if (vrStarted) { setVRStatus('Idle'); return; } // re-entry after a model swap
+      vrStarted = true;
       buildButtons();
       wireMic();
       startListenerTracking();
+      // Pre-warm voice (Whisper + Supertonic) in the background so the first
+      // spoken turn is instant. Best-effort; failures just fall back to lazy load.
+      const vEl = document.getElementById('voice-backend-text');
+      if (vEl) { vEl.setAttribute('value', 'voice: loading… (first run)'); vEl.setAttribute('color', '#ffcc66'); }
+      warmVoice().then(() => setVoiceBackend()).catch(() => {});
       // Resume the audio context when entering/interacting with the immersive
       // session (Quest suspends audio until a session gesture).
       const scene = document.querySelector('a-scene');
@@ -367,7 +406,7 @@
       btn.addEventListener('mouseenter', () => btn.setAttribute('material', 'color: #2a3650; shader: flat'));
       btn.addEventListener('mouseleave', () => btn.setAttribute('material', `color: ${vrRecording ? '#5a2030' : '#1c2638'}; shader: flat`));
       btn.addEventListener('click', async () => {
-        if (!enabled || engine.busy) return;
+        if (!enabled || engine.busy || switchingModel) return;
         try { await speaker.unlock(); } catch (_) {} // resume audio within the gesture
         if (!vrRecording) {
           try {
@@ -491,10 +530,83 @@
         try {
           await speaker.unlock();
           await speaker.setEngine(m); // swaps engine/device; reloads on next reply
+          // Keep the chosen spoken language across an engine switch.
+          await speaker.setEngine({ lang: LANGS[langIdx] });
           setVoiceBackend();
           setVRStatus('Idle');
         } catch (err) { setVRStatus(`Voice switch error: ${err.message || err}`); }
       });
+
+      // Spoken-language cycle (Supertonic). Instant — no model reload needed.
+      const langBtn = document.getElementById('lang-btn');
+      updateLangLabel();
+      langBtn.addEventListener('mouseenter', () => langBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
+      langBtn.addEventListener('mouseleave', () => langBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
+      langBtn.addEventListener('click', async () => {
+        langIdx = (langIdx + 1) % LANGS.length;
+        updateLangLabel();
+        try { await speaker.setEngine({ lang: LANGS[langIdx] }); } catch (_) {}
+        // Cached reply was synthesized in the old language — drop the cached
+        // audio so Replay re-synthesizes it in the newly-chosen language.
+        speaker._lastText = ''; speaker._lastBuffers = null;
+        setVRStatus(`Language: ${LANGS[langIdx].toUpperCase()}`);
+      });
+
+      // LLM model cycle — reloads the engine in place with progress on status.
+      const modelBtn = document.getElementById('model-btn');
+      modelBtn.addEventListener('mouseenter', () => modelBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
+      modelBtn.addEventListener('mouseleave', () => modelBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
+      modelBtn.addEventListener('click', cycleModel);
+    }
+
+    function updateLangLabel() {
+      const el = document.getElementById('lang-label');
+      if (el) el.setAttribute('value', `Lang: ${LANGS[langIdx].toUpperCase()}`);
+    }
+    function shortModelName(preset) {
+      // Trim the long preset labels down to something that fits the VR button.
+      return (preset.label || preset.id).split(/\s[—(]/)[0].trim();
+    }
+    function updateModelLabel() {
+      const el = document.getElementById('model-label');
+      const p = MODEL_PRESETS[modelIdx];
+      if (el && p) el.setAttribute('value', `Model: ${shortModelName(p)}`);
+    }
+
+    // Swap the LLM from inside VR: dispose the current model, then load the next
+    // preset, routing download/compile progress to the in-world status line.
+    async function cycleModel() {
+      if (switchingModel || engine.busy) return;
+      switchingModel = true;
+      stopVoice();
+      modelIdx = (modelIdx + 1) % MODEL_PRESETS.length;
+      const preset = MODEL_PRESETS[modelIdx];
+      updateModelLabel();
+      const onProgress = (p) => {
+        if (p.stage === 'init-runtime') setVRStatus('Loading runtime…');
+        else if (p.stage === 'downloading') setVRStatus(`Downloading ${shortModelName(preset)}… ${fmtBytes(p.loaded||0)}${p.total?` / ${fmtBytes(p.total)}`:''}`);
+        else if (p.stage === 'reading-file') setVRStatus(`Loading model… ${fmtBytes(p.loaded||0)}/${fmtBytes(p.total||0)}`);
+        else if (p.stage === 'creating-session') setVRStatus('Initializing & compiling…');
+        else if (p.stage === 'ready') setVRStatus('Ready');
+      };
+      setConvo(`Switching model to ${shortModelName(preset)}…`);
+      setVRStatus('Preparing…');
+      try {
+        try { engine.dispose(); } catch (_) {}
+        const args = { preset, onProgress, system: systemPrompt };
+        const src = preset.local || preset.url;
+        const f = src ? await acquireModel(src, onProgress) : null;
+        if (f) args.modelFile = f; else if (src) { args.modelUrl = src; args.buffered = false; }
+        await engine.load(args);
+        engine.reset();
+        setConvo(`Model loaded: ${preset.label}.\nReady — ask a question.`);
+        setVRStatus('Idle');
+      } catch (err) {
+        setConvo(`Model load failed: ${err.message || err}\nPick another with the Model button.`);
+        setVRStatus('Model error');
+      } finally {
+        switchingModel = false;
+      }
     }
 
     function updateVoiceModeLabel() {
@@ -503,7 +615,7 @@
     }
 
     async function ask(prompt) {
-      if (engine.busy) return;
+      if (engine.busy || switchingModel) return;
       // Resume audio NOW (we're inside the click/select gesture). Generation can
       // take seconds, after which the gesture's activation has expired and a late
       // resume() would be ignored → silent playback.

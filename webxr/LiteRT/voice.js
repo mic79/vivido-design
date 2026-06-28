@@ -308,10 +308,14 @@ export class SpatialSpeaker {
     spatial = true,
     position = { x: 0, y: 1.6, z: -1.8 },
     chunkChars = 140, // synth chunk size: smaller = first audio sooner (streaming)
+    leadChunks = 1,   // pre-synthesize this many chunks ahead before playback
+                      // starts → a buffer that hides the per-sentence synth time
+                      // (no idle gaps mid-reply when synth is slower than speech).
   } = {}) {
     this.cfg = { engine, modelId, device, dtype, voice, steps, speed, lang };
     this.voice = voice;
     this.chunkChars = chunkChars;
+    this.leadChunks = leadChunks;
     this.spatial = spatial;
     this.position = position;
     this.enabled = true;
@@ -573,19 +577,34 @@ export class SpatialSpeaker {
    * VR render. The synthesized buffers are cached so replay() needs no re-synth.
    * Pass { force: true } to speak even when `enabled` is off.
    */
-  async speak(text, { force = false } = {}) {
+  async speak(text, { force = false, lead = this.leadChunks } = {}) {
     if ((!this.enabled && !force) || !text || !text.trim()) return;
     if (!this.ready) await this.load();
     await this.unlock();
     const myGen = ++this._gen; // lets stop()/a newer speak() cancel this run
     const chunks = splitForSynth(text, this.chunkChars);
     const buffers = [];
-    for (const chunk of chunks) {
-      const buf = await this._synth(chunk);
+    let started = false; // has playback begun for this reply yet?
+    for (let i = 0; i < chunks.length; i++) {
+      const buf = await this._synth(chunks[i]);
       if (this._gen !== myGen) return; // superseded/stopped while synthesizing
-      if (buf) { buffers.push(buf); this._enqueue(buf); }
+      if (buf) {
+        buffers.push(buf);
+        this.queue.push(buf);
+        // Pre-buffer: don't start until we're `lead` chunks ahead (or this is the
+        // last chunk). After playback has begun, immediately resume if it stalled
+        // (queue drained because synth fell behind) — that's the gap we're fixing.
+        const isLast = (i === chunks.length - 1);
+        if (!this.playing) {
+          if (!started) {
+            if (this.queue.length > lead || isLast) { started = true; this._playNext(); }
+          } else {
+            this._playNext();
+          }
+        }
+      }
       // Yield a macrotask so the WebXR compositor can present a frame between
-      // GPU synth jobs (reduces the stutter during long replies).
+      // synth jobs (reduces the stutter during long replies).
       await new Promise((r) => setTimeout(r, 0));
       if (this._gen !== myGen) return;
     }
