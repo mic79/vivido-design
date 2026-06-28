@@ -178,7 +178,7 @@
     //   3) Kokoro (CPU): rock-solid + smooth, but slow synth (last resort).
     const VOICE_MODES = [
       { id: 'supertonic', engine: 'supertonic', modelId: 'onnx-community/Supertonic-TTS-2-ONNX',
-        device: 'wasm', dtype: 'fp32', voice: 'F1', steps: 5, speed: 1.0, gpu: false,
+        device: 'wasm', dtype: 'fp32', voice: 'F1', steps: 5, speed: 1.0, lang: 'en', gpu: false,
         label: 'Voice: Supertonic (fast, CPU)' },
       { id: 'kokoro-gpu', engine: 'kokoro', modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
         device: 'webgpu', dtype: 'fp32', voice: 'af_heart', gpu: true,

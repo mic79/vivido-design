@@ -298,11 +298,12 @@ export class SpatialSpeaker {
     voice = (engine === 'supertonic' ? 'F1' : 'af_heart'),
     steps = 5,        // Supertonic denoising steps (5 = fast, 12 = best quality)
     speed = 1.0,      // Supertonic speech speed factor
+    lang = 'en',      // Supertonic 2 language tag (en/ko/es/pt/fr)
     spatial = true,
     position = { x: 0, y: 1.6, z: -1.8 },
     chunkChars = 140, // synth chunk size: smaller = first audio sooner (streaming)
   } = {}) {
-    this.cfg = { engine, modelId, device, dtype, voice, steps, speed };
+    this.cfg = { engine, modelId, device, dtype, voice, steps, speed, lang };
     this.voice = voice;
     this.chunkChars = chunkChars;
     this.spatial = spatial;
@@ -472,7 +473,10 @@ export class SpatialSpeaker {
       const out = await vwCall('tts', { cfg: this.cfg, text: clean, voice: this.voice });
       data = out.audio; rate = out.rate || 24000;
     } else if (this.cfg.engine === 'supertonic') {
-      const out = await this._tts(clean, {
+      // Supertonic 2 needs a language tag ("<en>...</en>") or it garbles/repeats.
+      const lang = this.cfg.lang || 'en';
+      const tagged = /^\s*<[a-z]{2}>/i.test(clean) ? clean : `<${lang}>${clean}</${lang}>`;
+      const out = await this._tts(tagged, {
         speaker_embeddings: `https://huggingface.co/${this.cfg.modelId}/resolve/main/voices/${this.voice}.bin`,
         num_inference_steps: this.cfg.steps || 5,
         speed: this.cfg.speed || 1.0,

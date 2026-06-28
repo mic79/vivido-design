@@ -207,7 +207,13 @@ async function handle(msg) {
       if (isSupertonic(cfg)) {
         const voice = payload.voice || cfg.voice || 'F1';
         const emb = await supertonicEmbedding(cfg.modelId, voice);
-        const out = await tts(payload.text, {
+        // Supertonic 2 REQUIRES a language tag around the text (e.g. "<en>...</en>").
+        // Without it the multilingual tokenizer mis-aligns → repeated/garbled audio.
+        const lang = cfg.lang || 'en';
+        const tagged = /^\s*<[a-z]{2}>/i.test(payload.text)
+          ? payload.text
+          : `<${lang}>${payload.text}</${lang}>`;
+        const out = await tts(tagged, {
           speaker_embeddings: emb,
           num_inference_steps: cfg.steps || 5, // the "5-step" speed/quality dial
           speed: cfg.speed || 1.0,
