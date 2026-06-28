@@ -309,6 +309,7 @@ export class SpatialSpeaker {
     this.playing = false;
     this.current = null;       // currently-playing AudioBufferSourceNode
     this.onPlaying = null;     // optional cb(isPlaying) for UI (stop button, etc.)
+    this.onState = null;       // optional cb(audioContextState) for UI diagnostics
     this._gen = 0;             // bumped to cancel an in-flight chunked speak()
     this._lastText = '';       // cached reply text + audio for instant replay
     this._lastBuffers = null;
@@ -324,6 +325,9 @@ export class SpatialSpeaker {
   static isSupported() {
     return typeof (window.AudioContext || window.webkitAudioContext) !== 'undefined';
   }
+
+  /** Current AudioContext state ('running' | 'suspended' | 'closed' | 'none'). */
+  audioState() { return this.ctx ? this.ctx.state : 'none'; }
 
   async load() {
     if (this.ready) return this;
@@ -355,7 +359,11 @@ export class SpatialSpeaker {
     if (this.ctx) return; // build the graph once
     const AC = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AC();
+    // Surface context state changes (running / suspended) so the UI can show
+    // whether audio is actually alive — there's no console in the headset.
+    this.ctx.onstatechange = () => { if (typeof this.onState === 'function') { try { this.onState(this.ctx.state); } catch (_) {} } };
     this.gain = this.ctx.createGain();
+    this.gain.gain.value = 1;
     if (this.spatial) {
       this.panner = this.ctx.createPanner();
       this.panner.panningModel = 'HRTF';
@@ -423,14 +431,25 @@ export class SpatialSpeaker {
 
   _playNext() {
     if (!this.queue.length) { this.current = null; this._setPlaying(false); return; }
-    this._setPlaying(true);
-    const buf = this.queue.shift();
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(this.gain);
-    this.current = src;
-    src.onended = () => { if (this.current === src) this.current = null; this._playNext(); };
-    src.start();
+    const start = () => {
+      if (!this.queue.length) { this.current = null; this._setPlaying(false); return; }
+      this._setPlaying(true);
+      const buf = this.queue.shift();
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(this.gain);
+      this.current = src;
+      src.onended = () => { if (this.current === src) this.current = null; this._playNext(); };
+      try { src.start(); } catch (_) {}
+    };
+    // A source started on a suspended context is silent and never fires onended
+    // (the clock is frozen) — the classic "shows Speaking but no sound". Make
+    // sure the context is running first.
+    if (this.ctx.state !== 'running') {
+      this.ctx.resume().then(start).catch(start);
+    } else {
+      start();
+    }
   }
 
   /**

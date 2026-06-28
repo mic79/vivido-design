@@ -156,8 +156,11 @@
     const mic = new MicRecorder();
     const transcriber = new Transcriber(); // device:'auto' (WebGPU when available)
     let whisperLoaded = false;
-    const speaker = new SpatialSpeaker({ spatial: true, voice: 'af_heart',
-                                         position: { x: 0, y: 1.95, z: -1.8 } });
+    // TTS on WASM/CPU in VR on purpose: WebGPU synthesis fights the headset's
+    // shared GPU for the render loop and freezes the view for seconds. CPU keeps
+    // the GPU 100% for rendering, so the world stays smooth while it speaks.
+    const speaker = new SpatialSpeaker({ device: 'wasm', dtype: 'q8', spatial: true,
+                                         voice: 'af_heart', position: { x: 0, y: 1.95, z: -1.8 } });
 
     // Warm the voice models (download + compile kernels) once, as early as
     // possible, so the first spoken turn has nothing to load. Idempotent.
@@ -371,10 +374,13 @@
       const el = document.getElementById('voice-backend-text');
       if (!el) return;
       const tts = (speaker && speaker.backend) || '(not loaded)';
-      const fast = /webgpu/i.test(tts);
-      el.setAttribute('value', `voice: ${tts}${fast ? '  ✓ GPU' : '  ⚠ CPU (slow)'}`);
-      el.setAttribute('color', fast ? '#59e0b0' : '#ffcc66');
+      const audio = speaker ? speaker.audioState() : 'none';
+      // The audio state is what matters for "is there sound": running = good.
+      const ok = audio === 'running';
+      el.setAttribute('value', `voice: ${tts} · audio: ${audio}`);
+      el.setAttribute('color', ok ? '#59e0b0' : '#ffcc66');
     }
+    speaker.onState = () => setVoiceBackend();
 
     function buildButtons() {
       const wrap = document.getElementById('buttons');

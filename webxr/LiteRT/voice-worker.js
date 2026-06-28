@@ -75,7 +75,13 @@ async function ensureTts(cfg) {
     : [{ device: 'wasm', dtype: cfg.dtype || 'q8' }];
   const r = await loadFirst('TTS', candidates,
     (c) => KokoroTTS.from_pretrained(cfg.modelId, { device: c.device, dtype: c.dtype }));
-  tts = r.inst; ttsBackend = r.backend;
+  tts = r.inst;
+  // For the CPU path, speed depends entirely on WASM threads, which need
+  // cross-origin isolation. Report it so the UI can explain slow synth.
+  const threads = /wasm/i.test(r.backend)
+    ? (self.crossOriginIsolated ? `x${_tf.env.backends.onnx.wasm.numThreads}` : '1-thread')
+    : '';
+  ttsBackend = threads ? `${r.backend} ${threads}` : r.backend;
   return tts;
 }
 
