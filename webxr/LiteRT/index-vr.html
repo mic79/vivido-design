@@ -117,6 +117,11 @@
          overlap the status / voice readout lines) -->
     <a-entity id="buttons" position="0 0.82 -1.7"></a-entity>
 
+    <!-- Mic input visualizer (equalizer bars; shown while listening). Sits in the
+         empty center gap of the mic-button row. Bars are created in JS and driven
+         by the analyser's frequency data. -->
+    <a-entity id="mic-viz" position="0 0.42 -1.69" visible="false"></a-entity>
+
     <!-- Mic toggle (push-to-talk: click once to start, again to send) -->
     <a-entity class="clickable" id="mic-btn" position="-0.85 0.42 -1.7"
               geometry="primitive: plane; width: 0.5; height: 0.16"
@@ -202,8 +207,7 @@
     let systemPrompt = 'You are a concise assistant inside a VR app. Keep answers short (under 40 words). Reply in plain spoken sentences — do not use markdown, asterisks, bullet points, or headings.';
 
     // On-device voice (no cloud, no Web Speech API — Quest-compatible):
-    // Whisper = mic→text, Kokoro = text→speech spatialized at the avatar.
-    const mic = new MicRecorder();
+    // Whisper/Vosk = mic→text (streamed), Kokoro/Supertonic = text→speech.
     const transcriber = new Transcriber(); // device:'auto' (WebGPU when available)
     let whisperLoaded = false;
     // Voice (TTS) engines — cycle with the in-VR voice button. Ordered best-first
@@ -515,24 +519,31 @@
       btn.addEventListener('click', async () => {
         if (!enabled || engine.busy || switchingModel) return;
         try { await speaker.unlock(); } catch (_) {} // resume audio within the gesture
+        const engName = (transcriber.engine === 'vosk') ? 'Vosk' : 'Whisper';
         if (!vrRecording) {
           try {
             stopVoice(); // interrupt any current TTS before listening
-            await mic.start();
+            if (!whisperLoaded) { setVRStatus('Loading voice models (first use)…'); await warmVoice(); }
+            // Stream the mic: Vosk shows live partial text; both engines drive the
+            // input visualizer via onLevel.
+            await transcriber.startListening({
+              onPartial: (t) => { if (t) setVRStatus(`🎙 ${clip(t, 90)}`); },
+              onLevel: (freq) => updateMicViz(freq),
+            });
             vrRecording = true;
+            showMicViz(true);
             lbl.setAttribute('value', '⏺ Stop');
             btn.setAttribute('material', 'color: #5a2030; shader: flat');
-            setVRStatus('Listening…');
-          } catch (err) { setVRStatus(`Mic error: ${err.message || err}`); }
+            setVRStatus(transcriber.engine === 'vosk' ? 'Listening… (live)' : 'Listening…');
+          } catch (err) { setVRStatus(`Mic error: ${err.message || err}`); showMicViz(false); }
         } else {
           vrRecording = false;
+          showMicViz(false);
           lbl.setAttribute('value', '🎤 Talk');
           btn.setAttribute('material', 'color: #1c2638; shader: flat');
           try {
-            const audioBuf = await mic.stop();
-            if (!whisperLoaded) { setVRStatus('Loading voice models (first use)…'); await warmVoice(); }
-            setVRStatus('Transcribing (Whisper)…');
-            const text = await transcriber.transcribe(audioBuf);
+            setVRStatus(`Transcribing (${engName})…`);
+            const text = await transcriber.stopListening();
             if (!text) { setVRStatus('Didn’t catch that — try again.'); return; }
             await ask(text);
           } catch (err) { setVRStatus(`Voice error: ${err.message || err}`); }
@@ -557,6 +568,47 @@
         requestAnimationFrame(tick);
       };
       tick();
+    }
+
+    // ---- Mic input visualizer (equalizer bars, like languageVR) --------------
+    const MIC_VIZ_BARS = 16;
+    const MIC_VIZ_W = 0.9;          // total width of the bar field
+    const MIC_VIZ_MAXH = 0.34;      // tallest a bar can grow
+    let micVizBars = [];
+    function buildMicViz() {
+      const host = document.getElementById('mic-viz');
+      if (!host || micVizBars.length) return;
+      const bw = (MIC_VIZ_W / MIC_VIZ_BARS) * 0.7;
+      const step = MIC_VIZ_W / MIC_VIZ_BARS;
+      for (let i = 0; i < MIC_VIZ_BARS; i++) {
+        const bar = document.createElement('a-plane');
+        const x = -MIC_VIZ_W / 2 + step * (i + 0.5);
+        bar.setAttribute('width', bw);
+        bar.setAttribute('height', MIC_VIZ_MAXH);  // base height; scaled each frame
+        bar.setAttribute('position', `${x.toFixed(3)} 0 0`);
+        bar.setAttribute('material', 'color: #59e0b0; shader: flat; opacity: 0.95');
+        host.appendChild(bar);
+        micVizBars.push(bar);
+      }
+    }
+    function showMicViz(on) {
+      const host = document.getElementById('mic-viz');
+      if (!host) return;
+      buildMicViz();
+      host.setAttribute('visible', !!on);
+      if (!on) micVizBars.forEach((b) => { if (b.object3D) b.object3D.scale.y = 0.05; });
+    }
+    function updateMicViz(freq) {
+      if (!micVizBars.length) return;
+      const bin = Math.max(1, Math.floor(freq.length / MIC_VIZ_BARS));
+      for (let i = 0; i < MIC_VIZ_BARS; i++) {
+        let sum = 0;
+        for (let j = 0; j < bin; j++) sum += freq[i * bin + j] || 0;
+        const v = (sum / bin) / 255;             // 0..1 average magnitude
+        const s = Math.max(0.05, Math.min(1, v * 1.6)); // scale factor (unit = MAXH)
+        const bar = micVizBars[i];
+        if (bar.object3D) bar.object3D.scale.y = s;
+      }
     }
 
     const convoText = () => document.getElementById('convo-text');
@@ -683,6 +735,17 @@
     // Spoken-language menu = Auto-detect (STT only) + the concrete languages.
     const LANG_OPTIONS = ['auto', ...LANGS];
     const langOptName = (l) => (l === 'auto' ? 'Auto-detect (STT)' : (LANG_NAMES[l] || l));
+    // Plain English language names used to instruct the LLM which language to
+    // answer in (so a Dutch session gets Dutch replies, not English).
+    const REPLY_LANG = { en: 'English', nl: 'Dutch', fr: 'French', de: 'German',
+                         es: 'Spanish', it: 'Italian', pt: 'Brazilian Portuguese' };
+    // The active reply language tracks the spoken (TTS) language so the answer and
+    // the spoken voice are in the same language. (Auto-detect affects STT only.)
+    function effectiveSystem() {
+      const code = LANGS[langIdx];
+      if (!code || code === 'en') return systemPrompt;
+      return `${systemPrompt} Always write your entire reply in ${REPLY_LANG[code] || code}, even if the user writes in another language. Do not translate to English.`;
+    }
 
     // ---- In-world pop-up list menu (replaces toggles) -------------------------
     // Shows all options; selection only happens on click. Click the dimmed
@@ -1015,7 +1078,7 @@
       // take seconds, after which the gesture's activation has expired and a late
       // resume() would be ignored → silent playback.
       try { await speaker.unlock(); } catch (_) {}
-      await runVRTurn(prompt, (onToken) => engine.generate(prompt, { system: systemPrompt, onToken }));
+      await runVRTurn(prompt, (onToken) => engine.generate(prompt, { system: effectiveSystem(), onToken }));
     }
 
     async function runVRTurn(label, generator) {

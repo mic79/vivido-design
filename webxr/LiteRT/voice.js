@@ -195,6 +195,21 @@ export async function resampleToMono(audioBuffer, targetRate = TARGET_SR) {
   return offline.startRendering();
 }
 
+/** Linear-resample a mono Float32 PCM buffer (good enough for 16 kHz speech). */
+export function resampleFloat32(data, fromRate, toRate) {
+  if (!data || fromRate === toRate) return data;
+  const ratio = toRate / fromRate;
+  const out = new Float32Array(Math.max(1, Math.round(data.length * ratio)));
+  for (let i = 0; i < out.length; i++) {
+    const idx = i / ratio;
+    const i0 = Math.floor(idx);
+    const i1 = Math.min(i0 + 1, data.length - 1);
+    const f = idx - i0;
+    out[i] = data[i0] * (1 - f) + data[i1] * f;
+  }
+  return out;
+}
+
 /** mono AudioBuffer (or Float32Array) -> Float32Array for the ASR pipeline. */
 export function toFloat32(audio) {
   if (audio instanceof Float32Array) return audio;
@@ -279,7 +294,9 @@ export class Transcriber {
     this._useWorker = workerSupported();
     this._asr = null;  // inline whisper pipeline (only if Workers unavailable)
     this._vosk = null; // { model, recognizer, lang } when engine === 'vosk'
-    this._voskOnResult = null; // active per-transcription result sink
+    this._voskOnResult = null;  // active per-transcription final-result sink
+    this._voskOnPartial = null; // live partial-result sink (streaming)
+    this._cap = null;  // live mic capture graph (startListening/stopListening)
   }
 
   static isSupported() { return MicRecorder.isSupported(); }
@@ -316,6 +333,10 @@ export class Transcriber {
       const t = (m && m.result && m.result.text) || (m && m.text) || '';
       if (this._voskOnResult) this._voskOnResult(t.trim());
     });
+    recognizer.on('partialresult', (m) => {
+      const t = (m && m.result && m.result.partial) || (m && m.partial) || '';
+      if (this._voskOnPartial) this._voskOnPartial(t.trim());
+    });
     this._vosk = { model, recognizer, lang };
   }
 
@@ -324,6 +345,105 @@ export class Transcriber {
     try { this._vosk && this._vosk.model && this._vosk.model.terminate(); } catch (_) {}
     this._vosk = null;
     this._voskOnResult = null;
+    this._voskOnPartial = null;
+  }
+
+  /** Open the mic and start streaming.
+   *  - Vosk: feeds audio live and reports `onPartial(text)` as you speak.
+   *  - Whisper: not a streaming model, so it just buffers (no partials) — but
+   *    `onLevel` still fires for the visualizer, and stopListening() transcribes.
+   *  `onLevel(Uint8Array)` receives the analyser's frequency data every frame
+   *  (drive a mic-input visualizer with it). Call stopListening() to get text. */
+  async startListening({ onPartial = null, onLevel = null } = {}) {
+    if (this._cap) await this.stopListening().catch(() => {});
+    if (!this.ready) await this.load();
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC({ sampleRate: TARGET_SR });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, sampleRate: TARGET_SR },
+    });
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.8;
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    const cap = { ctx, stream, src, analyser, proc, chunks: [], onLevel, running: true };
+    this._cap = cap;
+
+    if (this.engine === 'vosk') {
+      this._voskParts = [];
+      this._voskOnPartial = (t) => { if (onPartial) onPartial(t); };
+      this._voskOnResult = (t) => { if (t) this._voskParts.push(t); };
+    }
+
+    proc.onaudioprocess = (e) => {
+      if (!cap.running) return;
+      const input = e.inputBuffer.getChannelData(0);
+      if (this.engine === 'vosk' && this._vosk) {
+        // acceptWaveformFloat resamples from the context rate to the recognizer's
+        // 16 kHz, so this is correct even if the platform ignored our SR request.
+        try { this._vosk.recognizer.acceptWaveformFloat(new Float32Array(input), ctx.sampleRate); } catch (_) {}
+      } else {
+        cap.chunks.push(new Float32Array(input)); // copy out (buffer is reused)
+      }
+    };
+    src.connect(analyser);
+    analyser.connect(proc);
+    proc.connect(ctx.destination);
+
+    if (onLevel) {
+      const freq = new Uint8Array(analyser.frequencyBinCount);
+      const loop = () => {
+        if (!cap.running) return;
+        analyser.getByteFrequencyData(freq);
+        onLevel(freq);
+        cap.raf = requestAnimationFrame(loop);
+      };
+      cap.raf = requestAnimationFrame(loop);
+    }
+  }
+
+  /** Stop streaming and return the recognized text. */
+  async stopListening() {
+    const cap = this._cap;
+    if (!cap) return '';
+    cap.running = false;
+    this._cap = null;
+    if (cap.raf) cancelAnimationFrame(cap.raf);
+    try { cap.proc.disconnect(); } catch (_) {}
+    try { cap.analyser.disconnect(); } catch (_) {}
+    try { cap.src.disconnect(); } catch (_) {}
+    try { cap.stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+
+    let text = '';
+    if (this.engine === 'vosk' && this._vosk) {
+      text = await new Promise((resolve) => {
+        let settle = setTimeout(() => resolve((this._voskParts || []).join(' ').trim()), 700);
+        // A late 'result' (from the silence flush below) extends the wait briefly
+        // so we capture the final segment.
+        this._voskOnResult = (t) => {
+          if (t) this._voskParts.push(t);
+          clearTimeout(settle);
+          settle = setTimeout(() => resolve(this._voskParts.join(' ').trim()), 250);
+        };
+        try {
+          this._vosk.recognizer.acceptWaveformFloat(new Float32Array(Math.round(TARGET_SR * 0.5)), TARGET_SR);
+        } catch (_) { clearTimeout(settle); resolve((this._voskParts || []).join(' ').trim()); }
+      });
+      this._voskOnPartial = null;
+      this._voskParts = [];
+      text = collapseRepeats(text.replace(/\s+/g, ' ').trim());
+    } else {
+      let total = 0;
+      for (const c of cap.chunks) total += c.length;
+      let data = new Float32Array(total);
+      let off = 0;
+      for (const c of cap.chunks) { data.set(c, off); off += c.length; }
+      if (cap.ctx.sampleRate !== TARGET_SR) data = resampleFloat32(data, cap.ctx.sampleRate, TARGET_SR);
+      text = await this.transcribe(data); // whisper path (has its own silence guard)
+    }
+    try { cap.ctx.close && cap.ctx.close(); } catch (_) {}
+    return text;
   }
 
   /** Download + instantiate the model so first real use isn't slow. */
@@ -338,6 +458,12 @@ export class Transcriber {
    *  worker was disposed to free memory). */
   unload() {
     this.ready = false; this._warmed = false; this._asr = null;
+    if (this._cap) {
+      const cap = this._cap; this._cap = null; cap.running = false;
+      if (cap.raf) cancelAnimationFrame(cap.raf);
+      try { cap.stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+      try { cap.ctx.close && cap.ctx.close(); } catch (_) {}
+    }
     if (this._vosk) this._disposeVosk();
   }
 
