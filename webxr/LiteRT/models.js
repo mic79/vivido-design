@@ -113,16 +113,19 @@ export const MODEL_PRESETS = [
   },
   {
     id: 'gemma4-e2b-web',
-    label: 'Gemma 4 E2B (web) — bundled, works offline (Quest: use CPU voice)',
+    label: 'Gemma 4 E2B (web) — ~2 GB, streams from Hugging Face',
     family: 'gemma4',
     template: 'gemma4',
     maxTokens: 2048,
     sizeMB: 2008,
     tier: 'medium',
     audio: false,            // web build is text-only
-    local: LOCAL_E2B,        // bundled file → loads with no network
+    // Public (non-gated) URL — streams + caches on first use. If you drop the
+    // file in ./models it loads offline instead (the app prefers a present local
+    // file, else this URL).
+    local: LOCAL_E2B,
     url: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task?download=true',
-    note: 'Default. ~2 GB, pre-downloaded to ./models (no login). On Quest 3 it fills the GPU, so use the “Stable (CPU)” voice mode (GPU voice may OOM).',
+    note: '~2 GB, streamed from the public litert-community repo (no login) and cached on-device after the first load. On Quest 3 it fills the GPU, so pair it with a CPU voice (GPU voice may OOM).',
   },
   {
     id: 'gemma3-1b-web',

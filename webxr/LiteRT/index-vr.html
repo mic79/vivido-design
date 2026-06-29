@@ -529,45 +529,212 @@
         b.addEventListener('mouseleave', () => b.setAttribute('material', 'color: #1c2638; shader: flat'));
       });
 
+      // Each settings button opens a pop-up LIST so you can see all options and
+      // pick one — nothing loads until you actually select it.
       const modeBtn = document.getElementById('voice-mode-btn');
       updateVoiceModeLabel();
       modeBtn.addEventListener('mouseenter', () => modeBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
       modeBtn.addEventListener('mouseleave', () => modeBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
-      modeBtn.addEventListener('click', async () => {
-        voiceModeIdx = (voiceModeIdx + 1) % VOICE_MODES.length;
-        const m = VOICE_MODES[voiceModeIdx];
-        updateVoiceModeLabel();
-        setVRStatus(`Switching voice to ${m.label.replace('Voice: ', '')}…`);
-        try {
-          await speaker.unlock();
-          await speaker.setEngine(m); // swaps engine/device; reloads on next reply
-          // Keep the chosen spoken language across an engine switch.
-          await speaker.setEngine({ lang: LANGS[langIdx] });
-          setVoiceBackend();
-          setVRStatus('Idle');
-        } catch (err) { setVRStatus(`Voice switch error: ${err.message || err}`); }
-      });
+      modeBtn.addEventListener('click', () => openMenu('Voice engine',
+        VOICE_MODES.map((m) => m.label.replace('Voice: ', '')), voiceModeIdx, selectVoiceMode));
 
-      // Spoken-language cycle (Supertonic). Instant — no model reload needed.
       const langBtn = document.getElementById('lang-btn');
       updateLangLabel();
       langBtn.addEventListener('mouseenter', () => langBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
       langBtn.addEventListener('mouseleave', () => langBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
-      langBtn.addEventListener('click', async () => {
-        langIdx = (langIdx + 1) % LANGS.length;
-        updateLangLabel();
-        try { await speaker.setEngine({ lang: LANGS[langIdx] }); } catch (_) {}
-        // Cached reply was synthesized in the old language — drop the cached
-        // audio so Replay re-synthesizes it in the newly-chosen language.
-        speaker._lastText = ''; speaker._lastBuffers = null;
-        setVRStatus(`Language: ${LANGS[langIdx].toUpperCase()}`);
-      });
+      langBtn.addEventListener('click', () => openMenu('Spoken language',
+        LANGS.map((l) => LANG_NAMES[l] || l), langIdx, selectLang));
 
-      // LLM model cycle — reloads the engine in place with progress on status.
       const modelBtn = document.getElementById('model-btn');
       modelBtn.addEventListener('mouseenter', () => modelBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
       modelBtn.addEventListener('mouseleave', () => modelBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
-      modelBtn.addEventListener('click', cycleModel);
+      modelBtn.addEventListener('click', () => openMenu('LLM model',
+        MODEL_PRESETS.map((p) => `${shortModelName(p)} · ~${(p.sizeMB / 1000).toFixed(1)} GB`),
+        modelIdx, selectModel));
+    }
+
+    const LANG_NAMES = { en: 'English', nl: 'Nederlands (Dutch)', fr: 'Français',
+                         de: 'Deutsch', es: 'Español', it: 'Italiano', pt: 'Português (BR)' };
+
+    // ---- In-world pop-up list menu (replaces toggles) -------------------------
+    // Shows all options; selection only happens on click. Click the dimmed
+    // backdrop or "Close" to dismiss without changing anything.
+    let menuEl = null;
+    function closeMenu() {
+      if (menuEl && menuEl.parentNode) menuEl.parentNode.removeChild(menuEl);
+      menuEl = null;
+    }
+    function openMenu(title, items, currentIdx, onPick) {
+      closeMenu();
+      const scene = document.querySelector('a-scene');
+      if (!scene) return;
+      menuEl = document.createElement('a-entity');
+      menuEl.setAttribute('position', '0 1.5 -1.45'); // in front of the panel
+      const rowH = 0.17, gap = 0.02, w = 1.8, pad = 0.08, headH = 0.22, footH = 0.22;
+      const n = items.length;
+      const listH = n * rowH + Math.max(0, n - 1) * gap;
+      const totalH = headH + listH + footH + pad * 2;
+      const halfH = totalH / 2;
+      // Border + background (background click = dismiss).
+      const border = document.createElement('a-plane');
+      border.setAttribute('width', w + 0.24); border.setAttribute('height', totalH + 0.04);
+      border.setAttribute('material', 'color: #2a3650; shader: flat'); border.setAttribute('position', '0 0 -0.01');
+      menuEl.appendChild(border);
+      const bg = document.createElement('a-plane');
+      bg.setAttribute('class', 'clickable'); bg.setAttribute('width', w + 0.2); bg.setAttribute('height', totalH);
+      bg.setAttribute('material', 'color: #0b1322; shader: flat; opacity: 0.99');
+      bg.addEventListener('click', closeMenu);
+      menuEl.appendChild(bg);
+      const t = document.createElement('a-text');
+      t.setAttribute('value', title); t.setAttribute('align', 'center'); t.setAttribute('color', '#6ea8fe');
+      t.setAttribute('width', '2.6'); t.setAttribute('position', `0 ${halfH - pad - 0.06} 0.02`);
+      menuEl.appendChild(t);
+      let y = halfH - pad - headH - rowH / 2;
+      items.forEach((label, i) => {
+        const sel = (i === currentIdx);
+        const base = sel ? '#24406a' : '#18233a';
+        const row = document.createElement('a-entity');
+        row.setAttribute('class', 'clickable');
+        row.setAttribute('geometry', `primitive: plane; width: ${w}; height: ${rowH}`);
+        row.setAttribute('material', `color: ${base}; shader: flat`);
+        row.setAttribute('position', `0 ${y} 0.02`);
+        const txt = document.createElement('a-text');
+        txt.setAttribute('value', (sel ? '● ' : '   ') + label);
+        txt.setAttribute('align', 'center'); txt.setAttribute('color', '#e7edf7');
+        txt.setAttribute('width', '2.5'); txt.setAttribute('position', '0 0 0.01');
+        row.appendChild(txt);
+        row.addEventListener('mouseenter', () => row.setAttribute('material', 'color: #2a3650; shader: flat'));
+        row.addEventListener('mouseleave', () => row.setAttribute('material', `color: ${base}; shader: flat`));
+        row.addEventListener('click', () => { closeMenu(); onPick(i); });
+        menuEl.appendChild(row);
+        y -= (rowH + gap);
+      });
+      const close = document.createElement('a-entity');
+      close.setAttribute('class', 'clickable');
+      close.setAttribute('geometry', `primitive: plane; width: 0.8; height: ${footH - 0.04}`);
+      close.setAttribute('material', 'color: #3a2030; shader: flat');
+      close.setAttribute('position', `0 ${-halfH + pad + footH / 2} 0.02`);
+      const ct = document.createElement('a-text');
+      ct.setAttribute('value', '✕ Close'); ct.setAttribute('align', 'center');
+      ct.setAttribute('color', '#ff9aa5'); ct.setAttribute('width', '2.4'); ct.setAttribute('position', '0 0 0.01');
+      close.appendChild(ct);
+      close.addEventListener('click', closeMenu);
+      menuEl.appendChild(close);
+      scene.appendChild(menuEl);
+    }
+
+    // ---- Selection handlers (called by the menu) -----------------------------
+    async function selectVoiceMode(i) {
+      voiceModeIdx = i;
+      const m = VOICE_MODES[i];
+      updateVoiceModeLabel();
+      setVRStatus(`Switching voice to ${m.label.replace('Voice: ', '')}…`);
+      try {
+        await speaker.unlock();
+        await speaker.setEngine(m);                 // swaps engine/device
+        await speaker.setEngine({ lang: LANGS[langIdx] }); // keep chosen language
+        setVoiceBackend();
+        setVRStatus('Idle');
+      } catch (err) { setVRStatus(`Voice switch error: ${err.message || err}`); }
+    }
+
+    async function selectLang(i) {
+      langIdx = i;
+      updateLangLabel();
+      try { await speaker.setEngine({ lang: LANGS[i] }); } catch (_) {}
+      // Drop the cached reply so Replay re-synthesizes in the new language.
+      speaker._lastText = ''; speaker._lastBuffers = null;
+      setVRStatus(`Language: ${LANG_NAMES[LANGS[i]] || LANGS[i]}`);
+    }
+
+    function selectModel(i) {
+      if (i === modelIdx) return; // already loaded — do nothing
+      loadPreset(MODEL_PRESETS[i], i);
+    }
+
+    // Does a (same-origin / relative) URL actually exist? Used to detect whether
+    // a preset's bundled local .task is present before trying to load it.
+    async function urlExists(u) {
+      try { const r = await fetch(u, { method: 'HEAD' }); return r.ok; } catch { return false; }
+    }
+
+    function friendlyModelError(preset, err) {
+      const e = (err && err.message) || String(err);
+      // Gemma 3-1B is gated on Hugging Face (needs login); the rest are public.
+      if (preset.id === 'gemma3-1b-web') {
+        return `Couldn't load ${shortModelName(preset)}.\n` +
+               `Its Hugging Face repo is gated (login required), so the browser can't ` +
+               `fetch it. Download the .task once into ./models/, OR host it on Cloudflare ` +
+               `R2 (like the default model) and set that URL in models.js.\n(${e})`;
+      }
+      return `Couldn't load ${shortModelName(preset)}: ${e}\n` +
+             `If it's a large model on a slow link, give it time; otherwise check the ` +
+             `connection / URL in models.js.`;
+    }
+
+    // Swap the LLM from inside VR. Picks a usable source (present local file →
+    // else URL), reloads in place with progress on the status line, and on
+    // failure restores the previously-loaded model so the app stays usable.
+    async function loadPreset(preset, idx) {
+      if (switchingModel || engine.busy) return;
+      switchingModel = true;
+      closeMenu();
+      stopVoice();
+      const prevIdx = modelIdx;
+      setConvo(`Switching model to ${shortModelName(preset)}…`);
+      setVRStatus('Preparing…');
+      const onProgress = (p) => {
+        if (p.stage === 'init-runtime') setVRStatus('Loading runtime…');
+        else if (p.stage === 'downloading') setVRStatus(`Downloading ${shortModelName(preset)}… ${fmtBytes(p.loaded || 0)}${p.total ? ` / ${fmtBytes(p.total)}` : ''}`);
+        else if (p.stage === 'reading-file') setVRStatus(`Loading model… ${fmtBytes(p.loaded || 0)}/${fmtBytes(p.total || 0)}`);
+        else if (p.stage === 'creating-session') setVRStatus('Initializing & compiling…');
+        else if (p.stage === 'ready') setVRStatus('Ready');
+      };
+      try {
+        // Prefer a bundled local file only if it's actually present; otherwise URL.
+        let src = null;
+        if (preset.local && await urlExists(preset.local)) src = preset.local;
+        else if (preset.url) src = preset.url;
+        else if (preset.local) src = preset.local; // will fail → friendly message
+        if (!src) throw new Error('No model source configured.');
+        try { engine.dispose(); } catch (_) {}
+        const args = { preset, onProgress, system: systemPrompt };
+        const f = await acquireModel(src, onProgress);
+        if (f) args.modelFile = f; else { args.modelUrl = src; args.buffered = false; }
+        await engine.load(args);
+        engine.reset();
+        modelIdx = idx; updateModelLabel();
+        setConvo(`Model loaded: ${preset.label}.\nReady — ask a question.`);
+        setVRStatus('Idle');
+      } catch (err) {
+        console.error('[LiteRT] model switch failed', err);
+        setConvo(friendlyModelError(preset, err));
+        setVRStatus('Model error — restoring previous…');
+        switchingModel = false;
+        await recoverModel(prevIdx);
+        return;
+      }
+      switchingModel = false;
+    }
+
+    // Reload the last working model after a failed switch (keeps the app alive).
+    async function recoverModel(prevIdx) {
+      const prev = MODEL_PRESETS[prevIdx];
+      if (!prev) { setVRStatus('No model loaded — reload the page.'); return; }
+      switchingModel = true;
+      try {
+        const src = (prev.local && await urlExists(prev.local)) ? prev.local : (prev.url || prev.local);
+        const args = { preset: prev, system: systemPrompt };
+        const f = await acquireModel(src, () => {});
+        if (f) args.modelFile = f; else { args.modelUrl = src; args.buffered = false; }
+        await engine.load(args); engine.reset();
+        modelIdx = prevIdx; updateModelLabel();
+        setVRStatus(`Kept ${shortModelName(prev)}.`);
+      } catch (e) {
+        setVRStatus('Model unavailable — reload the page.');
+      } finally {
+        switchingModel = false;
+      }
     }
 
     function updateLangLabel() {
@@ -582,42 +749,6 @@
       const el = document.getElementById('model-label');
       const p = MODEL_PRESETS[modelIdx];
       if (el && p) el.setAttribute('value', `Model: ${shortModelName(p)}`);
-    }
-
-    // Swap the LLM from inside VR: dispose the current model, then load the next
-    // preset, routing download/compile progress to the in-world status line.
-    async function cycleModel() {
-      if (switchingModel || engine.busy) return;
-      switchingModel = true;
-      stopVoice();
-      modelIdx = (modelIdx + 1) % MODEL_PRESETS.length;
-      const preset = MODEL_PRESETS[modelIdx];
-      updateModelLabel();
-      const onProgress = (p) => {
-        if (p.stage === 'init-runtime') setVRStatus('Loading runtime…');
-        else if (p.stage === 'downloading') setVRStatus(`Downloading ${shortModelName(preset)}… ${fmtBytes(p.loaded||0)}${p.total?` / ${fmtBytes(p.total)}`:''}`);
-        else if (p.stage === 'reading-file') setVRStatus(`Loading model… ${fmtBytes(p.loaded||0)}/${fmtBytes(p.total||0)}`);
-        else if (p.stage === 'creating-session') setVRStatus('Initializing & compiling…');
-        else if (p.stage === 'ready') setVRStatus('Ready');
-      };
-      setConvo(`Switching model to ${shortModelName(preset)}…`);
-      setVRStatus('Preparing…');
-      try {
-        try { engine.dispose(); } catch (_) {}
-        const args = { preset, onProgress, system: systemPrompt };
-        const src = preset.local || preset.url;
-        const f = src ? await acquireModel(src, onProgress) : null;
-        if (f) args.modelFile = f; else if (src) { args.modelUrl = src; args.buffered = false; }
-        await engine.load(args);
-        engine.reset();
-        setConvo(`Model loaded: ${preset.label}.\nReady — ask a question.`);
-        setVRStatus('Idle');
-      } catch (err) {
-        setConvo(`Model load failed: ${err.message || err}\nPick another with the Model button.`);
-        setVRStatus('Model error');
-      } finally {
-        switchingModel = false;
-      }
     }
 
     function updateVoiceModeLabel() {
