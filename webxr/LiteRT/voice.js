@@ -31,6 +31,46 @@ async function importKokoro() {
   return _kokoro;
 }
 
+// vosk-browser (Kaldi/WASM ASR) — loaded as a global UMD bundle via a <script>
+// tag. It manages its OWN web worker + WASM internally, so it runs on the CPU
+// off the render thread (no GPU contention with the LLM/compositor), the same
+// engine languageVR uses. Pinned to match languageVR's working version.
+const VOSK_URL = 'https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js';
+let _voskLib = null;
+function importVosk() {
+  if (typeof window !== 'undefined' && window.Vosk) return Promise.resolve(window.Vosk);
+  if (_voskLib) return _voskLib;
+  _voskLib = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = VOSK_URL;
+    s.async = true;
+    s.onload = () => (window.Vosk ? resolve(window.Vosk) : reject(new Error('vosk-browser loaded but window.Vosk missing')));
+    s.onerror = () => { _voskLib = null; reject(new Error('Failed to load vosk-browser from CDN')); };
+    document.head.appendChild(s);
+  });
+  return _voskLib;
+}
+
+// Per-language Vosk models (gzipped-tar Kaldi models). CORS applies to the
+// vosk worker's fetch, so models must be same-origin (or CORS-enabled).
+//   - 'nl' reuses the model already bundled in the sibling languageVR project
+//     (same dev-server origin → no CORS, works out of the box).
+//   - everything else expects a small model dropped in ./models/vosk/<code>.tar.gz
+//     (download e.g. vosk-model-small-<code>-*.zip from alphacephei.com/vosk/models,
+//      the .zip works directly — no need to repackage).
+const VOSK_LANGS = new Set(['en', 'nl', 'fr', 'de', 'es', 'it', 'pt', 'ru']);
+function voskModelUrl(lang) {
+  // vosk-browser fetches the model from inside ITS worker, so relative URLs would
+  // resolve against the CDN, not this page → must hand it an absolute URL.
+  const rel = (lang === 'nl')
+    ? '../languageVR/assets/vosk-models/nl.tar.gz'
+    : `./models/vosk/${lang}.tar.gz`;
+  try {
+    const base = (typeof window !== 'undefined' && window.location && window.location.href) || '';
+    return base ? new URL(rel, base).href : rel;
+  } catch (_) { return rel; }
+}
+
 // ---------------------------------------------------------------------------
 // Shared voice worker — runs Whisper (ASR) + Kokoro (TTS) off the main thread.
 // On Quest this is what keeps the render loop from freezing during voice work,
@@ -230,20 +270,25 @@ export class Transcriber {
   // it neither competes with the LLM for GPU memory nor freezes the render loop
   // (the actual work runs in voice-worker.js). 'whisper-tiny' keeps the download
   // and RAM footprint small; pass a bigger modelId on desktop if you want.
-  constructor({ modelId = 'onnx-community/whisper-tiny', device = 'wasm', dtype = 'fp32', language = null } = {}) {
+  constructor({ engine = 'whisper', modelId = 'onnx-community/whisper-tiny', device = 'wasm', dtype = 'fp32', language = null } = {}) {
+    this.engine = engine;     // 'whisper' (Transformers.js) | 'vosk' (vosk-browser)
     this.cfg = { modelId, device, dtype };
-    this.language = language; // null = auto-detect; or e.g. 'en', 'nl'
+    this.language = language;  // null = auto-detect (Whisper only); or e.g. 'en', 'nl'
     this.ready = false;
     this._warmed = false;
     this._useWorker = workerSupported();
-    this._asr = null; // inline fallback pipeline (only if Workers unavailable)
+    this._asr = null;  // inline whisper pipeline (only if Workers unavailable)
+    this._vosk = null; // { model, recognizer, lang } when engine === 'vosk'
+    this._voskOnResult = null; // active per-transcription result sink
   }
 
   static isSupported() { return MicRecorder.isSupported(); }
 
   async load() {
     if (this.ready) return this;
-    if (this._useWorker) {
+    if (this.engine === 'vosk') {
+      await this._loadVosk();
+    } else if (this._useWorker) {
       await vwCall('warm-asr', { cfg: this.cfg });
     } else {
       const { pipeline } = await importTransformers();
@@ -252,6 +297,33 @@ export class Transcriber {
     }
     this.ready = true;
     return this;
+  }
+
+  // Resolve the requested language to a Vosk model we can load (Vosk models are
+  // per-language; there's no auto-detect, so fall back to English).
+  _voskLang() {
+    const l = (this.language || '').slice(0, 2).toLowerCase();
+    return VOSK_LANGS.has(l) ? l : 'en';
+  }
+
+  async _loadVosk() {
+    const Vosk = await importVosk();
+    const lang = this._voskLang();
+    const model = await Vosk.createModel(voskModelUrl(lang));
+    const recognizer = new model.KaldiRecognizer(TARGET_SR);
+    try { recognizer.setWords(false); } catch (_) {}
+    recognizer.on('result', (m) => {
+      const t = (m && m.result && m.result.text) || (m && m.text) || '';
+      if (this._voskOnResult) this._voskOnResult(t.trim());
+    });
+    this._vosk = { model, recognizer, lang };
+  }
+
+  _disposeVosk() {
+    try { this._vosk && this._vosk.recognizer && this._vosk.recognizer.remove(); } catch (_) {}
+    try { this._vosk && this._vosk.model && this._vosk.model.terminate(); } catch (_) {}
+    this._vosk = null;
+    this._voskOnResult = null;
   }
 
   /** Download + instantiate the model so first real use isn't slow. */
@@ -264,7 +336,77 @@ export class Transcriber {
 
   /** Mark the model as unloaded so the next use re-warms (after the shared
    *  worker was disposed to free memory). */
-  unload() { this.ready = false; this._warmed = false; this._asr = null; }
+  unload() {
+    this.ready = false; this._warmed = false; this._asr = null;
+    if (this._vosk) this._disposeVosk();
+  }
+
+  /** Switch the ASR model (e.g. whisper-tiny -> whisper-base) at runtime. Drops
+   *  the old model in the worker so the next use loads the new one. */
+  async setModel(modelId) {
+    if (this.engine === 'whisper' && this.cfg.modelId === modelId) return;
+    this.engine = 'whisper';
+    this.cfg.modelId = modelId;
+    this.ready = false; this._warmed = false; this._asr = null;
+    if (this._vosk) this._disposeVosk();
+    if (this._useWorker) { try { await vwCall('reset-asr'); } catch (_) {} }
+  }
+
+  /** Switch the ASR engine ('whisper' | 'vosk'), optionally with a whisper model.
+   *  Tears down the previous engine's resources so the next use loads cleanly. */
+  async setEngine({ engine, modelId } = {}) {
+    const nextEngine = engine || this.engine;
+    const nextModel = (nextEngine === 'whisper' && modelId) ? modelId : this.cfg.modelId;
+    if (nextEngine === this.engine && nextModel === this.cfg.modelId) return;
+    // Tear down whatever is currently loaded.
+    if (this.engine === 'vosk') this._disposeVosk();
+    else if (this._useWorker) { try { await vwCall('reset-asr'); } catch (_) {} }
+    this.engine = nextEngine;
+    this.cfg.modelId = nextModel;
+    this.ready = false; this._warmed = false; this._asr = null;
+  }
+
+  /** Set the recognition language (null = Whisper auto-detect). For Vosk this
+   *  may require loading a different per-language model, so drop the current one
+   *  if it no longer matches. */
+  async setLanguage(language) {
+    this.language = language;
+    if (this.engine === 'vosk' && this._vosk && this._vosk.lang !== this._voskLang()) {
+      this._disposeVosk();
+      this.ready = false; this._warmed = false;
+    }
+  }
+
+  /** Run vosk-browser on a recorded clip (one-shot): feed the audio + a short
+   *  tail of silence to force end-of-utterance, accumulate the result segments,
+   *  and settle shortly after the last one. */
+  _voskTranscribe(data) {
+    return new Promise((resolve) => {
+      const token = {};
+      this._voskActive = token;
+      const parts = [];
+      let settle = null;
+      const finish = () => {
+        if (this._voskActive !== token) return;
+        this._voskActive = null;
+        this._voskOnResult = null;
+        clearTimeout(settle); clearTimeout(hard);
+        resolve(collapseRepeats(parts.join(' ').replace(/\s+/g, ' ').trim()));
+      };
+      this._voskOnResult = (text) => {
+        if (this._voskActive !== token) return;
+        if (text) parts.push(text);
+        clearTimeout(settle);
+        settle = setTimeout(finish, 350);
+      };
+      const hard = setTimeout(finish, 6000); // safety net if no 'result' fires
+      try {
+        this._vosk.recognizer.acceptWaveformFloat(data, TARGET_SR);
+        // ~0.5 s of silence nudges Kaldi to emit the final 'result'.
+        this._vosk.recognizer.acceptWaveformFloat(new Float32Array(Math.round(TARGET_SR * 0.5)), TARGET_SR);
+      } catch (_) { /* fall through to the timeout */ }
+    });
+  }
 
   /** Transcribe a mono 16 kHz AudioBuffer / Float32Array to text. */
   async transcribe(audio) {
@@ -277,6 +419,10 @@ export class Transcriber {
     for (let i = 0; i < data0.length; i++) sum += data0[i] * data0[i];
     const rms = Math.sqrt(sum / Math.max(1, data0.length));
     if (seconds < 0.3 || rms < 0.005) return '';
+
+    if (this.engine === 'vosk') {
+      return this._voskTranscribe(new Float32Array(data0));
+    }
 
     if (this._useWorker) {
       const data = new Float32Array(data0); // standalone buffer we can transfer

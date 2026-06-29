@@ -219,6 +219,11 @@ async function handle(msg) {
       // engine (used by the voice toggle). Frees the previous backend's memory.
       tts = null; ttsBackend = ''; ttsEngine = ''; _st3 = null;
       reply(id, 'ok');
+    } else if (type === 'reset-asr') {
+      // Drop the cached ASR model so the next warm/transcribe reloads a newly
+      // selected Whisper model (used by the STT model picker).
+      asr = null; asrBackend = '';
+      reply(id, 'ok');
     } else if (type === 'asr') {
       await ensureAsr(payload.cfg);
       const out = await asr(payload.audio, {

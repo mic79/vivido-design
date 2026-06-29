@@ -145,41 +145,49 @@
       <a-text value="⏹ Stop" color="#ff8a95" align="center" width="1.6" position="0 0 0.01"></a-text>
     </a-entity>
 
-    <!-- Voice engine toggle: Supertonic 3 (CPU) <-> Kokoro (GPU/CPU). -->
-    <a-entity class="clickable" id="voice-mode-btn" position="0 0.02 -1.7"
-              geometry="primitive: plane; width: 1.1; height: 0.16"
+    <!-- All settings are stacked to the right of the panel (clearly visible, out
+         of the way of the action buttons below). Each opens a selection list.
+         Order: Model, then TTS (voice out) + STT (voice in) engines, then the
+         voice details (speaker, language, quality). -->
+    <a-entity class="clickable" id="model-btn" position="1.32 1.78 -1.7"
+              geometry="primitive: plane; width: 0.62; height: 0.16"
               material="color: #1c2638; shader: flat">
-      <a-text id="voice-mode-label" value="Voice: Stable (CPU)" color="#cdd6e6" align="center" width="2.0" position="0 0 0.01"></a-text>
+      <a-text id="model-label" value="Model: …" color="#cdd6e6" align="center" width="1.55" position="0 0 0.01"></a-text>
     </a-entity>
 
-    <!-- Settings stacked to the right of the panel (clearly visible, out of the
-         way of the action buttons below): Model on top, Language beneath it. -->
-    <!-- LLM model: opens a list to pick a preset (reloads in place). -->
-    <a-entity class="clickable" id="model-btn" position="1.32 1.75 -1.7"
-              geometry="primitive: plane; width: 0.6; height: 0.18"
+    <!-- TTS engine (voice OUT): Supertonic 3 / Kokoro (GPU) / Kokoro (CPU). -->
+    <a-entity class="clickable" id="voice-mode-btn" position="1.32 1.58 -1.7"
+              geometry="primitive: plane; width: 0.62; height: 0.16"
               material="color: #1c2638; shader: flat">
-      <a-text id="model-label" value="Model: …" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
+      <a-text id="voice-mode-label" value="TTS: …" color="#cdd6e6" align="center" width="1.55" position="0 0 0.01"></a-text>
     </a-entity>
 
-    <!-- Spoken language (Supertonic): opens a list (en/nl/fr/de/es/it/pt). -->
-    <a-entity class="clickable" id="lang-btn" position="1.32 1.54 -1.7"
-              geometry="primitive: plane; width: 0.6; height: 0.18"
+    <!-- STT engine (voice IN): Whisper Tiny / Base / Small (multilingual). -->
+    <a-entity class="clickable" id="stt-btn" position="1.32 1.38 -1.7"
+              geometry="primitive: plane; width: 0.62; height: 0.16"
               material="color: #1c2638; shader: flat">
-      <a-text id="lang-label" value="Lang: EN" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
+      <a-text id="stt-label" value="STT: …" color="#cdd6e6" align="center" width="1.55" position="0 0 0.01"></a-text>
     </a-entity>
 
-    <!-- Speaker voice: opens a list of voices for the current engine. -->
-    <a-entity class="clickable" id="spk-btn" position="1.32 1.33 -1.7"
-              geometry="primitive: plane; width: 0.6; height: 0.18"
+    <!-- Speaker voice: opens a list of voices for the current TTS engine. -->
+    <a-entity class="clickable" id="spk-btn" position="1.32 1.18 -1.7"
+              geometry="primitive: plane; width: 0.62; height: 0.16"
               material="color: #1c2638; shader: flat">
-      <a-text id="spk-label" value="Speaker: F1" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
+      <a-text id="spk-label" value="Speaker: F1" color="#cdd6e6" align="center" width="1.55" position="0 0 0.01"></a-text>
+    </a-entity>
+
+    <!-- Spoken language (TTS + STT): en/nl/fr/de/es/it/pt. -->
+    <a-entity class="clickable" id="lang-btn" position="1.32 0.98 -1.7"
+              geometry="primitive: plane; width: 0.62; height: 0.16"
+              material="color: #1c2638; shader: flat">
+      <a-text id="lang-label" value="Lang: EN" color="#cdd6e6" align="center" width="1.55" position="0 0 0.01"></a-text>
     </a-entity>
 
     <!-- Synthesis quality/speed (Supertonic steps): Fast / Balanced / HQ. -->
-    <a-entity class="clickable" id="quality-btn" position="1.32 1.12 -1.7"
-              geometry="primitive: plane; width: 0.6; height: 0.18"
+    <a-entity class="clickable" id="quality-btn" position="1.32 0.78 -1.7"
+              geometry="primitive: plane; width: 0.62; height: 0.16"
               material="color: #1c2638; shader: flat">
-      <a-text id="quality-label" value="Quality: Balanced" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
+      <a-text id="quality-label" value="Quality: Balanced" color="#cdd6e6" align="center" width="1.55" position="0 0 0.01"></a-text>
     </a-entity>
   </a-scene>
 
@@ -215,13 +223,28 @@
     const VOICE_MODES = [
       { id: 'supertonic3', engine: 'supertonic3', modelId: 'Supertone/supertonic-3',
         device: 'wasm', dtype: 'fp32', voice: 'F1', steps: 6, speed: 1.05, lang: 'en', gpu: false,
-        label: 'Voice: Supertonic 3 (31 langs, CPU)' },
+        short: 'Supertonic 3', label: 'Supertonic 3 (31 langs, CPU)' },
       { id: 'kokoro-gpu', engine: 'kokoro', modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
         device: 'webgpu', dtype: 'fp32', voice: 'af_heart', gpu: true,
-        label: 'Voice: Kokoro (GPU)' },
+        short: 'Kokoro (GPU)', label: 'Kokoro (GPU, fast)' },
       { id: 'kokoro-cpu', engine: 'kokoro', modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
         device: 'wasm', dtype: 'q8', voice: 'af_heart', gpu: false,
-        label: 'Voice: Kokoro (stable, CPU)' },
+        short: 'Kokoro (CPU)', label: 'Kokoro (stable, CPU)' },
+    ];
+    // STT (speech-to-text) engines:
+    //   - Whisper (Transformers.js): one multilingual model at three sizes;
+    //     bigger = more accurate (esp. non-English) but heavier. Auto-detect
+    //     capable, runs in the shared voice worker.
+    //   - Vosk (vosk-browser, Kaldi/WASM): streaming engine languageVR uses. It
+    //     has PER-LANGUAGE models, so the spoken-language picker decides which
+    //     model loads (no auto-detect). Dutch works out of the box (reuses the
+    //     model bundled in languageVR); other languages need a small model in
+    //     ./models/vosk/<code>.tar.gz.
+    const STT_MODELS = [
+      { id: 'tiny',  engine: 'whisper', modelId: 'onnx-community/whisper-tiny',  short: 'Whisper Tiny',  label: 'Whisper Tiny (fast, ~75 MB)' },
+      { id: 'base',  engine: 'whisper', modelId: 'onnx-community/whisper-base',  short: 'Whisper Base',  label: 'Whisper Base (better, ~145 MB)' },
+      { id: 'small', engine: 'whisper', modelId: 'onnx-community/whisper-small', short: 'Whisper Small', label: 'Whisper Small (best, ~490 MB)' },
+      { id: 'vosk',  engine: 'vosk',    modelId: null,                           short: 'Vosk (Kaldi)',  label: 'Vosk — per-language, streaming (CPU)' },
     ];
     // Safety net: if a previous GPU-voice run crashed the tab, the crash marker
     // below is still set on the next load → start on the CPU Supertonic engine so
@@ -270,7 +293,11 @@
     if (voiceModeIdx < 0) voiceModeIdx = 0;
     if (_gpuVoiceCrashed && VOICE_MODES[voiceModeIdx].gpu) voiceModeIdx = 0;
     const _vm = VOICE_MODES[voiceModeIdx];
-    let langIdx = Math.max(0, LANGS.indexOf(saved.lang || _vm.lang || 'en'));
+    // STT language can be "auto" (Whisper auto-detect). TTS always needs a
+    // concrete language, so langIdx tracks the last concrete choice regardless.
+    let sttAuto = (saved.lang === 'auto');
+    const _savedLang = (saved.lang && saved.lang !== 'auto') ? saved.lang : null;
+    let langIdx = Math.max(0, LANGS.indexOf(_savedLang || _vm.lang || 'en'));
     // Restore a saved speaker voice if it's valid for this engine.
     const _engVoices = VOICES_BY_ENGINE[_vm.engine] || [_vm.voice];
     const _initVoice = _engVoices.includes(saved.voice) ? saved.voice : _vm.voice;
@@ -283,6 +310,9 @@
     let qualityIdx = QUALITY.findIndex((q) => q.steps === saved.steps);
     if (qualityIdx < 0) qualityIdx = 1; // default: Balanced
     const _initSteps = QUALITY[qualityIdx].steps;
+    // Restore the saved STT (Whisper) model.
+    let sttIdx = STT_MODELS.findIndex((m) => m.id === saved.stt);
+    if (sttIdx < 0) sttIdx = 0; // default: Tiny
     // Which MODEL_PRESETS entry is loaded (set in startVRApp; changed via menu).
     let modelIdx = 0;
     let switchingModel = false;
@@ -299,6 +329,17 @@
                                          // noticeable). Lower to 1 for a snappier first word.
                                          leadChunks: 2,
                                          spatial: true, position: { x: 0, y: 1.95, z: -1.8 } });
+
+    // Whisper (STT) is multilingual — match it to the chosen spoken language so
+    // recognition is reliable (auto-detect can misfire on short clips). Whisper's
+    // language codes are the same ISO codes we use for TTS (en/nl/fr/de/…).
+    transcriber.language = sttAuto ? null : LANGS[langIdx];
+    // Apply the saved STT engine/model (Whisper size or Vosk).
+    {
+      const _stt = STT_MODELS[sttIdx];
+      transcriber.engine = _stt.engine;
+      if (_stt.engine === 'whisper' && _stt.modelId) transcriber.cfg.modelId = _stt.modelId;
+    }
 
     // Warm the voice models (download + compile kernels) once, as early as
     // possible, so the first spoken turn has nothing to load. Idempotent.
@@ -597,15 +638,22 @@
       updateVoiceModeLabel();
       modeBtn.addEventListener('mouseenter', () => modeBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
       modeBtn.addEventListener('mouseleave', () => modeBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
-      modeBtn.addEventListener('click', () => openMenu('Voice engine',
-        VOICE_MODES.map((m) => m.label.replace('Voice: ', '')), voiceModeIdx, selectVoiceMode));
+      modeBtn.addEventListener('click', () => openMenu('Voice OUT (TTS) engine',
+        VOICE_MODES.map((m) => m.label), voiceModeIdx, selectVoiceMode));
+
+      const sttBtn = document.getElementById('stt-btn');
+      updateSttLabel();
+      sttBtn.addEventListener('mouseenter', () => sttBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
+      sttBtn.addEventListener('mouseleave', () => sttBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
+      sttBtn.addEventListener('click', () => openMenu('Voice IN (STT) engine',
+        STT_MODELS.map((m) => m.label), sttIdx, selectStt));
 
       const langBtn = document.getElementById('lang-btn');
       updateLangLabel();
       langBtn.addEventListener('mouseenter', () => langBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
       langBtn.addEventListener('mouseleave', () => langBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
       langBtn.addEventListener('click', () => openMenu('Spoken language',
-        LANGS.map((l) => LANG_NAMES[l] || l), langIdx, selectLang));
+        LANG_OPTIONS.map(langOptName), (sttAuto ? 0 : langIdx + 1), selectLang));
 
       const spkBtn = document.getElementById('spk-btn');
       updateSpeakerLabel();
@@ -632,6 +680,9 @@
 
     const LANG_NAMES = { en: 'English', nl: 'Nederlands (Dutch)', fr: 'Français',
                          de: 'Deutsch', es: 'Español', it: 'Italiano', pt: 'Português (BR)' };
+    // Spoken-language menu = Auto-detect (STT only) + the concrete languages.
+    const LANG_OPTIONS = ['auto', ...LANGS];
+    const langOptName = (l) => (l === 'auto' ? 'Auto-detect (STT)' : (LANG_NAMES[l] || l));
 
     // ---- In-world pop-up list menu (replaces toggles) -------------------------
     // Shows all options; selection only happens on click. Click the dimmed
@@ -725,13 +776,39 @@
     }
 
     async function selectLang(i) {
-      langIdx = i;
+      const opt = LANG_OPTIONS[i];
+      // "Auto-detect" applies to STT only (Whisper); TTS keeps its concrete
+      // language. Vosk can't auto-detect, so it falls back to English.
+      if (opt === 'auto') {
+        sttAuto = true;
+        updateLangLabel();
+        try { await transcriber.setLanguage(null); } catch (_) {}
+        if (transcriber.engine === 'vosk') {
+          transcriber.warmup().then(() => { whisperLoaded = true; }).catch(() => {});
+          setVRStatus('Auto-detect needs Whisper — Vosk will use English');
+        } else {
+          setVRStatus('Language: Auto-detect (STT)');
+        }
+        saveSettings({ lang: 'auto' });
+        return;
+      }
+      sttAuto = false;
+      langIdx = LANGS.indexOf(opt);
       updateLangLabel();
-      try { await speaker.setEngine({ lang: LANGS[i] }); } catch (_) {}
+      try { await speaker.setEngine({ lang: opt }); } catch (_) {}
+      // Match speech-to-text to the same language.
+      try { await transcriber.setLanguage(opt); } catch (_) {}
+      // Vosk loads a different per-language model — warm it now so the next mic
+      // press isn't slow (Whisper just passes the language as a decode hint).
+      if (transcriber.engine === 'vosk') {
+        whisperLoaded = false;
+        transcriber.warmup().then(() => { whisperLoaded = true; })
+          .catch((e) => console.warn('[Vosk] warm failed', e));
+      }
       // Drop the cached reply so Replay re-synthesizes in the new language.
       speaker._lastText = ''; speaker._lastBuffers = null;
-      setVRStatus(`Language: ${LANG_NAMES[LANGS[i]] || LANGS[i]}`);
-      saveSettings({ lang: LANGS[i] });
+      setVRStatus(`Language: ${LANG_NAMES[opt] || opt}`);
+      saveSettings({ lang: opt });
     }
 
     async function selectVoice(i) {
@@ -753,6 +830,28 @@
       updateQualityLabel();
       setVRStatus(`Quality: ${q.label} (Supertonic)`);
       saveSettings({ steps: q.steps });
+    }
+
+    async function selectStt(i) {
+      sttIdx = i;
+      const m = STT_MODELS[i];
+      updateSttLabel();
+      setVRStatus(`Loading STT: ${m.short}…`);
+      try {
+        // Switch engine (whisper<->vosk) and/or whisper model size. setEngine
+        // tears down the previous engine's resources so the next use is clean.
+        await transcriber.setEngine({ engine: m.engine, modelId: m.modelId });
+        whisperLoaded = false;
+        // Pre-warm the new model in the background so the first mic use isn't slow.
+        transcriber.warmup().then(() => { whisperLoaded = true; })
+          .catch((e) => { console.warn('[STT] warm failed', e); });
+        if (m.engine === 'vosk' && sttAuto) {
+          setVRStatus('STT: Vosk (auto-detect N/A → English; pick a language)');
+        } else {
+          setVRStatus(`STT: ${m.short}`);
+        }
+      } catch (e) { setVRStatus(`STT error: ${e.message || e}`); }
+      saveSettings({ stt: m.id });
     }
 
     function selectModel(i) {
@@ -881,7 +980,7 @@
 
     function updateLangLabel() {
       const el = document.getElementById('lang-label');
-      if (el) el.setAttribute('value', `Lang: ${LANGS[langIdx].toUpperCase()}`);
+      if (el) el.setAttribute('value', `Lang: ${sttAuto ? 'AUTO' : LANGS[langIdx].toUpperCase()}`);
     }
     function updateSpeakerLabel() {
       const el = document.getElementById('spk-label');
@@ -903,7 +1002,11 @@
 
     function updateVoiceModeLabel() {
       const el = document.getElementById('voice-mode-label');
-      if (el) el.setAttribute('value', VOICE_MODES[voiceModeIdx].label);
+      if (el) el.setAttribute('value', `TTS: ${VOICE_MODES[voiceModeIdx].short}`);
+    }
+    function updateSttLabel() {
+      const el = document.getElementById('stt-label');
+      if (el) el.setAttribute('value', `STT: ${STT_MODELS[sttIdx].short}`);
     }
 
     async function ask(prompt) {
