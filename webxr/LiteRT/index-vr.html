@@ -152,27 +152,41 @@
       <a-text id="voice-mode-label" value="Voice: Stable (CPU)" color="#cdd6e6" align="center" width="2.0" position="0 0 0.01"></a-text>
     </a-entity>
 
-    <!-- Settings flanking the panel (clearly visible, out of the way of the
-         action buttons below). Left = spoken language, right = LLM model. -->
-    <!-- Spoken language (Supertonic): cycle en/nl/fr/de/es/it/pt. -->
-    <a-entity class="clickable" id="lang-btn" position="-1.32 1.75 -1.7"
+    <!-- Settings stacked to the right of the panel (clearly visible, out of the
+         way of the action buttons below): Model on top, Language beneath it. -->
+    <!-- LLM model: opens a list to pick a preset (reloads in place). -->
+    <a-entity class="clickable" id="model-btn" position="1.32 1.75 -1.7"
+              geometry="primitive: plane; width: 0.6; height: 0.18"
+              material="color: #1c2638; shader: flat">
+      <a-text id="model-label" value="Model: …" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
+    </a-entity>
+
+    <!-- Spoken language (Supertonic): opens a list (en/nl/fr/de/es/it/pt). -->
+    <a-entity class="clickable" id="lang-btn" position="1.32 1.54 -1.7"
               geometry="primitive: plane; width: 0.6; height: 0.18"
               material="color: #1c2638; shader: flat">
       <a-text id="lang-label" value="Lang: EN" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
     </a-entity>
 
-    <!-- LLM model: cycle the presets and reload in place (progress on status). -->
-    <a-entity class="clickable" id="model-btn" position="1.32 1.75 -1.7"
+    <!-- Speaker voice: opens a list of voices for the current engine. -->
+    <a-entity class="clickable" id="spk-btn" position="1.32 1.33 -1.7"
               geometry="primitive: plane; width: 0.6; height: 0.18"
               material="color: #1c2638; shader: flat">
-      <a-text id="model-label" value="Model: …" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
+      <a-text id="spk-label" value="Speaker: F1" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
+    </a-entity>
+
+    <!-- Synthesis quality/speed (Supertonic steps): Fast / Balanced / HQ. -->
+    <a-entity class="clickable" id="quality-btn" position="1.32 1.12 -1.7"
+              geometry="primitive: plane; width: 0.6; height: 0.18"
+              material="color: #1c2638; shader: flat">
+      <a-text id="quality-label" value="Quality: Balanced" color="#cdd6e6" align="center" width="1.5" position="0 0 0.01"></a-text>
     </a-entity>
   </a-scene>
 
   <script type="module">
     import { LiteRTEngine } from './litert-engine.js';
     import { MODEL_PRESETS, getPreset } from './models.js';
-    import { MicRecorder, Transcriber, SpatialSpeaker } from './voice.js';
+    import { MicRecorder, Transcriber, SpatialSpeaker, disposeVoiceWorker } from './voice.js';
     import { ModelCache } from './model-cache.js';
 
     const $ = (s) => document.querySelector(s);
@@ -214,30 +228,77 @@
     // you can't get trapped in a reload→crash loop. Cleared after a successful GPU
     // synth (Supertonic is CPU so it never sets the marker).
     const GPU_VOICE_CRASH_KEY = 'litert-gpu-voice-crashed';
-    let voiceModeIdx = 0; // default: Supertonic 3 (CPU) — fast + smooth on Quest
-    try { sessionStorage.removeItem(GPU_VOICE_CRASH_KEY); } catch (_) {}
+    let _gpuVoiceCrashed = false;
+    try {
+      _gpuVoiceCrashed = sessionStorage.getItem(GPU_VOICE_CRASH_KEY) === '1';
+      sessionStorage.removeItem(GPU_VOICE_CRASH_KEY);
+    } catch (_) {}
+
+    // Persisted user choices (model / voice engine / language / speaker) so they
+    // survive a reload. Best-effort — falls back to defaults if storage is off.
+    const SETTINGS_KEY = 'litert-vr-settings';
+    function loadSettings() {
+      try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch { return {}; }
+    }
+    function saveSettings(patch) {
+      try {
+        const s = Object.assign(loadSettings(), patch);
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+      } catch (_) {}
+    }
+    const saved = loadSettings();
+
+    // Spoken language for Supertonic. A handy subset of Supertonic 3's 31
+    // languages; add more freely.
+    const LANGS = ['en', 'nl', 'fr', 'de', 'es', 'it', 'pt'];
+    // Selectable speaker voices per engine (shown in the Speaker menu).
+    const VOICES_BY_ENGINE = {
+      supertonic3: ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'],
+      supertonic:  ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'],
+      kokoro:      ['af_heart', 'af_bella', 'af_nicole', 'af_sarah',
+                    'am_adam', 'am_michael', 'bf_emma', 'bm_george'],
+    };
+    const VOICE_LABELS = { F1: 'Female 1', F2: 'Female 2', F3: 'Female 3', F4: 'Female 4',
+                           F5: 'Female 5', M1: 'Male 1', M2: 'Male 2', M3: 'Male 3',
+                           M4: 'Male 4', M5: 'Male 5' };
+    const voiceName = (v) => VOICE_LABELS[v] || v;
+
+    // Restore the saved voice engine (validate against the current list). If the
+    // last GPU-voice run hard-crashed the tab, fall back to the CPU default so we
+    // don't reload straight into another crash.
+    let voiceModeIdx = VOICE_MODES.findIndex((m) => m.id === saved.voiceMode);
+    if (voiceModeIdx < 0) voiceModeIdx = 0;
+    if (_gpuVoiceCrashed && VOICE_MODES[voiceModeIdx].gpu) voiceModeIdx = 0;
     const _vm = VOICE_MODES[voiceModeIdx];
+    let langIdx = Math.max(0, LANGS.indexOf(saved.lang || _vm.lang || 'en'));
+    // Restore a saved speaker voice if it's valid for this engine.
+    const _engVoices = VOICES_BY_ENGINE[_vm.engine] || [_vm.voice];
+    const _initVoice = _engVoices.includes(saved.voice) ? saved.voice : _vm.voice;
+    // Synthesis quality/speed dial (maps to Supertonic denoising `steps`).
+    const QUALITY = [
+      { id: 'fast', label: 'Fast', steps: 4 },
+      { id: 'balanced', label: 'Balanced', steps: 6 },
+      { id: 'hq', label: 'High quality', steps: 10 },
+    ];
+    let qualityIdx = QUALITY.findIndex((q) => q.steps === saved.steps);
+    if (qualityIdx < 0) qualityIdx = 1; // default: Balanced
+    const _initSteps = QUALITY[qualityIdx].steps;
+    // Which MODEL_PRESETS entry is loaded (set in startVRApp; changed via menu).
+    let modelIdx = 0;
+    let switchingModel = false;
+
     // Smaller chunks → first words play sooner (streamed), and each synth burst is
     // a smaller job so the WebXR compositor stalls less. 70 is a good Quest
     // balance; bump up on desktop if you prefer fewer seams.
     const speaker = new SpatialSpeaker({ engine: _vm.engine, modelId: _vm.modelId,
-                                         device: _vm.device, dtype: _vm.dtype, voice: _vm.voice,
-                                         steps: _vm.steps, speed: _vm.speed, lang: _vm.lang, chunkChars: 70,
+                                         device: _vm.device, dtype: _vm.dtype, voice: _initVoice,
+                                         steps: _initSteps, speed: _vm.speed, lang: LANGS[langIdx], chunkChars: 70,
                                          // Pre-synthesize 2 chunks ahead before playback starts so a
                                          // slower-than-realtime CPU synth doesn't leave idle gaps between
                                          // sentences (replies are short, so the extra lead is barely
                                          // noticeable). Lower to 1 for a snappier first word.
                                          leadChunks: 2,
                                          spatial: true, position: { x: 0, y: 1.95, z: -1.8 } });
-
-    // Spoken language for Supertonic (cycle with the in-VR Lang button). These
-    // are a handy subset of Supertonic 3's 31 languages; add more freely.
-    const LANGS = ['en', 'nl', 'fr', 'de', 'es', 'it', 'pt'];
-    let langIdx = Math.max(0, LANGS.indexOf(_vm.lang || 'en'));
-    // Which MODEL_PRESETS entry is loaded (set in startVRApp; cycled by the
-    // in-VR Model button).
-    let modelIdx = 0;
-    let switchingModel = false;
 
     // Warm the voice models (download + compile kernels) once, as early as
     // possible, so the first spoken turn has nothing to load. Idempotent.
@@ -358,9 +419,10 @@
     // downloads + compiles Whisper and Supertonic in the background so the first
     // spoken turn has nothing to load — no "first run" wait that breaks the flow.
 
-    // Auto-load the bundled model on startup — no selection step.
+    // Auto-load on startup — restoring the last-used model if it's still valid.
     (async () => {
       if (!(await LiteRTEngine.isSupported())) { setStatus(LiteRTEngine.unsupportedReason(), true); return; }
+      if (saved.model && getPreset(saved.model)) { presetSel.value = saved.model; refreshNote(); }
       doLoad();
     })();
 
@@ -545,12 +607,27 @@
       langBtn.addEventListener('click', () => openMenu('Spoken language',
         LANGS.map((l) => LANG_NAMES[l] || l), langIdx, selectLang));
 
+      const spkBtn = document.getElementById('spk-btn');
+      updateSpeakerLabel();
+      spkBtn.addEventListener('mouseenter', () => spkBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
+      spkBtn.addEventListener('mouseleave', () => spkBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
+      spkBtn.addEventListener('click', () => {
+        const list = currentVoices();
+        const cur = Math.max(0, list.indexOf(speaker.voice));
+        openMenu('Speaker voice', list.map(voiceName), cur, selectVoice);
+      });
+
+      const qualBtn = document.getElementById('quality-btn');
+      updateQualityLabel();
+      qualBtn.addEventListener('mouseenter', () => qualBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
+      qualBtn.addEventListener('mouseleave', () => qualBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
+      qualBtn.addEventListener('click', () => openMenu('Synthesis quality',
+        QUALITY.map((q) => `${q.label} (${q.steps} steps)`), qualityIdx, selectQuality));
+
       const modelBtn = document.getElementById('model-btn');
       modelBtn.addEventListener('mouseenter', () => modelBtn.setAttribute('material', 'color: #2a3650; shader: flat'));
       modelBtn.addEventListener('mouseleave', () => modelBtn.setAttribute('material', 'color: #1c2638; shader: flat'));
-      modelBtn.addEventListener('click', () => openMenu('LLM model',
-        MODEL_PRESETS.map((p) => `${shortModelName(p)} · ~${(p.sizeMB / 1000).toFixed(1)} GB`),
-        modelIdx, selectModel));
+      modelBtn.addEventListener('click', openModelMenu);
     }
 
     const LANG_NAMES = { en: 'English', nl: 'Nederlands (Dutch)', fr: 'Français',
@@ -624,6 +701,10 @@
     }
 
     // ---- Selection handlers (called by the menu) -----------------------------
+    function currentVoices() {
+      return VOICES_BY_ENGINE[VOICE_MODES[voiceModeIdx].engine] || [speaker.voice];
+    }
+
     async function selectVoiceMode(i) {
       voiceModeIdx = i;
       const m = VOICE_MODES[i];
@@ -632,9 +713,14 @@
       try {
         await speaker.unlock();
         await speaker.setEngine(m);                 // swaps engine/device
-        await speaker.setEngine({ lang: LANGS[langIdx] }); // keep chosen language
+        // Keep a compatible speaker voice for the new engine + the chosen lang.
+        const voices = currentVoices();
+        const v = voices.includes(speaker.voice) ? speaker.voice : (m.voice || voices[0]);
+        await speaker.setEngine({ voice: v, lang: LANGS[langIdx] });
+        updateSpeakerLabel();
         setVoiceBackend();
         setVRStatus('Idle');
+        saveSettings({ voiceMode: m.id, voice: v });
       } catch (err) { setVRStatus(`Voice switch error: ${err.message || err}`); }
     }
 
@@ -645,11 +731,53 @@
       // Drop the cached reply so Replay re-synthesizes in the new language.
       speaker._lastText = ''; speaker._lastBuffers = null;
       setVRStatus(`Language: ${LANG_NAMES[LANGS[i]] || LANGS[i]}`);
+      saveSettings({ lang: LANGS[i] });
+    }
+
+    async function selectVoice(i) {
+      const v = currentVoices()[i];
+      if (!v) return;
+      try { await speaker.setEngine({ voice: v }); } catch (_) {}
+      speaker.voice = v;            // ensure it takes effect on the next synth
+      speaker._lastText = ''; speaker._lastBuffers = null; // re-synth on Replay
+      updateSpeakerLabel();
+      setVRStatus(`Speaker: ${voiceName(v)}`);
+      saveSettings({ voice: v });
+    }
+
+    async function selectQuality(i) {
+      qualityIdx = i;
+      const q = QUALITY[i];
+      try { await speaker.setEngine({ steps: q.steps }); } catch (_) {}
+      speaker._lastText = ''; speaker._lastBuffers = null; // re-synth on Replay
+      updateQualityLabel();
+      setVRStatus(`Quality: ${q.label} (Supertonic)`);
+      saveSettings({ steps: q.steps });
     }
 
     function selectModel(i) {
       if (i === modelIdx) return; // already loaded — do nothing
       loadPreset(MODEL_PRESETS[i], i);
+    }
+
+    // Build the model menu with a per-model availability tag (on disk / cached /
+    // needs download) so it's clear before you tap what will happen.
+    async function openModelMenu() {
+      const labels = await Promise.all(MODEL_PRESETS.map(async (p) => {
+        const gb = `~${(p.sizeMB / 1000).toFixed(1)} GB`;
+        let tag = `⤓ ${gb}`;
+        try {
+          if (p.local && await urlExists(p.local)) tag = '✓ on disk';
+          else if (p.url) {
+            const have = await ModelCache.cachedBytes(p.url);
+            const total = p.sizeMB * 1e6;
+            if (have >= total * 0.97) tag = '✓ cached';
+            else if (have > 0) tag = `⤓ resume ${Math.floor((have / total) * 100)}% · ${gb}`;
+          }
+        } catch (_) {}
+        return `${shortModelName(p)} — ${tag}`;
+      }));
+      openMenu('LLM model', labels, modelIdx, selectModel);
     }
 
     // Does a (same-origin / relative) URL actually exist? Used to detect whether
@@ -690,6 +818,16 @@
         else if (p.stage === 'creating-session') setVRStatus('Initializing & compiling…');
         else if (p.stage === 'ready') setVRStatus('Ready');
       };
+      // Big models (≳1 GB) compete with the voice models for RAM/GPU on Quest →
+      // OOM. Free the entire voice worker first, then re-warm it after the LLM is
+      // loaded. (~250 MB models leave plenty of headroom, so skip the churn.)
+      const bigModel = (preset.sizeMB || 0) > 1000;
+      if (bigModel) {
+        setVRStatus('Freeing memory for a large model…');
+        try { speaker.unload(); transcriber.unload(); disposeVoiceWorker(); } catch (_) {}
+        voiceWarm = null; whisperLoaded = false;
+        setVoiceBackend();
+      }
       try {
         // Prefer a bundled local file only if it's actually present; otherwise URL.
         let src = null;
@@ -704,6 +842,7 @@
         await engine.load(args);
         engine.reset();
         modelIdx = idx; updateModelLabel();
+        saveSettings({ model: preset.id });
         setConvo(`Model loaded: ${preset.label}.\nReady — ask a question.`);
         setVRStatus('Idle');
       } catch (err) {
@@ -712,9 +851,12 @@
         setVRStatus('Model error — restoring previous…');
         switchingModel = false;
         await recoverModel(prevIdx);
+        if (bigModel) warmVoice().then(() => setVoiceBackend()).catch(() => {});
         return;
       }
       switchingModel = false;
+      // Re-warm the voice models we freed, in the background, now the LLM is in.
+      if (bigModel) warmVoice().then(() => setVoiceBackend()).catch(() => {});
     }
 
     // Reload the last working model after a failed switch (keeps the app alive).
@@ -740,6 +882,14 @@
     function updateLangLabel() {
       const el = document.getElementById('lang-label');
       if (el) el.setAttribute('value', `Lang: ${LANGS[langIdx].toUpperCase()}`);
+    }
+    function updateSpeakerLabel() {
+      const el = document.getElementById('spk-label');
+      if (el) el.setAttribute('value', `Speaker: ${voiceName(speaker.voice)}`);
+    }
+    function updateQualityLabel() {
+      const el = document.getElementById('quality-label');
+      if (el) el.setAttribute('value', `Quality: ${QUALITY[qualityIdx].label}`);
     }
     function shortModelName(preset) {
       // Trim the long preset labels down to something that fits the VR button.

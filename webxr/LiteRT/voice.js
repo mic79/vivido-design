@@ -66,6 +66,20 @@ function vwCall(type, payload, transfer) {
   });
 }
 
+/**
+ * Fully tear down the shared voice worker, freeing ALL its memory (ASR + TTS
+ * models + the WASM heap). Use this to reclaim RAM before loading a big LLM on
+ * memory-tight devices (Quest). The next voice call lazily spawns a fresh
+ * worker; callers should also unload() their Transcriber/SpatialSpeaker so they
+ * re-warm. No-op if no worker is running.
+ */
+export function disposeVoiceWorker() {
+  if (_vw) { try { _vw.terminate(); } catch (_) {} }
+  for (const [, p] of _vwPending) { try { p.reject(new Error('Voice worker disposed')); } catch (_) {} }
+  _vwPending.clear();
+  _vw = null;
+}
+
 // ---------------------------------------------------------------------------
 // Microphone capture (raw PCM -> mono 16 kHz)
 // ---------------------------------------------------------------------------
@@ -247,6 +261,10 @@ export class Transcriber {
     this._warmed = true;
     return this;
   }
+
+  /** Mark the model as unloaded so the next use re-warms (after the shared
+   *  worker was disposed to free memory). */
+  unload() { this.ready = false; this._warmed = false; this._asr = null; }
 
   /** Transcribe a mono 16 kHz AudioBuffer / Float32Array to text. */
   async transcribe(audio) {
@@ -432,6 +450,16 @@ export class SpatialSpeaker {
     this._lastBuffers = null;
     if (this._useWorker) { try { await vwCall('reset-tts'); } catch (_) {} }
     else { this._tts = null; this._st3 = null; }
+  }
+
+  /** Drop the loaded TTS model + cached audio so the next use re-warms (after
+   *  the shared worker was disposed to free memory for a big LLM). Keeps the
+   *  audio graph/context so spatial playback still works afterwards. */
+  unload() {
+    this.stop();
+    this.ready = false; this._warmed = false; this.backend = '';
+    this._lastText = ''; this._lastBuffers = null;
+    this._st3 = null; this._tts = null;
   }
 
   _initAudioGraph() {
