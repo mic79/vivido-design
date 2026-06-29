@@ -359,6 +359,11 @@ export class Transcriber {
     if (!this.ready) await this.load();
     const AC = window.AudioContext || window.webkitAudioContext;
     const ctx = new AC({ sampleRate: TARGET_SR });
+    // A fresh context can start 'suspended' (autoplay policy). If it isn't
+    // resumed the ScriptProcessor never fires and the analyser returns all
+    // zeros → the input visualizer looks dead. startListening() runs inside the
+    // mic click gesture, so resume() is allowed here.
+    try { if (ctx.state === 'suspended') await ctx.resume(); } catch (_) {}
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, sampleRate: TARGET_SR },
     });
@@ -401,6 +406,19 @@ export class Transcriber {
       };
       cap.raf = requestAnimationFrame(loop);
     }
+  }
+
+  /** Number of frequency bins the input analyser exposes (0 if not listening). */
+  inputFreqBins() { return (this._cap && this._cap.analyser) ? this._cap.analyser.frequencyBinCount : 0; }
+
+  /** Fill `out` (Uint8Array) with the live mic frequency magnitudes. Returns true
+   *  if data was written. Safe to call every frame from a render loop (e.g. an
+   *  A-Frame tick, which keeps running inside an immersive WebXR session, unlike
+   *  window.requestAnimationFrame on some headsets). */
+  readInputFreq(out) {
+    if (!this._cap || !this._cap.analyser || !out) return false;
+    this._cap.analyser.getByteFrequencyData(out);
+    return true;
   }
 
   /** Stop streaming and return the recognized text. */

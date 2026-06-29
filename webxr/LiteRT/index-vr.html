@@ -204,7 +204,7 @@
 
     const $ = (s) => document.querySelector(s);
     const engine = new LiteRTEngine();
-    let systemPrompt = 'You are a concise assistant inside a VR app. Keep answers short (under 40 words). Reply in plain spoken sentences — do not use markdown, asterisks, bullet points, or headings.';
+    let systemPrompt = "You are a friendly, helpful voice assistant in a VR app. Have a natural spoken conversation: answer the user's question directly and warmly, then stop. Keep replies short — 1 to 3 sentences. Never repeat the user's question back to them. If you are unsure or don't know something, say so honestly instead of inventing facts. Reply in plain spoken sentences only — no markdown, asterisks, bullet points, headings, or emoji.";
 
     // On-device voice (no cloud, no Web Speech API — Quest-compatible):
     // Whisper/Vosk = mic→text (streamed), Kokoro/Supertonic = text→speech.
@@ -524,11 +524,11 @@
           try {
             stopVoice(); // interrupt any current TTS before listening
             if (!whisperLoaded) { setVRStatus('Loading voice models (first use)…'); await warmVoice(); }
-            // Stream the mic: Vosk shows live partial text; both engines drive the
-            // input visualizer via onLevel.
+            // Stream the mic: Vosk shows live partial text. The input visualizer
+            // is driven from the A-Frame tick (mic-viz-driver) so it animates in
+            // immersive VR too (window.rAF can be paused inside an XR session).
             await transcriber.startListening({
               onPartial: (t) => { if (t) setVRStatus(`🎙 ${clip(t, 90)}`); },
-              onLevel: (freq) => updateMicViz(freq),
             });
             vrRecording = true;
             showMicViz(true);
@@ -605,10 +605,30 @@
         let sum = 0;
         for (let j = 0; j < bin; j++) sum += freq[i * bin + j] || 0;
         const v = (sum / bin) / 255;             // 0..1 average magnitude
-        const s = Math.max(0.05, Math.min(1, v * 1.6)); // scale factor (unit = MAXH)
+        const s = Math.max(0.06, Math.min(1, v * 2.0)); // scale factor (unit = MAXH)
         const bar = micVizBars[i];
         if (bar.object3D) bar.object3D.scale.y = s;
       }
+    }
+    // Drive the visualizer from A-Frame's render loop (runs in flat AND immersive
+    // VR). Reads the live analyser each frame while the mic is recording.
+    let _micFreq = null;
+    if (window.AFRAME && !AFRAME.components['mic-viz-driver']) {
+      AFRAME.registerComponent('mic-viz-driver', {
+        tick() {
+          if (!vrRecording) return;
+          const bins = transcriber.inputFreqBins();
+          if (!bins) return;
+          if (!_micFreq || _micFreq.length !== bins) _micFreq = new Uint8Array(bins);
+          if (transcriber.readInputFreq(_micFreq)) updateMicViz(_micFreq);
+        },
+      });
+    }
+    // Attach the driver to the scene so its tick runs (registration happens above,
+    // before this, so A-Frame recognizes the component).
+    {
+      const _scene = document.querySelector('a-scene');
+      if (_scene) _scene.setAttribute('mic-viz-driver', '');
     }
 
     const convoText = () => document.getElementById('convo-text');
