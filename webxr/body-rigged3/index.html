@@ -692,6 +692,9 @@
           // (world space) until release, ignoring further controller motion.
           this._grabLockedWristWorldLeft = new THREE.Vector3();
           this._grabLockedWristWorldRight = new THREE.Vector3();
+          this._grabWristCorrLeft = new THREE.Vector3();
+          this._grabWristCorrRight = new THREE.Vector3();
+          this._grabWristErrTmp = new THREE.Vector3();
           this._grabWristLockLeft = false;
           this._grabWristLockRight = false;
           this._grabSurfaceContactLeft = false;
@@ -4607,11 +4610,45 @@
         _finalizeSurfaceGrabHands: function () { /* removed: smooth collision */ },
 
 
+        _restoreHandBoneRestPosition: function (hand) {
+          const handBone = this.bones[`${hand}HandBone`];
+          if (!handBone || !this.initialBonePositions) return;
+          const rest = this.initialBonePositions[handBone.name];
+          if (rest) handBone.position.copy(rest);
+        },
+
+        // Hold the wrist at lockedWristWorld without touching handBone.position
+        // (which severs the Mixamo wrist→forearm bind). Compensates residual IK
+        // error by nudging the IK target and re-solving — hierarchy stays intact.
+        _solveFrozenGrabWrist: function (hand, handBone, lockedWristWorld, targetHandPos, applyTwoBoneIK) {
+          this._restoreHandBoneRestPosition(hand);
+          const corr = hand === 'left' ? this._grabWristCorrLeft : this._grabWristCorrRight;
+          const err = this._grabWristErrTmp;
+          targetHandPos.copy(lockedWristWorld).add(corr);
+          applyTwoBoneIK(true);
+          for (let i = 0; i < 2; i++) {
+            this.model.updateMatrixWorld(true);
+            if (this.skeleton) this.skeleton.update();
+            handBone.getWorldPosition(err);
+            err.subVectors(lockedWristWorld, err);
+            if (err.lengthSq() < 1e-10) break;
+            corr.add(err);
+            targetHandPos.copy(lockedWristWorld).add(corr);
+            applyTwoBoneIK(true);
+          }
+          // Soft-cap correction so a bad frame can't accumulate forever.
+          const maxCorr = 0.12;
+          if (corr.lengthSq() > maxCorr * maxCorr) {
+            corr.setLength(maxCorr);
+          }
+        },
+
         _releaseGrabHand: function (hand) {
           const legIk = this.el.sceneEl.components['leg-ik-world'];
           if (legIk && legIk._handLastTrack) {
             legIk._handLastTrack[hand] = null;
           }
+          this._restoreHandBoneRestPosition(hand);
           if (hand === 'left') {
             this._grabAnchorActiveLeft = false;
             this._hasStablePalmLeft = false;
@@ -4623,6 +4660,7 @@
             this._grabFingersFrozenLeft = false;
             this._grabFingerSettleLeft = 0;
             this._grabFrozenCurlsLeft = null;
+            this._grabWristCorrLeft.set(0, 0, 0);
           } else {
             this._grabAnchorActiveRight = false;
             this._hasStablePalmRight = false;
@@ -4634,6 +4672,7 @@
             this._grabFingersFrozenRight = false;
             this._grabFingerSettleRight = 0;
             this._grabFrozenCurlsRight = null;
+            this._grabWristCorrRight.set(0, 0, 0);
           }
         },
 
@@ -6081,9 +6120,9 @@
           }
 
           if (handFrozen) {
-            applyTwoBoneIK(true);
-            if (handBone) {
-              if (ragDummyHold) {
+            if (ragDummyHold) {
+              applyTwoBoneIK(true);
+              if (handBone) {
                 const fwq = new THREE.Quaternion();
                 forearmBone.getWorldQuaternion(fwq);
                 let handLocalQuat = handWorldQuat.clone();
@@ -6096,17 +6135,18 @@
                 );
                 handLocalQuat.multiply(rollCorrection);
                 handBone.quaternion.copy(handLocalQuat);
-              } else {
-                handBone.parent.updateMatrixWorld(true);
-                handBone.position.copy(handBone.parent.worldToLocal(lockedWristWorld.clone()));
-                handBone.updateMatrixWorld(true);
-                const bpFrozen = this._getHandPalmProbeWorldPos(hand, this._palmWorldTmp);
-                stablePalmForNextFrame = bpFrozen.clone();
               }
-            }
-            if (ragDummyHold) {
               this._updateRagdollHoldHaptics(hand, true, handWorldPos);
             } else {
+              // Hierarchy-safe freeze: rest handBone.position + IK-target compensation.
+              // Never write world→local into handBone.position (that detaches the wrist).
+              if (handBone) {
+                this._solveFrozenGrabWrist(hand, handBone, lockedWristWorld, targetHandPos, applyTwoBoneIK);
+                const bpFrozen = this._getHandPalmProbeWorldPos(hand, this._palmWorldTmp);
+                stablePalmForNextFrame = bpFrozen.clone();
+              } else {
+                applyTwoBoneIK(true);
+              }
               this._updateHandHaptics(hand, true, grabActive, grabWasActive);
             }
           } else {
@@ -6212,7 +6252,13 @@
             if (grabActive && !grabWasActive) {
               this.model.updateMatrixWorld(true);
               if (this.skeleton) this.skeleton.update();
+              this._restoreHandBoneRestPosition(hand);
               handBone.getWorldPosition(lockedWristWorld);
+              if (hand === 'left') {
+                this._grabWristCorrLeft.set(0, 0, 0);
+              } else {
+                this._grabWristCorrRight.set(0, 0, 0);
+              }
               this._lockGrabHandOrientation(hand, handBone);
               if (hand === 'left') {
                 this._grabWristLockLeft = true;
