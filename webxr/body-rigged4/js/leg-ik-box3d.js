@@ -676,6 +676,7 @@
         };
 
       this._applyCameraFloorOffset();
+      this._initMirrorBodyVisibility();
       this._updateVRHeightPanel();
 
       this._prevCamLocal = new THREE.Vector3();
@@ -929,6 +930,58 @@
       this._nudgeStandingEye(delta);
     },
 
+    _loadMirrorBodyVisible: function () {
+      try {
+        return localStorage.getItem('bodyRigged4_mirrorVisible') === 'true';
+      } catch (_) {
+        return false;
+      }
+    },
+
+    _saveMirrorBodyVisible: function (visible) {
+      try {
+        localStorage.setItem('bodyRigged4_mirrorVisible', visible ? 'true' : 'false');
+      } catch (_) {}
+    },
+
+    _isMirrorBodyVisible: function () {
+      const mirror = document.getElementById('mirror-body');
+      return !!(mirror && mirror.object3D.visible);
+    },
+
+    setMirrorBodyVisible: function (visible) {
+      const on = !!visible;
+      const mirror = document.getElementById('mirror-body');
+      const label = document.getElementById('mirror-body-label');
+      if (mirror) mirror.setAttribute('visible', on);
+      if (label) label.setAttribute('visible', on);
+      this._saveMirrorBodyVisible(on);
+      this._syncMirrorToggleUI(on);
+      this.scene.emit('mirror-body-toggled', { visible: on });
+    },
+
+    toggleMirrorBody: function () {
+      this.setMirrorBodyVisible(!this._isMirrorBodyVisible());
+    },
+
+    _initMirrorBodyVisibility: function () {
+      this.setMirrorBodyVisible(this._loadMirrorBodyVisible());
+    },
+
+    _syncMirrorToggleUI: function (visible) {
+      const on = visible !== undefined ? !!visible : this._isMirrorBodyVisible();
+      const mirrorEl = document.getElementById('vr-val-mirror');
+      const btnLabel = document.getElementById('vr-mirror-btn-label');
+      const btn = document.querySelector('[vr-mirror-toggle]');
+      if (mirrorEl) mirrorEl.setAttribute('value', on ? 'ON' : 'OFF');
+      if (btnLabel) btnLabel.setAttribute('value', on ? 'Hide mirror' : 'Show mirror');
+      if (btn) {
+        btn.setAttribute('material', 'color', on ? '#388E3C' : '#555555');
+        const hover = btn.components?.['vr-height-btn-hover'];
+        if (hover) hover.baseColor = on ? '#388E3C' : '#555555';
+      }
+    },
+
     _updateVRHeightPanel: function () {
       const w = this.scene.legIkWorld;
       if (!w) return;
@@ -958,6 +1011,7 @@
       } else if (camEl) {
         camEl.setAttribute('value', 'â€”');
       }
+      this._syncMirrorToggleUI();
     },
 
     _isValidEyeHeight: function (y) {

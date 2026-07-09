@@ -54,7 +54,7 @@
           <span style="color:#888;">Stand on floor → Camera ▲/▼ → Calibrate → Body tune feet.</span>
         </div>
       </div>
-      <div id="legdebug" style="margin-top:8px;font:11px monospace;color:#9ee;white-space:pre-wrap;">legIK: waiting…</div>
+      <div id="legdebug" style="display:none;margin-top:8px;font:11px monospace;color:#9ee;white-space:pre-wrap;">legIK: waiting…</div>
     </div>
 
     <a-scene background="color: #87CEEB" gravity-mode="allowSwitch: true" leg-ik-world scene-shadows keyboard-shortcuts="enterVR: false" webxr="referenceSpaceType: local-floor" renderer="colorManagement: true; physicallyCorrectLights: true; shadow: true; shadowMapType: PCFSoft">
@@ -70,27 +70,27 @@
             hand-controls="hand: left; handModelStyle: lowPoly"
             hide-hand-model
             laser-controls="hand: left"
-            raycaster="objects: .clickable; far: 5; showLine: true; lineColor: #4CAF50; lineOpacity: 0.85">
+            raycaster="objects: .clickable; far: 5; showLine: false">
           </a-entity>
           <a-entity id="right-hand"
             hand-controls="hand: right; handModelStyle: lowPoly"
             hide-hand-model
             laser-controls="hand: right"
-            raycaster="objects: .clickable; far: 5; showLine: true; lineColor: #4CAF50; lineOpacity: 0.85">
+            raycaster="objects: .clickable; far: 5; showLine: false">
           </a-entity>
           <a-entity id="local-body" mixamo-body="isMirror: false"></a-entity>
         </a-entity>
       </a-entity>
 
       <!-- Mirror Body - STATIC position 2m ahead -->
-      <a-entity id="mirror-body" mixamo-body="isMirror: true; color: #66BB6A" position="0 0 -2"></a-entity>
+      <a-entity id="mirror-body" visible="false" mixamo-body="isMirror: true; color: #66BB6A" position="0 0 -2"></a-entity>
 
       <a-plane id="ground-plane" floor-grid="cellSize: 0.1; size: 40" position="0 0.001 0" rotation="-90 0 0" width="40" height="40"
         material="shader: standard; color: #ffffff; roughness: 0.92; metalness: 0; receiveShadow: true"></a-plane>
 
       <!-- Laser-clickable VR calibration panel (in front of mirror) -->
       <a-entity id="vr-height-panel" position="0 1.5 -1.55">
-        <a-plane width="0.92" height="1.38" rotation="0 0 0" color="#1a1a1a" opacity="0.88" material="shader: standard; side: double; transparent: true; roughness: 0.9; metalness: 0; receiveShadow: true"></a-plane>
+        <a-plane width="0.92" height="1.50" rotation="0 0 0" color="#1a1a1a" opacity="0.88" material="shader: standard; side: double; transparent: true; roughness: 0.9; metalness: 0; receiveShadow: true"></a-plane>
         <a-text value="VR Calibration" align="center" position="0 0.54 0.01" width="1.1" color="#ffffff"></a-text>
         <a-text value="Stand straight · laser + trigger" align="center" position="0 0.46 0.01" width="0.85" color="#888888"></a-text>
 
@@ -169,23 +169,30 @@
         <a-text value="Tracked eye" align="right" position="-0.38 -0.52 0.01" width="0.62" color="#888888"></a-text>
         <a-text id="vr-val-cam" value="—" align="center" position="0 -0.52 0.01" width="0.55" color="#9cf"></a-text>
 
-        <a-plane class="clickable" vr-height-btn="target: calibrate; direction: 0" vr-height-btn-hover="hoverColor: #2e7d32" rotation="0 0 0" position="0 -0.64 0.015"
+        <a-text value="Mirror body" align="right" position="-0.38 -0.62 0.01" width="0.62" color="#cccccc"></a-text>
+        <a-text id="vr-val-mirror" value="OFF" align="center" position="0 -0.62 0.01" width="0.55" color="#ffffff"></a-text>
+        <a-plane class="clickable" vr-mirror-toggle vr-height-btn-hover="hoverColor: #66BB6A" rotation="0 0 0" position="0 -0.70 0.015"
+          width="0.72" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text id="vr-mirror-btn-label" value="Show mirror" align="center" position="0 0 0.01" width="0.9" color="#ffffff"></a-text>
+        </a-plane>
+
+        <a-plane class="clickable" vr-height-btn="target: calibrate; direction: 0" vr-height-btn-hover="hoverColor: #2e7d32" rotation="0 0 0" position="0 -0.80 0.015"
           width="0.72" height="0.09" color="#388E3C" material="shader: flat; side: double">
           <a-text value="Snap posture + scale to tracked" align="center" position="0 0 0.01" width="0.9" color="#ffffff"></a-text>
         </a-plane>
       </a-entity>
 
-      <a-text value="Your Body Mirror" position="0 2.5 -2" align="center" color="#333" width="4"></a-text>
-      <a-text value="Ramp (Problem_1)" position="4 1.2 -5" align="center" color="#333" width="3"></a-text>
-      <a-text value="Stairs (Problem_2)" position="7 1.2 -5" align="center" color="#333" width="3"></a-text>
+      <a-text id="mirror-body-label" visible="false" value="Your Body Mirror" position="0 2.5 -2" align="center" color="#333" width="4"></a-text>
+      <a-text visible="false" value="Ramp (Problem_1)" position="4 1.2 -5" align="center" color="#333" width="3"></a-text>
+      <a-text visible="false" value="Stairs (Problem_2)" position="7 1.2 -5" align="center" color="#333" width="3"></a-text>
 
       <!-- Test collision objects -->
       <a-box id="test-wall" position="2 1 -1" width="0.2" height="2" depth="2"
         material="color: #B71C1C; roughness: 0.8; metalness: 0.1" shadow="cast: true; receive: true"></a-box>
       <a-cylinder id="test-pillar" position="-1.5 1 -1.5" radius="0.3" height="2"
         material="color: #1B5E20; roughness: 0.7; metalness: 0.2" shadow="cast: true; receive: true"></a-cylinder>
-      <a-text value="Wall" position="2 2.2 -1" align="center" color="#B71C1C" width="2"></a-text>
-      <a-text value="Pillar" position="-1.5 2.2 -1.5" align="center" color="#1B5E20" width="2"></a-text>
+      <a-text visible="false" value="Wall" position="2 2.2 -1" align="center" color="#B71C1C" width="2"></a-text>
+      <a-text visible="false" value="Pillar" position="-1.5 2.2 -1.5" align="center" color="#1B5E20" width="2"></a-text>
       
       <a-entity light="type: ambient; intensity: 0.35; color: #c8dce8"></a-entity>
       <a-entity id="sun-light" fixed-sun-light light="type: directional; castShadow: true; intensity: 0.95; color: #fff8ee; shadowMapWidth: 2048; shadowMapHeight: 2048; shadowCameraLeft: -22; shadowCameraRight: 22; shadowCameraTop: 22; shadowCameraBottom: -22; shadowCameraNear: 0.5; shadowCameraFar: 60; shadowBias: -0.0002" position="10 18 8"></a-entity>
@@ -352,6 +359,40 @@
         remove: function () {
           this.el.removeEventListener('mouseenter', this.onEnter);
           this.el.removeEventListener('mouseleave', this.onLeave);
+        }
+      });
+
+      AFRAME.registerComponent('vr-mirror-toggle', {
+        init: function () {
+          this.btnLabel = this.el.querySelector('#vr-mirror-btn-label');
+          this.onClick = this.onClick.bind(this);
+          this.onToggled = this.onToggled.bind(this);
+          this.el.addEventListener('click', this.onClick);
+          this.el.sceneEl.addEventListener('mirror-body-toggled', this.onToggled);
+          this.el.sceneEl.addEventListener('loaded', () => {
+            const legIk = this.el.sceneEl.components['leg-ik-world'];
+            if (legIk?._syncMirrorToggleUI) legIk._syncMirrorToggleUI();
+          });
+        },
+        onClick: function () {
+          const legIk = this.el.sceneEl.components['leg-ik-world'];
+          if (legIk?.toggleMirrorBody) legIk.toggleMirrorBody();
+        },
+        onToggled: function (evt) {
+          this._refreshButton(evt?.detail?.visible);
+        },
+        _refreshButton: function (visible) {
+          const on = !!visible;
+          if (this.btnLabel) {
+            this.btnLabel.setAttribute('value', on ? 'Hide mirror' : 'Show mirror');
+          }
+          this.el.setAttribute('material', 'color', on ? '#388E3C' : '#555555');
+          const hover = this.el.components['vr-height-btn-hover'];
+          if (hover) hover.baseColor = on ? '#388E3C' : '#555555';
+        },
+        remove: function () {
+          this.el.removeEventListener('click', this.onClick);
+          this.el.sceneEl.removeEventListener('mirror-body-toggled', this.onToggled);
         }
       });
 
@@ -671,7 +712,8 @@
           // Residual gap left between palm skin and surface (0 = touch).
           this.palmTouchGap = 0;
           this.handCollisionRadius = this.palmProbeRadius;
-          this.showHandCollisionDebug = true;
+          this.showHandCollisionDebug = false;
+          this.showLegDebug = false;
           this.fingerCollisionRadius = 0.011;
           this.knuckleCollisionRadius = 0.016;
           this.showPlayerBodyCollisionDebug = false;
@@ -1482,6 +1524,17 @@
           return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
         },
 
+        /** Body orientation in world space (includes parent rig snap-yaw when rig-child). */
+        _getBodyWorldQuat: function (out) {
+          out = out || new THREE.Quaternion();
+          if (this._isLocalRigChild()) {
+            this.el.object3D.getWorldQuaternion(out);
+          } else {
+            out.copy(this.el.object3D.quaternion);
+          }
+          return out;
+        },
+
         /** World horizontal facing for locomotion blends / move direction. */
         _getWorldLocomotionYawQuat: function() {
           if (!this.camera) return new THREE.Quaternion();
@@ -1727,9 +1780,13 @@
         },
 
         _getCameraFootWorld: function() {
-          const foot = new THREE.Vector3();
-          this.camera.object3D.getWorldPosition(foot);
-          foot.add(this._getManualBodyOffsetLocal());
+          const foot = this._cameraFootWorldTmp || (this._cameraFootWorldTmp = new THREE.Vector3());
+          foot.copy(this._getCameraLocalAnchor());
+          const parent = this.camera?.object3D?.parent;
+          if (parent) {
+            parent.updateWorldMatrix(true, true);
+            foot.applyMatrix4(parent.matrixWorld);
+          }
           foot.y = this._getPhysicalGroundY(foot.x, foot.z);
           return foot;
         },
@@ -1762,7 +1819,7 @@
         },
         
         _updateLegDebug: function() {
-          if (this.data.isMirror) return;
+          if (this.data.isMirror || !this.showLegDebug) return;
           const ik = this.legIK;
           const f = (v) => (v === undefined || v === null ? '—' : v.toFixed(3));
           let line;
@@ -1846,6 +1903,42 @@
           if (this.skeleton) this.skeleton.update();
         },
 
+        _isGrabHangActive: function () {
+          if (this.data.isMirror || this._isZeroGMode()) return false;
+          if (!(this._grabAnchorActiveLeft || this._grabAnchorActiveRight)) return false;
+          const legIk = this.el.sceneEl.components['leg-ik-world'];
+          return !!legIk?.grabPullLocomotionActive && legIk?.playerGrounded === false;
+        },
+
+        _getGrabHangWorldVelocity: function () {
+          const legIk = this.el.sceneEl.components['leg-ik-world'];
+          if (!this._hangVel) this._hangVel = new THREE.Vector3();
+          if (legIk?._grabPullVelocity) {
+            this._hangVel.copy(legIk._grabPullVelocity);
+          } else {
+            this._hangVel.set(0, 0, 0);
+          }
+          return this._hangVel;
+        },
+
+        _applyGrabHangLegs: function (dt) {
+          if (!this.zeroGLegs || !this.bones) return;
+          const refQuat = this._zeroGBodyQuat || (this._zeroGBodyQuat = new THREE.Quaternion());
+          if (this._isLocalRigChild()) {
+            this.el.object3D.getWorldQuaternion(refQuat);
+            this._yawOnlyQuat(refQuat, refQuat);
+          } else {
+            this._yawOnlyQuat(this.torsoRotation, refQuat);
+          }
+          this.zeroGLegs.update(
+            this.bones,
+            this._getGrabHangWorldVelocity(),
+            refQuat,
+            dt
+          );
+          if (this.skeleton) this.skeleton.update();
+        },
+
         _applyLegIKTerrain: function(dt, footRoot) {
           // Zero-G legs are applied at end of updateBones (after hip/spine reset).
           if (this._isZeroGMode()) {
@@ -1854,6 +1947,25 @@
               this.legIK.isGrounded = false;
               this.legIK.jumped = true;
               this.legIK.isMoving = false;
+            }
+            return;
+          }
+
+          if (this._isGrabHangActive()) {
+            if (this.legIK) {
+              this.legIK.isActive = false;
+              this.legIK.isGrounded = false;
+              this.legIK.jumped = true;
+              this.legIK.isMoving = false;
+            }
+            if (!this.useAnimatedLocomotion) {
+              const mantleCrouch = this.el.sceneEl.legIkWorld?.mantleCrouchAmount || 0;
+              if (mantleCrouch < 0.05) {
+                const hipsInitialPos = this.initialBonePositions[this.bones.hips?.name];
+                if (hipsInitialPos) {
+                  this.bones.hips.position.copy(hipsInitialPos);
+                }
+              }
             }
             return;
           }
@@ -1871,7 +1983,9 @@
                 this.bones.hips.position.copy(hipsInitialPos);
               }
             }
-            this.updateLegAnimation(dt, this.horizontalSpeed);
+            if (!this._isGrabHangActive()) {
+              this.updateLegAnimation(dt, this.horizontalSpeed);
+            }
           }
           
           if (!this.legIK) return;
@@ -5903,6 +6017,11 @@
               this.bones.hips.position.copy(this.initialBonePositions[this.bones.hips.name]);
             }
             this._applyZeroGLegs(dt);
+          } else if (this._isGrabHangActive()) {
+            if (this.bones.hips && this.initialBonePositions[this.bones.hips?.name]) {
+              this.bones.hips.position.copy(this.initialBonePositions[this.bones.hips.name]);
+            }
+            this._applyGrabHangLegs(dt);
           }
         },
         
@@ -5924,7 +6043,8 @@
 
           if (this.bones.neck) {
             const relativeHeadQuat = headWorldQuat.clone();
-            const invBodyQuat = this.el.object3D.quaternion.clone().invert();
+            const invBodyQuat = this._neckInvBodyQuat || (this._neckInvBodyQuat = new THREE.Quaternion());
+            this._getBodyWorldQuat(invBodyQuat).invert();
             relativeHeadQuat.premultiply(invBodyQuat);
             const euler = new THREE.Euler().setFromQuaternion(relativeHeadQuat, 'YXZ');
             euler.x = -euler.x;
@@ -6006,7 +6126,7 @@
           const hipsPos = new THREE.Vector3();
           this.bones.hips.getWorldPosition(hipsPos);
           
-          const bodyQuat = this.el.object3D.quaternion;
+          const bodyQuat = this._getBodyWorldQuat(this._footBodyQuat || (this._footBodyQuat = new THREE.Quaternion()));
           const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(bodyQuat);
           const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(bodyQuat);
           const offset = this.getFootCycleOffset(phase, step);
@@ -6036,7 +6156,7 @@
         },
         
         updateLegAnimation: function(dt, horizontalSpeed) {
-          if (this.useAnimatedLocomotion) return;
+          if (this.useAnimatedLocomotion || this._isGrabHangActive()) return;
           if (!this.bones.hips || !this.bones.leftUpLeg) return;
           
           this.el.object3D.updateMatrixWorld(true);
@@ -6088,7 +6208,9 @@
           const cosAngle = (upperSq + distSq - lowerSq) / (2 * this.config.upperLegLength * targetDist);
           const angle = Math.acos(THREE.MathUtils.clamp(cosAngle, -0.999, 0.999));
           
-          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.el.object3D.quaternion);
+          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(
+            this._getBodyWorldQuat(this._legIkBodyQuat || (this._legIkBodyQuat = new THREE.Quaternion()))
+          );
           let bendDir = bodyForward.clone().multiplyScalar(0.75);
           bendDir.addScaledVector(new THREE.Vector3(0, -1, 0), 0.25);
           bendDir.normalize();
@@ -6230,7 +6352,8 @@
             adjustedHandPos.copy(ragHold.wristWorld);
           } else {
             const leftRightOffsetLocal = new THREE.Vector3(hand === 'left' ? 0.1 : -0.1, 0, 0);
-            const leftRightOffsetWorld = leftRightOffsetLocal.applyQuaternion(this.el.object3D.quaternion);
+            const bodyWorldQuat = this._getBodyWorldQuat(this._ikBodyWorldQuat || (this._ikBodyWorldQuat = new THREE.Quaternion()));
+            const leftRightOffsetWorld = leftRightOffsetLocal.applyQuaternion(bodyWorldQuat);
             adjustedHandPos.add(leftRightOffsetWorld);
           }
           
