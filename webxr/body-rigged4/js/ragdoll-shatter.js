@@ -225,55 +225,156 @@
     );
   }
 
-  function bakeRegionBuckets(skinnedMeshes, spaceInverse) {
-    const buckets = {};
-    if (!skinnedMeshes.length) return buckets;
-
-    const skeleton = skinnedMeshes[0].skeleton;
-    const boneToRegion = skeleton ? buildBoneIndexToRegion(skeleton) : [];
-
+  function buildTriangleRegionIndex(skinnedMeshes, boneToRegion) {
+    const index = {};
     for (let m = 0; m < skinnedMeshes.length; m++) {
       const mesh = skinnedMeshes[m];
       const geo = mesh.geometry;
       const posAttr = geo.attributes.position;
-      const index = geo.index;
-      const triCount = index ? index.count / 3 : posAttr.count / 3;
+      const triAttr = geo.index;
+      const triCount = triAttr ? triAttr.count / 3 : posAttr.count / 3;
 
       for (let t = 0; t < triCount; t++) {
-        const i0 = index ? index.getX(t * 3) : t * 3;
-        const i1 = index ? index.getX(t * 3 + 1) : t * 3 + 1;
-        const i2 = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+        const i0 = triAttr ? triAttr.getX(t * 3) : t * 3;
+        const i1 = triAttr ? triAttr.getX(t * 3 + 1) : t * 3 + 1;
+        const i2 = triAttr ? triAttr.getX(t * 3 + 2) : t * 3 + 2;
         const matIdx = triangleMaterialIndex(geo, t * 3);
         const region = triangleRegion(mesh, i0, i1, i2, boneToRegion);
-        const key = bucketKey(region, matIdx);
+        if (!index[region]) index[region] = [];
+        index[region].push({ m, t, matIdx });
+      }
+    }
+    return index;
+  }
 
-        if (!buckets[key]) {
-          buckets[key] = {
-            id: region,
-            matIdx,
-            meshRef: mesh,
-            positions: []
-          };
-        }
+  function skinTriangleToBucket(mesh, t, matIdx, region, spaceInverse, buckets) {
+    const geo = mesh.geometry;
+    const index = geo.index;
+    const i0 = index ? index.getX(t * 3) : t * 3;
+    const i1 = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+    const i2 = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+    const key = bucketKey(region, matIdx);
 
-        computeSkinnedVertexWorld(mesh, i0, _v);
-        computeSkinnedVertexWorld(mesh, i1, _v2);
-        computeSkinnedVertexWorld(mesh, i2, _v3);
-        if (spaceInverse) {
-          _v.applyMatrix4(spaceInverse);
-          _v2.applyMatrix4(spaceInverse);
-          _v3.applyMatrix4(spaceInverse);
-        }
+    if (!buckets[key]) {
+      buckets[key] = {
+        id: region,
+        matIdx,
+        meshRef: mesh,
+        positions: []
+      };
+    }
 
-        if (
-          !Number.isFinite(_v.x) || !Number.isFinite(_v.y) || !Number.isFinite(_v.z) ||
-          !Number.isFinite(_v2.x) || !Number.isFinite(_v2.y) || !Number.isFinite(_v2.z) ||
-          !Number.isFinite(_v3.x) || !Number.isFinite(_v3.y) || !Number.isFinite(_v3.z)
-        ) {
-          continue;
-        }
+    computeSkinnedVertexWorld(mesh, i0, _v);
+    computeSkinnedVertexWorld(mesh, i1, _v2);
+    computeSkinnedVertexWorld(mesh, i2, _v3);
+    if (spaceInverse) {
+      _v.applyMatrix4(spaceInverse);
+      _v2.applyMatrix4(spaceInverse);
+      _v3.applyMatrix4(spaceInverse);
+    }
 
-        pushTriangle(buckets[key], _v, _v2, _v3);
+    if (
+      !Number.isFinite(_v.x) || !Number.isFinite(_v.y) || !Number.isFinite(_v.z) ||
+      !Number.isFinite(_v2.x) || !Number.isFinite(_v2.y) || !Number.isFinite(_v2.z) ||
+      !Number.isFinite(_v3.x) || !Number.isFinite(_v3.y) || !Number.isFinite(_v3.z)
+    ) {
+      return;
+    }
+
+    pushTriangle(buckets[key], _v, _v2, _v3);
+  }
+
+  function finalizeBucketCentroid(bucket) {
+    const pos = bucket.positions;
+    if (pos.length < 3) return false;
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    let n = 0;
+    for (let i = 0; i < pos.length; i += 3) {
+      cx += pos[i];
+      cy += pos[i + 1];
+      cz += pos[i + 2];
+      n++;
+    }
+    bucket.centroidX = cx / n;
+    bucket.centroidY = cy / n;
+    bucket.centroidZ = cz / n;
+    return true;
+  }
+
+  function buildEntriesCatalog(buckets) {
+    const catalog = {};
+    const keys = Object.keys(buckets);
+    for (let k = 0; k < keys.length; k++) {
+      const key = keys[k];
+      const bucket = buckets[key];
+      if (bucket.positions.length < 12) continue;
+      const id = bucket.id;
+      if (!catalog[id]) catalog[id] = [];
+      catalog[id].push({
+        id,
+        matIdx: bucket.matIdx,
+        key,
+        bucket,
+        dist: Infinity
+      });
+    }
+    return catalog;
+  }
+
+  function entryDistance(entry, localImpact, V3Class) {
+    const bucket = entry.bucket;
+    if (bucket.centroidX != null) {
+      return Math.sqrt(bucketCentroidDistSq(bucket, localImpact));
+    }
+    return bucketDistanceToPoint(bucket, localImpact, V3Class);
+  }
+
+  function collectFromCatalog(store, impactPoint, spaceInverse, skipRegions, regionIds) {
+    const V3Class = store.V3Class || THREE.Vector3;
+    const localImpact = new V3Class().copy(impactPoint);
+    if (spaceInverse) localImpact.applyMatrix4(spaceInverse);
+
+    const entries = [];
+    const catalog = store.entriesCatalog;
+    if (!catalog) return { entries, V3Class, localImpact };
+
+    const ids = regionIds?.length
+      ? regionIds
+      : Object.keys(catalog);
+
+    for (let r = 0; r < ids.length; r++) {
+      const list = catalog[ids[r]];
+      if (!list) continue;
+      for (let i = 0; i < list.length; i++) {
+        const entry = list[i];
+        if (skipRegions && skipRegions[entry.key]) continue;
+        if (entry.bucket.positions.length < 12) continue;
+        entry.dist = entryDistance(entry, localImpact, V3Class);
+        entries.push(entry);
+      }
+    }
+
+    entries.sort((a, b) => a.dist - b.dist);
+    return { entries, V3Class, localImpact };
+  }
+
+  function bakeRegionBuckets(skinnedMeshes, spaceInverse, boneToRegion, triIndex) {
+    const buckets = {};
+    if (!skinnedMeshes.length) return buckets;
+
+    boneToRegion = boneToRegion || buildBoneIndexToRegion(skinnedMeshes[0].skeleton);
+    triIndex = triIndex || buildTriangleRegionIndex(skinnedMeshes, boneToRegion);
+
+    const regionIds = Object.keys(triIndex);
+    for (let r = 0; r < regionIds.length; r++) {
+      const region = regionIds[r];
+      const tris = triIndex[region];
+      for (let i = 0; i < tris.length; i++) {
+        const ref = tris[i];
+        const mesh = skinnedMeshes[ref.m];
+        skinTriangleToBucket(mesh, ref.t, ref.matIdx, region, spaceInverse, buckets);
       }
     }
 
@@ -284,57 +385,104 @@
     const keys = Object.keys(buckets);
     for (let k = 0; k < keys.length; k++) {
       const bucket = buckets[keys[k]];
-      const pos = bucket.positions;
-      if (pos.length < 3) continue;
-      let cx = 0;
-      let cy = 0;
-      let cz = 0;
-      let n = 0;
-      for (let i = 0; i < pos.length; i += 3) {
-        cx += pos[i];
-        cy += pos[i + 1];
-        cz += pos[i + 2];
-        n++;
+      if (!finalizeBucketCentroid(bucket)) {
+        delete buckets[keys[k]];
       }
-      bucket.centroidX = cx / n;
-      bucket.centroidY = cy / n;
-      bucket.centroidZ = cz / n;
     }
   }
 
-  const _moduleBucketCache = { key: '', buckets: null };
+  const _moduleBucketCache = { buckets: null };
 
-  /** Pose-only fingerprint — buckets are baked in model-local space, not world position. */
-  function skeletonPoseFingerprint(skinnedMeshes) {
-    const skel = skinnedMeshes[0]?.skeleton;
-    if (!skel?.boneMatrices) return '';
-    const bm = skel.boneMatrices;
-    let h = '';
-    const q = 40;
-    for (let i = 0; i < bm.length; i++) {
-      h += (Math.round(bm[i] * q)).toString(36);
-    }
-    return h;
-  }
-
-  function prepareBucketCache(skinnedMeshes, spaceInverse, store) {
-    store = store || _moduleBucketCache;
-    const key = skeletonPoseFingerprint(skinnedMeshes);
-    if (store.key === key && store.buckets) return store.buckets;
-    store.buckets = bakeRegionBuckets(skinnedMeshes, spaceInverse || null);
+  function populateShatterStore(skinnedMeshes, spaceInverse, store) {
+    const skeleton = skinnedMeshes[0]?.skeleton;
+    store.boneToRegion = skeleton ? buildBoneIndexToRegion(skeleton) : [];
+    store.triIndex = buildTriangleRegionIndex(skinnedMeshes, store.boneToRegion);
+    store.buckets = bakeRegionBuckets(
+      skinnedMeshes,
+      spaceInverse || null,
+      store.boneToRegion,
+      store.triIndex
+    );
     finalizeBucketCentroids(store.buckets);
-    store.key = key;
+    store.entriesCatalog = buildEntriesCatalog(store.buckets);
+    const factory = createRenderFactory(skinnedMeshes[0]);
+    store.factory = factory;
+    store.V3Class = factory.Vector3Class;
+    store.ready = true;
     return store.buckets;
+  }
+
+  function ensureBucketCache(skinnedMeshes, spaceInverse, store) {
+    store = store || _moduleBucketCache;
+    if (store.buckets && store.ready) return store.buckets;
+    return populateShatterStore(skinnedMeshes, spaceInverse, store);
+  }
+
+  /** Re-skin only the buckets touched by this shot (indexed triangles, not full mesh scan). */
+  function patchBucketsForRegions(skinnedMeshes, spaceInverse, store, regionIds) {
+    if (!skinnedMeshes?.length || !regionIds?.length) {
+      return ensureBucketCache(skinnedMeshes, spaceInverse, store);
+    }
+    store = store || _moduleBucketCache;
+    const buckets = ensureBucketCache(skinnedMeshes, spaceInverse, store);
+    const triIndex = store.triIndex;
+    const idSet = {};
+    for (let i = 0; i < regionIds.length; i++) idSet[regionIds[i]] = true;
+
+    const keys = Object.keys(buckets);
+    for (let k = 0; k < keys.length; k++) {
+      if (idSet[buckets[keys[k]].id]) delete buckets[keys[k]];
+    }
+
+    if (triIndex) {
+      for (let r = 0; r < regionIds.length; r++) {
+        const region = regionIds[r];
+        const tris = triIndex[region];
+        if (!tris) continue;
+        for (let i = 0; i < tris.length; i++) {
+          const ref = tris[i];
+          skinTriangleToBucket(
+            skinnedMeshes[ref.m],
+            ref.t,
+            ref.matIdx,
+            region,
+            spaceInverse,
+            buckets
+          );
+        }
+      }
+    }
+
+    const bucketKeys = Object.keys(buckets);
+    for (let k = 0; k < bucketKeys.length; k++) {
+      const key = bucketKeys[k];
+      const bucket = buckets[key];
+      if (!idSet[bucket.id]) continue;
+      if (!finalizeBucketCentroid(bucket)) delete buckets[key];
+    }
+
+    store.entriesCatalog = buildEntriesCatalog(buckets);
+    return buckets;
   }
 
   function invalidateBucketCache(store) {
     store = store || _moduleBucketCache;
-    store.key = '';
     store.buckets = null;
+    store.triIndex = null;
+    store.boneToRegion = null;
+    store.entriesCatalog = null;
+    store.factory = null;
+    store.V3Class = null;
+    store.ready = false;
+  }
+
+  function isBucketCacheReady(store) {
+    store = store || _moduleBucketCache;
+    return !!(store.ready && store.buckets);
   }
 
   function getOrBakeBuckets(skinnedMeshes, spaceInverse, bucketStore) {
-    return prepareBucketCache(skinnedMeshes, spaceInverse, bucketStore || _moduleBucketCache);
+    return ensureBucketCache(skinnedMeshes, spaceInverse, bucketStore || _moduleBucketCache);
   }
 
   function bucketCentroidDistSq(bucket, point) {
@@ -1172,6 +1320,11 @@
     const primaryRegionId = opts.primaryRegionId || null;
     const regionFilter = regionFilterSet(primaryRegionId);
 
+    if (bucketStore?.entriesCatalog) {
+      const regionIds = regionFilter ? Object.keys(regionFilter) : null;
+      return collectFromCatalog(bucketStore, impactPoint, spaceInverse, skipRegions, regionIds);
+    }
+
     const factory = createRenderFactory(skinnedMeshes[0]);
     const V3Class = factory.Vector3Class;
     const localImpact = new V3Class().copy(impactPoint);
@@ -1230,8 +1383,12 @@
     LIMB_DAMAGE_CHAINS,
     limbDamageChainKey,
     chainMemberRegionIds,
-    prepareBucketCache,
+    prepareBucketCache: ensureBucketCache,
+    populateShatterStore,
+    patchBucketsForRegions,
     invalidateBucketCache,
+    isBucketCacheReady,
+    collectFromCatalog,
     collectRegionEntries: function (skinnedMeshes, impactPoint, spaceInverse, skipRegions, opts) {
       return collectRegionEntries(skinnedMeshes, impactPoint, spaceInverse, skipRegions, opts);
     },

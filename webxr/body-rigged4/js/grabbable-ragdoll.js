@@ -267,10 +267,9 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this._zeroGLegModeBlend = 0;
     this._legFlinchUntil = 0;
     this._legSnapQuats = null;
-    this._shatterBucketCache = { key: '', buckets: null };
+    this._shatterBucketCache = { buckets: null, ready: false };
     this._shatterSpaceInverseMat = null;
-    this._pendingFracture = null;
-    this._fractureScheduled = false;
+    this._shatterCachePending = false;
 
     this.el.object3D.position.set(this.data.x, this.data.y, this.data.z);
 
@@ -639,7 +638,76 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     if (this.bones.hips) {
       this._hipsRestPos = this.bones.hips.position.clone();
     }
+    this._scheduleShatterCacheBake();
     console.log('[grabbable-ragdoll] ready at', this.data.x, this.data.z);
+  },
+
+  _scheduleShatterCacheBake: function () {
+    if (this._shatterBucketCache?.ready || this._shatterCachePending) return;
+    this._shatterCachePending = true;
+    const run = () => {
+      this._shatterCachePending = false;
+      this._initShatterBucketCache();
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(run, { timeout: 2500 });
+    } else {
+      setTimeout(run, 80);
+    }
+  },
+
+  _ensureShatterCacheReady: function () {
+    if (window.RagdollShatter?.isBucketCacheReady?.(this._shatterBucketCache)) return true;
+    this._initShatterBucketCache();
+    return !!window.RagdollShatter?.isBucketCacheReady?.(this._shatterBucketCache);
+  },
+
+  _shotPatchRegionIds: function (primaryRegionId) {
+    if (!primaryRegionId) return null;
+    const neighbors = window.RagdollShatter?.REGION_NEIGHBORS?.[primaryRegionId] || [];
+    const ids = [primaryRegionId];
+    for (let i = 0; i < neighbors.length; i++) ids.push(neighbors[i]);
+    return ids;
+  },
+
+  /** One-time full mesh bake at rest pose — never per-frame. */
+  _initShatterBucketCache: function () {
+    const RS = window.RagdollShatter;
+    if (!RS?.populateShatterStore || !this._skinnedMeshes?.length || !this.model) return;
+    if (this.skeleton) this.skeleton.update();
+    this.model.updateMatrixWorld(true);
+    if (!this._shatterSpaceInverseMat) {
+      this._shatterSpaceInverseMat = new window.AFRAME.THREE.Matrix4();
+    }
+    this._shatterSpaceInverseMat.copy(this.model.matrixWorld).invert();
+    RS.populateShatterStore(
+      this._skinnedMeshes,
+      this._shatterSpaceInverseMat,
+      this._shatterBucketCache
+    );
+  },
+
+  _updateShatterSpaceInverse: function () {
+    if (!this.model) return;
+    this.model.updateMatrixWorld(true);
+    if (!this._shatterSpaceInverseMat) {
+      this._shatterSpaceInverseMat = new window.AFRAME.THREE.Matrix4();
+    }
+    this._shatterSpaceInverseMat.copy(this.model.matrixWorld).invert();
+    this._shatterSpaceInverse = this._shatterSpaceInverseMat;
+  },
+
+  _patchShotBuckets: function (regionIds) {
+    const RS = window.RagdollShatter;
+    if (!RS?.patchBucketsForRegions || !regionIds?.length) return;
+    this._syncMeshWorldMatrices(true);
+    this._updateShatterSpaceInverse();
+    RS.patchBucketsForRegions(
+      this._skinnedMeshes,
+      this._shatterSpaceInverseMat,
+      this._shatterBucketCache,
+      regionIds
+    );
   },
 
   // Mirror mixamo-body.mapBones for exactly the keys the retarget needs.
@@ -1213,75 +1281,6 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     return regionId;
   },
 
-  _scheduleFracture: function (job) {
-    this._pendingFracture = job;
-    if (this._fractureScheduled) return;
-    this._fractureScheduled = true;
-    requestAnimationFrame(() => {
-      this._fractureScheduled = false;
-      const pending = this._pendingFracture;
-      this._pendingFracture = null;
-      if (pending) this._runFractureJob(pending);
-    });
-  },
-
-  _runFractureJob: function (job) {
-    const RS = window.RagdollShatter;
-    if (!RS?.fracture || !job?.ref) return;
-
-    const newShards = RS.fracture({
-      root: this._shardRoot,
-      spaceInverse: job.spaceInverse,
-      skinnedMeshes: this._skinnedMeshes,
-      material: job.ref.material,
-      impactPoint: job.impactPoint,
-      impactNormal: job.impactNormal,
-      shotDir: job.shotDir,
-      b3: this.b3,
-      world: this.world,
-      group: this.group || 1,
-      shotStrength: job.strength,
-      baseVelocity: job.baseVelocity,
-      skipRegions: this._shatteredRegionKeys,
-      regionKeys: job.fractureKeys,
-      surfaceOnly: job.surfaceOnly,
-      damageStage: job.damageStage,
-      primaryRegionId: job.primaryRegionId,
-      precomputedEntries: job.entries,
-      precomputedV3Class: job.v3Class,
-      bucketStore: this._shatterBucketCache
-    });
-
-    if (!newShards.length && !job.damageStage) return;
-
-    this._bakeShardsToWorld(newShards);
-    const zones = job.zones;
-    const damageMax = RS.REGION_DAMAGE_MAX || 3;
-    if (!zones.surfaceOnly && zones.primaryId && job.damageStage) {
-      this._applyRegionDamageVisual(zones.primaryId, job.damageStage);
-    }
-    if (!this._shards) this._shards = [];
-    for (let i = 0; i < newShards.length; i++) {
-      this._shards.push(newShards[i]);
-    }
-  },
-
-  _warmShatterBucketCache: function () {
-    const RS = window.RagdollShatter;
-    if (!RS?.prepareBucketCache || !this._skinnedMeshes?.length || !this.model) return;
-    this._syncMeshWorldMatrices();
-    if (!this._shatterSpaceInverseMat) {
-      this._shatterSpaceInverseMat = new window.AFRAME.THREE.Matrix4();
-    }
-    this.model.updateMatrixWorld(true);
-    this._shatterSpaceInverseMat.copy(this.model.matrixWorld).invert();
-    RS.prepareBucketCache(
-      this._skinnedMeshes,
-      this._shatterSpaceInverseMat,
-      this._shatterBucketCache
-    );
-  },
-
   /** World-space ray vs posed skinned meshes (for shooter). Ignores shard meshes. */
   raycastFromShot: function (origin, direction, maxDist) {
     if (!this.modelLoaded) return null;
@@ -1342,8 +1341,9 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     if (!this.b3 || !this.world) return false;
 
     strength = strength == null ? 1 : strength;
-    this._syncMeshWorldMatrices();
-    this._warmShatterBucketCache();
+    if (!this._ensureShatterCacheReady()) return false;
+    this._syncMeshWorldMatrices(true);
+    this._updateShatterSpaceInverse();
     const zeroG = this._isZeroGMode();
     const holding = this._heldHandCount() > 0;
     if (!zeroG || !holding) {
@@ -1355,15 +1355,10 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     const ref = this._skinnedMeshes[0];
     if (!ref) return false;
 
-    this.model.updateMatrixWorld(true);
-    const Mat4 = ref.matrixWorld.constructor;
-    if (!this._shatterSpaceInverseMat) {
-      this._shatterSpaceInverseMat = new Mat4();
-    }
-    this._shatterSpaceInverseMat.copy(this.model.matrixWorld).invert();
-    this._shatterSpaceInverse = this._shatterSpaceInverseMat;
-
     const RS = window.RagdollShatter;
+    const patchIds = this._shotPatchRegionIds(primaryRegionId);
+    if (patchIds) this._patchShotBuckets(patchIds);
+
     const collectOpts = {
       bucketStore: this._shatterBucketCache,
       primaryRegionId: primaryRegionId || null
@@ -1380,6 +1375,26 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       this._shatteredRegionKeys,
       primaryRegionId || null
     );
+
+    if (zones.ids?.length && patchIds) {
+      let needsExtra = false;
+      for (let i = 0; i < zones.ids.length; i++) {
+        if (patchIds.indexOf(zones.ids[i]) < 0) {
+          needsExtra = true;
+          break;
+        }
+      }
+      if (needsExtra) {
+        this._patchShotBuckets(zones.ids);
+        collected.entries = RS.collectFromCatalog(
+          this._shatterBucketCache,
+          impactPoint,
+          this._shatterSpaceInverse,
+          this._shatteredRegionKeys,
+          zones.ids
+        ).entries;
+      }
+    }
 
     if (!zones.keys.length && !zones.surfaceOnly) {
       console.warn('[grabbable-ragdoll] shot — no shatter zones (already destroyed there?)');
@@ -1470,24 +1485,41 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       this._hideShatteredRegionBones([zones.primaryId]);
     }
 
-    this._scheduleFracture({
-      ref: ref,
+    const newShards = window.RagdollShatter.fracture({
+      root: this._shardRoot,
       spaceInverse: this._shatterSpaceInverse,
+      skinnedMeshes: this._skinnedMeshes,
+      material: ref.material,
       impactPoint: impactPoint,
       impactNormal: impactNormal,
       shotDir: dir,
-      strength: strength,
+      b3: this.b3,
+      world: this.world,
+      group: this.group || 1,
+      shotStrength: strength,
       baseVelocity: baseVel,
-      fractureKeys: fractureKeys,
+      skipRegions: this._shatteredRegionKeys,
+      regionKeys: fractureKeys,
       surfaceOnly: !!zones.surfaceOnly,
       damageStage: damageStage,
       primaryRegionId: zones.primaryId || null,
-      entries: collected.entries,
-      v3Class: collected.V3Class,
-      zones: zones
+      precomputedEntries: collected.entries,
+      precomputedV3Class: collected.V3Class,
+      bucketStore: this._shatterBucketCache
     });
 
-    return true;
+    if (newShards.length || damageStage) {
+      this._bakeShardsToWorld(newShards);
+      if (!zones.surfaceOnly && zones.primaryId && damageStage) {
+        this._applyRegionDamageVisual(zones.primaryId, damageStage);
+      }
+      if (!this._shards) this._shards = [];
+      for (let i = 0; i < newShards.length; i++) {
+        this._shards.push(newShards[i]);
+      }
+    }
+
+    return newShards.length > 0 || !!zones.surfaceOnly || !!damageStage;
   },
 
   _aimCapsuleRadius: function (segIdx) {
@@ -2730,7 +2762,6 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       this._applyHitReactionsToPose();
       if (this.skeleton) this.skeleton.update();
       if (this.model) this.model.updateMatrixWorld(true);
-      this._warmShatterBucketCache();
       return;
     }
 
@@ -2790,7 +2821,6 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       if (this._zeroGLegModeBlend > 0.001 || this._isZeroGMode()) {
         this._applyZeroGLegsRagdoll(dt);
       }
-      this._warmShatterBucketCache();
     }
   }
 });
