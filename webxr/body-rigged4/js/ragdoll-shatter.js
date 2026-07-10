@@ -280,36 +280,68 @@
     return buckets;
   }
 
-  let _bakeCacheKey = '';
-  let _bakeCacheBuckets = null;
-
-  function bakeCacheFingerprint(skinnedMeshes, spaceInverse) {
-    const mesh = skinnedMeshes[0];
-    if (!mesh) return '';
-    const model = mesh.parent;
-    const e = model?.matrixWorld?.elements;
-    if (!e) return '';
-    const scene = typeof document !== 'undefined' ? document.querySelector('a-scene') : null;
-    const sceneTime = scene?.time ?? 0;
-    const skel = mesh.skeleton;
-    const b0 = skel?.bones?.[0];
-    let bx = 0;
-    let by = 0;
-    if (b0?.matrixWorld?.elements) {
-      bx = b0.matrixWorld.elements[12];
-      by = b0.matrixWorld.elements[13];
+  function finalizeBucketCentroids(buckets) {
+    const keys = Object.keys(buckets);
+    for (let k = 0; k < keys.length; k++) {
+      const bucket = buckets[keys[k]];
+      const pos = bucket.positions;
+      if (pos.length < 3) continue;
+      let cx = 0;
+      let cy = 0;
+      let cz = 0;
+      let n = 0;
+      for (let i = 0; i < pos.length; i += 3) {
+        cx += pos[i];
+        cy += pos[i + 1];
+        cz += pos[i + 2];
+        n++;
+      }
+      bucket.centroidX = cx / n;
+      bucket.centroidY = cy / n;
+      bucket.centroidZ = cz / n;
     }
-    const inv = spaceInverse?.elements;
-    const invTag = inv ? inv[12].toFixed(2) + inv[13].toFixed(2) : '0';
-    return sceneTime + ':' + e[12].toFixed(3) + ':' + e[13].toFixed(3) + ':' + bx.toFixed(3) + ':' + by.toFixed(3) + ':' + invTag;
   }
 
-  function getOrBakeBuckets(skinnedMeshes, spaceInverse) {
-    const key = bakeCacheFingerprint(skinnedMeshes, spaceInverse);
-    if (_bakeCacheKey === key && _bakeCacheBuckets) return _bakeCacheBuckets;
-    _bakeCacheBuckets = bakeRegionBuckets(skinnedMeshes, spaceInverse || null);
-    _bakeCacheKey = key;
-    return _bakeCacheBuckets;
+  const _moduleBucketCache = { key: '', buckets: null };
+
+  /** Pose-only fingerprint — buckets are baked in model-local space, not world position. */
+  function skeletonPoseFingerprint(skinnedMeshes) {
+    const skel = skinnedMeshes[0]?.skeleton;
+    if (!skel?.boneMatrices) return '';
+    const bm = skel.boneMatrices;
+    let h = '';
+    const q = 40;
+    for (let i = 0; i < bm.length; i++) {
+      h += (Math.round(bm[i] * q)).toString(36);
+    }
+    return h;
+  }
+
+  function prepareBucketCache(skinnedMeshes, spaceInverse, store) {
+    store = store || _moduleBucketCache;
+    const key = skeletonPoseFingerprint(skinnedMeshes);
+    if (store.key === key && store.buckets) return store.buckets;
+    store.buckets = bakeRegionBuckets(skinnedMeshes, spaceInverse || null);
+    finalizeBucketCentroids(store.buckets);
+    store.key = key;
+    return store.buckets;
+  }
+
+  function invalidateBucketCache(store) {
+    store = store || _moduleBucketCache;
+    store.key = '';
+    store.buckets = null;
+  }
+
+  function getOrBakeBuckets(skinnedMeshes, spaceInverse, bucketStore) {
+    return prepareBucketCache(skinnedMeshes, spaceInverse, bucketStore || _moduleBucketCache);
+  }
+
+  function bucketCentroidDistSq(bucket, point) {
+    const dx = bucket.centroidX - point.x;
+    const dy = bucket.centroidY - point.y;
+    const dz = bucket.centroidZ - point.z;
+    return dx * dx + dy * dy + dz * dz;
   }
 
   const LARGE_REGIONS = {
@@ -340,6 +372,8 @@
   const BODY_HITS_TO_RAGDOLL = 5;
   const CRATER_RADIUS_BY_STAGE = { 1: 0.085, 2: 0.14 };
   const MAX_CRATER_SHARDS_BY_STAGE = { 1: 4, 2: 9 };
+  /** Hard cap on convex debris spawned from a single shot (keeps fracture off the stutter cliff). */
+  const MAX_SHARDS_PER_SHOT = 10;
   /** Cap live debris — oldest shards are removed when this limit is exceeded. */
   const MAX_ACTIVE_SHARDS = 96;
   let _shardSpawnSeq = 0;
@@ -507,6 +541,17 @@
     rightForearm: ['rightUpperArm', 'rightHand'],
     rightHand: ['rightForearm']
   };
+
+  function regionFilterSet(primaryRegionId) {
+    if (!primaryRegionId) return null;
+    const set = {};
+    set[primaryRegionId] = true;
+    const neighbors = REGION_NEIGHBORS[primaryRegionId] || [];
+    for (let i = 0; i < neighbors.length; i++) {
+      set[neighbors[i]] = true;
+    }
+    return set;
+  }
 
   /** Mixamo bone keys to collapse when a baked region is shattered. */
   const REGION_BONE_KEYS = {
@@ -1119,29 +1164,49 @@
     };
   }
 
-  function collectRegionEntries(skinnedMeshes, impactPoint, spaceInverse, skipRegions) {
+  function collectRegionEntries(skinnedMeshes, impactPoint, spaceInverse, skipRegions, opts) {
     if (!skinnedMeshes?.length) return { entries: [], V3Class: THREE.Vector3 };
+
+    opts = opts || {};
+    const bucketStore = opts.bucketStore || null;
+    const primaryRegionId = opts.primaryRegionId || null;
+    const regionFilter = regionFilterSet(primaryRegionId);
 
     const factory = createRenderFactory(skinnedMeshes[0]);
     const V3Class = factory.Vector3Class;
     const localImpact = new V3Class().copy(impactPoint);
     if (spaceInverse) localImpact.applyMatrix4(spaceInverse);
 
-    const buckets = getOrBakeBuckets(skinnedMeshes, spaceInverse || null);
+    const buckets = getOrBakeBuckets(skinnedMeshes, spaceInverse || null, bucketStore);
     const keys = Object.keys(buckets);
     const entries = [];
+    const nearR = SHATTER_RADIUS + PROXIMITY_RADIUS + 0.22;
+    const nearR2 = nearR * nearR;
+    const looseR2 = nearR2 * 2.25;
 
     for (let k = 0; k < keys.length; k++) {
       const key = keys[k];
       if (skipRegions && skipRegions[key]) continue;
       const bucket = buckets[key];
       if (bucket.positions.length < 12) continue;
+      if (regionFilter && !regionFilter[bucket.id]) continue;
+      if (bucket.centroidX != null) {
+        const cd2 = bucketCentroidDistSq(bucket, localImpact);
+        if (cd2 > looseR2) continue;
+      }
+
+      let dist;
+      if (bucket.centroidX != null && bucketCentroidDistSq(bucket, localImpact) > nearR2) {
+        dist = Math.sqrt(bucketCentroidDistSq(bucket, localImpact));
+      } else {
+        dist = bucketDistanceToPoint(bucket, localImpact, V3Class);
+      }
       entries.push({
         id: bucket.id,
         matIdx: bucket.matIdx,
         key: bucket.id + ':' + bucket.matIdx,
         bucket,
-        dist: bucketDistanceToPoint(bucket, localImpact, V3Class)
+        dist
       });
     }
 
@@ -1159,13 +1224,16 @@
     REGION_DAMAGE_MAX,
     BODY_HITS_TO_RAGDOLL,
     MAX_ACTIVE_SHARDS,
+    MAX_SHARDS_PER_SHOT,
     REGION_PHYSICS_BONES,
     physicsBonesForRegionIds,
     LIMB_DAMAGE_CHAINS,
     limbDamageChainKey,
     chainMemberRegionIds,
-    collectRegionEntries: function (skinnedMeshes, impactPoint, spaceInverse, skipRegions) {
-      return collectRegionEntries(skinnedMeshes, impactPoint, spaceInverse, skipRegions);
+    prepareBucketCache,
+    invalidateBucketCache,
+    collectRegionEntries: function (skinnedMeshes, impactPoint, spaceInverse, skipRegions, opts) {
+      return collectRegionEntries(skinnedMeshes, impactPoint, spaceInverse, skipRegions, opts);
     },
 
     resolveHitRegionAtPoint: function (skinnedMeshes, impactPoint, spaceInverse, faceRegionId, skipRegions) {
@@ -1248,7 +1316,8 @@
         damageStage = null,
         primaryRegionId = null,
         precomputedEntries = null,
-        precomputedV3Class = null
+        precomputedV3Class = null,
+        bucketStore = null
       } = opts;
 
       if (!root || !skinnedMeshes?.length || !b3 || !world) return [];
@@ -1263,7 +1332,8 @@
           skinnedMeshes,
           impactPoint,
           spaceInverse,
-          skipRegions
+          skipRegions,
+          { bucketStore, primaryRegionId: primaryRegionId || null }
         );
         bucketEntries = collected.entries;
         V3Class = collected.V3Class;
@@ -1343,7 +1413,7 @@
         } else if (!isHit) {
           splitOpts.maxDepth = Math.min(splitOpts.maxDepth, 3);
         } else if (fullDestroy) {
-          splitOpts.maxDepth = Math.max(splitOpts.maxDepth, 5);
+          splitOpts.maxDepth = Math.min(splitOpts.maxDepth, 4);
         }
 
         let impulse;
@@ -1400,6 +1470,7 @@
         if (!pieces.length) continue;
 
         for (let p = 0; p < pieces.length; p++) {
+          if (shards.length >= MAX_SHARDS_PER_SHOT) break;
           const shotUnit = new V3Class().copy(shotDir);
           if (shotUnit.lengthSq() < 1e-8) shotUnit.set(0, 0, -1);
           else shotUnit.normalize();
@@ -1432,14 +1503,11 @@
             )
           );
         }
+        if (shards.length >= MAX_SHARDS_PER_SHOT) break;
       }
 
       root.updateMatrixWorld(true);
       if (root.parent) root.parent.updateMatrixWorld(true);
-
-      console.log('[ragdoll-shatter] convex shards:', shards.length,
-        'zones:', shatteredRegions, 'primary:', primaryId || '?',
-        surfaceOnly ? '(core crater)' : (stage < REGION_DAMAGE_MAX ? 'damage ' + stage + '/' + REGION_DAMAGE_MAX : 'destroyed'));
 
       return shards;
     },

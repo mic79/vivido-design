@@ -267,6 +267,10 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this._zeroGLegModeBlend = 0;
     this._legFlinchUntil = 0;
     this._legSnapQuats = null;
+    this._shatterBucketCache = { key: '', buckets: null };
+    this._shatterSpaceInverseMat = null;
+    this._pendingFracture = null;
+    this._fractureScheduled = false;
 
     this.el.object3D.position.set(this.data.x, this.data.y, this.data.z);
 
@@ -1209,6 +1213,75 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     return regionId;
   },
 
+  _scheduleFracture: function (job) {
+    this._pendingFracture = job;
+    if (this._fractureScheduled) return;
+    this._fractureScheduled = true;
+    requestAnimationFrame(() => {
+      this._fractureScheduled = false;
+      const pending = this._pendingFracture;
+      this._pendingFracture = null;
+      if (pending) this._runFractureJob(pending);
+    });
+  },
+
+  _runFractureJob: function (job) {
+    const RS = window.RagdollShatter;
+    if (!RS?.fracture || !job?.ref) return;
+
+    const newShards = RS.fracture({
+      root: this._shardRoot,
+      spaceInverse: job.spaceInverse,
+      skinnedMeshes: this._skinnedMeshes,
+      material: job.ref.material,
+      impactPoint: job.impactPoint,
+      impactNormal: job.impactNormal,
+      shotDir: job.shotDir,
+      b3: this.b3,
+      world: this.world,
+      group: this.group || 1,
+      shotStrength: job.strength,
+      baseVelocity: job.baseVelocity,
+      skipRegions: this._shatteredRegionKeys,
+      regionKeys: job.fractureKeys,
+      surfaceOnly: job.surfaceOnly,
+      damageStage: job.damageStage,
+      primaryRegionId: job.primaryRegionId,
+      precomputedEntries: job.entries,
+      precomputedV3Class: job.v3Class,
+      bucketStore: this._shatterBucketCache
+    });
+
+    if (!newShards.length && !job.damageStage) return;
+
+    this._bakeShardsToWorld(newShards);
+    const zones = job.zones;
+    const damageMax = RS.REGION_DAMAGE_MAX || 3;
+    if (!zones.surfaceOnly && zones.primaryId && job.damageStage) {
+      this._applyRegionDamageVisual(zones.primaryId, job.damageStage);
+    }
+    if (!this._shards) this._shards = [];
+    for (let i = 0; i < newShards.length; i++) {
+      this._shards.push(newShards[i]);
+    }
+  },
+
+  _warmShatterBucketCache: function () {
+    const RS = window.RagdollShatter;
+    if (!RS?.prepareBucketCache || !this._skinnedMeshes?.length || !this.model) return;
+    this._syncMeshWorldMatrices();
+    if (!this._shatterSpaceInverseMat) {
+      this._shatterSpaceInverseMat = new window.AFRAME.THREE.Matrix4();
+    }
+    this.model.updateMatrixWorld(true);
+    this._shatterSpaceInverseMat.copy(this.model.matrixWorld).invert();
+    RS.prepareBucketCache(
+      this._skinnedMeshes,
+      this._shatterSpaceInverseMat,
+      this._shatterBucketCache
+    );
+  },
+
   /** World-space ray vs posed skinned meshes (for shooter). Ignores shard meshes. */
   raycastFromShot: function (origin, direction, maxDist) {
     if (!this.modelLoaded) return null;
@@ -1270,6 +1343,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
 
     strength = strength == null ? 1 : strength;
     this._syncMeshWorldMatrices();
+    this._warmShatterBucketCache();
     const zeroG = this._isZeroGMode();
     const holding = this._heldHandCount() > 0;
     if (!zeroG || !holding) {
@@ -1283,15 +1357,23 @@ AFRAME.registerComponent('grabbable-ragdoll', {
 
     this.model.updateMatrixWorld(true);
     const Mat4 = ref.matrixWorld.constructor;
-    const spaceInverse = new Mat4().copy(this.model.matrixWorld).invert();
-    this._shatterSpaceInverse = spaceInverse;
+    if (!this._shatterSpaceInverseMat) {
+      this._shatterSpaceInverseMat = new Mat4();
+    }
+    this._shatterSpaceInverseMat.copy(this.model.matrixWorld).invert();
+    this._shatterSpaceInverse = this._shatterSpaceInverseMat;
 
     const RS = window.RagdollShatter;
+    const collectOpts = {
+      bucketStore: this._shatterBucketCache,
+      primaryRegionId: primaryRegionId || null
+    };
     const collected = RS.collectRegionEntries(
       this._skinnedMeshes,
       impactPoint,
-      spaceInverse,
-      this._shatteredRegionKeys
+      this._shatterSpaceInverse,
+      this._shatteredRegionKeys,
+      collectOpts
     );
     const zones = RS.pickImpactZonesFromEntries(
       collected.entries,
@@ -1365,44 +1447,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     }
 
     const dir = shotDir.clone().normalize();
-    const baseVel = this._getShatterBaseVelocity();
-    const newShards = window.RagdollShatter.fracture({
-      root: this._shardRoot,
-      spaceInverse: spaceInverse,
-      skinnedMeshes: this._skinnedMeshes,
-      material: ref.material,
-      impactPoint: impactPoint,
-      impactNormal: impactNormal,
-      shotDir: dir,
-      b3: this.b3,
-      world: this.world,
-      group: this.group || 1,
-      shotStrength: strength,
-      baseVelocity: baseVel.multiplyScalar(strength),
-      skipRegions: this._shatteredRegionKeys,
-      regionKeys: fractureKeys,
-      surfaceOnly: !!zones.surfaceOnly,
-      damageStage: damageStage,
-      primaryRegionId: zones.primaryId || null,
-      precomputedEntries: collected.entries,
-      precomputedV3Class: collected.V3Class
-    });
-
-    if (newShards.length || damageStage) {
-      this._bakeShardsToWorld(newShards);
-      if (!zones.surfaceOnly && zones.primaryId && damageStage) {
-        this._applyRegionDamageVisual(zones.primaryId, damageStage);
-        if (damageStage >= damageMax) {
-          this._destroyedRegionIds[zones.primaryId] = true;
-          this._markRegionKeysDestroyed(fractureKeys);
-          this._hideShatteredRegionBones([zones.primaryId]);
-        }
-      }
-      if (!this._shards) this._shards = [];
-      for (let i = 0; i < newShards.length; i++) {
-        this._shards.push(newShards[i]);
-      }
-    }
+    const baseVel = this._getShatterBaseVelocity().multiplyScalar(strength);
 
     if (shouldCollapse) {
       if (!this.ragdollActive) {
@@ -1419,20 +1464,30 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       RT.apply(this, this.b3, this.human, this.retargetState);
     }
 
-    console.log(
-      '[grabbable-ragdoll] shot —',
-      bodyKnockdown
-        ? 'body-knockdown ragdoll'
-        : (criticalDestroy ? 'critical-off ragdoll' : (this.ragdollActive ? 'ragdoll' : 'idle+hit-react')),
-      '+',
-      newShards.length,
-      'shards primary',
-      zones.primaryId || '?',
-      zones.surfaceOnly
-        ? ('core-crater body ' + this._bodyHitCount + '/' + bodyHitsToRagdoll)
-        : (damageStage ? 'damage ' + damageStage + '/' + damageMax : 'zones ' + zones.ids.join('+')),
-    );
-    return newShards.length > 0 || !!zones.surfaceOnly || !!damageStage;
+    if (!zones.surfaceOnly && zones.primaryId && damageStage != null && damageStage >= damageMax) {
+      this._destroyedRegionIds[zones.primaryId] = true;
+      this._markRegionKeysDestroyed(fractureKeys);
+      this._hideShatteredRegionBones([zones.primaryId]);
+    }
+
+    this._scheduleFracture({
+      ref: ref,
+      spaceInverse: this._shatterSpaceInverse,
+      impactPoint: impactPoint,
+      impactNormal: impactNormal,
+      shotDir: dir,
+      strength: strength,
+      baseVelocity: baseVel,
+      fractureKeys: fractureKeys,
+      surfaceOnly: !!zones.surfaceOnly,
+      damageStage: damageStage,
+      primaryRegionId: zones.primaryId || null,
+      entries: collected.entries,
+      v3Class: collected.V3Class,
+      zones: zones
+    });
+
+    return true;
   },
 
   _aimCapsuleRadius: function (segIdx) {
@@ -2675,6 +2730,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       this._applyHitReactionsToPose();
       if (this.skeleton) this.skeleton.update();
       if (this.model) this.model.updateMatrixWorld(true);
+      this._warmShatterBucketCache();
       return;
     }
 
@@ -2734,6 +2790,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       if (this._zeroGLegModeBlend > 0.001 || this._isZeroGMode()) {
         this._applyZeroGLegsRagdoll(dt);
       }
+      this._warmShatterBucketCache();
     }
   }
 });

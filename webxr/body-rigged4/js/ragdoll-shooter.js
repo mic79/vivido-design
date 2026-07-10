@@ -344,6 +344,10 @@
           regionId: preview.regionId || null
         };
       }
+      if (comp?.raycastAimPreview) {
+        const capsuleHit = comp.raycastAimPreview(this._rayOri, this._rayDir, MAX_RANGE);
+        if (capsuleHit) return capsuleHit;
+      }
       if (!comp?.raycastFromShot) return null;
       return comp.raycastFromShot(this._rayOri, this._rayDir, MAX_RANGE);
     },
