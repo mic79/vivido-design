@@ -40,6 +40,34 @@
   // Physics body indices for wrist-hand capsules (appended after reference 14-bone human).
   const HAND_BODY_IDX = { leftHand: 14, rightHand: 15 };
 
+  /** Physics body indices driven by each baked shatter region. */
+  const REGION_BODY_INDICES = {
+    hips: [0],
+    torso: [1, 2],
+    chest: [3],
+    neck: [4],
+    head: [5],
+    leftThigh: [6],
+    leftShin: [7],
+    leftFoot: [7],
+    rightThigh: [8],
+    rightShin: [9],
+    rightFoot: [9],
+    leftUpperArm: [10],
+    leftForearm: [11],
+    leftHand: [14],
+    rightUpperArm: [12],
+    rightForearm: [13],
+    rightHand: [15]
+  };
+
+  const SHOT_IMPULSE_RADIUS = 0.55;
+  const ADJACENT_IMPULSE_SCALE = 0.42;
+
+  const LEG_BODY_INDICES = { 6: true, 7: true, 8: true, 9: true };
+  const THIGH_BODY_INDICES = { 6: true, 8: true };
+  const SHIN_BODY_INDICES = { 7: true, 9: true };
+
   const _bodyQuat = new THREE.Quaternion();
   const _boneWorldQuat = new THREE.Quaternion();
   const _parentWorldQuat = new THREE.Quaternion();
@@ -60,7 +88,9 @@
   // when the arm swings, wiping out the hinge flex (legs don't have this problem).
   const FOREARM_HINGE_PARENT = {
     11: 10, // leftForearm  ← upper_arm_l / leftUpperArm
-    13: 12  // rightForearm ← upper_arm_r / rightUpperArm
+    13: 12, // rightForearm ← upper_arm_r / rightUpperArm
+    14: 11, // leftHand     ← lower_arm_l / leftForearm (wrist hinge)
+    15: 13  // rightHand    ← lower_arm_r / rightForearm
   };
 
   function bodyWorldQuaternion(b3, body, out) {
@@ -201,7 +231,7 @@
   function applyRotations(mixamoComp, b3, human, state) {
     if (!mixamoComp?.bones || !mixamoComp.skeleton || !b3 || !human || !state || !BONES.length) return;
 
-    if (state.shoulderRest) {
+    if (state.shoulderRest && !mixamoComp._freeRagdollMode) {
       Object.keys(state.shoulderRest).forEach((k) => {
         if (mixamoComp.bones[k]) {
           mixamoComp.bones[k].quaternion.copy(state.shoulderRest[k]);
@@ -263,6 +293,24 @@
     if (mixamoComp.model) mixamoComp.model.updateMatrixWorld(true);
   }
 
+  /** Hand capsules are small and spin easily — cap wrist whirl after impacts. */
+  function dampHandAngularVelocity(b3, human, maxRadPerSec) {
+    if (!b3?.b3Body_GetAngularVelocity || !b3.b3Body_SetAngularVelocity || !human?.bodies) return;
+    maxRadPerSec = maxRadPerSec == null ? 14 : maxRadPerSec;
+    const indices = [HAND_BODY_IDX.leftHand, HAND_BODY_IDX.rightHand];
+    for (let i = 0; i < indices.length; i++) {
+      const body = human.bodies[indices[i]];
+      if (!body) continue;
+      if (human.dynamicFlags && !human.dynamicFlags[indices[i]]) continue;
+      const w = b3.b3Body_GetAngularVelocity(body);
+      const speed = Math.hypot(w.x, w.y, w.z);
+      if (speed > maxRadPerSec) {
+        const s = maxRadPerSec / speed;
+        b3.b3Body_SetAngularVelocity(body, { x: w.x * s, y: w.y * s, z: w.z * s });
+      }
+    }
+  }
+
   /** Snap wrist-hand physics bodies onto the live Mixamo hand bones before calibrate. */
   function snapHandBodiesFromMesh(mixamoComp, b3, human) {
     if (!mixamoComp?.bones || !b3 || !human) return;
@@ -293,6 +341,7 @@
     if (!mixamoComp || !b3 || !human || !state) return;
     positionEntity(mixamoComp, b3, human, state);
     applyRotations(mixamoComp, b3, human, state);
+    dampHandAngularVelocity(b3, human);
   }
 
   /** Per-bone world linear velocity from mixamo-body's frame-to-frame bone tracking. */
@@ -349,9 +398,220 @@
     }
   }
 
+  /**
+   * Apply shot momentum to the primary hit region and its skeleton neighbors only.
+   * zones: { primaryId, ids } from RagdollShatter.pickImpactZones.
+   */
+  function applyShotImpulse(b3, human, zones, shotDir, impactNormal, strength, impulseScale, opts) {
+    if (!b3 || !human || !b3.b3Body_SetLinearVelocity || !zones?.primaryId) return;
+
+    opts = opts || {};
+    const skipHeld = opts.skipBodyIndices || null;
+    const skipRootBodies = !!opts.skipRootBodies;
+    const primaryOnly = !!opts.primaryOnly;
+    const angularBend = !!opts.angularBend;
+    const angularScale = opts.angularScale == null ? 1 : opts.angularScale;
+    const str = strength == null ? 1 : Math.max(0.35, strength);
+    const scaleMul = impulseScale == null ? 1 : impulseScale;
+    const coreBoost = zones.surfaceOnly ? 1.3 : 1;
+    const dir = _boneLinVel.copy(shotDir);
+    if (dir.lengthSq() < 1e-8) dir.set(0, 0, -1);
+    else dir.normalize();
+
+    const normal = _spawnBaseVel.copy(impactNormal || shotDir);
+    if (normal.lengthSq() < 1e-8) normal.copy(dir);
+    else normal.normalize();
+
+    const deltas = new Map();
+    const ids = primaryOnly ? [zones.primaryId] : (zones.ids || []);
+    const primaryId = zones.primaryId;
+
+    for (let r = 0; r < ids.length; r++) {
+      const regionId = ids[r];
+      const isPrimary = regionId === primaryId;
+      const scale = isPrimary ? 1 : ADJACENT_IMPULSE_SCALE;
+      const shotMag = (isPrimary ? 8.5 : 4.0) * str * scale * coreBoost * scaleMul;
+      const normMag = (isPrimary ? 2.4 : 1.0) * str * scale * coreBoost * scaleMul;
+      const indices = REGION_BODY_INDICES[regionId];
+      if (!indices) continue;
+
+      for (let i = 0; i < indices.length; i++) {
+        const idx = indices[i];
+        if (skipRootBodies && idx < 6) continue;
+        let d = deltas.get(idx);
+        if (!d) {
+          d = { x: 0, y: 0, z: 0 };
+          deltas.set(idx, d);
+        }
+        d.x += dir.x * shotMag + normal.x * normMag;
+        d.y += dir.y * shotMag + normal.y * normMag;
+        d.z += dir.z * shotMag + normal.z * normMag;
+      }
+    }
+
+    let bendAxis = null;
+    if (angularBend && b3.b3Body_SetAngularVelocity) {
+      _desiredEntityWorld.set(0, 1, 0).cross(dir);
+      if (_desiredEntityWorld.lengthSq() < 1e-6) _desiredEntityWorld.set(1, 0, 0).cross(dir);
+      if (_desiredEntityWorld.lengthSq() > 1e-8) {
+        _desiredEntityWorld.normalize();
+        bendAxis = _desiredEntityWorld;
+      }
+    }
+
+    const maxSpd = opts.maxSpeed != null ? opts.maxSpeed : (11 * str);
+    const maxAng = opts.maxAngularSpeed != null ? opts.maxAngularSpeed : (9 * str * angularScale);
+
+    deltas.forEach((delta, idx) => {
+      const body = human.bodies[idx];
+      if (!body) return;
+      if (skipHeld && skipHeld[idx]) return;
+      if (skipRootBodies && idx < 6) return;
+      if (human.dynamicFlags && !human.dynamicFlags[idx]) return;
+
+      let vx = delta.x;
+      let vy = delta.y;
+      let vz = delta.z;
+      if (b3.b3Body_GetLinearVelocity) {
+        const cur = b3.b3Body_GetLinearVelocity(body);
+        vx += cur.x;
+        vy += cur.y;
+        vz += cur.z;
+      }
+
+      const sp = Math.hypot(vx, vy, vz);
+      if (sp > maxSpd) {
+        const s = maxSpd / sp;
+        vx *= s;
+        vy *= s;
+        vz *= s;
+      }
+
+      b3.b3Body_SetLinearVelocity(body, { x: vx, y: vy, z: vz });
+      if (b3.b3Body_SetAwake) b3.b3Body_SetAwake(body, true);
+
+      if (bendAxis && LEG_BODY_INDICES[idx]) {
+        let angMag = 0;
+        if (SHIN_BODY_INDICES[idx]) angMag = str * 5.4 * scaleMul * angularScale;
+        else if (THIGH_BODY_INDICES[idx]) angMag = str * 3.1 * scaleMul * angularScale;
+        if (angMag > 0) {
+          let wx = bendAxis.x * angMag;
+          let wy = bendAxis.y * angMag;
+          let wz = bendAxis.z * angMag;
+          if (b3.b3Body_GetAngularVelocity) {
+            const curW = b3.b3Body_GetAngularVelocity(body);
+            wx += curW.x;
+            wy += curW.y;
+            wz += curW.z;
+          }
+          const wSp = Math.hypot(wx, wy, wz);
+          if (wSp > maxAng) {
+            const s = maxAng / wSp;
+            wx *= s;
+            wy *= s;
+            wz *= s;
+          }
+          b3.b3Body_SetAngularVelocity(body, { x: wx, y: wy, z: wz });
+        }
+      }
+    });
+  }
+
+  /**
+   * Whole-body stumble: nudge kinematic pelvis/legs and kick dynamic spine/limb bodies.
+   * Keeps the dummy upright while visibly recoiling from each hit.
+   */
+  function applyStumbleImpulse(b3, human, shotDir, impactNormal, strength, stage, opts) {
+    if (!b3 || !human) return;
+
+    opts = opts || {};
+    const skipPelvisNudge = !!opts.skipPelvisNudge;
+    const skipSpine = !!opts.skipSpine;
+    const limbScale = opts.limbScale == null ? 1 : opts.limbScale;
+    const legsOnly = !!opts.legsOnly;
+    const armsOnly = !!opts.armsOnly;
+
+    const str = strength == null ? 1 : Math.max(0.35, strength);
+    const stageMul = stage === 1 ? 0.9 : stage === 2 ? 1.2 : 1.55;
+
+    const dir = _boneLinVel.copy(shotDir);
+    if (dir.lengthSq() < 1e-8) dir.set(0, 0, -1);
+    else dir.normalize();
+
+    const norm = _spawnBaseVel.copy(impactNormal || shotDir);
+    if (norm.lengthSq() < 1e-8) norm.copy(dir);
+    else norm.normalize();
+
+    const transX = (dir.x * 0.68 + norm.x * 0.32) * str * stageMul * 0.062;
+    const transY = norm.y * str * stageMul * 0.022;
+    const transZ = (dir.z * 0.68 + norm.z * 0.32) * str * stageMul * 0.062;
+
+    const bodyCount = human.bodies.length;
+    for (let i = 0; i < bodyCount; i++) {
+      const body = human.bodies[i];
+      if (!body) continue;
+
+      const isDynamic = !human.dynamicFlags || human.dynamicFlags[i];
+
+      if (!isDynamic && b3.b3Body_SetTransform && b3.b3Body_GetPosition && b3.b3Body_GetRotation) {
+        if (skipPelvisNudge && i === 0) continue;
+        if (legsOnly || armsOnly || skipSpine) continue;
+        const pos = b3.b3Body_GetPosition(body);
+        const rot = b3.b3Body_GetRotation(body);
+        b3.b3Body_SetTransform(body, {
+          x: pos.x + transX,
+          y: pos.y + transY,
+          z: pos.z + transZ
+        }, rot);
+        continue;
+      }
+
+      if (!isDynamic || !b3.b3Body_SetLinearVelocity) continue;
+      if (legsOnly && i < 6) continue;
+      if (armsOnly && (i < 10 || i > 15)) continue;
+      if (skipSpine && i >= 0 && i <= 5) continue;
+
+      let spineMag = 0;
+      if (i >= 1 && i <= 3) {
+        if (legsOnly || armsOnly || skipSpine) continue;
+        spineMag = str * stageMul * (i === 3 ? 4.8 : 3.6);
+      } else if (i >= 6) {
+        if (armsOnly && i < 10) continue;
+        spineMag = str * stageMul * 5.2 * limbScale;
+      } else {
+        continue;
+      }
+
+      let vx = dir.x * spineMag + norm.x * str * stageMul * 0.85 * (i >= 6 ? limbScale : 1);
+      let vy = dir.y * spineMag * 0.35 + norm.y * str * stageMul * 0.75 * (i >= 6 ? limbScale : 1);
+      let vz = dir.z * spineMag + norm.z * str * stageMul * 0.85 * (i >= 6 ? limbScale : 1);
+
+      if (b3.b3Body_GetLinearVelocity) {
+        const cur = b3.b3Body_GetLinearVelocity(body);
+        vx += cur.x;
+        vy += cur.y;
+        vz += cur.z;
+      }
+
+      const maxSpd = opts.maxSpeed != null ? opts.maxSpeed : (9.5 * str * stageMul);
+      const sp = Math.hypot(vx, vy, vz);
+      if (sp > maxSpd) {
+        const s = maxSpd / sp;
+        vx *= s;
+        vy *= s;
+        vz *= s;
+      }
+
+      b3.b3Body_SetLinearVelocity(body, { x: vx, y: vy, z: vz });
+      if (b3.b3Body_SetAwake) b3.b3Body_SetAwake(body, true);
+    }
+  }
+
   window.Box3DRagdollRetarget = {
     MIXAMO_BONE_KEYS,
     HAND_BODY_IDX,
+    REGION_BODY_INDICES,
+    SHOT_IMPULSE_RADIUS,
     calibrate,
     alignHumanToMeshAnchors,
     snapHandBodiesFromMesh,
@@ -360,6 +620,8 @@
     applyRotations,
     positionEntity,
     sampleMixamoBoneLinearVel,
-    applyMixamoSpawnMomentum
+    applyMixamoSpawnMomentum,
+    applyShotImpulse,
+    applyStumbleImpulse
   };
 })();

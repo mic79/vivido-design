@@ -6,6 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.6.0/dist/aframe-extras.min.js"></script>
+    <script src="js/ragdoll-shooter.js"></script>
+    <script src="js/ragdoll-shatter.js"></script>
     <script type="importmap">
       {
         "imports": {
@@ -17,7 +19,8 @@
     <script type="module">
       import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-      window.BodyRiggedLoaders = { GLTFLoader, FBXLoader, ready: true };
+      import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
+      window.BodyRiggedLoaders = { GLTFLoader, FBXLoader, ConvexGeometry, ready: true };
     </script>
     <style>
       body { margin: 0; overflow: hidden; }
@@ -28,6 +31,38 @@
         font-family: monospace; z-index: 1000; max-width: 400px;
       }
       #ui h3 { margin-top: 0; color: #4CAF50; }
+      #aim-crosshair {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        width: 18px;
+        height: 18px;
+        margin: -9px 0 0 -9px;
+        pointer-events: none;
+        z-index: 500;
+        opacity: 0.55;
+      }
+      #aim-crosshair::before,
+      #aim-crosshair::after {
+        content: '';
+        position: absolute;
+        background: rgba(255, 255, 255, 0.9);
+      }
+      #aim-crosshair::before {
+        left: 50%;
+        top: 2px;
+        width: 2px;
+        height: 14px;
+        margin-left: -1px;
+      }
+      #aim-crosshair::after {
+        top: 50%;
+        left: 2px;
+        width: 14px;
+        height: 2px;
+        margin-top: -1px;
+      }
+      #aim-crosshair.hidden { display: none; }
       .info { font-size: 11px; color: #888; margin-top: 10px; line-height: 1.5; }
     </style>
   </head>
@@ -37,12 +72,13 @@
       <div class="info">
         <strong>Model:</strong> character.glb (Mixamo + Walk/Idle) · <span id="model-height-info">height: measuring…</span><br>
         <strong>Physics:</strong> <a href="https://github.com/isaac-mason/box3d.js" target="_blank">box3d.js</a> (WASM) · per-finger collision · ragdoll (R)<br>
+        <strong>Shatter:</strong> shoot grabbable dummy — desktop <kbd>Left click</kbd> 3D view or <kbd>H</kbd> · VR right trigger<br>
         <strong>Gravity mode:</strong>
         <button type="button" id="btn-mode-grounded" style="margin:0 4px;padding:2px 8px;cursor:pointer;">Grounded</button>
         <button type="button" id="btn-mode-zerog" style="margin:0 4px;padding:2px 8px;cursor:pointer;">Zero-G</button>
         · <span id="gravity-mode-label" style="color:#9cf;">grounded</span>
         · key <kbd>G</kbd> or VR <kbd>X</kbd> toggles · <code>?mode=zerog</code><br>
-        <strong>Grounded:</strong> WASD / left stick = walk · right stick / Z-X = yaw<br>
+        <strong>Grounded:</strong> WASD / left stick = walk · right stick / Z-X = yaw · <kbd>M</kbd> mirror body<br>
         <strong>Zero-G:</strong> Y/B thrusters · grip+B ragdoll · L-stick click boost · R-stick click brake · R-stick / Z-X yaw · grab/fling · desktop Q/E · T boost · C brake<br>
         <strong>VR calibration:</strong> First enter VR auto-calibrates (or press Calibrate standing straight) · Body depth/side = FP body position<br>
         <strong>Status:</strong> <span id="status">Loading...</span>
@@ -56,8 +92,9 @@
       </div>
       <div id="legdebug" style="display:none;margin-top:8px;font:11px monospace;color:#9ee;white-space:pre-wrap;">legIK: waiting…</div>
     </div>
+    <div id="aim-crosshair" aria-hidden="true"></div>
 
-    <a-scene background="color: #87CEEB" gravity-mode="allowSwitch: true" leg-ik-world scene-shadows keyboard-shortcuts="enterVR: false" webxr="referenceSpaceType: local-floor" renderer="colorManagement: true; physicallyCorrectLights: true; shadow: true; shadowMapType: PCFSoft">
+    <a-scene background="color: #87CEEB" gravity-mode="allowSwitch: true" leg-ik-world scene-shadows keyboard-shortcuts="enterVR: false" ragdoll-shooter webxr="referenceSpaceType: local-floor" renderer="colorManagement: true; physicallyCorrectLights: true; shadow: true; shadowMapType: PCFSoft">
       <!-- Grabbable dummy ticks before the player rig so arm-hold state is fresh for IK -->
       <a-entity id="grab-dummy" grabbable-ragdoll="x: 1.4; y: 0; z: -1.6"></a-entity>
 
@@ -187,11 +224,11 @@
       <a-text visible="false" value="Stairs (Problem_2)" position="7 1.2 -5" align="center" color="#333" width="3"></a-text>
 
       <!-- Test collision objects -->
-      <a-box id="test-wall" position="2 1 -1" width="0.2" height="2" depth="2"
+      <a-box id="test-wall" position="2.5 1 -1" width="0.4" height="2" depth="2"
         material="color: #B71C1C; roughness: 0.8; metalness: 0.1" shadow="cast: true; receive: true"></a-box>
       <a-cylinder id="test-pillar" position="-1.5 1 -1.5" radius="0.3" height="2"
         material="color: #1B5E20; roughness: 0.7; metalness: 0.2" shadow="cast: true; receive: true"></a-cylinder>
-      <a-text visible="false" value="Wall" position="2 2.2 -1" align="center" color="#B71C1C" width="2"></a-text>
+      <a-text visible="false" value="Wall" position="2.5 2.2 -1" align="center" color="#B71C1C" width="2"></a-text>
       <a-text visible="false" value="Pillar" position="-1.5 2.2 -1.5" align="center" color="#1B5E20" width="2"></a-text>
       
       <a-entity light="type: ambient; intensity: 0.35; color: #c8dce8"></a-entity>
@@ -554,6 +591,7 @@
           this.zeroGLegs = window.ZeroGLegs ? new window.ZeroGLegs() : null;
           this._zeroGBodyQuat = new THREE.Quaternion();
           this._zeroGVel = new THREE.Vector3();
+          this._zeroGLegModeBlend = 0;
           
           // Mixamo bone names
           this.boneNames = {
@@ -897,6 +935,11 @@
               if (e.code === 'KeyR') {
                 toggleRagdollAndReset();
               }
+              if (e.code === 'KeyM') {
+                e.preventDefault();
+                const legIk = document.querySelector('a-scene')?.components['leg-ik-world'];
+                if (legIk?.toggleMirrorBody) legIk.toggleMirrorBody();
+              }
             };
             const onKeyUp = (e) => {
               window._bodyRiggedKeys[e.code] = false;
@@ -1003,7 +1046,8 @@
           
           console.log('[Mixamo Body]', this.data.isMirror ? 'Mirror' : 'Local',
             '-', meta.isGltf ? 'GLB' : 'FBX', '- materials:', allMaterials.length);
-          
+
+          this._captureBindPose();
           this._initAnimations(meta.animations || []);
           this._measureLegLengths();
           this._measureBodyOffsets();
@@ -1016,6 +1060,29 @@
           document.querySelector('#status').style.color = '#4CAF50';
 
           this._initBodyDotOverlay();
+        },
+
+        _captureBindPose: function () {
+          if (!this.skeleton) return;
+          this._bindPose = this.skeleton.bones.map((b) => ({
+            pos: b.position.clone(),
+            quat: b.quaternion.clone(),
+            scale: b.scale.clone()
+          }));
+        },
+
+        _restoreBindPose: function () {
+          if (!this.skeleton || !this._bindPose) return;
+          for (let i = 0; i < this.skeleton.bones.length; i++) {
+            const snap = this._bindPose[i];
+            if (!snap) continue;
+            const b = this.skeleton.bones[i];
+            b.position.copy(snap.pos);
+            b.quaternion.copy(snap.quat);
+            b.scale.copy(snap.scale);
+          }
+          this.skeleton.update();
+          if (this.model) this.model.updateMatrixWorld(true);
         },
         
         _initAnimations: function(animations) {
@@ -1058,15 +1125,8 @@
           console.log('[Mixamo Body] Animation clips:',
             Object.fromEntries(Object.entries(this.animClips).map(([k, v]) => [k, v.name])));
 
-          // Start idle immediately so model isn't in T-pose before blend space activates
-          if (this.animClips.idle) {
-            const idleAction = this.mixer.clipAction(this.animClips.idle);
-            idleAction.reset();
-            idleAction.setLoop(THREE.LoopRepeat, Infinity);
-            idleAction.setEffectiveWeight(1);
-            idleAction.play();
-          }
-          this.currentAnim = 'idle';
+          // Stay in bind pose until the player moves — no looping idle at load.
+          this.currentAnim = null;
 
           this._loadStrafeClip();
           this._loadCrouchClip();
@@ -1885,8 +1945,22 @@
           return this._zeroGVel;
         },
 
-        _applyZeroGLegs: function (dt) {
+        _updateZeroGLegModeBlend: function (dt) {
+          if (window.ZeroGLegs?.updateLegModeBlend) {
+            this._zeroGLegModeBlend = window.ZeroGLegs.updateLegModeBlend(
+              this._zeroGLegModeBlend,
+              this._isZeroGMode(),
+              dt
+            );
+          } else {
+            this._zeroGLegModeBlend = this._isZeroGMode() ? 1 : 0;
+          }
+        },
+
+        _applyZeroGLegs: function (dt, modeBlend) {
           if (!this.zeroGLegs || !this.bones) return;
+          const blend = modeBlend != null ? modeBlend : this._zeroGLegModeBlend;
+          if (blend <= 0.001) return;
           const refQuat = this._zeroGBodyQuat || (this._zeroGBodyQuat = new THREE.Quaternion());
           if (this._isLocalRigChild()) {
             this.el.object3D.getWorldQuaternion(refQuat);
@@ -1898,7 +1972,8 @@
             this.bones,
             this._getZeroGWorldVelocity(),
             refQuat,
-            dt
+            dt,
+            blend
           );
           if (this.skeleton) this.skeleton.update();
         },
@@ -1940,8 +2015,11 @@
         },
 
         _applyLegIKTerrain: function(dt, footRoot) {
+          const legBlend = this._zeroGLegModeBlend;
+          const fullZeroG = this._isZeroGMode() && legBlend > 0.88;
+
           // Zero-G legs are applied at end of updateBones (after hip/spine reset).
-          if (this._isZeroGMode()) {
+          if (fullZeroG) {
             if (this.legIK) {
               this.legIK.isActive = false;
               this.legIK.isGrounded = false;
@@ -2031,7 +2109,7 @@
             if (!action.isRunning()) {
               action.reset();
               action.setLoop(THREE.LoopRepeat, Infinity);
-              action.setEffectiveWeight(slot === 'idle' ? 1 : 0);
+              action.setEffectiveWeight(0);
               action.setEffectiveTimeScale(1);
               action.play();
             }
@@ -2043,7 +2121,6 @@
           const w = { idle: 0, walk: 0, run: 0, strafeLeft: 0, strafeRight: 0 };
 
           if (speed < this.walkThreshold) {
-            w.idle = 1;
             return w;
           }
 
@@ -2153,13 +2230,21 @@
         _updateLocomotionAnimation: function(dt) {
           if (!this.mixer) return;
 
-          this._initBlendSpace();
           this._updateSmoothedMoveDir(dt);
 
           const locomotionSuppressed = this._isLocomotionSuppressed();
           const speed = locomotionSuppressed ? 0 : this._smoothedHorizontalSpeed;
           const crouchAmt = this.el.sceneEl.legIkWorld?.crouchAmount || 0;
           const crouching = crouchAmt > 0.12 || (this._crouchAnimWeight || 0) > 0.12;
+
+          if (speed < this.walkThreshold && !crouching && !locomotionSuppressed) {
+            if (this.mixer) this.mixer.stopAllAction();
+            this._blendSpaceInited = false;
+            this._restoreBindPose();
+            return;
+          }
+
+          this._initBlendSpace();
 
           // Decompose movement into facing-relative forward/right components
           let comps = locomotionSuppressed ? null : this._getMoveFacingComponents();
@@ -3369,6 +3454,7 @@
           state.frozen = true;
           const rig = this.rig || document.getElementById('rig');
           const legIk = this.el.sceneEl.components['leg-ik-world'];
+          const ragdollActive = !!(legIk?.ragdollActive || this.el.sceneEl.legIkWorld?.ragdollActive);
 
           if (legIk) {
             if (legIk._playerMov) legIk._playerMov.set(0, 0, 0);
@@ -3379,10 +3465,20 @@
             if (legIk._playerMoveDir) legIk._playerMoveDir.set(0, 0, 0);
             legIk.playerVelY = 0;
             legIk.grabPullLocomotionActive = false;
-            if (legIk.ready && legIk.physics) {
-              const p = legIk.physics.getPlayerTranslation();
-              state.frozenPos = { x: p.x, y: p.y, z: p.z };
-            }
+          }
+
+          // While ragdolling the player capsule is disabled — its translation is the
+          // stale spawn point, not where the rig/camera actually are. Anchor freeze
+          // to the live rig or F will teleport the headset.
+          if (ragdollActive && rig) {
+            state.frozenPos = {
+              x: rig.object3D.position.x,
+              y: rig.object3D.position.y,
+              z: rig.object3D.position.z
+            };
+          } else if (legIk?.ready && legIk.physics) {
+            const p = legIk.physics.getPlayerTranslation();
+            state.frozenPos = { x: p.x, y: p.y, z: p.z };
           }
 
           if (!state.frozenPos && rig) {
@@ -3478,7 +3574,12 @@
           if (ragdollActive) {
             const legIkWorld = this.el.sceneEl.legIkWorld;
             if (this.model) this.model.visible = true;
-            if (
+            if (poseFrozen) {
+              this._applyFrozenPoseSnapshot(dotState.frozenPoseSnapshot);
+              if (!this.data.isMirror) {
+                this._publishPoseSnapshot();
+              }
+            } else if (
               legIkWorld?.ragdollHuman &&
               legIkWorld.b3 &&
               legIkWorld.ragdollRetargetState &&
@@ -4384,6 +4485,73 @@
           if (this.model) this.model.updateMatrixWorld(true);
           if (this.skeleton) this.skeleton.update();
           return dest.copy(probeLocal).applyMatrix4(handBone.matrixWorld);
+        },
+
+        /** VR shot ray from the posed virtual hand (palm origin, finger-forward direction). */
+        getHandShotAim: function (hand, out) {
+          out = out || {};
+          const handBone = this.bones[`${hand}HandBone`];
+          if (!handBone || this.data.isMirror) {
+            out.ok = false;
+            return out;
+          }
+
+          const frame = this.el.sceneEl?.time;
+          if (frame != null && this._handShotAimFrame === frame && this._handShotAimHand === hand && this._handShotAimCached?.ok) {
+            const c = this._handShotAimCached;
+            if (!out.origin) out.origin = new THREE.Vector3();
+            if (!out.direction) out.direction = new THREE.Vector3();
+            out.ok = true;
+            out.origin.copy(c.origin);
+            out.direction.copy(c.direction);
+            out.handBone = c.handBone;
+            out.localOrigin = c.localOrigin;
+            return out;
+          }
+
+          if (this.model) this.model.updateMatrixWorld(true);
+
+          const origin = out.origin || new THREE.Vector3();
+          const direction = out.direction || new THREE.Vector3();
+          const contactLocal = hand === 'left' ? this._palmContactLocalLeft : this._palmContactLocalRight;
+          const forwardLocal = hand === 'left' ? this._palmForwardLocalLeft : this._palmForwardLocalRight;
+          if (!contactLocal || !forwardLocal) {
+            out.ok = false;
+            return out;
+          }
+
+          origin.copy(contactLocal).applyMatrix4(handBone.matrixWorld);
+          if (!this._handShotAimQuat) this._handShotAimQuat = new THREE.Quaternion();
+          handBone.getWorldQuaternion(this._handShotAimQuat);
+          direction.copy(forwardLocal).applyQuaternion(this._handShotAimQuat).normalize();
+          if (direction.lengthSq() < 1e-8) {
+            out.ok = false;
+            return out;
+          }
+
+          if (!this._handShotAimCached) {
+            this._handShotAimCached = {
+              ok: true,
+              origin: new THREE.Vector3(),
+              direction: new THREE.Vector3(),
+              handBone: handBone,
+              localOrigin: contactLocal.clone()
+            };
+          }
+          this._handShotAimCached.ok = true;
+          this._handShotAimCached.origin.copy(origin);
+          this._handShotAimCached.direction.copy(direction);
+          this._handShotAimCached.handBone = handBone;
+          this._handShotAimCached.localOrigin.copy(contactLocal);
+          this._handShotAimFrame = frame;
+          this._handShotAimHand = hand;
+
+          out.ok = true;
+          out.origin = origin;
+          out.direction = direction;
+          out.handBone = handBone;
+          out.localOrigin = this._handShotAimCached.localOrigin;
+          return out;
         },
 
         _probeWorldToContactWorld: function (hand, probeWorld, dest) {
@@ -5713,6 +5881,10 @@
           }
           this.calculateBodyTilt(track.headPos, track.leftPos, track.rightPos, dt);
 
+          if (!this.data.isMirror) {
+            this._updateZeroGLegModeBlend(dt);
+          }
+
           const footRoot = this._getLegIKFootRoot(headWorldPos);
           this._anchorBodyAtFeet(footRoot);
 
@@ -5723,8 +5895,10 @@
           const mantleAmt = legIkWorld ? (legIkWorld.mantleCrouchAmount || 0) : 0;
           const mantleActive = legIkWorld && (legIkWorld._ledgeMantleActive || mantleAmt > 0.01);
 
+          const legBlend = this._zeroGLegModeBlend;
           const zeroG = this._isZeroGMode();
-          if (this.useAnimatedLocomotion && !zeroG) {
+          const suppressWalkAnim = zeroG && legBlend > 0.85;
+          if (this.useAnimatedLocomotion && !suppressWalkAnim) {
             if (mantleActive) {
               if (this.bones.hips && this._standingHipsLocalY !== undefined) {
                 this._animatedHipsLocalY = this._standingHipsLocalY;
@@ -5737,14 +5911,14 @@
             }
           } else if (!this.data.isMirror) {
             this._hideLocalHeadMesh();
-            if (mantleActive && !zeroG) {
+            if (mantleActive && !suppressWalkAnim) {
               this._applyMantleCrouchBlend(dt, mantleAmt);
             }
           }
 
           this._applyPreLegIKPosture(headWorldPos);
           this._applyLegIKTerrain(dt, footRoot);
-          if (!zeroG) this._applyPostLegIKGrounding(headWorldPos, dt);
+          if (legBlend < 0.12) this._applyPostLegIKGrounding(headWorldPos, dt);
           this._updateLegDebug();
 
           this.updateBones(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos, leftHandWorldQuat, rightHandWorldQuat, dt);
@@ -6011,12 +6185,13 @@
           
           this._syncVRUpperBodyToHead(headPos, headQuat);
 
-          // Zero-G legs after hip/spine reset (same order as body-rigged-zerog2).
-          if (this._isZeroGMode()) {
+          // Zero-G legs after hip/spine reset — blend smoothly with grounded leg IK/animation.
+          const legBlend = this._zeroGLegModeBlend;
+          if (legBlend > 0.001) {
             if (this.bones.hips && this.initialBonePositions[this.bones.hips?.name]) {
               this.bones.hips.position.copy(this.initialBonePositions[this.bones.hips.name]);
             }
-            this._applyZeroGLegs(dt);
+            this._applyZeroGLegs(dt, legBlend);
           } else if (this._isGrabHangActive()) {
             if (this.bones.hips && this.initialBonePositions[this.bones.hips?.name]) {
               this.bones.hips.position.copy(this.initialBonePositions[this.bones.hips.name]);

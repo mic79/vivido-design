@@ -1,9 +1,7 @@
 /**
- * grabbable-ragdoll — a standalone Mixamo character that starts static (bind/T-pose)
- * and becomes a physics ragdoll the moment a hand grabs it. While held, the grabbed
- * body chases the hand (the rest of the body swings from the joints); on release the
- * hand's velocity is imparted so it can be thrown. Once ragdolled it stays a ragdoll,
- * so it remains grabbable/throwable after it settles on the floor.
+ * grabbable-ragdoll — a standalone Mixamo character that loops idle. Shots add
+ * springy hit reactions on top of idle (whole-body nudge + limb recoil, then recover).
+ * Grabbing switches to full physics ragdoll for hold/throw.
  *
  * It reuses the shared physics world + ragdoll modules but does NOT touch the player's
  * ragdoll or collider: it calls Box3DRagdoll.createHuman directly (not spawnRagdoll).
@@ -26,6 +24,108 @@ const MESH_BODY_SEGS = {
   13: ['rightForearm', 'rightHand'],
   14: ['leftForearm', 'leftHand'],
   15: ['rightForearm', 'rightHand']
+};
+
+const AIM_SEG_REGIONS = {
+  0: 'hips',
+  1: 'torso',
+  2: 'chest',
+  3: 'neck',
+  4: 'head',
+  5: 'head',
+  6: 'leftThigh',
+  7: 'leftShin',
+  8: 'rightThigh',
+  9: 'rightShin',
+  10: 'leftUpperArm',
+  11: 'leftForearm',
+  12: 'rightUpperArm',
+  13: 'rightForearm',
+  14: 'leftHand',
+  15: 'rightHand'
+};
+
+const LEG_BONE_KEYS = ['leftUpLeg', 'leftLeg', 'leftFoot', 'rightUpLeg', 'rightLeg', 'rightFoot'];
+
+const HIT_BODY_WOBBLE = [
+  { key: 'spine2', w: 0.2 },
+  { key: 'spine1', w: 0.14 },
+  { key: 'spine', w: 0.1 },
+  { key: 'hips', w: 0.07 }
+];
+
+const LIMB_HIT_REGIONS = {
+  leftThigh: true,
+  leftShin: true,
+  leftFoot: true,
+  rightThigh: true,
+  rightShin: true,
+  rightFoot: true,
+  leftUpperArm: true,
+  leftForearm: true,
+  leftHand: true,
+  rightUpperArm: true,
+  rightForearm: true,
+  rightHand: true
+};
+
+function hitWeightsForRegion(regionId) {
+  const arm = (side, upper, fore, hand, shoulder) => ({
+    [`${side}Hand`]: [
+      { key: hand, w: 1 },
+      { key: fore, w: 0.62 },
+      { key: upper, w: 0.38 },
+      { key: shoulder, w: 0.18 }
+    ],
+    [`${side}Forearm`]: [
+      { key: fore, w: 1 },
+      { key: upper, w: 0.52 },
+      { key: shoulder, w: 0.22 }
+    ],
+    [`${side}UpperArm`]: [
+      { key: upper, w: 1 },
+      { key: shoulder, w: 0.28 }
+    ]
+  });
+
+  const leg = (side, thigh, shin, foot) => ({
+    [`${side}Foot`]: [
+      { key: foot, w: 1 },
+      { key: shin, w: 0.55 },
+      { key: thigh, w: 0.32 }
+    ],
+    [`${side}Shin`]: [
+      { key: shin, w: 1 },
+      { key: thigh, w: 0.48 }
+    ],
+    [`${side}Thigh`]: [
+      { key: thigh, w: 1 }
+    ]
+  });
+
+  return {
+    ...arm('left', 'leftUpperArm', 'leftForearm', 'leftHand', 'leftShoulder'),
+    ...arm('right', 'rightUpperArm', 'rightForearm', 'rightHand', 'rightShoulder'),
+    ...leg('left', 'leftUpLeg', 'leftLeg', 'leftFoot'),
+    ...leg('right', 'rightUpLeg', 'rightLeg', 'rightFoot'),
+    neck: [{ key: 'neck', w: 1 }, { key: 'head', w: 0.35 }, ...HIT_BODY_WOBBLE],
+    head: [{ key: 'head', w: 1 }, { key: 'neck', w: 0.45 }, ...HIT_BODY_WOBBLE],
+    hips: [{ key: 'hips', w: 1 }, { key: 'spine', w: 0.35 }],
+    torso: [{ key: 'spine', w: 0.8 }, { key: 'spine1', w: 0.55 }, { key: 'hips', w: 0.35 }],
+    chest: [{ key: 'spine2', w: 1 }, { key: 'spine1', w: 0.55 }, { key: 'neck', w: 0.2 }, ...HIT_BODY_WOBBLE]
+  }[regionId] || HIT_BODY_WOBBLE;
+}
+
+/** Fully destroying any of these regions collapses the whole body into physics ragdoll. */
+const COLLAPSE_RAGDOLL_REGION_IDS = {
+  leftThigh: true,
+  leftShin: true,
+  leftFoot: true,
+  rightThigh: true,
+  rightShin: true,
+  rightFoot: true,
+  head: true,
+  neck: true
 };
 
 AFRAME.registerComponent('grabbable-ragdoll', {
@@ -133,6 +233,41 @@ AFRAME.registerComponent('grabbable-ragdoll', {
 
     this._grabPressed = { left: false, right: false };
 
+    this._shattered = false;
+    this._shards = [];
+    this._shardRoot = null;
+    this._shatterGroup = null;
+    this._shatterRefMesh = null;
+    this._shatterSpaceInverse = null;
+    this._shatteredRegionKeys = {};
+    this._regionDamage = {};
+    this._bodyHitCount = 0;
+    this._destroyedRegionIds = {};
+    this._partialDynamicBoneSet = null;
+    this._shardsWorldSpace = false;
+
+    this._hitBoneState = {};
+    this._rootNudge = {
+      pos: new THREE.Vector3(),
+      vel: new THREE.Vector3(),
+      rotY: 0,
+      angVelY: 0
+    };
+    this._hitEuler = new THREE.Euler();
+    this._hitDq = new THREE.Quaternion();
+    this._entityBasePos = new THREE.Vector3(this.data.x, this.data.y, this.data.z);
+    this._entityBaseRotY = 0;
+    this._freeRagdollMode = false;
+    this._ragdollStuckTimer = 0;
+    this._grabCooldownUntil = 0;
+    this.zeroGLegs = window.ZeroGLegs ? new window.ZeroGLegs() : null;
+    this._zeroGBodyQuat = new THREE.Quaternion();
+    this._zeroGVelScratch = new THREE.Vector3();
+    this._hipsRestPos = null;
+    this._zeroGLegModeBlend = 0;
+    this._legFlinchUntil = 0;
+    this._legSnapQuats = null;
+
     this.el.object3D.position.set(this.data.x, this.data.y, this.data.z);
 
     this.MAX_THROW_SPEED = 14;
@@ -160,13 +295,295 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     const loader = new window.BodyRiggedLoaders.GLTFLoader();
     loader.load(
       path,
-      (gltf) => this._onModelLoaded(gltf.scene),
+      (gltf) => this._onModelLoaded(gltf.scene, gltf.animations || []),
       undefined,
       (err) => console.error('[grabbable-ragdoll] model load error:', err)
     );
   },
 
-  _onModelLoaded: function (modelRoot) {
+  _initIdleAnimation: function (animations) {
+    if (!animations?.length || !this.skeleton || !this.model) return false;
+
+    const THREE = window.AFRAME.THREE;
+    const aliases = ['Idle', 'idle', 'T-Pose', 'TPose'];
+    let clip = null;
+    for (let i = 0; i < aliases.length; i++) {
+      clip = THREE.AnimationClip.findByName(animations, aliases[i]);
+      if (clip) break;
+    }
+    if (!clip) clip = animations[0];
+    if (!clip) return false;
+
+    const mixer = new THREE.AnimationMixer(this.model);
+    const action = mixer.clipAction(clip);
+    action.reset();
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    action.setEffectiveWeight(1);
+    action.clampWhenFinished = false;
+    action.time = 0;
+    mixer.update(0);
+    this.skeleton.update();
+    this.model.updateMatrixWorld(true);
+    action.play();
+
+    this._idleMixer = mixer;
+    this._idleAction = action;
+    this._idleClip = clip;
+    return true;
+  },
+
+  _pauseIdleAnimation: function () {
+    if (this._idleAction) {
+      this._idleAction.paused = true;
+      this._idleAction.setEffectiveWeight(0);
+    }
+  },
+
+  _resumeIdleAnimation: function () {
+    if (this._idleAction && this._idleMixer) {
+      this._idleAction.reset();
+      this._idleAction.setEffectiveWeight(1);
+      this._idleAction.paused = false;
+      this._idleAction.play();
+    }
+  },
+
+  _reapplyDestroyedRegionBones: function () {
+    const ids = Object.keys(this._destroyedRegionIds || {});
+    if (!ids.length) return;
+    this._hideShatteredRegionBones(ids);
+  },
+
+  _clearHitReactions: function () {
+    this._hitBoneState = {};
+    this._rootNudge.pos.set(0, 0, 0);
+    this._rootNudge.vel.set(0, 0, 0);
+    this._rootNudge.rotY = 0;
+    this._rootNudge.angVelY = 0;
+  },
+
+  _ensureHitBoneState: function (boneKey) {
+    if (!this._hitBoneState[boneKey]) {
+      this._hitBoneState[boneKey] = {
+        offsetQuat: new THREE.Quaternion(),
+        angVel: new THREE.Vector3()
+      };
+    }
+    return this._hitBoneState[boneKey];
+  },
+
+  _addBoneHitImpulse: function (boneKey, shotDir, impactNormal, magnitude) {
+    const bone = this.bones[boneKey];
+    if (!bone || magnitude <= 0) return;
+
+    const st = this._ensureHitBoneState(boneKey);
+    bone.getWorldQuaternion(this._tmpQ);
+    this._hitDq.copy(this._tmpQ).invert();
+
+    this._tmpV.crossVectors(impactNormal, shotDir);
+    if (this._tmpV.lengthSq() < 1e-6) {
+      this._tmpV.crossVectors(impactNormal, this._segAB.set(0, 1, 0));
+    }
+    if (this._tmpV.lengthSq() < 1e-6) this._tmpV.set(0, 1, 0);
+    else this._tmpV.normalize();
+    this._tmpV.applyQuaternion(this._hitDq);
+
+    const impulse = magnitude * 6.2;
+    st.angVel.x += this._tmpV.x * impulse;
+    st.angVel.y += this._tmpV.y * impulse * 0.65;
+    st.angVel.z += this._tmpV.z * impulse;
+
+    this._segAB.copy(shotDir).applyQuaternion(this._hitDq);
+    st.angVel.x -= this._segAB.z * magnitude * 3.4;
+    st.angVel.z += this._segAB.x * magnitude * 3.4;
+    st.angVel.y += impactNormal.y * magnitude * 1.6;
+  },
+
+  /**
+   * Limb recoil — always push away from the incoming shot (opposite shotDir).
+   * Uses bone-axis swing so the reaction reads the same from any hit point on the limb.
+   */
+  _addLimbPushImpulse: function (boneKey, pushDir, magnitude) {
+    const bone = this.bones[boneKey];
+    if (!bone || magnitude <= 0) return;
+
+    const st = this._ensureHitBoneState(boneKey);
+    bone.getWorldQuaternion(this._tmpQ);
+
+    // Mixamo bone length axis in world space.
+    this._segAB.set(0, 1, 0).applyQuaternion(this._tmpQ).normalize();
+    if (this._segAB.lengthSq() < 1e-8) return;
+
+    // Spin axis that swings the bone tip along pushDir.
+    this._tmpV.crossVectors(this._segAB, pushDir);
+    if (this._tmpV.lengthSq() < 1e-6) {
+      this._tmpV.crossVectors(this._segAB, this._closestAxis.set(0, 1, 0));
+    }
+    if (this._tmpV.lengthSq() < 1e-6) {
+      this._tmpV.crossVectors(this._segAB, this._closestAxis.set(1, 0, 0));
+    }
+    if (this._tmpV.lengthSq() < 1e-6) return;
+    this._tmpV.normalize();
+
+    this._hitDq.copy(this._tmpQ).invert();
+    this._closestAxis.copy(this._tmpV).applyQuaternion(this._hitDq);
+
+    const sign = this._segAB.dot(pushDir) >= 0 ? 1 : -1;
+    const k = magnitude * 5.2 * sign;
+    st.angVel.x += this._closestAxis.x * k;
+    st.angVel.y += this._closestAxis.y * k;
+    st.angVel.z += this._closestAxis.z * k;
+  },
+
+  /** Impact normal should face toward the incoming shot (away from the surface). */
+  _normalFacingIncomingShot: function (shotDir, impactNormal, out) {
+    out.copy(impactNormal);
+    if (out.lengthSq() < 1e-8) out.copy(shotDir).negate();
+    else out.normalize();
+    if (out.dot(shotDir) > 0) out.negate();
+    return out;
+  },
+
+  /** Stable push direction for limbs — recoil opposite incoming shot. */
+  _limbPushDirection: function (shotDir, impactNormal, out) {
+    this._normalFacingIncomingShot(shotDir, impactNormal, out);
+    if (out.dot(shotDir) > -0.15) {
+      out.copy(shotDir).negate();
+    }
+    if (out.lengthSq() < 1e-8) out.copy(shotDir).negate();
+    else out.normalize();
+    return out;
+  },
+
+  _impulseHitReaction: function (shotDir, impactNormal, strength, regionId, stage) {
+    if (!regionId) return;
+
+    const str = Math.max(0.35, strength == null ? 1 : strength);
+    const stageMul = stage === 1 ? 0.82 : stage === 2 ? 1.05 : 1.28;
+    const zeroG = this._isZeroGMode();
+    const dir = shotDir.clone().normalize();
+    const isLimb = !!LIMB_HIT_REGIONS[regionId];
+
+    const rn = this._rootNudge;
+    const nudgeMag = str * stageMul * (zeroG ? 0.22 : 0.1);
+
+    if (isLimb) {
+      const push = this._limbPushDirection(dir, impactNormal, this._bonePosTmp);
+      rn.vel.x += push.x * nudgeMag * 1.15;
+      rn.vel.y += push.y * nudgeMag * 0.55;
+      rn.vel.z += push.z * nudgeMag * 1.15;
+
+      const isLegRegion = regionId.indexOf('Thigh') >= 0
+        || regionId.indexOf('Shin') >= 0
+        || regionId.indexOf('Foot') >= 0;
+      const limbKick = (zeroG && isLegRegion) ? 1.65 : 1;
+      const weights = hitWeightsForRegion(regionId);
+      for (let i = 0; i < weights.length; i++) {
+        const w = weights[i];
+        this._addLimbPushImpulse(w.key, push, str * w.w * stageMul * limbKick);
+      }
+      return;
+    }
+
+    const norm = this._normalFacingIncomingShot(dir, impactNormal, this._tmpV.clone());
+    rn.vel.x += dir.x * nudgeMag + norm.x * nudgeMag * 0.38;
+    rn.vel.z += dir.z * nudgeMag + norm.z * nudgeMag * 0.38;
+    rn.vel.y += norm.y * str * stageMul * 0.028;
+    rn.angVelY += (dir.x * 0.55 - dir.z * 0.35) * str * stageMul * 2.1;
+
+    const weights = hitWeightsForRegion(regionId);
+    for (let i = 0; i < weights.length; i++) {
+      const w = weights[i];
+      this._addBoneHitImpulse(w.key, dir, norm, str * w.w * stageMul);
+    }
+  },
+
+  _updateHitReactions: function (dt) {
+    const zeroG = this._isZeroGMode();
+    const legFlinch = zeroG && this._legHitOverlayActive();
+    const spring = zeroG ? (legFlinch ? 30 : 14) : 38;
+    const damp = zeroG ? (legFlinch ? 6.5 : 4) : 7.2;
+    const posSpring = zeroG ? 11 : 32;
+    const posDamp = zeroG ? 4 : 8.5;
+    const rotSpring = zeroG ? 12 : 28;
+    const rotDamp = zeroG ? 4 : 7.5;
+    const keys = Object.keys(this._hitBoneState);
+    for (let i = 0; i < keys.length; i++) {
+      const st = this._hitBoneState[keys[i]];
+      const av = st.angVel;
+      const ax = av.x * dt;
+      const ay = av.y * dt;
+      const az = av.z * dt;
+      if (Math.abs(ax) + Math.abs(ay) + Math.abs(az) > 1e-7) {
+        this._hitEuler.set(ax, ay, az, 'XYZ');
+        this._hitDq.setFromEuler(this._hitEuler);
+        st.offsetQuat.multiply(this._hitDq);
+        st.offsetQuat.normalize();
+      }
+
+      this._hitEuler.setFromQuaternion(st.offsetQuat, 'XYZ');
+      av.x += (-this._hitEuler.x * spring - av.x * damp) * dt;
+      av.y += (-this._hitEuler.y * spring - av.y * damp) * dt;
+      av.z += (-this._hitEuler.z * spring - av.z * damp) * dt;
+
+      if (
+        av.lengthSq() < 1e-6
+        && Math.abs(this._hitEuler.x) + Math.abs(this._hitEuler.y) + Math.abs(this._hitEuler.z) < 0.002
+      ) {
+        st.offsetQuat.identity();
+        av.set(0, 0, 0);
+      }
+    }
+
+    const rn = this._rootNudge;
+    rn.pos.x += rn.vel.x * dt;
+    rn.pos.y += rn.vel.y * dt;
+    rn.pos.z += rn.vel.z * dt;
+    rn.rotY += rn.angVelY * dt;
+    rn.vel.x += (-rn.pos.x * posSpring - rn.vel.x * posDamp) * dt;
+    rn.vel.y += (-rn.pos.y * (zeroG ? posSpring * 0.85 : 36) - rn.vel.y * (zeroG ? posDamp : 9)) * dt;
+    rn.vel.z += (-rn.pos.z * posSpring - rn.vel.z * posDamp) * dt;
+    rn.angVelY += (-rn.rotY * rotSpring - rn.angVelY * rotDamp) * dt;
+
+    if (
+      rn.pos.lengthSq() < 1e-8
+      && rn.vel.lengthSq() < 1e-8
+      && Math.abs(rn.rotY) < 1e-5
+      && Math.abs(rn.angVelY) < 1e-5
+    ) {
+      rn.pos.set(0, 0, 0);
+      rn.vel.set(0, 0, 0);
+      rn.rotY = 0;
+      rn.angVelY = 0;
+    }
+  },
+
+  _applyHitReactionsToPose: function () {
+    const keys = Object.keys(this._hitBoneState);
+    for (let i = 0; i < keys.length; i++) {
+      const boneKey = keys[i];
+      const st = this._hitBoneState[boneKey];
+      const bone = this.bones[boneKey];
+      if (!bone) continue;
+      const nearId = st.angVel.lengthSq() < 1e-6
+        && Math.abs(st.offsetQuat.x) + Math.abs(st.offsetQuat.y) + Math.abs(st.offsetQuat.z) < 1e-4
+        && st.offsetQuat.w > 0.99999;
+      if (nearId) continue;
+      bone.quaternion.multiply(st.offsetQuat);
+      bone.updateMatrixWorld(true);
+    }
+
+    const rn = this._rootNudge;
+    const bp = this._entityBasePos;
+    this.el.object3D.position.set(
+      bp.x + rn.pos.x,
+      bp.y + rn.pos.y,
+      bp.z + rn.pos.z
+    );
+    this.el.object3D.rotation.y = this._entityBaseRotY + rn.rotY;
+  },
+
+  _onModelLoaded: function (modelRoot, animations) {
     this.model = modelRoot;
     modelRoot.scale.set(1, 1, 1);
     modelRoot.position.y = 0.05;
@@ -188,6 +605,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     });
 
     this._mapBones();
+    this._initIdleAnimation(animations || []);
     if (this.model) {
       const box = new THREE.Box3().setFromObject(this.model);
       box.getSize(this._tmpV);
@@ -195,9 +613,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     }
     this.modelLoaded = true;
 
-    // Snapshot the exact loaded ("static T-pose") transforms so reset restores the
-    // character byte-for-byte instead of relying on skeleton.pose() (which for this
-    // GLB can collapse the mesh) or on the physics-driven entity position.
+    // Snapshot idle rest pose (frame 0) so reset restores the standing dummy, not T-pose.
     this._staticPose = {
       entityPos: new THREE.Vector3(this.data.x, this.data.y, this.data.z),
       entityQuat: this.el.object3D.quaternion.clone(),
@@ -214,6 +630,11 @@ AFRAME.registerComponent('grabbable-ragdoll', {
           }))
         : []
     };
+    this._entityBasePos.copy(this._staticPose.entityPos);
+    this._entityBaseRotY = this.el.object3D.rotation.y;
+    if (this.bones.hips) {
+      this._hipsRestPos = this.bones.hips.position.clone();
+    }
     console.log('[grabbable-ragdoll] ready at', this.data.x, this.data.z);
   },
 
@@ -266,22 +687,41 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     return btn.pressed || btn.value >= 0.45;
   },
 
-  _spawnRagdoll: function () {
+  _prepareEntityForRagdollSpawn: function () {
+    this._clearHitReactions();
+    this.el.object3D.position.copy(this._entityBasePos);
+    this.el.object3D.rotation.y = this._entityBaseRotY;
+    this.el.object3D.updateMatrixWorld(true);
+    if (this.skeleton) this.skeleton.update();
+    if (this.model) this.model.updateMatrixWorld(true);
+  },
+
+  _spawnRagdoll: function (opts) {
+    opts = opts || {};
     const R = window.Box3DRagdoll;
     const RT = window.Box3DRagdollRetarget;
     if (!R || !RT || !this.b3 || !this.world) return false;
 
+    const collapse = opts.collapse === true;
+    this._freeRagdollMode = collapse;
+    const jointFriction = collapse ? 0.04 : (opts.jointFriction != null ? opts.jointFriction : 0.14);
+
     this.el.object3D.getWorldPosition(this._tmpV);
-    const basePos = { x: this._tmpV.x, y: 0, z: this._tmpV.z };
+    const basePos = {
+      x: this._tmpV.x,
+      y: this._isZeroGMode() ? this._tmpV.y : 0,
+      z: this._tmpV.z
+    };
 
     this.group = (this.legIk.physics.ragdollGroup++ ) || 1;
     this.human = R.createHuman(
       this.b3, this.world, basePos, this.group,
-      0, undefined, undefined,
+      jointFriction, undefined, undefined,
       {
-        enableJointMotors: false,
         density: this.data.bodyDensity,
-        floppyLimbs: true
+        floppyLimbs: true,
+        dynamicBones: opts.dynamicBones || null,
+        enableJointMotors: collapse ? false : opts.enableJointMotors
       }
     );
 
@@ -297,13 +737,89 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this.retargetState = RT.calibrate(this, this.b3, this.human);
     this.ragdollActive = true;
     this._spawnedStanding = true;
+    this._pauseIdleAnimation();
+    if (collapse && R.wakeAllHumanBodies) R.wakeAllHumanBodies(this.b3, this.human);
+    this._ragdollStuckTimer = 0;
     return true;
   },
 
-  // Tear the ragdoll down and return the character to its initial static T-pose at
-  // its spawn location. Called by B / R so each press re-arms the dummy.
+  /** If the ragdoll has settled mid-air (e.g. wedged on a wall), nudge it to fall. */
+  _maintainFreeRagdoll: function (dt) {
+    if (this._isZeroGMode()) return;
+    if (!this._freeRagdollMode || !this.human || !this.b3 || this._heldHandCount() > 0) return;
+
+    const R = window.Box3DRagdoll;
+    if (R.wakeAllHumanBodies) R.wakeAllHumanBodies(this.b3, this.human);
+
+    this._ragdollStuckTimer += dt;
+    if (this._ragdollStuckTimer < 0.35) return;
+
+    const lowestY = R.computeLowestY(this.b3, this.human);
+    if (!isFinite(lowestY) || lowestY <= this.FLOOR_Y + 0.07) {
+      this._ragdollStuckTimer = 0;
+      return;
+    }
+
+    let speedSq = 0;
+    for (let i = 0; i < this.human.bodies.length; i++) {
+      if (this.human.dynamicFlags && !this.human.dynamicFlags[i]) continue;
+      const body = this.human.bodies[i];
+      if (!body || !this.b3.b3Body_GetLinearVelocity) continue;
+      const v = this.b3.b3Body_GetLinearVelocity(body);
+      speedSq += v.x * v.x + v.y * v.y + v.z * v.z;
+    }
+    if (speedSq > 0.4) return;
+
+    for (let i = 0; i < this.human.bodies.length; i++) {
+      if (this.human.dynamicFlags && !this.human.dynamicFlags[i]) continue;
+      const body = this.human.bodies[i];
+      if (!body || !this.b3.b3Body_SetLinearVelocity) continue;
+      const v = this.b3.b3Body_GetLinearVelocity(body);
+      this.b3.b3Body_SetLinearVelocity(body, {
+        x: v.x * 0.85 + (Math.random() - 0.5) * 0.35,
+        y: v.y - 1.4,
+        z: v.z * 0.85 + (Math.random() - 0.5) * 0.35
+      });
+      if (this.b3.b3Body_SetAwake) this.b3.b3Body_SetAwake(body, true);
+    }
+    this._ragdollStuckTimer = 0;
+  },
+
+  _isCollapseRagdollRegion: function (regionId) {
+    return !!COLLAPSE_RAGDOLL_REGION_IDS[regionId];
+  },
+
+  /** Full-body ragdoll when a critical part (leg/head) is blown off. */
+  _ragdollFromCriticalLoss: function (shotDir, impactNormal, strength, zones) {
+    const RT = window.Box3DRagdollRetarget;
+    const R = window.Box3DRagdoll;
+    if (!RT || !R || !this.b3 || !this.world) return false;
+
+    this._prepareEntityForRagdollSpawn();
+
+    if (this.human && window.Box3DRagdoll?.destroyHuman) {
+      window.Box3DRagdoll.destroyHuman(this.b3, this.human);
+    }
+    this.human = null;
+    this.retargetState = null;
+    this.ragdollActive = false;
+
+    if (!this._spawnRagdoll({ collapse: true })) return false;
+
+    const str = strength == null ? 1 : strength;
+    this._applyRagdollShotImpulses(shotDir, impactNormal, str, zones, 3, true);
+    if (R.wakeAllHumanBodies) R.wakeAllHumanBodies(this.b3, this.human);
+    if (RT.apply && this.retargetState) {
+      RT.apply(this, this.b3, this.human, this.retargetState);
+    }
+    return true;
+  },
+
+  // Tear the ragdoll down and return the character to its idle rest pose at spawn.
   resetRagdoll: function () {
     if (!this.modelLoaded || !this.model) return;
+
+    this._disposeShatter();
 
     // Drop any held hands without imparting a throw.
     this._held.left = -1;
@@ -344,6 +860,14 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this.group = null;
 
     this._restoreStaticPose();
+    this._clearHitReactions();
+    this._freeRagdollMode = false;
+    this._ragdollStuckTimer = 0;
+    this._entityBasePos.copy(this._staticPose.entityPos);
+    this._entityBaseRotY = this._staticPose.entityQuat
+      ? new THREE.Euler().setFromQuaternion(this._staticPose.entityQuat).y
+      : 0;
+    this._resumeIdleAnimation();
   },
 
   _restoreStaticPose: function () {
@@ -359,8 +883,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this.model.quaternion.copy(st.modelQuat);
     this.model.scale.copy(st.modelScale);
 
-    // Restore every bone's captured local transform (exact T-pose the model loaded
-    // with) rather than skeleton.pose(), which can produce a collapsed/invisible mesh.
+    // Restore every bone's captured idle rest transform.
     for (let i = 0; i < st.bones.length; i++) {
       const b = st.bones[i];
       b.bone.position.copy(b.pos);
@@ -372,8 +895,671 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     if (this.skeleton) this.skeleton.update();
     this.model.updateMatrixWorld(true);
     this.model.traverse((node) => {
-      if (node.isMesh) node.visible = true;
+      if (node.isSkinnedMesh || node.isMesh) node.visible = true;
     });
+  },
+
+  _disposeShatter: function () {
+    if (this._shards?.length && window.RagdollShatter) {
+      const root = this._shardRoot || this.el.object3D;
+      window.RagdollShatter.dispose(this._shards, this.b3, root);
+    }
+    this._shards = [];
+    this._shattered = false;
+    this._shatterGroup = null;
+    this._shatterRefMesh = null;
+    this._shatterSpaceInverse = null;
+    this._shatteredRegionKeys = {};
+    this._regionDamage = {};
+    this._bodyHitCount = 0;
+    this._destroyedRegionIds = {};
+    this._partialDynamicBoneSet = null;
+    this._shardsWorldSpace = false;
+    this._clearHitReactions();
+    if (this._shardRoot?.parent) {
+      this._shardRoot.parent.remove(this._shardRoot);
+    }
+    this._shardRoot = null;
+  },
+
+  _releaseAllHands: function (releaseVel) {
+    ['left', 'right'].forEach((hand) => {
+      if (this._held[hand] < 0) return;
+      const idx = this._held[hand];
+      const vel = releaseVel || this._handVel[hand];
+      this._releaseBody(idx, vel);
+      this._held[hand] = -1;
+      this._holdStart[hand] = null;
+      this._holdEffReady[hand] = false;
+      this._holdQuatReady[hand] = false;
+      this._grabOffsetLocal[hand].set(0, 0, 0);
+      this._grabAnchorWorld[hand].set(0, 0, 0);
+      this._holdMotionIntensity[hand] = 0;
+      this._holdMotionInit[hand] = false;
+      this._clearPlayerArmHold(hand);
+    });
+  },
+
+  _shotKickVelocity: function (shotDir, impactNormal, strength) {
+    const str = Math.max(0.35, strength == null ? 1 : strength);
+    const dir = this._meshRayDir.copy(shotDir);
+    if (dir.lengthSq() < 1e-8) dir.set(0, 0, -1);
+    else dir.normalize();
+    const norm = this._tmpV.copy(impactNormal || shotDir);
+    if (norm.lengthSq() < 1e-8) norm.copy(dir);
+    else norm.normalize();
+
+    // Whole-body release kick — grounded only; zero-g uses localized region impulse instead.
+    if (this._isZeroGMode()) {
+      return { x: 0, y: 0, z: 0 };
+    }
+    const shotMag = 4.2 * str;
+    const normMag = 1.6 * str;
+    return {
+      x: dir.x * shotMag + norm.x * normMag,
+      y: dir.y * shotMag + norm.y * normMag,
+      z: dir.z * shotMag + norm.z * normMag
+    };
+  },
+
+  _applyRagdollShotImpulses: function (shotDir, impactNormal, strength, zones, damageStage, shouldCollapse) {
+    const RT = window.Box3DRagdollRetarget;
+    if (!RT || !this.human || !this.b3) return;
+
+    const zeroG = this._isZeroGMode();
+    const holding = this._heldHandCount() > 0;
+    const stage = shouldCollapse
+      ? 3
+      : (damageStage || (zones?.surfaceOnly ? 2 : 1));
+    const hitLeg = !!(zones?.primaryId && LIMB_HIT_REGIONS[zones.primaryId]
+      && (zones.primaryId.indexOf('Thigh') >= 0
+        || zones.primaryId.indexOf('Shin') >= 0
+        || zones.primaryId.indexOf('Foot') >= 0));
+    const hitArm = !!(zones?.primaryId && LIMB_HIT_REGIONS[zones.primaryId]
+      && (zones.primaryId.indexOf('Arm') >= 0 || zones.primaryId.indexOf('Hand') >= 0));
+    const limbDestroy = shouldCollapse && (hitLeg || hitArm);
+
+    let impulseScale = shouldCollapse ? 0.45 : (zeroG ? 0.42 : 1.2);
+    let shotOpts = null;
+
+    if (shouldCollapse) {
+      impulseScale = zeroG ? 0.22 : 0.38;
+      shotOpts = {
+        primaryOnly: true,
+        skipRootBodies: limbDestroy,
+        skipBodyIndices: holding ? this._heldBodyIndexSet() : null,
+        maxSpeed: zeroG ? 1.35 : 2.8,
+        maxAngularSpeed: zeroG ? 4 : 5.5,
+        angularBend: limbDestroy,
+        angularScale: 0.72
+      };
+      if (RT.applyStumbleImpulse && limbDestroy) {
+        RT.applyStumbleImpulse(this.b3, this.human, shotDir, impactNormal, strength, stage, {
+          skipPelvisNudge: true,
+          skipSpine: true,
+          legsOnly: hitLeg,
+          armsOnly: hitArm,
+          limbScale: zeroG ? 0.14 : 0.22,
+          maxSpeed: zeroG ? 1.2 : 2.4
+        });
+      } else if (RT.applyStumbleImpulse && !zeroG) {
+        RT.applyStumbleImpulse(this.b3, this.human, shotDir, impactNormal, strength, stage, {
+          limbScale: 0.32,
+          maxSpeed: 3.2
+        });
+      }
+      if (limbDestroy && zones?.primaryId) {
+        this._impulseRagdollLegBend(shotDir, impactNormal, strength, zones.primaryId, { subtle: true });
+      }
+    } else if (RT.applyStumbleImpulse && !zeroG) {
+      RT.applyStumbleImpulse(this.b3, this.human, shotDir, impactNormal, strength, stage);
+    } else if (zeroG && this.ragdollActive && !shouldCollapse) {
+      impulseScale = holding ? 0.48 : 0.82;
+      shotOpts = {
+        skipBodyIndices: holding ? this._heldBodyIndexSet() : null,
+        skipRootBodies: holding && hitLeg,
+        primaryOnly: holding,
+        maxSpeed: holding ? 2.2 : 8,
+        maxAngularSpeed: holding ? 8 : 11,
+        angularBend: hitLeg,
+        angularScale: holding ? 1.2 : 1
+      };
+      if (hitLeg) {
+        this._impulseRagdollLegBend(shotDir, impactNormal, strength, zones.primaryId);
+      }
+    } else if (zeroG && this.ragdollActive) {
+      impulseScale = 0.82;
+      shotOpts = {
+        skipBodyIndices: holding ? this._heldBodyIndexSet() : null,
+        maxSpeed: 8,
+        angularBend: hitLeg,
+        angularScale: 0.95
+      };
+    }
+
+    if (zones && RT.applyShotImpulse && (zones.primaryId || zones.ids?.length)) {
+      const skipHeld = (!shotOpts && zeroG) ? this._heldBodyIndexSet() : null;
+      RT.applyShotImpulse(
+        this.b3,
+        this.human,
+        zones,
+        shotDir,
+        impactNormal,
+        strength,
+        impulseScale,
+        shotOpts || { skipBodyIndices: skipHeld }
+      );
+    }
+    if (this.ragdollActive) {
+      this._legFlinchUntil = performance.now() + 680;
+    }
+  },
+
+  /** Bone-space leg kick layered on ragdoll retarget (matches idle limb bend). */
+  _impulseRagdollLegBend: function (shotDir, impactNormal, strength, regionId, opts) {
+    if (!regionId) return;
+    opts = opts || {};
+    const str = Math.max(0.35, strength == null ? 1 : strength);
+    const push = this._limbPushDirection(shotDir, impactNormal, this._bonePosTmp);
+    const weights = hitWeightsForRegion(regionId);
+    const stageMul = opts.subtle ? 0.72 : 1.35;
+    const legKeys = LEG_BONE_KEYS;
+    const armKeys = ['leftUpperArm', 'leftForearm', 'leftHand', 'rightUpperArm', 'rightForearm', 'rightHand'];
+    for (let i = 0; i < weights.length; i++) {
+      const w = weights[i];
+      const isLeg = legKeys.indexOf(w.key) >= 0;
+      const isArm = armKeys.indexOf(w.key) >= 0;
+      if (!isLeg && !isArm) continue;
+      this._addLimbPushImpulse(w.key, push, str * w.w * stageMul * (opts.subtle ? 0.85 : 1.4));
+    }
+  },
+
+  _updateRagdollLegHitReactions: function (dt) {
+    const spring = 22;
+    const damp = 5.5;
+    for (let i = 0; i < LEG_BONE_KEYS.length; i++) {
+      const key = LEG_BONE_KEYS[i];
+      const st = this._hitBoneState[key];
+      if (!st) continue;
+      const av = st.angVel;
+      const ax = av.x * dt;
+      const ay = av.y * dt;
+      const az = av.z * dt;
+      if (Math.abs(ax) + Math.abs(ay) + Math.abs(az) > 1e-7) {
+        this._hitEuler.set(ax, ay, az, 'XYZ');
+        this._hitDq.setFromEuler(this._hitEuler);
+        st.offsetQuat.multiply(this._hitDq);
+        st.offsetQuat.normalize();
+      }
+
+      this._hitEuler.setFromQuaternion(st.offsetQuat, 'XYZ');
+      av.x += (-this._hitEuler.x * spring - av.x * damp) * dt;
+      av.y += (-this._hitEuler.y * spring - av.y * damp) * dt;
+      av.z += (-this._hitEuler.z * spring - av.z * damp) * dt;
+
+      if (
+        av.lengthSq() < 1e-6
+        && Math.abs(this._hitEuler.x) + Math.abs(this._hitEuler.y) + Math.abs(this._hitEuler.z) < 0.002
+      ) {
+        st.offsetQuat.identity();
+        av.set(0, 0, 0);
+      }
+    }
+  },
+
+  _applyRagdollLegHitOverlay: function () {
+    for (let i = 0; i < LEG_BONE_KEYS.length; i++) {
+      const boneKey = LEG_BONE_KEYS[i];
+      const st = this._hitBoneState[boneKey];
+      const bone = this.bones[boneKey];
+      if (!st || !bone) continue;
+      const nearId = st.angVel.lengthSq() < 1e-6
+        && Math.abs(st.offsetQuat.x) + Math.abs(st.offsetQuat.y) + Math.abs(st.offsetQuat.z) < 1e-4
+        && st.offsetQuat.w > 0.99999;
+      if (nearId) continue;
+      bone.quaternion.multiply(st.offsetQuat);
+      bone.rotation.setFromQuaternion(bone.quaternion);
+      bone.updateMatrixWorld(true);
+    }
+  },
+
+  _legHitOverlayActive: function () {
+    for (let i = 0; i < LEG_BONE_KEYS.length; i++) {
+      const st = this._hitBoneState[LEG_BONE_KEYS[i]];
+      if (!st) continue;
+      if (st.angVel.lengthSq() > 1e-6) return true;
+      if (Math.abs(st.offsetQuat.x) + Math.abs(st.offsetQuat.y) + Math.abs(st.offsetQuat.z) > 1e-4) {
+        return true;
+      }
+    }
+    return performance.now() < (this._legFlinchUntil || 0);
+  },
+
+  _heldBodyIndexSet: function () {
+    const set = {};
+    if (this._held.left >= 0) set[this._held.left] = true;
+    if (this._held.right >= 0) set[this._held.right] = true;
+    return set;
+  },
+
+  _getShatterBaseVelocity: function () {
+    this._tmpV.set(0, 0, 0);
+    if (!this.human?.bodies?.[0] || !this.b3) return this._tmpV.clone();
+    if (this.b3.b3Body_GetLinearVelocity) {
+      const v = this.b3.b3Body_GetLinearVelocity(this.human.bodies[0]);
+      this._tmpV.set(v.x, v.y, v.z);
+      const len = this._tmpV.length();
+      if (len > 3) this._tmpV.multiplyScalar(3 / len);
+    }
+    return this._tmpV.clone();
+  },
+
+  _applyRegionDamageVisual: function (regionId, stage) {
+    const RS = window.RagdollShatter;
+    const maxStage = RS?.REGION_DAMAGE_MAX || 3;
+    if (stage >= maxStage) {
+      this._hideShatteredRegionBones([regionId]);
+    }
+  },
+
+  _markRegionKeysDestroyed: function (regionKeys) {
+    if (!regionKeys?.length) return;
+    for (let i = 0; i < regionKeys.length; i++) {
+      this._shatteredRegionKeys[regionKeys[i]] = true;
+    }
+  },
+
+  _hideShatteredRegionBones: function (regionIds) {
+    const map = window.RagdollShatter?.REGION_BONE_KEYS;
+    if (!map || !this.bones) return;
+    const tiny = 0.001;
+    for (let i = 0; i < regionIds.length; i++) {
+      const keys = map[regionIds[i]];
+      if (!keys) continue;
+      for (let k = 0; k < keys.length; k++) {
+        const bone = this.bones[keys[k]];
+        if (bone) bone.scale.set(tiny, tiny, tiny);
+      }
+    }
+    if (this.skeleton) this.skeleton.update();
+  },
+
+  _isRegionShotThrough: function (regionId) {
+    return !!(regionId && this._destroyedRegionIds[regionId]);
+  },
+
+  _regionIdFromHit: function (mesh, hit) {
+    const RS = window.RagdollShatter;
+    if (!RS || !mesh || hit?.faceIndex == null) return null;
+
+    let regionId = RS.regionFromHitFace(mesh, hit.faceIndex);
+
+    if (regionId && RS.CORE_TORSO_REGIONS?.[regionId] && RS.resolveHitRegionAtPoint
+      && hit.point && this.model) {
+      const Mat4 = mesh.matrixWorld.constructor;
+      const spaceInverse = new Mat4().copy(this.model.matrixWorld).invert();
+      regionId = RS.resolveHitRegionAtPoint(
+        this._skinnedMeshes,
+        hit.point,
+        spaceInverse,
+        regionId,
+        this._shatteredRegionKeys
+      );
+    }
+    return regionId;
+  },
+
+  /** World-space ray vs posed skinned meshes (for shooter). Ignores shard meshes. */
+  raycastFromShot: function (origin, direction, maxDist) {
+    if (!this.modelLoaded) return null;
+
+    const dir = this._meshRayDir.copy(direction);
+    if (dir.lengthSq() < 1e-8) return null;
+    dir.normalize();
+
+    const raycaster = this._meshRaycaster;
+    raycaster.set(origin, dir);
+    raycaster.near = 0.02;
+    raycaster.far = maxDist || 48;
+
+    this._syncMeshWorldMatrices();
+
+    const candidates = [];
+    for (let m = 0; m < this._skinnedMeshes.length; m++) {
+      const mesh = this._skinnedMeshes[m];
+      const hits = raycaster.intersectObject(mesh, false);
+      for (let hi = 0; hi < hits.length; hi++) {
+        candidates.push({ mesh: mesh, h: hits[hi] });
+      }
+    }
+    candidates.sort((a, b) => a.h.distance - b.h.distance);
+
+    for (let i = 0; i < candidates.length; i++) {
+      const mesh = candidates[i].mesh;
+      const h = candidates[i].h;
+      const regionId = this._regionIdFromHit(mesh, h);
+      if (this._isRegionShotThrough(regionId)) continue;
+      return {
+        point: h.point.clone(),
+        normal: h.face?.normal
+          ? h.face.normal.clone().transformDirection(mesh.matrixWorld).normalize()
+          : dir.clone().negate(),
+        distance: h.distance,
+        regionId: regionId
+      };
+    }
+    return null;
+  },
+
+  _bakeShardsToWorld: function (newShards) {
+    if (!newShards?.length || !this.model) return;
+    this.model.updateMatrixWorld(true);
+    const m = this.model.matrixWorld;
+    for (let i = 0; i < newShards.length; i++) {
+      const mesh = newShards[i].mesh;
+      if (mesh) mesh.position.applyMatrix4(m);
+    }
+  },
+
+  /**
+   * Ragdoll + localized shatter: physics reaction on the dummy, shards only near impact.
+   */
+  shatterFromShot: function (impactPoint, impactNormal, shotDir, strength, primaryRegionId) {
+    if (!this.modelLoaded || !window.RagdollShatter?.fracture) return false;
+    if (!this.b3 || !this.world) return false;
+
+    strength = strength == null ? 1 : strength;
+    this._syncMeshWorldMatrices();
+    const zeroG = this._isZeroGMode();
+    const holding = this._heldHandCount() > 0;
+    if (!zeroG || !holding) {
+      const shotKick = this._shotKickVelocity(shotDir, impactNormal, strength);
+      this._releaseAllHands(shotKick);
+      this._grabCooldownUntil = performance.now() + 140;
+    }
+
+    const ref = this._skinnedMeshes[0];
+    if (!ref) return false;
+
+    this.model.updateMatrixWorld(true);
+    const Mat4 = ref.matrixWorld.constructor;
+    const spaceInverse = new Mat4().copy(this.model.matrixWorld).invert();
+    this._shatterSpaceInverse = spaceInverse;
+
+    const RS = window.RagdollShatter;
+    const collected = RS.collectRegionEntries(
+      this._skinnedMeshes,
+      impactPoint,
+      spaceInverse,
+      this._shatteredRegionKeys
+    );
+    const zones = RS.pickImpactZonesFromEntries(
+      collected.entries,
+      this._shatteredRegionKeys,
+      primaryRegionId || null
+    );
+
+    if (!zones.keys.length && !zones.surfaceOnly) {
+      console.warn('[grabbable-ragdoll] shot — no shatter zones (already destroyed there?)');
+      return false;
+    }
+
+    const damageMax = RS?.REGION_DAMAGE_MAX || 3;
+    const bodyHitsToRagdoll = RS?.BODY_HITS_TO_RAGDOLL || 5;
+    let damageStage = null;
+    let fractureKeys = zones.keys;
+    const RT = window.Box3DRagdollRetarget;
+
+    let bodyKnockdown = false;
+    if (zones.surfaceOnly) {
+      this._bodyHitCount = (this._bodyHitCount || 0) + 1;
+      bodyKnockdown = this._bodyHitCount >= bodyHitsToRagdoll;
+    }
+
+    if (!zones.surfaceOnly && zones.primaryId) {
+      const prevHits = this._regionDamage[zones.primaryId] || 0;
+      damageStage = Math.min(damageMax, prevHits + 1);
+      this._regionDamage[zones.primaryId] = damageStage;
+
+      fractureKeys = RS.keysForRegionIdFromEntries
+        ? RS.keysForRegionIdFromEntries(collected.entries, zones.primaryId)
+        : zones.keys.filter((k) => k.indexOf(zones.primaryId + ':') === 0);
+    }
+
+    const criticalDestroy = !zones.surfaceOnly
+      && zones.primaryId
+      && this._isCollapseRagdollRegion(zones.primaryId)
+      && damageStage != null
+      && damageStage >= damageMax;
+
+    const shouldCollapse = criticalDestroy || bodyKnockdown;
+
+    let reactionRegion = zones.primaryId || (zones.surfaceOnly ? 'chest' : null);
+    if (reactionRegion && RS?.CORE_TORSO_REGIONS?.[reactionRegion]) {
+      reactionRegion = 'chest';
+    }
+    if (reactionRegion && !this.ragdollActive && !shouldCollapse) {
+      this._impulseHitReaction(
+        shotDir,
+        impactNormal,
+        strength,
+        reactionRegion,
+        damageStage || 1
+      );
+      if (this._isZeroGMode() && reactionRegion && LIMB_HIT_REGIONS[reactionRegion]
+        && (reactionRegion.indexOf('Thigh') >= 0
+          || reactionRegion.indexOf('Shin') >= 0
+          || reactionRegion.indexOf('Foot') >= 0)) {
+        this._legFlinchUntil = performance.now() + 720;
+      }
+    }
+
+    if (!this._shardRoot) {
+      this._shardRoot = window.RagdollShatter.createShardRoot(ref);
+      this._shardRoot.name = 'ragdoll-shards';
+      this._shardRoot.visible = true;
+      this._shardRoot.frustumCulled = false;
+      this.el.sceneEl.object3D.add(this._shardRoot);
+      this._shardsWorldSpace = true;
+      this._shatterRefMesh = ref;
+    }
+
+    const dir = shotDir.clone().normalize();
+    const baseVel = this._getShatterBaseVelocity();
+    const newShards = window.RagdollShatter.fracture({
+      root: this._shardRoot,
+      spaceInverse: spaceInverse,
+      skinnedMeshes: this._skinnedMeshes,
+      material: ref.material,
+      impactPoint: impactPoint,
+      impactNormal: impactNormal,
+      shotDir: dir,
+      b3: this.b3,
+      world: this.world,
+      group: this.group || 1,
+      shotStrength: strength,
+      baseVelocity: baseVel.multiplyScalar(strength),
+      skipRegions: this._shatteredRegionKeys,
+      regionKeys: fractureKeys,
+      surfaceOnly: !!zones.surfaceOnly,
+      damageStage: damageStage,
+      primaryRegionId: zones.primaryId || null,
+      precomputedEntries: collected.entries,
+      precomputedV3Class: collected.V3Class
+    });
+
+    if (newShards.length || damageStage) {
+      this._bakeShardsToWorld(newShards);
+      if (!zones.surfaceOnly && zones.primaryId && damageStage) {
+        this._applyRegionDamageVisual(zones.primaryId, damageStage);
+        if (damageStage >= damageMax) {
+          this._destroyedRegionIds[zones.primaryId] = true;
+          this._markRegionKeysDestroyed(fractureKeys);
+          this._hideShatteredRegionBones([zones.primaryId]);
+        }
+      }
+      if (!this._shards) this._shards = [];
+      for (let i = 0; i < newShards.length; i++) {
+        this._shards.push(newShards[i]);
+      }
+    }
+
+    if (shouldCollapse) {
+      if (!this.ragdollActive) {
+        this._ragdollFromCriticalLoss(shotDir, impactNormal, strength, zones);
+      } else {
+        this._applyRagdollShotImpulses(shotDir, impactNormal, strength, zones, damageStage, true);
+      }
+    } else if (this.ragdollActive && this.human) {
+      this._applyRagdollShotImpulses(shotDir, impactNormal, strength, zones, damageStage, false);
+      if (RT?.apply && this.retargetState) {
+        RT.apply(this, this.b3, this.human, this.retargetState);
+      }
+    } else if (RT?.apply && this.retargetState && this.human) {
+      RT.apply(this, this.b3, this.human, this.retargetState);
+    }
+
+    console.log(
+      '[grabbable-ragdoll] shot —',
+      bodyKnockdown
+        ? 'body-knockdown ragdoll'
+        : (criticalDestroy ? 'critical-off ragdoll' : (this.ragdollActive ? 'ragdoll' : 'idle+hit-react')),
+      '+',
+      newShards.length,
+      'shards primary',
+      zones.primaryId || '?',
+      zones.surfaceOnly
+        ? ('core-crater body ' + this._bodyHitCount + '/' + bodyHitsToRagdoll)
+        : (damageStage ? 'damage ' + damageStage + '/' + damageMax : 'zones ' + zones.ids.join('+')),
+    );
+    return newShards.length > 0 || !!zones.surfaceOnly || !!damageStage;
+  },
+
+  _aimCapsuleRadius: function (segIdx) {
+    if (segIdx >= 14) return 0.048;
+    if (segIdx >= 10) return 0.052;
+    if (segIdx >= 6) return 0.062;
+    return 0.128;
+  },
+
+  _rayIntersectSphere: function (origin, dir, center, radius, maxDist, outPoint, outNormal) {
+    const oc = this._segAP.copy(origin).sub(center);
+    const b = oc.dot(dir);
+    const c = oc.dot(oc) - radius * radius;
+    const disc = b * b - c;
+    if (disc < 0) return null;
+    const s = Math.sqrt(disc);
+    let t = -b - s;
+    if (t < 0) t = -b + s;
+    if (t < 0.02 || t > maxDist) return null;
+    outPoint.copy(origin).addScaledVector(dir, t);
+    outNormal.copy(outPoint).sub(center);
+    if (outNormal.lengthSq() < 1e-8) outNormal.copy(dir).negate();
+    else outNormal.normalize();
+    return t;
+  },
+
+  /** Ray vs capsule (segment ab + radius). Returns hit distance t or null. */
+  _rayIntersectCapsule: function (origin, dir, a, b, radius, maxDist, outPoint, outNormal) {
+    const ba = this._segAB.copy(b).sub(a);
+    const oa = this._segAP.copy(origin).sub(a);
+    const baba = ba.dot(ba);
+    if (baba < 1e-8) {
+      return this._rayIntersectSphere(origin, dir, a, radius, maxDist, outPoint, outNormal);
+    }
+
+    const bard = ba.dot(dir);
+    const baoa = ba.dot(oa);
+    const rdoa = dir.dot(oa);
+    const oaoa = oa.dot(oa);
+    const aa = baba - bard * bard;
+    const bb = baba * rdoa - baoa * bard;
+    const cc = baba * oaoa - baoa * baoa - radius * radius * baba;
+    const h = bb * bb - aa * cc;
+
+    if (h >= 0 && Math.abs(aa) > 1e-8) {
+      const sqrtH = Math.sqrt(h);
+      for (let s = 0; s < 2; s++) {
+        const t = ((-bb + (s === 0 ? -sqrtH : sqrtH)) / aa);
+        if (t >= 0.02 && t <= maxDist) {
+          const y = baoa + t * bard;
+          if (y > 0 && y < baba) {
+            outPoint.copy(origin).addScaledVector(dir, t);
+            this._closestAxis.copy(a).addScaledVector(ba, y / baba);
+            outNormal.copy(outPoint).sub(this._closestAxis);
+            if (outNormal.lengthSq() < 1e-8) outNormal.copy(dir).negate();
+            else outNormal.normalize();
+            return t;
+          }
+        }
+      }
+    }
+
+    let tA = this._rayIntersectSphere(origin, dir, a, radius, maxDist, outPoint, outNormal);
+    const tB = this._rayIntersectSphere(
+      origin, dir, b, radius, maxDist, this._tmpV, this._bonePosTmp
+    );
+    if (tB != null && (tA == null || tB < tA)) {
+      outPoint.copy(this._tmpV);
+      outNormal.copy(this._bonePosTmp);
+      return tB;
+    }
+    return tA;
+  },
+
+  /**
+   * Cheap VR aim preview — bone capsules only (no skinned-mesh raycast).
+   * Accurate shot registration still uses raycastFromShot on fire.
+   */
+  raycastAimPreview: function (origin, direction, maxDist) {
+    if (!this.modelLoaded || !this.skeleton) return null;
+
+    const dir = this._meshRayDir.copy(direction);
+    if (dir.lengthSq() < 1e-8) return null;
+    dir.normalize();
+    maxDist = maxDist || 48;
+
+    this._syncMeshWorldMatrices();
+
+    let bestT = maxDist + 1;
+    let gotHit = false;
+    let bestSeg = -1;
+
+    for (let seg = 0; seg <= 15; seg++) {
+      const keys = MESH_BODY_SEGS[seg];
+      if (!keys) continue;
+      const boneA = this.bones[keys[0]];
+      const boneB = this.bones[keys[1]];
+      if (!boneA || !boneB) continue;
+      boneA.getWorldPosition(this._segA);
+      boneB.getWorldPosition(this._segB);
+      const t = this._rayIntersectCapsule(
+        origin,
+        dir,
+        this._segA,
+        this._segB,
+        this._aimCapsuleRadius(seg),
+        maxDist,
+        this._tmpV,
+        this._bonePosTmp
+      );
+      if (t != null && t < bestT) {
+        bestT = t;
+        bestSeg = seg;
+        this._closestAxis.copy(this._tmpV);
+        this._rayOrigin.copy(this._bonePosTmp);
+        gotHit = true;
+      }
+    }
+
+    if (!gotHit) return null;
+    return {
+      point: this._closestAxis.clone(),
+      normal: this._rayOrigin.clone(),
+      distance: bestT,
+      regionId: AIM_SEG_REGIONS[bestSeg] || null,
+      preview: true
+    };
   },
 
   // Distance from a point to a segment (both THREE.Vector3), reusing scratch vecs.
@@ -435,6 +1621,168 @@ AFRAME.registerComponent('grabbable-ragdoll', {
 
   _isZeroGMode: function () {
     return !!(window.BodyRiggedGravity && window.BodyRiggedGravity.isZeroG());
+  },
+
+  _yawOnlyQuat: function (src, out) {
+    this._hitEuler.setFromQuaternion(src, 'YXZ');
+    out.setFromAxisAngle(this._tmpV.set(0, 1, 0), this._hitEuler.y);
+    return out;
+  },
+
+  _getDummyZeroGVelocity: function () {
+    const v = this._zeroGVelScratch;
+    v.set(0, 0, 0);
+
+    if (this.ragdollActive && this.human?.bodies?.[0] && this.b3?.b3Body_GetLinearVelocity) {
+      const pv = this.b3.b3Body_GetLinearVelocity(this.human.bodies[0]);
+      v.set(pv.x, pv.y, pv.z);
+    }
+
+    if (this._heldHandCount() > 0) {
+      let n = 0;
+      ['left', 'right'].forEach((hand) => {
+        if (this._held[hand] < 0) return;
+        v.add(this._handVel[hand]);
+        n++;
+      });
+      if (n > 0) v.multiplyScalar(1 / n);
+    } else if (!this.ragdollActive) {
+      const rn = this._rootNudge.vel;
+      v.set(rn.x, rn.y, rn.z);
+    }
+
+    return v;
+  },
+
+  _updateZeroGLegModeBlend: function (dt) {
+    if (window.ZeroGLegs?.updateLegModeBlend) {
+      this._zeroGLegModeBlend = window.ZeroGLegs.updateLegModeBlend(
+        this._zeroGLegModeBlend,
+        this._isZeroGMode(),
+        dt
+      );
+    } else {
+      this._zeroGLegModeBlend = this._isZeroGMode() ? 1 : 0;
+    }
+  },
+
+  /** Procedural float legs (same system as the player body in zero-g). */
+  _applyZeroGLegs: function (dt) {
+    if (!this.zeroGLegs || !this.bones) return;
+    this._updateZeroGLegModeBlend(dt);
+    const blend = this._zeroGLegModeBlend;
+    if (blend <= 0.001) return;
+
+    const legReact = this._legHitOverlayActive();
+    const poseBlend = legReact ? blend * 0.55 : blend;
+
+    if (this.bones.hips && this._hipsRestPos) {
+      this.bones.hips.position.copy(this._hipsRestPos);
+    }
+
+    if (this.bones.hips) {
+      this.bones.hips.getWorldQuaternion(this._zeroGBodyQuat);
+      this._yawOnlyQuat(this._zeroGBodyQuat, this._zeroGBodyQuat);
+    } else {
+      this.el.object3D.getWorldQuaternion(this._zeroGBodyQuat);
+      this._yawOnlyQuat(this._zeroGBodyQuat, this._zeroGBodyQuat);
+    }
+
+    this.zeroGLegs.update(
+      this.bones,
+      this._getDummyZeroGVelocity(),
+      this._zeroGBodyQuat,
+      dt,
+      poseBlend
+    );
+    if (this.skeleton) this.skeleton.update();
+    if (this.model) this.model.updateMatrixWorld(true);
+  },
+
+  _ensureLegSnapQuats: function () {
+    if (this._legSnapQuats) return;
+    const THREE = window.AFRAME.THREE;
+    this._legSnapQuats = {};
+    for (let i = 0; i < LEG_BONE_KEYS.length; i++) {
+      this._legSnapQuats[LEG_BONE_KEYS[i]] = new THREE.Quaternion();
+    }
+  },
+
+  _snapshotLegBoneQuats: function () {
+    this._ensureLegSnapQuats();
+    for (let i = 0; i < LEG_BONE_KEYS.length; i++) {
+      const key = LEG_BONE_KEYS[i];
+      const bone = this.bones[key];
+      if (bone) this._legSnapQuats[key].copy(bone.quaternion);
+    }
+  },
+
+  _blendLegBonesFromPhysics: function (zeroGWeight) {
+    this._ensureLegSnapQuats();
+    zeroGWeight = Math.max(0, Math.min(1, zeroGWeight));
+    for (let i = 0; i < LEG_BONE_KEYS.length; i++) {
+      const key = LEG_BONE_KEYS[i];
+      const bone = this.bones[key];
+      if (!bone) continue;
+      bone.quaternion.copy(this._legSnapQuats[key]).slerp(bone.quaternion, zeroGWeight);
+      bone.rotation.setFromQuaternion(bone.quaternion);
+    }
+  },
+
+  _ragdollLimbMotionFactor: function () {
+    if (!this.human?.bodies || !this.b3?.b3Body_GetLinearVelocity) return 0;
+    let maxSpd = 0;
+    for (let i = 6; i <= 9; i++) {
+      const body = this.human.bodies[i];
+      if (!body) continue;
+      const v = this.b3.b3Body_GetLinearVelocity(body);
+      maxSpd = Math.max(maxSpd, Math.hypot(v.x, v.y, v.z));
+    }
+    return Math.min(1, maxSpd / 2.2);
+  },
+
+  /**
+   * Ragdoll: physics retarget drives legs; zero-g pose is cosmetic overlay only
+   * so shot impulses remain visible on the limbs.
+   */
+  _applyZeroGLegsRagdoll: function (dt) {
+    if (!this.zeroGLegs || !this.bones) return;
+    this._updateZeroGLegModeBlend(dt);
+    const modeBlend = this._zeroGLegModeBlend;
+    if (modeBlend <= 0.001) return;
+
+    const flinch = this._legHitOverlayActive();
+    if (!flinch) {
+      this._snapshotLegBoneQuats();
+
+      if (this.bones.hips && this._hipsRestPos) {
+        this.bones.hips.position.copy(this._hipsRestPos);
+      }
+
+      if (this.bones.hips) {
+        this.bones.hips.getWorldQuaternion(this._zeroGBodyQuat);
+        this._yawOnlyQuat(this._zeroGBodyQuat, this._zeroGBodyQuat);
+      } else {
+        this.el.object3D.getWorldQuaternion(this._zeroGBodyQuat);
+        this._yawOnlyQuat(this._zeroGBodyQuat, this._zeroGBodyQuat);
+      }
+
+      this.zeroGLegs.update(
+        this.bones,
+        this._getDummyZeroGVelocity(),
+        this._zeroGBodyQuat,
+        dt,
+        modeBlend
+      );
+
+      const limbMotion = this._ragdollLimbMotionFactor();
+      let cosmetic = modeBlend * (limbMotion > 0.35 ? 0.08 : 0.18);
+      cosmetic = Math.min(cosmetic, modeBlend);
+      this._blendLegBonesFromPhysics(cosmetic);
+    }
+
+    if (this.skeleton) this.skeleton.update();
+    if (this.model) this.model.updateMatrixWorld(true);
   },
 
   _isLimbBody: function (idx) {
@@ -716,14 +2064,23 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     };
   },
 
-  _syncMeshWorldMatrices: function () {
+  _syncMeshWorldMatrices: function (force) {
     if (!this.skeleton || !this.model) return;
-    const t = this.el.sceneEl?.time;
-    if (t === this._meshSyncTime) return;
-    this._meshSyncTime = t;
+    if (!force) {
+      const t = this.el.sceneEl?.time;
+      if (t === this._meshSyncTime) return;
+      this._meshSyncTime = t;
+    }
     this.el.object3D.updateMatrixWorld(true);
+    if (!this.ragdollActive && this._idleMixer) {
+      this._idleMixer.update(0);
+    }
     this.model.updateMatrixWorld(true);
     this.skeleton.update();
+    for (let i = 0; i < this._skinnedMeshes.length; i++) {
+      const mesh = this._skinnedMeshes[i];
+      mesh.updateMatrixWorld(true);
+    }
   },
 
   _meshCapsuleEndpoints: function (idx, outA, outB) {
@@ -1289,10 +2646,40 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     if (dt <= 0) return;
     this._lastDt = dt;
 
+    if (this._shards?.length && window.RagdollShatter?.syncShards) {
+      window.RagdollShatter.syncShards(this._shards, this.b3, dt, this.legIk?.queries, {
+        root: this._shardRoot,
+        refMesh: this._shatterRefMesh || this._shards[0]?.mesh,
+        spaceInverse: this._shardsWorldSpace ? null : this._shatterSpaceInverse,
+        zeroG: this._isZeroGMode()
+      });
+    }
+
+    // Grip + hand pose must run while idle too — tock uses this for first grab → ragdoll spawn.
     ['left', 'right'].forEach((hand) => {
       this._updateHand(hand, dt);
-      const pressed = this._isGrabPressed(hand);
-      this._grabPressed[hand] = pressed;
+      this._grabPressed[hand] = this._isGrabPressed(hand);
+    });
+
+    if (!this.ragdollActive) {
+      this._updateHitReactions(dt);
+      if (this._idleMixer) {
+        this._idleMixer.update(dt);
+        if (this.skeleton) this.skeleton.update();
+        this._reapplyDestroyedRegionBones();
+        if (this.model) this.model.updateMatrixWorld(true);
+      }
+      if (this._zeroGLegModeBlend > 0.001 || this._isZeroGMode()) {
+        this._applyZeroGLegs(dt);
+      }
+      this._applyHitReactionsToPose();
+      if (this.skeleton) this.skeleton.update();
+      if (this.model) this.model.updateMatrixWorld(true);
+      return;
+    }
+
+    ['left', 'right'].forEach((hand) => {
+      const pressed = this._grabPressed[hand];
 
       if (!pressed && this._held[hand] >= 0) {
         this._detachHand(hand, this._handVel[hand]);
@@ -1305,16 +2692,21 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     });
 
     this._updateHeldBodies();
+    this._maintainFreeRagdoll(dt);
   },
 
   tock: function (time, deltaTime) {
     if (!this.modelLoaded || !this.b3) return;
+    const dt = Math.min(deltaTime / 1000, 0.05);
 
     const palmProbe = this._rayOrigin;
     const palmContact = this._bonePosTmp;
 
     ['left', 'right'].forEach((hand) => {
-      if (!this._grabPressed[hand] || this._held[hand] >= 0) return;
+      const pressed = this._isGrabPressed(hand);
+      this._grabPressed[hand] = pressed;
+      if (!pressed || this._held[hand] >= 0) return;
+      if (performance.now() < (this._grabCooldownUntil || 0)) return;
       const query = this._getPlayerPalm(hand, palmProbe, palmContact)
         ? palmContact
         : this._handPos[hand];
@@ -1332,7 +2724,16 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     }
 
     if (this.ragdollActive && this.human && this.retargetState && window.Box3DRagdollRetarget) {
+      if (this._isZeroGMode()) {
+        this._updateRagdollLegHitReactions(dt);
+      }
       window.Box3DRagdollRetarget.apply(this, this.b3, this.human, this.retargetState);
+      if (this._isZeroGMode()) {
+        this._applyRagdollLegHitOverlay();
+      }
+      if (this._zeroGLegModeBlend > 0.001 || this._isZeroGMode()) {
+        this._applyZeroGLegsRagdoll(dt);
+      }
     }
   }
 });

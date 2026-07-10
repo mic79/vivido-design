@@ -38,6 +38,9 @@
       this.directionMaintainThreshold = options.directionMaintainThreshold ?? 0.15;
       this._localVel = new THREE.Vector3();
       this._invBody = new THREE.Quaternion();
+      this._legGroundedQ = new THREE.Quaternion();
+      this._legTargetQ = new THREE.Quaternion();
+      this._legEuler = new THREE.Euler();
     }
 
     /**
@@ -45,9 +48,12 @@
      * @param {THREE.Vector3} worldVelocity player / torso world velocity
      * @param {THREE.Quaternion} bodyWorldQuat torso orientation
      * @param {number} dt seconds
+     * @param {number} modeBlend 0 = grounded leg pose on bones, 1 = full zero-g pose
      */
-    update(bones, worldVelocity, bodyWorldQuat, dt) {
+    update(bones, worldVelocity, bodyWorldQuat, dt, modeBlend) {
       if (!bones || !worldVelocity) return;
+      modeBlend = modeBlend == null ? 1 : Math.max(0, Math.min(1, modeBlend));
+      if (modeBlend <= 0) return;
       const safeDt = Math.min(Math.max(dt || 0.016, 0.001), 0.1);
 
       this._invBody.copy(bodyWorldQuat || new THREE.Quaternion()).invert();
@@ -172,11 +178,27 @@
         );
       }
 
-      this.applyLegPose(bones, 'left', this.smoothedLegPose.left);
-      this.applyLegPose(bones, 'right', this.smoothedLegPose.right);
+      this.applyLegPose(bones, 'left', this.smoothedLegPose.left, modeBlend);
+      this.applyLegPose(bones, 'right', this.smoothedLegPose.right, modeBlend);
     }
 
-    applyLegPose(bones, side, pose) {
+    _blendBoneRotation(bone, targetEuler, modeBlend) {
+      if (!bone) return;
+      if (modeBlend >= 0.999) {
+        bone.rotation.copy(targetEuler);
+        return;
+      }
+      this._legGroundedQ.copy(bone.quaternion);
+      this._legTargetQ.setFromEuler(targetEuler);
+      this._legGroundedQ.slerp(this._legTargetQ, modeBlend);
+      bone.quaternion.copy(this._legGroundedQ);
+      bone.rotation.setFromQuaternion(bone.quaternion);
+    }
+
+    applyLegPose(bones, side, pose, modeBlend) {
+      modeBlend = modeBlend == null ? 1 : Math.max(0, Math.min(1, modeBlend));
+      if (modeBlend <= 0) return;
+
       const upLegBone = bones[`${side}UpLeg`] || bones[side === 'left' ? 'leftThigh' : 'rightThigh'];
       const legBone = bones[`${side}Leg`] || bones[side === 'left' ? 'leftKnee' : 'rightKnee'];
       const footBone = bones[`${side}Foot`] || bones[side === 'left' ? 'leftFoot' : 'rightFoot'];
@@ -188,13 +210,33 @@
       const ankleFlexRad = pose.ankleFlex * DEG;
       const ankleSwayRad = (pose.ankleSway || 0) * DEG;
 
-      // Mixamo upper-leg Y points down the limb — 180° Z flip + spread.
-      upLegBone.rotation.set(hipFlexRad, 0, Math.PI + hipSpreadRad, 'XYZ');
-      legBone.rotation.set(-kneeBendRad, 0, 0, 'XYZ');
-      footBone.rotation.set(ankleFlexRad, 0, ankleSwayRad, 'XYZ');
+      this._blendBoneRotation(
+        upLegBone,
+        this._legEuler.set(hipFlexRad, 0, Math.PI + hipSpreadRad, 'XYZ'),
+        modeBlend
+      );
+      this._blendBoneRotation(
+        legBone,
+        this._legEuler.set(-kneeBendRad, 0, 0, 'XYZ'),
+        modeBlend
+      );
+      this._blendBoneRotation(
+        footBone,
+        this._legEuler.set(ankleFlexRad, 0, ankleSwayRad, 'XYZ'),
+        modeBlend
+      );
     }
+  }
+
+  /** Smooth 0↔1 blend for grounded ↔ zero-g leg poses (~0.35s default). */
+  function updateLegModeBlend(current, isZeroG, dt, rate) {
+    const target = isZeroG ? 1 : 0;
+    const blendRate = rate == null ? 5.5 : rate;
+    const safeDt = Math.min(Math.max(dt || 0.016, 0.001), 0.1);
+    return current + (target - current) * Math.min(1, safeDt * blendRate);
   }
 
   window.ZeroGLegs = ZeroGLegs;
   window.ZeroGLegs.DEFAULT_POSES = DEFAULT_POSES;
+  window.ZeroGLegs.updateLegModeBlend = updateLegModeBlend;
 })();

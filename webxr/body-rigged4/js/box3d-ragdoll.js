@@ -190,12 +190,12 @@
       refP: { x: 0.418, y: 1.281, z: 0.144 },
       refQ: { v: { x: 0.165048, y: 0.563437, z: -0.802002 }, s: 0.109959 },
       c1: { x: 0.0, y: 0.0, z: 0.0 }, c2: { x: -0.048, y: 0.012, z: 0.085 },
-      radius: 0.042, groupFilter: false,
+      radius: 0.045, groupFilter: false,
       joint: {
-        type: 'spherical',
+        type: 'revolute',
         localFrameA: { p: { x: -0.115, y: 0.032, z: 0.208 }, q: { v: { x: 0.503803, y: -0.029831, z: 0.858168 }, s: 0.094017 } },
-        localFrameB: { p: { x: 0.0, y: 0.0, z: 0.0 }, q: { v: { x: -1.0, y: 0.0, z: 0.0 }, s: 0.0 } },
-        swing: 35.0 * DEG, twistLo: -25.0 * DEG, twistHi: 25.0 * DEG, friction: 0.6
+        localFrameB: { p: { x: 0.0, y: 0.0, z: 0.0 }, q: { v: { x: 0.503803, y: -0.029831, z: 0.858168 }, s: 0.094017 } },
+        swing: 0, twistLo: -42.0 * DEG, twistHi: 42.0 * DEG, friction: 1.6
       }
     },
     {
@@ -203,12 +203,12 @@
       refP: { x: -0.418, y: 1.281, z: 0.144 },
       refQ: { v: { x: 0.165048, y: -0.563437, z: 0.802002 }, s: 0.109959 },
       c1: { x: 0.0, y: 0.0, z: 0.0 }, c2: { x: 0.048, y: 0.012, z: 0.085 },
-      radius: 0.042, groupFilter: false,
+      radius: 0.045, groupFilter: false,
       joint: {
-        type: 'spherical',
+        type: 'revolute',
         localFrameA: { p: { x: 0.115, y: 0.032, z: 0.208 }, q: { v: { x: -0.029831, y: 0.503803, z: -0.094017 }, s: -0.858169 } },
-        localFrameB: { p: { x: 0.0, y: 0.0, z: 0.0 }, q: { v: { x: -1.0, y: 0.0, z: 0.0 }, s: 0.0 } },
-        swing: 35.0 * DEG, twistLo: -25.0 * DEG, twistHi: 25.0 * DEG, friction: 0.6
+        localFrameB: { p: { x: 0.0, y: 0.0, z: 0.0 }, q: { v: { x: -0.029831, y: 0.503803, z: -0.094017 }, s: -0.858169 } },
+        swing: 0, twistLo: -42.0 * DEG, twistHi: 42.0 * DEG, friction: 1.6
       }
     }
   ];
@@ -327,6 +327,7 @@
         def.enableLimit = true;
         let lo = j.twistLo;
         let hi = j.twistHi;
+        const isWrist = bone.name === 'hand_l' || bone.name === 'hand_r';
         // Grabbable-only: widen elbow hinge so forearms fold more easily under gravity/drag.
         if (floppyLimbs && (bone.name === 'lower_arm_l' || bone.name === 'lower_arm_r')) {
           lo -= 20.0 * DEG;
@@ -338,7 +339,8 @@
         def.hertz = hertz;
         def.dampingRatio = damping;
         def.enableMotor = enableJointMotors;
-        def.maxMotorTorque = enableJointMotors ? j.friction * friction : 0;
+        const motorScale = isWrist ? 2.8 : 1.0;
+        def.maxMotorTorque = enableJointMotors ? j.friction * friction * motorScale : 0;
         joints.push(b3.b3CreateRevoluteJoint(world, def));
       } else {
         const def = b3.b3DefaultSphericalJointDef();
@@ -354,11 +356,6 @@
         // near T-pose and prevent the elbow from getting leverage to fold.
         if (floppyLimbs && (bone.name === 'upper_arm_l' || bone.name === 'upper_arm_r')) {
           swing = 75.0 * DEG;
-          twistLo = -40.0 * DEG;
-          twistHi = 40.0 * DEG;
-        }
-        if (floppyLimbs && (bone.name === 'hand_l' || bone.name === 'hand_r')) {
-          swing = 55.0 * DEG;
           twistLo = -40.0 * DEG;
           twistHi = 40.0 * DEG;
         }
@@ -449,6 +446,16 @@
       if (!body) continue;
       if (human.dynamicFlags && !human.dynamicFlags[i]) continue;
       b3.b3Body_SetLinearVelocity(body, vel);
+      if (b3.b3Body_SetAwake) b3.b3Body_SetAwake(body, true);
+    }
+  }
+
+  /** Keep ragdoll bodies simulating — sleeping or stale constraints can freeze mid-air. */
+  function wakeAllHumanBodies(b3, human) {
+    if (!b3 || !human?.bodies) return;
+    for (let i = 0; i < human.bodies.length; i++) {
+      const body = human.bodies[i];
+      if (!body) continue;
       if (b3.b3Body_SetAwake) b3.b3Body_SetAwake(body, true);
     }
   }
@@ -655,6 +662,7 @@
     translateHuman,
     rotateHumanYaw,
     setHumanVelocity,
+    wakeAllHumanBodies,
     syncHumanToThree,
     ensureMirrorVisualMeshes,
     syncMirroredHumanToThree

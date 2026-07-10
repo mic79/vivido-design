@@ -97,9 +97,9 @@
 
     _addSceneColliders() {
       const wallDef = this.b3.b3DefaultBodyDef();
-      wallDef.position = { x: 2, y: 1, z: -1 };
+      wallDef.position = { x: 2.5, y: 1, z: -1 };
       const wall = this.b3.b3CreateBody(this.world, wallDef);
-      this.b3.b3CreateBoxShape(wall, this._shapeDef(), 0.1, 1.0, 1.0);
+      this.b3.b3CreateBoxShape(wall, this._shapeDef(), 0.2, 1.0, 1.0);
 
       const pillarDef = this.b3.b3DefaultBodyDef();
       pillarDef.position = { x: -1.5, y: 1, z: -1.5 };
@@ -465,10 +465,9 @@
         this.world,
         position,
         this.ragdollGroup++,
-        // Joint friction scales each joint's motor torque, i.e. joint stiffness. At
-        // 1.0 the joints were stiff enough to hold a leg straight up against gravity
-        // (not ragdoll-like). Keep it low so limbs flop down and settle naturally.
-        opts.jointFriction ?? 0.1,
+        // Joint friction scales each joint's motor torque (stiffness). Wrists need
+        // enough resistance to track the forearm instead of spinning freely.
+        opts.jointFriction ?? 0.14,
         undefined,
         undefined,
         { dynamicBones: opts.dynamicBones || null }

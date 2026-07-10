@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Leg IK for A-Frame Mixamo bodies — Box3D physics (body-rigged4)
  */
 (function () {
@@ -1402,7 +1402,7 @@
       const pipeRadius = 0.075;
       const pipeHeight = Math.max(0.5, stairsHeight * 2);
       const halfH = pipeHeight * 0.5;
-      // Corner nearest the red test wall (x=2, z=-1): low X, high Z on the stairs footprint.
+      // Corner nearest the red test wall (x=2.5, z=-1): low X, high Z on the stairs footprint.
       const pipeX = stairsBox.min.x + pipeRadius;
       const pipeZ = stairsBox.max.z - pipeRadius;
       const pipeY = halfH;
@@ -1610,7 +1610,10 @@
       if (!comp) return;
       comp._ragdollPausedAnim = false;
       if (comp.model) comp.model.visible = true;
-      if (comp.mixer && comp.animClips?.idle) {
+      if (comp._restoreBindPose) {
+        comp._restoreBindPose();
+        comp.currentAnim = null;
+      } else if (comp.mixer && comp.animClips?.idle) {
         const idle = comp.mixer.clipAction(comp.animClips.idle);
         idle.reset();
         idle.setLoop(THREE.LoopRepeat, Infinity);
@@ -1980,7 +1983,9 @@
       const fp = dotFx.frozenPos;
       const rig = document.getElementById('rig');
       if (rig) rig.object3D.position.set(fp.x, fp.y, fp.z);
-      if (this.physics) {
+      // Capsule is disabled during ragdoll — don't rewrite its translation or the
+      // rig will jump to the stale spawn point on the next ragdoll exit.
+      if (this.physics && !this.ragdollActive) {
         this.physics.setPlayerTranslation(fp.x, fp.y, fp.z);
       }
       if (this._playerMov) this._playerMov.set(0, 0, 0);
