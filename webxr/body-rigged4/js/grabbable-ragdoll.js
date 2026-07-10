@@ -662,14 +662,6 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     return !!window.RagdollShatter?.isBucketCacheReady?.(this._shatterBucketCache);
   },
 
-  _shotPatchRegionIds: function (primaryRegionId) {
-    if (!primaryRegionId) return null;
-    const neighbors = window.RagdollShatter?.REGION_NEIGHBORS?.[primaryRegionId] || [];
-    const ids = [primaryRegionId];
-    for (let i = 0; i < neighbors.length; i++) ids.push(neighbors[i]);
-    return ids;
-  },
-
   /** One-time full mesh bake at rest pose — never per-frame. */
   _initShatterBucketCache: function () {
     const RS = window.RagdollShatter;
@@ -1356,14 +1348,11 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     if (!ref) return false;
 
     const RS = window.RagdollShatter;
-    const patchIds = this._shotPatchRegionIds(primaryRegionId);
-    if (patchIds) this._patchShotBuckets(patchIds);
-
     const collectOpts = {
       bucketStore: this._shatterBucketCache,
       primaryRegionId: primaryRegionId || null
     };
-    const collected = RS.collectRegionEntries(
+    let collected = RS.collectRegionEntries(
       this._skinnedMeshes,
       impactPoint,
       this._shatterSpaceInverse,
@@ -1375,26 +1364,6 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       this._shatteredRegionKeys,
       primaryRegionId || null
     );
-
-    if (zones.ids?.length && patchIds) {
-      let needsExtra = false;
-      for (let i = 0; i < zones.ids.length; i++) {
-        if (patchIds.indexOf(zones.ids[i]) < 0) {
-          needsExtra = true;
-          break;
-        }
-      }
-      if (needsExtra) {
-        this._patchShotBuckets(zones.ids);
-        collected.entries = RS.collectFromCatalog(
-          this._shatterBucketCache,
-          impactPoint,
-          this._shatterSpaceInverse,
-          this._shatteredRegionKeys,
-          zones.ids
-        ).entries;
-      }
-    }
 
     if (!zones.keys.length && !zones.surfaceOnly) {
       console.warn('[grabbable-ragdoll] shot — no shatter zones (already destroyed there?)');
@@ -1479,10 +1448,36 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       RT.apply(this, this.b3, this.human, this.retargetState);
     }
 
-    if (!zones.surfaceOnly && zones.primaryId && damageStage != null && damageStage >= damageMax) {
-      this._destroyedRegionIds[zones.primaryId] = true;
-      this._markRegionKeysDestroyed(fractureKeys);
-      this._hideShatteredRegionBones([zones.primaryId]);
+    if (zones.ids?.length) {
+      this._syncMeshWorldMatrices(true);
+      this._updateShatterSpaceInverse();
+      this._patchShotBuckets(zones.ids);
+      collected = RS.collectFromCatalog(
+        this._shatterBucketCache,
+        impactPoint,
+        this._shatterSpaceInverse,
+        this._shatteredRegionKeys,
+        zones.ids
+      );
+      if (!zones.surfaceOnly && zones.primaryId) {
+        fractureKeys = RS.keysForRegionIdFromEntries
+          ? RS.keysForRegionIdFromEntries(collected.entries, zones.primaryId)
+          : zones.keys.filter((k) => k.indexOf(zones.primaryId + ':') === 0);
+      }
+    }
+
+    const fullRegionDestroy = !zones.surfaceOnly
+      && zones.primaryId
+      && damageStage != null
+      && damageStage >= damageMax;
+
+    // Full destroy must use every baked bucket for the region, not just proximity entries.
+    if (fullRegionDestroy && RS.catalogKeysForRegionIds) {
+      fractureKeys = RS.catalogKeysForRegionIds(
+        this._shatterBucketCache,
+        [zones.primaryId],
+        this._shatteredRegionKeys
+      );
     }
 
     const newShards = window.RagdollShatter.fracture({
@@ -1505,12 +1500,21 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       primaryRegionId: zones.primaryId || null,
       precomputedEntries: collected.entries,
       precomputedV3Class: collected.V3Class,
-      bucketStore: this._shatterBucketCache
+      bucketStore: this._shatterBucketCache,
+      primaryKeyOverride: zones.primaryKey || null,
+      maxShardsPerShot: fullRegionDestroy ? RS.MAX_SHARDS_FULL_DESTROY : null
     });
+
+    // Mark regions shattered only after fracture — marking before skipRegions blocked the final blow.
+    if (fullRegionDestroy) {
+      this._destroyedRegionIds[zones.primaryId] = true;
+      this._markRegionKeysDestroyed(fractureKeys);
+      this._hideShatteredRegionBones([zones.primaryId]);
+    }
 
     if (newShards.length || damageStage) {
       this._bakeShardsToWorld(newShards);
-      if (!zones.surfaceOnly && zones.primaryId && damageStage) {
+      if (!zones.surfaceOnly && zones.primaryId && damageStage && !fullRegionDestroy) {
         this._applyRegionDamageVisual(zones.primaryId, damageStage);
       }
       if (!this._shards) this._shards = [];

@@ -111,6 +111,15 @@
       });
     }
 
+    addStaticBox(x, y, z, halfX, halfY, halfZ, opts) {
+      if (!this.b3 || !this.world) return null;
+      const def = this.b3.b3DefaultBodyDef();
+      def.position = { x, y, z };
+      const body = this.b3.b3CreateBody(this.world, def);
+      this.b3.b3CreateBoxShape(body, this._shapeDef(opts), halfX, halfY, halfZ);
+      return body;
+    }
+
     addTrimeshFromObject(model) {
       const vertices = [];
       const indices = [];

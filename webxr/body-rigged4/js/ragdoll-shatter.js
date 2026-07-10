@@ -518,12 +518,14 @@
   const REGION_DAMAGE_MAX = 3;
   /** Core torso hits (chest / belly / groin) before the dummy collapses into ragdoll. */
   const BODY_HITS_TO_RAGDOLL = 5;
-  const CRATER_RADIUS_BY_STAGE = { 1: 0.085, 2: 0.14 };
-  const MAX_CRATER_SHARDS_BY_STAGE = { 1: 4, 2: 9 };
-  /** Hard cap on convex debris spawned from a single shot (keeps fracture off the stutter cliff). */
-  const MAX_SHARDS_PER_SHOT = 10;
+  const CRATER_RADIUS_BY_STAGE = { 1: 0.095, 2: 0.155 };
+  const MAX_CRATER_SHARDS_BY_STAGE = { 1: 6, 2: 12 };
+  /** Per-shot spawn budget — enough debris for impact feel without stutter. */
+  const MAX_SHARDS_PER_SHOT = 28;
+  /** Final blow that tears off a region — needs more pieces to replace hidden skin. */
+  const MAX_SHARDS_FULL_DESTROY = 52;
   /** Cap live debris — oldest shards are removed when this limit is exceeded. */
-  const MAX_ACTIVE_SHARDS = 96;
+  const MAX_ACTIVE_SHARDS = 128;
   let _shardSpawnSeq = 0;
 
   /** Box3D ragdoll body names to activate when a region is fully destroyed (pelvis stays kinematic). */
@@ -870,6 +872,24 @@
     if (!entries?.length || !regionId) return keys;
     for (let i = 0; i < entries.length; i++) {
       if (entries[i].id === regionId) keys.push(entries[i].key);
+    }
+    return keys;
+  }
+
+  /** All baked material buckets for region ids (not proximity-filtered). */
+  function catalogKeysForRegionIds(store, regionIds, skipRegions) {
+    const keys = [];
+    const catalog = store?.entriesCatalog;
+    if (!catalog || !regionIds?.length) return keys;
+    for (let r = 0; r < regionIds.length; r++) {
+      const list = catalog[regionIds[r]];
+      if (!list) continue;
+      for (let i = 0; i < list.length; i++) {
+        const key = list[i].key;
+        if (skipRegions && skipRegions[key]) continue;
+        if (list[i].bucket?.positions?.length < 12) continue;
+        keys.push(key);
+      }
     }
     return keys;
   }
@@ -1378,6 +1398,8 @@
     BODY_HITS_TO_RAGDOLL,
     MAX_ACTIVE_SHARDS,
     MAX_SHARDS_PER_SHOT,
+    MAX_SHARDS_FULL_DESTROY,
+    catalogKeysForRegionIds,
     REGION_PHYSICS_BONES,
     physicsBonesForRegionIds,
     LIMB_DAMAGE_CHAINS,
@@ -1474,7 +1496,9 @@
         primaryRegionId = null,
         precomputedEntries = null,
         precomputedV3Class = null,
-        bucketStore = null
+        bucketStore = null,
+        primaryKeyOverride = null,
+        maxShardsPerShot = null
       } = opts;
 
       if (!root || !skinnedMeshes?.length || !b3 || !world) return [];
@@ -1500,7 +1524,7 @@
         return [];
       }
 
-      const zones = pickImpactZones(bucketEntries, skipRegions);
+      const zones = pickImpactZones(bucketEntries, skipRegions, primaryRegionId || null);
       const keysToShatter = regionKeys || zones.keys;
       if (!keysToShatter.length) return [];
 
@@ -1509,8 +1533,17 @@
         keyLookup[keysToShatter[k]] = true;
       }
 
-      const factory = createRenderFactory(skinnedMeshes[0]);
+      const factory = bucketStore?.factory || createRenderFactory(skinnedMeshes[0]);
       const str = Math.max(0.35, shotStrength);
+
+      const primaryKey = primaryKeyOverride || zones.primaryKey || bucketEntries[0].key;
+      const primaryId = primaryRegionId || zones.primaryId;
+      const stage = damageStage == null ? REGION_DAMAGE_MAX : damageStage;
+      const fullDestroy = !surfaceOnly && stage >= REGION_DAMAGE_MAX;
+
+      const shardBudget = maxShardsPerShot == null
+        ? (fullDestroy ? MAX_SHARDS_FULL_DESTROY : MAX_SHARDS_PER_SHOT)
+        : maxShardsPerShot;
 
       const localImpact = new V3Class().copy(impactPoint);
       if (spaceInverse) localImpact.applyMatrix4(spaceInverse);
@@ -1524,20 +1557,24 @@
       if (worldNormal.lengthSq() < 1e-8) worldNormal.copy(shotDir).negate();
       worldNormal.normalize();
 
-      const primaryKey = zones.primaryKey || bucketEntries[0].key;
-      const primaryId = primaryRegionId || zones.primaryId;
-      const stage = damageStage == null ? REGION_DAMAGE_MAX : damageStage;
-      const fullDestroy = !surfaceOnly && stage >= REGION_DAMAGE_MAX;
       const shards = [];
       const base = baseVelocity
         ? new V3Class(baseVelocity.x, baseVelocity.y, baseVelocity.z)
         : new V3Class();
       clampVelocity(base, 3 * str);
 
+      const workEntries = bucketEntries.slice();
+      workEntries.sort((a, b) => {
+        const aPrimary = a.key === primaryKey || a.id === primaryId;
+        const bPrimary = b.key === primaryKey || b.id === primaryId;
+        if (aPrimary !== bPrimary) return aPrimary ? -1 : 1;
+        return a.dist - b.dist;
+      });
+
       let shatteredRegions = 0;
 
-      for (let r = 0; r < bucketEntries.length; r++) {
-        const entry = bucketEntries[r];
+      for (let r = 0; r < workEntries.length; r++) {
+        const entry = workEntries[r];
         if (!keyLookup[entry.key]) continue;
         if (skipRegions && skipRegions[entry.key]) continue;
         if (!surfaceOnly && stage < REGION_DAMAGE_MAX && entry.id !== primaryId) continue;
@@ -1568,9 +1605,9 @@
           splitOpts.maxDepth = isPartialCrater ? 4 : 5;
           splitOpts.extentScale = isPartialCrater ? 0.38 : 0.32;
         } else if (!isHit) {
-          splitOpts.maxDepth = Math.min(splitOpts.maxDepth, 3);
-        } else if (fullDestroy) {
           splitOpts.maxDepth = Math.min(splitOpts.maxDepth, 4);
+        } else if (fullDestroy) {
+          splitOpts.maxDepth = Math.max(splitOpts.maxDepth, 6);
         }
 
         let impulse;
@@ -1627,7 +1664,7 @@
         if (!pieces.length) continue;
 
         for (let p = 0; p < pieces.length; p++) {
-          if (shards.length >= MAX_SHARDS_PER_SHOT) break;
+          if (shards.length >= shardBudget) break;
           const shotUnit = new V3Class().copy(shotDir);
           if (shotUnit.lengthSq() < 1e-8) shotUnit.set(0, 0, -1);
           else shotUnit.normalize();
@@ -1660,7 +1697,7 @@
             )
           );
         }
-        if (shards.length >= MAX_SHARDS_PER_SHOT) break;
+        if (shards.length >= shardBudget) break;
       }
 
       root.updateMatrixWorld(true);
