@@ -67,6 +67,428 @@
       const SPAWN_LATERAL_OFFSETS = [2, -2, 3.5, -3.5]; // ~1m to the side of the 1m-radius goal; flank it
       const SPAWN_HEIGHT = 2;
 
+      // --- Goalie behavior (shared) + optional temporary test mode ---
+      // Test mode: enable with ?goalieTest=1 or toggleGoalieTest(true). Off by default.
+      // Integrated: when a team has 2+ bots and no humans, and opponents threaten with the ball,
+      // the bot nearest its own goal enters goalie mode (omnidirectional crease play).
+      const GOALIE_STANDOFF = 0.5;
+      const GOALIE_ROAM_RADIUS = 1.0;
+      const GOALIE_MAX_SPEED = 2.5;
+      const GOALIE_STEER = 3.2;
+      const GOALIE_ARRIVE_EPS = 0.12;
+      const GOALIE_ENGAGE_DIST = 12;
+      const GOALIE_LEASH_SOFT = 0.75;
+      const GOALIE_LEASH_ARM_DIST = 2.5; // only leash once this close to base (travel freely before that)
+      const GOALIE_EXIT_NO_THREAT_MS = 5000;
+      // Temporary test-mode layout (blue goalie vs red shooter)
+      const GOALIE_TEST_BOT_COLOR = 'blue';
+      const GOALIE_TEST_BOT_ID = 'zerog-bot-blue';
+      const GOALIE_TEST_PLAYER_TEAM = 'red';
+      const GOALIE_TEST_BALL_AHEAD = 0.4;
+      // Back-compat aliases used by older goalie-test helpers
+      const GOALIE_TEST_STANDOFF = GOALIE_STANDOFF;
+      const GOALIE_TEST_ROAM_RADIUS = GOALIE_ROAM_RADIUS;
+      const GOALIE_TEST_MAX_SPEED = GOALIE_MAX_SPEED;
+      const GOALIE_TEST_STEER = GOALIE_STEER;
+      const GOALIE_TEST_ARRIVE_EPS = GOALIE_ARRIVE_EPS;
+      const GOALIE_TEST_ENGAGE_DIST = GOALIE_ENGAGE_DIST;
+      const GOALIE_TEST_LEASH_SOFT = GOALIE_LEASH_SOFT;
+      const GOALIE_TEST_THRUST_SCALE = 0.55;
+
+      const goalieLastOpponentPossession = { red: 0, blue: 0 };
+      const goalieAssignedBotId = { red: null, blue: null };
+
+      (function initGoalieTestFlag() {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          if (params.has('goalieTest')) {
+            const v = params.get('goalieTest');
+            window.__goalieTest = v !== '0' && v !== 'false';
+          } else {
+            window.__goalieTest = false; // normal play by default
+          }
+        } catch (e) {
+          window.__goalieTest = false;
+        }
+      })();
+
+      function isGoalieTestMode() {
+        return !!window.__goalieTest;
+      }
+
+      function getGoalieBaseForTeam(team) {
+        const goalZ = TEAM_GOAL_Z[team];
+        if (goalZ === undefined) return { x: 0, y: 0, z: 0, rotY: 0 };
+        const towardCenter = goalZ < 0 ? 1 : -1;
+        const rotY = goalZ < 0 ? 180 : 0;
+        return {
+          x: 0,
+          y: 0,
+          z: goalZ + towardCenter * GOALIE_STANDOFF,
+          rotY
+        };
+      }
+
+      function getGoalieFaceFieldDirForTeam(team) {
+        const goalZ = TEAM_GOAL_Z[team];
+        if (goalZ === undefined) return new THREE.Vector3(0, 0, -1);
+        return new THREE.Vector3(0, 0, goalZ < 0 ? 1 : -1);
+      }
+
+      function getGoalieTestGoalieSpawn() {
+        return getGoalieBaseForTeam(GOALIE_TEST_BOT_COLOR);
+      }
+
+      function getGoalieTestFaceFieldDir() {
+        return getGoalieFaceFieldDirForTeam(GOALIE_TEST_BOT_COLOR);
+      }
+
+      function getGoalieTestPlayerSpawn() {
+        const oppZ = TEAM_GOAL_Z[GOALIE_TEST_BOT_COLOR];
+        return { x: 0, y: 0, z: oppZ * 0.75, rotY: 180 };
+      }
+
+      function getGoalieTestBallSpawn() {
+        const p = getGoalieTestPlayerSpawn();
+        return { x: p.x, y: SPAWN_HEIGHT - 0.5, z: p.z + GOALIE_TEST_BALL_AHEAD };
+      }
+
+      function isHumanPlayerId(id) {
+        return !!(id && String(id).startsWith('player_'));
+      }
+
+      function countHumansOnTeam(team) {
+        if (typeof playerTeams === 'undefined') return 0;
+        if (isMultiplayer && activePlayers.size > 1) {
+          let n = 0;
+          activePlayers.forEach((id) => {
+            if (isHumanPlayerId(id) && playerTeams.get(id) === team) n++;
+          });
+          return n;
+        }
+        const localId = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+        return playerTeams.get(localId) === team ? 1 : 0;
+      }
+
+      function getActiveBotsOnTeam(team) {
+        const list = [];
+        document.querySelectorAll('[zerog-bot]').forEach((el) => {
+          const bot = el.components['zerog-bot'];
+          if (!bot || !bot.body || !bot.data.enabled) return;
+          if (el.getAttribute('visible') === false || el.getAttribute('visible') === 'false') return;
+          if ((bot.data.team || '') !== team) return;
+          list.push({ el, bot, id: bot.getMyOwnerId() });
+        });
+        return list;
+      }
+
+      function getCaptureBallOwnerTeam() {
+        const captureBall = document.querySelector('#capture-ball');
+        if (!captureBall || !captureBall.components['zerog-ball']) return null;
+        const bc = captureBall.components['zerog-ball'];
+        let owner = bc.currentOwner;
+        if (!owner && bc.isGrabbed) {
+          owner = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+        }
+        if (!owner) return null;
+        if (typeof playerTeams !== 'undefined' && playerTeams.has(owner)) {
+          return playerTeams.get(owner);
+        }
+        // Fallbacks if playerTeams entry is missing.
+        if (owner === 'bot-red') return 'red';
+        if (owner === 'bot-blue' || owner === 'bot-green') return 'blue';
+        if (String(owner).startsWith('player_')) {
+          const localId = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+          return (typeof playerTeams !== 'undefined' && playerTeams.get(localId)) || 'red';
+        }
+        return null;
+      }
+
+      // Pick/clear per-team goalie bots for integrated (non-test) play.
+      function updateGoalieAssignments() {
+        if (gameMode !== 'capture' || isGoalieTestMode()) {
+          ['red', 'blue'].forEach((team) => { goalieAssignedBotId[team] = null; });
+          document.querySelectorAll('[zerog-bot]').forEach((el) => {
+            const bot = el.components['zerog-bot'];
+            if (bot) bot._isGoalie = false;
+          });
+          return;
+        }
+
+        // Ensure bot team ids exist for possession checks.
+        if (typeof playerTeams !== 'undefined') {
+          if (!playerTeams.has('bot-red')) playerTeams.set('bot-red', 'red');
+          if (!playerTeams.has('bot-blue')) playerTeams.set('bot-blue', 'blue');
+          if (!playerTeams.has('bot-green')) playerTeams.set('bot-green', 'blue');
+        }
+
+        const captureBall = document.querySelector('#capture-ball');
+        let ballZ = 0;
+        if (captureBall && captureBall.object3D) {
+          const bp = new THREE.Vector3();
+          captureBall.object3D.getWorldPosition(bp);
+          ballZ = bp.z;
+        }
+
+        const ownerTeam = getCaptureBallOwnerTeam();
+        const now = Date.now();
+
+        ['red', 'blue'].forEach((team) => {
+          const bots = getActiveBotsOnTeam(team);
+          const humans = countHumansOnTeam(team);
+          const eligible = bots.length >= 2 && humans === 0;
+
+          const opponentHasBall = !!(ownerTeam && ownerTeam !== team);
+          if (opponentHasBall) {
+            goalieLastOpponentPossession[team] = now;
+          }
+
+          const lastThreat = goalieLastOpponentPossession[team] || 0;
+          const msSinceThreat = now - lastThreat;
+
+          // Goalie whenever the opponent has the ball (own half OR opponent's half),
+          // and for 5s after they lose possession.
+          const wantGoalie = eligible && (
+            opponentHasBall ||
+            (lastThreat > 0 && msSinceThreat < GOALIE_EXIT_NO_THREAT_MS)
+          );
+
+          if (!wantGoalie) {
+            if (goalieAssignedBotId[team]) {
+              console.log(`🥅 ${team} goalie OFF (oppBall=${opponentHasBall}, ms=${msSinceThreat}, z=${ballZ.toFixed(1)})`);
+            }
+            goalieAssignedBotId[team] = null;
+            bots.forEach(({ bot }) => { bot._isGoalie = false; });
+            return;
+          }
+
+          // Keep current assignee if still active; else pick bot nearest own goal.
+          let assignee = null;
+          const currentId = goalieAssignedBotId[team];
+          if (currentId) {
+            assignee = bots.find((b) => b.id === currentId) || null;
+          }
+          if (!assignee) {
+            const base = getGoalieBaseForTeam(team);
+            const basePos = new THREE.Vector3(base.x, base.y, base.z);
+            let bestDist = Infinity;
+            bots.forEach((b) => {
+              const p = b.bot.body.position;
+              const d = basePos.distanceToSquared(new THREE.Vector3(p.x, p.y, p.z));
+              if (d < bestDist) {
+                bestDist = d;
+                assignee = b;
+              }
+            });
+          }
+
+          const prevId = goalieAssignedBotId[team];
+          goalieAssignedBotId[team] = assignee ? assignee.id : null;
+          bots.forEach(({ bot, id }) => {
+            bot._isGoalie = !!(assignee && id === assignee.id);
+          });
+          if (assignee && prevId !== assignee.id) {
+            console.log(`🥅 ${team} goalie ON → ${assignee.id} (ownerTeam=${ownerTeam}, z=${ballZ.toFixed(1)})`);
+          }
+        });
+      }
+
+      function isActingGoalie(botComponent) {
+        if (!botComponent) return false;
+        if (isGoalieTestMode() && botComponent.el && botComponent.el.id === GOALIE_TEST_BOT_ID) return true;
+        return !!botComponent._isGoalie;
+      }
+
+      function placeLocalPlayerAtWorldSpawn(s) {
+        const rig = document.querySelector('#rig');
+        if (!rig) return;
+        const desiredWorld = new THREE.Vector3(s.x, s.y, s.z);
+        let local = desiredWorld.clone();
+        const parent = rig.object3D.parent;
+        if (parent) {
+          parent.updateMatrixWorld(true);
+          local = parent.worldToLocal(desiredWorld.clone());
+        }
+        rig.setAttribute('position', `${local.x} ${local.y} ${local.z}`);
+        const zp = document.querySelector('[zerog-player]');
+        if (zp && zp.components['zerog-player']) {
+          const pc = zp.components['zerog-player'];
+          if (pc.velocity) pc.velocity.set(0, 0, 0);
+          if (typeof pc.rotationY === 'number') pc.rotationY = THREE.MathUtils.degToRad(s.rotY);
+          rig.object3D.rotation.y = THREE.MathUtils.degToRad(s.rotY);
+        }
+      }
+
+      function placeBotAtWorldSpawn(botEl, s) {
+        if (!botEl || !botEl.components['zerog-bot']) return;
+        const bot = botEl.components['zerog-bot'];
+        if (bot.body) {
+          bot.body.position.set(s.x, s.y, s.z);
+          bot.body.velocity.set(0, 0, 0);
+          bot.body.angularVelocity.set(0, 0, 0);
+          // Face the field (yaw only).
+          const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, THREE.MathUtils.degToRad(s.rotY), 0, 'YXZ'));
+          bot.body.quaternion.set(q.x, q.y, q.z, q.w);
+          // Zeroing velocity can put Cannon to sleep; wake so thrusters work after respawn.
+          if (typeof bot.body.wakeUp === 'function') bot.body.wakeUp();
+        }
+        botEl.setAttribute('position', `${s.x} ${s.y} ${s.z}`);
+        botEl.object3D.rotation.set(0, THREE.MathUtils.degToRad(s.rotY), 0);
+        botEl.object3D.quaternion.setFromEuler(botEl.object3D.rotation);
+        bot.isGrabbingBall = false;
+        bot.isStunned = false;
+        bot.stunEndTime = 0;
+        bot.navigationState = 'idle';
+        bot.thrusterActive.left = false;
+        bot.thrusterActive.right = false;
+        if (bot.velocity) bot.velocity.set(0, 0, 0);
+        bot._noRegrabUntil = 0;
+        bot.ballStealTimeout = null;
+      }
+
+      function placeCaptureBallAtWorldSpawn(pos) {
+        const captureBall = document.querySelector('#capture-ball');
+        if (!captureBall || !captureBall.components['zerog-ball']) return;
+        captureBall.components['zerog-ball'].resetPosition(pos);
+      }
+
+      // Wireframe sphere on the goalie showing its current grab reach (closeDistance / steal range).
+      window.__goalieGrabRangeVizOn = true;
+      function ensureGoalieGrabRangeViz(radius) {
+        const bot = document.querySelector(`#${GOALIE_TEST_BOT_ID}`);
+        if (!bot) return null;
+        let viz = bot.querySelector('.goalie-grab-range-viz');
+        const show = isGoalieTestMode() && window.__goalieGrabRangeVizOn;
+        if (!show) {
+          if (viz && viz.parentNode) viz.parentNode.removeChild(viz);
+          return null;
+        }
+        const botComp = bot.components['zerog-bot'];
+        const r = (typeof radius === 'number')
+          ? radius
+          : ((botComp && botComp.closeDistance) ? botComp.closeDistance : 0.5);
+        if (!viz) {
+          viz = document.createElement('a-entity');
+          viz.classList.add('goalie-grab-range-viz');
+          viz.setAttribute('material',
+            'color: #00ff88; wireframe: true; shader: flat; transparent: true; opacity: 0.9; depthTest: false');
+          viz.setAttribute('position', '0 0 0');
+          bot.appendChild(viz);
+        }
+        if (viz.dataset.grabRadius !== String(r)) {
+          viz.dataset.grabRadius = String(r);
+          viz.setAttribute('geometry',
+            `primitive: sphere; radius: ${r}; segmentsWidth: 16; segmentsHeight: 12`);
+        }
+        viz.setAttribute('visible', true);
+        return viz;
+      }
+
+      window.toggleGoalieGrabRange = function(show) {
+        window.__goalieGrabRangeVizOn = (typeof show === 'boolean') ? show : !window.__goalieGrabRangeVizOn;
+        ensureGoalieGrabRangeViz();
+        console.log(window.__goalieGrabRangeVizOn
+          ? '🟢 Goalie grab-range wireframe ON'
+          : '🟢 Goalie grab-range wireframe OFF');
+        return window.__goalieGrabRangeVizOn;
+      };
+
+      // Goalie test: put the capture ball back at the halfway spawn and clear any holder.
+      function respawnGoalieTestBall() {
+        if (!isGoalieTestMode()) return false;
+        const captureBall = document.querySelector('#capture-ball');
+        if (!captureBall || !captureBall.components['zerog-ball']) return false;
+
+        const ballComponent = captureBall.components['zerog-ball'];
+        const owner = ballComponent.currentOwner;
+        const localId = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+
+        if (owner && String(owner).startsWith('bot-')) {
+          const botElement = document.querySelector(`#zerog-${owner}`);
+          if (botElement && botElement.components['zerog-bot']) {
+            botElement.components['zerog-bot'].isGrabbingBall = false;
+          }
+        } else {
+          // Also clear goalie grab flag even if owner id is stale.
+          const goalie = document.querySelector(`#${GOALIE_TEST_BOT_ID}`);
+          if (goalie && goalie.components['zerog-bot']) {
+            goalie.components['zerog-bot'].isGrabbingBall = false;
+          }
+        }
+
+        if (ballComponent.isGrabbed) {
+          ballComponent.onRelease();
+        }
+
+        const zerogPlayer = document.querySelector('[zerog-player]');
+        if (zerogPlayer && zerogPlayer.components['zerog-player']) {
+          const pc = zerogPlayer.components['zerog-player'];
+          const holdingCapture =
+            (pc.grabInfo && pc.grabInfo.left && pc.grabInfo.left.surface && pc.grabInfo.left.surface.id === 'capture-ball') ||
+            (pc.grabInfo && pc.grabInfo.right && pc.grabInfo.right.surface && pc.grabInfo.right.surface.id === 'capture-ball') ||
+            owner === localId || owner === myPlayerId;
+          if (holdingCapture || !owner || String(owner).startsWith('player_')) {
+            pc.isGrabbing.left = false;
+            pc.isGrabbing.right = false;
+            if (pc.grabbedSurface) {
+              pc.grabbedSurface.left = null;
+              pc.grabbedSurface.right = null;
+            }
+            if (pc.grabInfo) {
+              pc.grabInfo.left = null;
+              pc.grabInfo.right = null;
+            }
+            pc.speedBoostAvailable = true;
+          }
+        }
+
+        placeCaptureBallAtWorldSpawn(getGoalieTestBallSpawn());
+        console.log('🥅 Goalie test: ball respawned at halfway spawn (A)');
+        return true;
+      }
+
+      // Goalie-test kickoff / post-goal layout.
+      function applyGoalieTestLayout() {
+        if (!isGoalieTestMode() || gameMode !== 'capture') return;
+
+        const localId = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+        if (typeof playerTeams !== 'undefined') {
+          playerTeams.set(localId, GOALIE_TEST_PLAYER_TEAM);
+          playerTeams.set('bot-blue', 'blue');
+        }
+
+        placeLocalPlayerAtWorldSpawn(getGoalieTestPlayerSpawn());
+
+        const canMoveBots = (typeof isMultiplayer === 'undefined') || !isMultiplayer || isHost;
+        if (canMoveBots) {
+          const goalieSpawn = getGoalieTestGoalieSpawn();
+          ['red', 'blue', 'green'].forEach((color) => {
+            const botEl = document.querySelector(`#zerog-bot-${color}`);
+            if (!botEl) return;
+            if (color === GOALIE_TEST_BOT_COLOR) {
+              placeBotAtWorldSpawn(botEl, goalieSpawn);
+            } else if (botEl.components['zerog-bot']) {
+              // Park unused bots out of the way and clear grab state.
+              const bot = botEl.components['zerog-bot'];
+              bot.isGrabbingBall = false;
+              bot.navigationState = 'idle';
+              bot.thrusterActive.left = false;
+              bot.thrusterActive.right = false;
+              if (bot.velocity) bot.velocity.set(0, 0, 0);
+              if (bot.body) {
+                bot.body.velocity.set(0, 0, 0);
+                bot.body.angularVelocity.set(0, 0, 0);
+              }
+            }
+          });
+        }
+
+        placeCaptureBallAtWorldSpawn(getGoalieTestBallSpawn());
+        manageActivePlayersAndBots();
+        ensureGoalieGrabRangeViz();
+        console.log('🥅 Goalie test layout applied (stationary blue goalie, player halfway to blue goal)');
+      }
+
       // Spawn point for a team member: in front of its own goal, offset sideways by slot index, and
       // facing toward field center (red faces +z, blue faces -z).
       function getTeamSpawnPosition(team, idx) {
@@ -89,6 +511,10 @@
       // Bots are only moved by the authority (singleplayer or host) to avoid client/host conflicts.
       function spawnAllPlayersAtStartPositions() {
         if (gameMode !== 'capture') return; // team goals only exist in capture mode
+        if (isGoalieTestMode()) {
+          applyGoalieTestLayout();
+          return;
+        }
         const counters = { red: 0, blue: 0 };
         const nextSpawn = (team) => getTeamSpawnPosition(team, counters[team] !== undefined ? counters[team]++ : 0);
 
@@ -97,27 +523,8 @@
         // rig's parent frame, otherwise the human lands several meters off from the bots.
         const localId = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
         const localTeam = (typeof playerTeams !== 'undefined' && playerTeams.get(localId)) || 'red';
-        const rig = document.querySelector('#rig');
-        if (rig) {
-          const s = nextSpawn(localTeam);
-          const desiredWorld = new THREE.Vector3(s.x, s.y, s.z);
-          let local = desiredWorld.clone();
-          const parent = rig.object3D.parent;
-          if (parent) {
-            parent.updateMatrixWorld(true);
-            local = parent.worldToLocal(desiredWorld.clone());
-          }
-          rig.setAttribute('position', `${local.x} ${local.y} ${local.z}`);
-          const zp = document.querySelector('[zerog-player]');
-          if (zp && zp.components['zerog-player']) {
-            const pc = zp.components['zerog-player'];
-            if (pc.velocity) pc.velocity.set(0, 0, 0);
-            // The player owns its yaw (it writes rig.rotation.y from rotationY every frame), so set
-            // that state directly instead of the rig attribute, which would be overwritten next tick.
-            if (typeof pc.rotationY === 'number') pc.rotationY = THREE.MathUtils.degToRad(s.rotY);
-            rig.object3D.rotation.y = THREE.MathUtils.degToRad(s.rotY);
-          }
-        }
+        const s = nextSpawn(localTeam);
+        placeLocalPlayerAtWorldSpawn(s);
 
         // Bots (host/singleplayer only).
         const canMoveBots = (typeof isMultiplayer === 'undefined') || !isMultiplayer || isHost;
@@ -127,19 +534,7 @@
             if (!botEl || !botEl.components['zerog-bot']) return;
             const bot = botEl.components['zerog-bot'];
             const team = bot.data.team || (color === 'red' ? 'red' : 'blue');
-            const s = nextSpawn(team);
-            if (bot.body) {
-              bot.body.position.set(s.x, s.y, s.z);
-              bot.body.velocity.set(0, 0, 0);
-              bot.body.angularVelocity.set(0, 0, 0);
-            }
-            botEl.setAttribute('position', `${s.x} ${s.y} ${s.z}`);
-            // Clear AI state so the bot doesn't keep chasing/holding from before the reset.
-            bot.isGrabbingBall = false;
-            bot.navigationState = 'idle';
-            if (bot.velocity) bot.velocity.set(0, 0, 0);
-            bot._noRegrabUntil = 0;
-            bot.ballStealTimeout = null;
+            placeBotAtWorldSpawn(botEl, nextSpawn(team));
           });
         }
       }
@@ -702,6 +1097,35 @@
         return window.__botsFrozen;
       };
 
+      // TEMPORARY: toggle the stationary goalie test mode.
+      //   toggleGoalieTest()       -> flip on/off
+      //   toggleGoalieTest(true)   -> on   |   toggleGoalieTest(false) -> off
+      // When enabling mid-session, call applyGoalieTestLayout() / restart the match to reposition.
+      window.toggleGoalieTest = function(on) {
+        window.__goalieTest = (typeof on === 'boolean') ? on : !window.__goalieTest;
+        console.log(window.__goalieTest ? '🥅 Goalie TEST mode ON' : '🥅 Goalie TEST mode OFF');
+        if (window.__goalieTest) applyGoalieTestLayout();
+        else manageActivePlayersAndBots();
+        return window.__goalieTest;
+      };
+
+      // Goalie test: A button respawns the capture ball at the halfway spawn (does not move player/goalie).
+      document.addEventListener('DOMContentLoaded', function() {
+        const scene = document.querySelector('a-scene');
+        const bindA = (el) => {
+          if (!el || el.__goalieTestABound) return;
+          el.__goalieTestABound = true;
+          el.addEventListener('abuttondown', () => {
+            if (!isGoalieTestMode()) return;
+            respawnGoalieTestBall();
+          });
+        };
+        if (scene) {
+          if (scene.hasLoaded) bindA(scene);
+          else scene.addEventListener('loaded', () => bindA(scene));
+        }
+      });
+
       // DEBUG: visualize the per-bone GRASP CAPSULES (the limb-shaped surfaces the fingertips
       // conform to). One wireframe capsule per arm/leg segment + torso, plus a sphere for the head,
       // on every loaded character. They ride the bones each frame.
@@ -848,7 +1272,8 @@
 
       // Startup: all grab/grasp debug overlays OFF and bots running normally. Re-enable any of them
       // on demand from the console: toggleGrabColliders(), toggleGraspCapsules(), togglePalmViz(),
-      // freezeBots().
+      // freezeBots(), toggleGoalieTest(), toggleGoalieGrabRange(). Goalie test mode is OFF by
+      // default; enable with ?goalieTest=1. Integrated goalie assignment runs in normal capture play.
       window.__grabVizOn = false;
       window.__botsFrozen = false;
 
@@ -2847,7 +3272,7 @@
             }
             
             // Clear any grab state from player component (only for local player)
-            if (ballComponent.currentOwner === myPlayerId) {
+            if (ballComponent.currentOwner === myPlayerId || ballComponent.currentOwner === 'player_0') {
               const zerogPlayer = document.querySelector('[zerog-player]');
               if (zerogPlayer && zerogPlayer.components['zerog-player']) {
                 const playerComponent = zerogPlayer.components['zerog-player'];
@@ -2861,6 +3286,20 @@
                 console.log('✅ Speed boost re-enabled - ball taken during goal scoring');
               }
             }
+          }
+        }
+
+        // Goalie test: always clear goalie carry/stun so it can move again after the reset.
+        if (isGoalieTestMode()) {
+          const goalie = document.querySelector(`#${GOALIE_TEST_BOT_ID}`);
+          if (goalie && goalie.components['zerog-bot']) {
+            const gc = goalie.components['zerog-bot'];
+            gc.isGrabbingBall = false;
+            gc.isStunned = false;
+            gc.stunEndTime = 0;
+            gc._noRegrabUntil = 0;
+            gc.ballStealTimeout = null;
+            if (gc.body && typeof gc.body.wakeUp === 'function') gc.body.wakeUp();
           }
         }
         
@@ -2884,12 +3323,14 @@
         
         // CRITICAL: Wait a moment for network messages to propagate, then reset locally
         setTimeout(() => {
-          // Reset ball position (3m in front of the scored goal) and clear ownership.
-          ballComponent.resetPosition(ballSpawn);
-          console.log(`🏆 Ball reset to [${ballSpawn.x}, ${ballSpawn.y}, ${ballSpawn.z}] after goal`);
+          // Goalie test: ball returns with the player (halfway to the goal), not in front of the net.
+          const pos = isGoalieTestMode() ? getGoalieTestBallSpawn() : ballSpawn;
+          ballComponent.resetPosition(pos);
+          console.log(`🏆 Ball reset to [${pos.x}, ${pos.y}, ${pos.z}] after goal`);
         }, 50); // Small delay to ensure network sync
 
         // Send all players back to their team start positions (next to their own goal).
+        // In goalie test mode this re-applies the stationary goalie + halfway player layout.
         spawnAllPlayersAtStartPositions();
       }
       
@@ -7433,6 +7874,7 @@ function setGameplayHUD(isPlaying) {
           this.lastCloseTime = 0; // Track when bot was last close to ball
           this.closeDistance = 0.5; // Distance considered "close" to ball (for grabbing)
           this.isGrabbingBall = false; // Track if bot is currently grabbing the ball
+          this._isGoalie = false; // Integrated / test crease role
           this.ballStealTimeout = null; // Timeout after ball is stolen from bot
           this.lastStealTime = 0; // Track when bot last stole a ball (to prevent rapid stealing)
 
@@ -7721,6 +8163,12 @@ function setGameplayHUD(isPlaying) {
         },
         
         applyThrusterForces: function(dt) {
+          // Goalie (test or integrated): omnidirectional steer + crease leash.
+          if (isActingGoalie(this)) {
+            this.applyGoalieThrusterForces(dt);
+            return;
+          }
+
           // CRITICAL FIX: Use persistent velocity system EXACTLY like humans
           let totalThrust = new THREE.Vector3(0, 0, 0);
           
@@ -7774,6 +8222,81 @@ function setGameplayHUD(isPlaying) {
           
           // CRITICAL: Add custom collision detection for surfaces (same as player system)
           this.checkCustomCollisionWithSurfaces();
+        },
+
+        // Goalie test: omnidirectional thrust only (no facing-aligned thrusters) + leash.
+        applyGoalieThrusterForces: function(dt) {
+          if (!this.body || !this.velocity) return;
+
+          // Direct steer from goalie AI — move any direction without turning into it.
+          if (this._goalieSteer && this._goalieSteer.lengthSq() > 0) {
+            this.velocity.addScaledVector(this._goalieSteer, 1);
+            this._goalieSteer.set(0, 0, 0);
+          }
+
+          if (this.velocity.length() > GOALIE_MAX_SPEED) {
+            this.velocity.normalize().multiplyScalar(GOALIE_MAX_SPEED);
+          }
+
+          const dampingFactor = Math.pow(this.damping, dt * 60);
+          this.velocity.multiplyScalar(dampingFactor);
+          if (this.velocity.length() < this.minVelocity) {
+            this.velocity.set(0, 0, 0);
+          }
+
+          this.body.velocity.set(this.velocity.x, this.velocity.y, this.velocity.z);
+          this.body.angularVelocity.x = 0;
+          this.body.angularVelocity.z = 0;
+          if (this.velocity.lengthSq() > 0 && typeof this.body.wakeUp === 'function') {
+            this.body.wakeUp();
+          }
+          this.enforceGoalieLeash(dt);
+        },
+
+        // Soft spring near the roam limit + hard clamp outside it, so the goalie can still
+        // slide along/inside the sphere instead of freezing on the boundary.
+        // While still traveling in from the field, skip the leash so they can reach the crease.
+        enforceGoalieLeash: function(dt) {
+          if (!this.body || !this.velocity) return;
+          const team = this.data.team || (isGoalieTestMode() ? GOALIE_TEST_BOT_COLOR : 'blue');
+          const spawn = getGoalieBaseForTeam(team);
+          const bx = spawn.x, by = spawn.y, bz = spawn.z;
+          const px = this.body.position.x;
+          const py = this.body.position.y;
+          const pz = this.body.position.z;
+          let ox = px - bx;
+          let oy = py - by;
+          let oz = pz - bz;
+          const dist = Math.sqrt(ox * ox + oy * oy + oz * oz);
+          if (dist < 1e-6) return;
+          if (dist > GOALIE_LEASH_ARM_DIST) return; // still approaching crease
+
+          const softStart = GOALIE_ROAM_RADIUS * GOALIE_LEASH_SOFT;
+          if (dist > softStart) {
+            const t = Math.min(1, (dist - softStart) / Math.max(1e-6, GOALIE_ROAM_RADIUS - softStart));
+            const inv = 1 / dist;
+            const nx = ox * inv, ny = oy * inv, nz = oz * inv;
+            const pull = GOALIE_STEER * (0.6 + t * 1.8) * (dt || 0.016);
+            this.velocity.x -= nx * pull;
+            this.velocity.y -= ny * pull;
+            this.velocity.z -= nz * pull;
+          }
+
+          if (dist > GOALIE_ROAM_RADIUS) {
+            const scale = GOALIE_ROAM_RADIUS / dist;
+            ox *= scale; oy *= scale; oz *= scale;
+            this.body.position.set(bx + ox, by + oy, bz + oz);
+            const invLen = 1 / GOALIE_ROAM_RADIUS;
+            const nx = ox * invLen, ny = oy * invLen, nz = oz * invLen;
+            const outwardSpeed = this.velocity.x * nx + this.velocity.y * ny + this.velocity.z * nz;
+            if (outwardSpeed > 0) {
+              this.velocity.x -= nx * outwardSpeed;
+              this.velocity.y -= ny * outwardSpeed;
+              this.velocity.z -= nz * outwardSpeed;
+            }
+          }
+
+          this.body.velocity.set(this.velocity.x, this.velocity.y, this.velocity.z);
         },
 
         // Periodic forward boost, mirroring the player's speed boost. Fires only when the bot is far
@@ -8087,6 +8610,14 @@ function setGameplayHUD(isPlaying) {
         intelligentNavigation: function(dt) {
           // Only navigate in capture mode
           if (gameMode !== 'capture') {
+            this.navigationState = 'idle';
+            return;
+          }
+
+          // Goalie (test or integrated): crease AI handles grab; skip field chase.
+          if (isActingGoalie(this)) {
+            this.thrusterActive.left = false;
+            this.thrusterActive.right = false;
             this.navigationState = 'idle';
             return;
           }
@@ -8486,6 +9017,105 @@ function setGameplayHUD(isPlaying) {
           // Bot aiming calculation complete
 
         },
+
+        // Goalie: omnidirectional slide within ~1m of own-goal base; face ball (or field when holding).
+        runStationaryGoalieTick: function(dt) {
+          const team = this.data.team || (isGoalieTestMode() ? GOALIE_TEST_BOT_COLOR : 'blue');
+          const spawn = getGoalieBaseForTeam(team);
+          const base = new THREE.Vector3(spawn.x, spawn.y, spawn.z);
+          const faceField = getGoalieFaceFieldDirForTeam(team);
+          this._goalieBase = base;
+          if (!this._goalieSteer) this._goalieSteer = new THREE.Vector3();
+          this._goalieSteer.set(0, 0, 0);
+
+          this.thrusterActive.left = false;
+          this.thrusterActive.right = false;
+          this.navigationState = 'idle';
+          this.isMoving = false;
+
+          if (isGoalieTestMode()) ensureGoalieGrabRangeViz(this.closeDistance || 0.5);
+
+          const captureBall = document.querySelector('#capture-ball');
+          let ballPos = null;
+          let ballComp = null;
+          if (captureBall && captureBall.components['zerog-ball']) {
+            ballComp = captureBall.components['zerog-ball'];
+            const isVisible = captureBall.getAttribute('visible');
+            if (isVisible !== 'false' && isVisible !== false) {
+              ballPos = new THREE.Vector3();
+              captureBall.object3D.getWorldPosition(ballPos);
+            }
+          }
+
+          // Recover from post-goal desync: don't stay in "carrying" if we no longer own the ball.
+          if (this.isGrabbingBall) {
+            const owner = ballComp ? ballComp.currentOwner : null;
+            if (!ballComp || owner !== this.getMyOwnerId()) {
+              this.isGrabbingBall = false;
+            }
+          }
+
+          // Desired point: slide toward ball within roam sphere; when holding, settle slightly
+          // toward midfield from base so the held ball clears the goal mouth.
+          const desired = base.clone();
+          if (this.isGrabbingBall) {
+            desired.copy(base).addScaledVector(faceField, 0.35);
+          } else if (ballPos) {
+            const fromBaseToBall = new THREE.Vector3().subVectors(ballPos, base);
+            const distBaseToBall = fromBaseToBall.length();
+            if (distBaseToBall > 0.01 && distBaseToBall < GOALIE_ENGAGE_DIST) {
+              const reach = Math.min(GOALIE_ROAM_RADIUS * 0.85, distBaseToBall);
+              desired.copy(base).addScaledVector(fromBaseToBall.normalize(), reach);
+            }
+          }
+
+          const botPos = new THREE.Vector3(
+            this.body.position.x, this.body.position.y, this.body.position.z
+          );
+          const toDesired = new THREE.Vector3().subVectors(desired, botPos);
+          const distToDesired = toDesired.length();
+
+          // Omnidirectional move: steer without rotating into the travel direction.
+          if (distToDesired > GOALIE_ARRIVE_EPS) {
+            const dir = toDesired.multiplyScalar(1 / distToDesired);
+            this.targetDirection.copy(dir);
+            this._goalieSteer.copy(dir).multiplyScalar(GOALIE_STEER * dt);
+            this.isMoving = true;
+            this.navigationState = 'thrusting';
+          } else if (this.velocity && this.velocity.lengthSq() > 0.0001) {
+            this.velocity.multiplyScalar(0.82);
+          }
+
+          // Facing is independent of travel:
+          // - chasing: always face the ball
+          // - holding: face midfield so the held ball stays away from own goal
+          if (this.isGrabbingBall) {
+            this.rotateTowards(faceField, dt);
+          } else if (ballPos) {
+            const toBall = new THREE.Vector3().subVectors(ballPos, botPos);
+            if (toBall.lengthSq() > 0.0001) {
+              this.rotateTowards(toBall.normalize(), dt);
+            }
+          } else {
+            this.rotateTowards(faceField, dt);
+          }
+
+          if (this.isGrabbingBall) return;
+          if (!captureBall || !ballPos || !ballComp) return;
+
+          const distanceToBall = botPos.distanceTo(ballPos);
+          const ballIsGrabbed = ballComp.isGrabbed;
+          // Keep normal grab range for steals too (don't shrink to 0.3m).
+          const requiredDistance = this.closeDistance || 0.5;
+          if (isGoalieTestMode()) ensureGoalieGrabRangeViz(requiredDistance);
+          if (distanceToBall < requiredDistance) {
+            const canGrab = Date.now() > this._noRegrabUntil &&
+              (!ballIsGrabbed || !this.ballStealTimeout || Date.now() > this.ballStealTimeout);
+            if (canGrab) {
+              this.tryGrabBall(captureBall);
+            }
+          }
+        },
         
         tick: function(time) {
           // CRITICAL: Check manual override from performance config
@@ -8548,14 +9178,27 @@ function setGameplayHUD(isPlaying) {
           
           // Track player movement for predictive aiming
           this.updatePlayerTracking(time);
-          
-          // NEW: Intelligent navigation system
-          this.intelligentNavigation(deltaTime);
-          
-          // Rotation is now handled directly in rotateTowards function
-          
-          // Apply thruster forces
-          this.applyThrusterForces(deltaTime);
+
+          // Integrated goalie assignment (no-op in test mode / non-capture).
+          if (!this._goalieAssignClock || time - this._goalieAssignClock > 200) {
+            this._goalieAssignClock = time;
+            updateGoalieAssignments();
+          }
+
+          // Goalie crease play (temporary test bot, or integrated team goalie).
+          if (isActingGoalie(this)) {
+            this.runStationaryGoalieTick(deltaTime);
+            this.applyThrusterForces(deltaTime); // routes to applyGoalieThrusterForces + leash
+            // Fall through to visual sync + ball-carry positioning (skip pass / throw).
+          } else {
+            // NEW: Intelligent navigation system
+            this.intelligentNavigation(deltaTime);
+            
+            // Rotation is now handled directly in rotateTowards function
+            
+            // Apply thruster forces
+            this.applyThrusterForces(deltaTime);
+          }
           
           // Update visual position from physics
           this.el.object3D.position.copy(this.body.position);
@@ -8636,6 +9279,11 @@ function setGameplayHUD(isPlaying) {
           }
 
           // Team play: while carrying, pass to a teammate who's closer to the opponent's goal.
+          // Goalie holds; don't pass or throw.
+          if (isActingGoalie(this)) {
+            return;
+          }
+
           if (this.isGrabbingBall) {
             this.maybePassBall(time);
           }
@@ -8704,8 +9352,11 @@ function setGameplayHUD(isPlaying) {
             ball.object3D.getWorldPosition(ballPos);
             const distance = botPos.distanceTo(ballPos);
             
-            // Require close proximity to steal (0.3m like human players)
-            if (distance > 0.3) {
+            // Normal bots: 0.3m steal. Goalie: same as normal grab range (closeDistance).
+            const stealRange = isActingGoalie(this)
+              ? (this.closeDistance || 0.5)
+              : 0.3;
+            if (distance > stealRange) {
               console.log(`🤖 Bot ${this.el.id}: Too far to steal ball (${distance.toFixed(2)}m)`);
               return false;
             }
@@ -11791,6 +12442,20 @@ function setGameplayHUD(isPlaying) {
         
         // Manage bot and ball visibility for capture mode
         manageActivePlayersAndBots();
+
+        // TEMPORARY: auto-enter goalie test match so we can iterate without menu clicks.
+        if (isGoalieTestMode()) {
+          console.log('🥅 Goalie test mode active — auto-starting capture match');
+          setTimeout(() => {
+            const gameManager = document.querySelector('[game-manager]');
+            if (gameManager && gameManager.components['game-manager']) {
+              const gmc = gameManager.components['game-manager'];
+              if (gmc.matchState === 'WAITING' || gmc.matchState === 'ENDED') {
+                gmc.startMatchWithBots();
+              }
+            }
+          }, 1200);
+        }
       }
 
       // --- MULTIPLAYER SYNC COMPONENT ---
@@ -22262,7 +22927,10 @@ function setGameplayHUD(isPlaying) {
         
         // Enable/disable bots based on need
         bots.forEach((bot, index) => {
-          const shouldEnable = index < botsNeeded;
+          // Goalie test: only the dedicated blue goalie bot is active.
+          const shouldEnable = isGoalieTestMode()
+            ? (bot.id === GOALIE_TEST_BOT_ID)
+            : (index < botsNeeded);
           if (bot) {
             bot.setAttribute('visible', shouldEnable);
             if (bot.components['zerog-bot']) {
