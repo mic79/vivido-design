@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Leg IK for A-Frame Mixamo bodies — Box3D physics (body-rigged4)
  */
 (function () {
@@ -2048,6 +2048,7 @@
       const zc = rig.components?.['zerog-locomotion'];
       if (window.BodyRiggedGravity?.isZeroG?.() && zc?.tickZeroG) {
         zc.tickZeroG(dt, this);
+        this._resolvePlayerVsGrabDummy(false);
         return;
       }
 
@@ -2202,6 +2203,58 @@
           this._playerRootPos.set(pos.x, pos.y, pos.z);
         }
       }
+
+      this._resolvePlayerVsGrabDummy(true);
+    },
+
+    _getGrabDummyRagdoll: function () {
+      return document.querySelector('#grab-dummy')?.components?.['grabbable-ragdoll'] || null;
+    },
+
+    /** True while gripping the dummy — body/head must not fight the hold pin. */
+    _isHoldingGrabDummy: function (rag) {
+      const comp = rag || this._getGrabDummyRagdoll();
+      if (!comp) return false;
+      if (typeof comp._heldHandCount === 'function') return comp._heldHandCount() > 0;
+      return !!(comp._held && (comp._held.left >= 0 || comp._held.right >= 0));
+    },
+
+    /**
+     * After env capsule move: block the player body on the dummy's live Mixamo
+     * limb capsules (same geometry as hand collision — not Box3D ragdoll shapes).
+     * Skipped while holding so the kinematic pin cannot shove the player.
+     */
+    _resolvePlayerVsGrabDummy: function (horizontalOnly) {
+      if (!this.physics || this.physics.playerColliderDisabled) return false;
+      const rag = this._getGrabDummyRagdoll();
+      if (!rag || !rag.resolvePlayerCapsuleOnMesh || !rag.modelLoaded) return false;
+      if (this._isHoldingGrabDummy(rag)) return false;
+
+      const cap = this.physics.capsule;
+      if (!cap) return false;
+
+      const maxStep = 0.09;
+      let moved = false;
+      for (let iter = 0; iter < 3; iter++) {
+        const cur = this.physics.getPlayerTranslation();
+        const result = rag.resolvePlayerCapsuleOnMesh(cur, cap, {
+          horizontalOnly: horizontalOnly !== false,
+          samples: 4,
+          queryRadius: 0.95
+        });
+        if (!result || !result.hit) break;
+        const len = Math.hypot(result.dx, result.dy, result.dz);
+        if (len < 1e-5) break;
+        const s = len > maxStep ? maxStep / len : 1;
+        const nx = cur.x + result.dx * s;
+        const ny = cur.y + result.dy * s;
+        const nz = cur.z + result.dz * s;
+        this.physics.setPlayerTranslation(nx, ny, nz);
+        const rig = document.getElementById('rig');
+        if (rig) rig.object3D.position.set(nx, ny, nz);
+        moved = true;
+      }
+      return moved;
     },
 
     _checkHeadCollision: function () {
@@ -2211,10 +2264,31 @@
       if (!rig || !camera) return;
       const headPos = new THREE.Vector3();
       camera.object3D.getWorldPosition(headPos);
-      const result = this.physics.resolveSphere(headPos, 0.2, { horizontalOnly: true });
-      if (!result.hit) return;
-      const correction = result.position.clone().sub(headPos);
-      correction.y = 0;
+
+      const correction = new THREE.Vector3();
+      const env = this.physics.resolveSphere(headPos, 0.2, { horizontalOnly: true });
+      if (env.hit) {
+        correction.copy(env.position).sub(headPos);
+        correction.y = 0;
+      }
+
+      // Same live limb capsules as hands — keep the head from clipping the dummy.
+      // While holding, skip: the pinned body would otherwise shove the headset.
+      const rag = this._getGrabDummyRagdoll();
+      if (rag && rag.resolveSphereOnMesh && !this._isHoldingGrabDummy(rag)) {
+        const headAfter = this._headMeshTmp || (this._headMeshTmp = new THREE.Vector3());
+        headAfter.copy(headPos).add(correction);
+        const mesh = rag.resolveSphereOnMesh(headAfter, 0.2, {
+          horizontalOnly: true,
+          queryRadius: 0.75
+        });
+        if (mesh && mesh.hit) {
+          correction.x += mesh.position.x - headAfter.x;
+          correction.z += mesh.position.z - headAfter.z;
+        }
+      }
+
+      if (correction.lengthSq() < 1e-10) return;
       rig.object3D.position.add(correction);
       const p = rig.object3D.position;
       this.physics.setPlayerTranslation(p.x, p.y, p.z);
@@ -2246,6 +2320,7 @@
         sticky: null,
         contactPoint: null,
         normal: new THREE.Vector3(0, 1, 0),
+        shapeId: null,
         controller: track.clone(),
         contactDistance: 0
       };
@@ -2265,7 +2340,19 @@
         lastValid = null;
       }
 
-      const slide = this.physics.slideHandSphere(lastValid, lastValid || track, desired, radius, track);
+      // lastTrack should be prior controller/palm tracking, not lastValid — that
+      // keeps depenetration biased toward the real hand approach.
+      const lastTrack = options.lastTrack || track;
+      const slide = this.physics.slideHandSphere(
+        lastValid,
+        lastTrack,
+        desired,
+        radius,
+        track,
+        {
+          preferToward: options.preferToward || null
+        }
+      );
       dest.copy(slide.position);
 
       const n = slide.normal ? slide.normal.clone() : new THREE.Vector3(0, 1, 0);
@@ -2280,6 +2367,7 @@
           ? slide.contactPoint.clone()
           : slide.position.clone().addScaledVector(n, -radius),
         normal: n,
+        shapeId: slide.shapeId != null ? slide.shapeId : null,
         controller: track.clone(),
         contactDistance: blocked ? slide.position.distanceTo(track) : 0
       };

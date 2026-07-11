@@ -65,6 +65,13 @@
     const handFilter = defaultHandFilter(b3);
     const planeScratch = b3.createPlaneResult ? b3.createPlaneResult() : null;
 
+    /** Toggle whether hand sphere queries also hit RAGDOLL (proximity-gated by callers). */
+    function setHandCollideRagdoll(enabled) {
+      handFilter.maskBits = enabled
+        ? (CATEGORY.ENVIRONMENT | CATEGORY.RAGDOLL)
+        : CATEGORY.ENVIRONMENT;
+    }
+
     function castRay(origin, direction, maxDist, filter) {
       const f = filter || envFilter;
       const len = Math.hypot(direction.x, direction.y, direction.z) || 1;
@@ -413,7 +420,8 @@
       sampleStepAhead,
       computeAutoStep,
       envFilter,
-      handFilter
+      handFilter,
+      setHandCollideRagdoll
     };
   }
 

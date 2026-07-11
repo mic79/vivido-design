@@ -96,7 +96,7 @@
 
     <a-scene background="color: #87CEEB" gravity-mode="allowSwitch: true" leg-ik-world scene-shadows keyboard-shortcuts="enterVR: false" ragdoll-shooter webxr="referenceSpaceType: local-floor" renderer="colorManagement: true; physicallyCorrectLights: true; shadow: true; shadowMapType: PCFSoft">
       <!-- Grabbable dummy ticks before the player rig so arm-hold state is fresh for IK -->
-      <a-entity id="grab-dummy" grabbable-ragdoll="x: 1.4; y: 0; z: -1.6"></a-entity>
+      <a-entity id="grab-dummy" grabbable-ragdoll="x: 1.4; y: 0; z: -1.6; showCollisionWireframe: false"></a-entity>
 
       <!-- Local Player Body (child of rig so it shares the VR reference frame) -->
       <a-entity id="rig" position="0 0 0" vr-locomotion box3d-locomotion zerog-locomotion>
@@ -777,6 +777,22 @@
           this._lastStablePalmRight = new THREE.Vector3();
           this._hasStablePalmLeft = false;
           this._hasStablePalmRight = false;
+          this._lastPalmTrackLeft = new THREE.Vector3();
+          this._lastPalmTrackRight = new THREE.Vector3();
+          this._hasPalmTrackLeft = false;
+          this._hasPalmTrackRight = false;
+          this._smoothCollPalmLeft = new THREE.Vector3();
+          this._smoothCollPalmRight = new THREE.Vector3();
+          this._hasSmoothCollPalmLeft = false;
+          this._hasSmoothCollPalmRight = false;
+          this._smoothCollHitLeft = false;
+          this._smoothCollHitRight = false;
+          this._smoothCollDisplayTmp = new THREE.Vector3();
+          this._smoothCollPrevTmp = new THREE.Vector3();
+          this.handCollisionSmoothRateHit = 18;
+          this.handCollisionSmoothRateFree = 28;
+          this.handCollisionMaxStepHit = 0.022;
+          this.handCollisionMaxStepFree = 0.05;
           this._grabAnchorLeft = new THREE.Vector3();
           this._grabAnchorRight = new THREE.Vector3();
           this._grabAnchorActiveLeft = false;
@@ -848,8 +864,20 @@
           this._hasSmoothedPalmContactLeft = false;
           this._hasSmoothedPalmContactRight = false;
           this._ragdollArmHold = {
-            left: { active: false, overloaded: false, wristWorld: new THREE.Vector3() },
-            right: { active: false, overloaded: false, wristWorld: new THREE.Vector3() }
+            left: {
+              active: false,
+              overloaded: false,
+              wristWorld: new THREE.Vector3(),
+              handQuat: new THREE.Quaternion(),
+              hasHandQuat: false
+            },
+            right: {
+              active: false,
+              overloaded: false,
+              wristWorld: new THREE.Vector3(),
+              handQuat: new THREE.Quaternion(),
+              hasHandQuat: false
+            }
           };
 
           // Leg IK (Box3D physics via leg-ik-box3d.js)
@@ -3647,6 +3675,8 @@
           if (this.data.isMirror || !this.modelLoaded || !this.skeleton) return;
           if (!this.leftController || !this.rightController) return;
 
+          // Grab-dummy tock may attach mid-frame; re-solve arms so weight-limited
+          // wrist targets apply the same frame as the new hold.
           const comp = document.querySelector('#grab-dummy')?.components['grabbable-ragdoll'];
           const hold = comp?.getPlayerArmHold?.();
           const ragHoldActive = !!(hold?.left?.active || hold?.right?.active);
@@ -4786,6 +4816,8 @@
           if (!probes.length) return false;
 
           const maxIter = options.singlePass ? 1 : 10;
+          const preferToward = options.preferToward || null;
+          const maxDelta = options.maxDelta != null ? options.maxDelta : 0.08;
 
           if (!this._handProbeLast) this._handProbeLast = {};
           let lastArr = this._handProbeLast[hand];
@@ -4798,7 +4830,10 @@
             // Drop stale history (teleport / large jump) so we never sweep across
             // unrelated geometry and yank the hand.
             if (last && last.distanceTo(cur) > 0.5) last = null;
-            return legIk.physics.slideHandSphere(last, last || cur, cur, probes[i].radius, cur);
+            return legIk.physics.slideHandSphere(last, last || cur, cur, probes[i].radius, cur, {
+              preferToward,
+              maxDelta
+            });
           };
 
           let everHit = false;
@@ -4826,6 +4861,11 @@
 
             if (!bestDelta || deepest < 0.0006) break;
             if (deepest > 0.8) break; // pathological — ignore this frame's push
+            // Cap a single rigid correction so probes never yank the wrist across the scene.
+            if (deepest > maxDelta) {
+              bestDelta.multiplyScalar(maxDelta / deepest);
+              deepest = maxDelta;
+            }
             everHit = true;
             targetHandPos.add(bestDelta);
             applyTwoBoneIK(true);
@@ -5091,6 +5131,8 @@
         },
 
         _getGrabLockedHandWorld: function (hand) {
+          const rag = this._ragdollArmHold?.[hand];
+          if (rag?.active && rag.hasHandQuat) return rag.handQuat;
           if (hand === 'left' && this._grabHandLockLeft) {
             return this._grabLockedHandWorldLeft;
           }
@@ -5216,6 +5258,9 @@
           if (hand === 'left') {
             this._grabAnchorActiveLeft = false;
             this._hasStablePalmLeft = false;
+            this._hasPalmTrackLeft = false;
+            this._hasSmoothCollPalmLeft = false;
+            this._smoothCollHitLeft = false;
             this._grabCollisionMissLeft = 0;
             this._grabHandLockLeft = false;
             this._grabWristLockLeft = false;
@@ -5228,6 +5273,9 @@
           } else {
             this._grabAnchorActiveRight = false;
             this._hasStablePalmRight = false;
+            this._hasPalmTrackRight = false;
+            this._hasSmoothCollPalmRight = false;
+            this._smoothCollHitRight = false;
             this._grabCollisionMissRight = 0;
             this._grabHandLockRight = false;
             this._grabWristLockRight = false;
@@ -5365,21 +5413,13 @@
         },
 
         _nudgeWristForPalmContact: function (hand, handBone, desiredProbe, targetHandPos, applyTwoBoneIK, dt, maxStepScale) {
-          // Iteratively move the wrist target so the palm probe lands exactly on
-          // the collision-corrected surface point. Because the surface point is
-          // continuous frame-to-frame (collide-and-slide), this fully blocks the
-          // hand without teleporting. A generous per-frame cap guards against
-          // pathological single-frame jumps.
+          // Move the wrist so the palm probe lands on the collision-corrected point.
           const tmp = this._palmWorldTmp2 || new THREE.Vector3();
           const firstProbe = this._getHandPalmProbeWorldPos(hand, tmp);
           const initialErr = desiredProbe.distanceTo(firstProbe);
           if (initialErr < 1e-5) return;
-          if (initialErr > 1.5) return; // pathological frame — never snap across the scene
+          if (initialErr > 1.5) return;
 
-          // No per-frame cap: the surface target is continuous frame-to-frame, so
-          // fully placing the palm on it produces smooth motion (the transient
-          // "reach into controller" pose is never rendered). Capping here would
-          // only let the hand sink in when the controller pushes past the cap.
           for (let iter = 0; iter < 8; iter++) {
             const curProbe = this._getHandPalmProbeWorldPos(hand, tmp);
             const err = desiredProbe.clone().sub(curProbe);
@@ -6048,12 +6088,73 @@
           return !!(hold && hold[hand]?.active);
         },
 
+        /** Drop palm sweep history so the next frame re-approaches from the controller. */
+        invalidateHandCollisionHistory: function (hand) {
+          if (!hand || hand === 'left') {
+            this._hasStablePalmLeft = false;
+            this._hasPalmTrackLeft = false;
+            this._hasSmoothCollPalmLeft = false;
+            this._smoothCollHitLeft = false;
+            if (this._handProbeLast) this._handProbeLast.left = null;
+          }
+          if (!hand || hand === 'right') {
+            this._hasStablePalmRight = false;
+            this._hasPalmTrackRight = false;
+            this._hasSmoothCollPalmRight = false;
+            this._smoothCollHitRight = false;
+            if (this._handProbeLast) this._handProbeLast.right = null;
+          }
+        },
+
+        /**
+         * Temporally smooth the palm probe used for wrist IK so surface contact
+         * never stutters, while physics lastStable stays on the raw slide result.
+         */
+        _smoothHandCollisionProbe: function (hand, rawProbe, dest, dt, hit) {
+          const sKey = hand === 'left' ? '_smoothCollPalmLeft' : '_smoothCollPalmRight';
+          const hKey = hand === 'left' ? '_hasSmoothCollPalmLeft' : '_hasSmoothCollPalmRight';
+          const hitKey = hand === 'left' ? '_smoothCollHitLeft' : '_smoothCollHitRight';
+          const smoothed = this[sKey];
+
+          if (!this[hKey]) {
+            smoothed.copy(rawProbe);
+            this[hKey] = true;
+            this[hitKey] = !!hit;
+            return dest.copy(smoothed);
+          }
+
+          const prev = this._smoothCollPrevTmp || (this._smoothCollPrevTmp = new THREE.Vector3());
+          prev.copy(smoothed);
+
+          const rate = hit
+            ? (this.handCollisionSmoothRateHit || 18)
+            : (this.handCollisionSmoothRateFree || 28);
+          const alpha = 1 - Math.exp(-rate * Math.max(dt, 1e-4));
+          smoothed.lerp(rawProbe, alpha);
+
+          const maxStepBase = hit
+            ? (this.handCollisionMaxStepHit || 0.022)
+            : (this.handCollisionMaxStepFree || 0.05);
+          const maxStep = maxStepBase * Math.max(dt / 0.016, 0.35);
+          const moved = smoothed.distanceTo(prev);
+          if (moved > maxStep && moved > 1e-8) {
+            const dir = this._palmWorldTmp || new THREE.Vector3();
+            dir.subVectors(smoothed, prev).normalize();
+            smoothed.copy(prev).addScaledVector(dir, maxStep);
+          }
+
+          this[hitKey] = !!hit;
+          return dest.copy(smoothed);
+        },
+
         _applyRagdollDummyArmHold: function(leftHandWorldPos, rightHandWorldPos) {
           if (this.data.isMirror) return;
           this._ragdollArmHold.left.active = false;
           this._ragdollArmHold.left.overloaded = false;
+          this._ragdollArmHold.left.hasHandQuat = false;
           this._ragdollArmHold.right.active = false;
           this._ragdollArmHold.right.overloaded = false;
+          this._ragdollArmHold.right.hasHandQuat = false;
           const comp = document.querySelector('#grab-dummy')?.components['grabbable-ragdoll'];
           if (!comp || !comp.getPlayerArmHold) return;
           const hold = comp.getPlayerArmHold();
@@ -6061,11 +6162,19 @@
             this._ragdollArmHold.left.active = true;
             this._ragdollArmHold.left.overloaded = !!hold.left.overloaded;
             this._ragdollArmHold.left.wristWorld.copy(hold.left.wristWorld);
+            if (hold.left.hasHandQuat && hold.left.handQuat) {
+              this._ragdollArmHold.left.handQuat.copy(hold.left.handQuat);
+              this._ragdollArmHold.left.hasHandQuat = true;
+            }
           }
           if (hold.right?.active) {
             this._ragdollArmHold.right.active = true;
             this._ragdollArmHold.right.overloaded = !!hold.right.overloaded;
             this._ragdollArmHold.right.wristWorld.copy(hold.right.wristWorld);
+            if (hold.right.hasHandQuat && hold.right.handQuat) {
+              this._ragdollArmHold.right.handQuat.copy(hold.right.handQuat);
+              this._ragdollArmHold.right.hasHandQuat = true;
+            }
           }
         },
 
@@ -6496,17 +6605,22 @@
           // the controller — otherwise pulling the controller in shortens the arm
           // and the hand drifts off the hold.
           const wristLocked = hand === 'left' ? this._grabWristLockLeft : this._grabWristLockRight;
-          const lockedWristWorld = hand === 'left' ? this._grabLockedWristWorldLeft : this._grabLockedWristWorldRight;
+          const envLockedWristWorld = hand === 'left' ? this._grabLockedWristWorldLeft : this._grabLockedWristWorldRight;
+          const freezeWristWorld = this._ragHoldFreezeWristTmp || (this._ragHoldFreezeWristTmp = new THREE.Vector3());
           let heldGrabFreeze = false;
           const ragHold = !this.data.isMirror ? this._ragdollArmHold[hand] : null;
           const ragDummyHold = !!ragHold?.active;
 
           // Ragdoll dummy uses the same grip button — keep it separate from environment grab.
+          // Pin the virtual hand to the weight-limited grab contact (anchor + palm→bone
+          // offset). When lift limits bind, the anchor lags the controller and the
+          // hand stays on the object — that is the weight feel.
           if (ragDummyHold && !this.data.isMirror && handBone) {
             if (hand === 'left' ? this._grabAnchorActiveLeft : this._grabAnchorActiveRight) {
               this._releaseGrabHand(hand);
             }
-            // Arms follow the controller; ragdoll pull uses a frozen body anchor in physics.
+            heldGrabFreeze = true;
+            freezeWristWorld.copy(ragHold.wristWorld);
           } else if (!this.data.isMirror && handBone && wristLocked) {
             const grabActiveNow = hand === 'left' ? this._grabAnchorActiveLeft : this._grabAnchorActiveRight;
             if (grabActiveNow && this._isGrabPressed(hand)) {
@@ -6514,17 +6628,16 @@
               const anchorH = hand === 'left' ? this._grabAnchorLeft : this._grabAnchorRight;
               if (!this._shouldReleaseGrab(hand, ctrlH, anchorH, true)) {
                 heldGrabFreeze = true;
+                freezeWristWorld.copy(envLockedWristWorld);
               }
             }
           }
 
           const adjustedHandPos = handWorldPos.clone();
           if (heldGrabFreeze) {
-            // Reach is measured to the fixed hold; lockedWristWorld is already the
+            // Reach is measured to the fixed hold; freezeWristWorld is already the
             // final wrist world position (no left/right offset needed).
-            adjustedHandPos.copy(lockedWristWorld);
-          } else if (ragHold?.active) {
-            adjustedHandPos.copy(ragHold.wristWorld);
+            adjustedHandPos.copy(freezeWristWorld);
           } else {
             const leftRightOffsetLocal = new THREE.Vector3(hand === 'left' ? 0.1 : -0.1, 0, 0);
             const bodyWorldQuat = this._getBodyWorldQuat(this._ikBodyWorldQuat || (this._ikBodyWorldQuat = new THREE.Quaternion()));
@@ -6548,7 +6661,7 @@
           
           if (distance > naturalMaxReach * 0.97) {
             // Locked holds (environment + ragdoll) may stretch to keep the anchor.
-            const allowGrabStretch = heldGrabFreeze && !ragDummyHold;
+            const allowGrabStretch = heldGrabFreeze;
             armScale = THREE.MathUtils.clamp(
               distance / (naturalMaxReach * 0.97),
               1.0,
@@ -6564,7 +6677,7 @@
           let targetHandPos = adjustedHandPos.clone();
           if (heldGrabFreeze) {
             // Pin exactly to the hold — never shorten, or the hand drifts off it.
-            targetHandPos.copy(lockedWristWorld);
+            targetHandPos.copy(freezeWristWorld);
           } else if (distance > effectiveMaxReach) {
             targetHandPos = shoulderWorldPos.clone().add(
               shoulderToHand.clone().normalize().multiplyScalar(effectiveMaxReach)
@@ -6746,13 +6859,14 @@
           // was captured when the grab began. Controller motion only drives
           // grab-pull locomotion (the body moves under a static hand); it must
           // NOT reposition or reorient the grabbing hand until release.
+          // Ragdoll holds freeze to the weight-limited contact wrist instead.
           let handFrozen = false;
           if (heldGrabFreeze) {
             handFrozen = true;
             if (!ragDummyHold) {
               lockedHandLocal = this._getGrabLockedHandLocal(hand);
             }
-            targetHandPos.copy(lockedWristWorld);
+            targetHandPos.copy(freezeWristWorld);
           } else if (!ragDummyHold && !this.data.isMirror && handBone && grabActive && grabWasActive && wristLocked && grabPressed) {
             // Was holding, but the pull-release threshold was crossed this frame.
             this._releaseGrabHand(hand);
@@ -6761,30 +6875,24 @@
           }
 
           if (handFrozen) {
-            if (ragDummyHold) {
-              if (handBone) {
-                this._solveFrozenGrabWrist(hand, handBone, lockedWristWorld, targetHandPos, applyTwoBoneIK);
-              } else {
-                applyTwoBoneIK(true);
-              }
-              this._updateRagdollHoldHaptics(hand, true, handWorldPos);
-            } else {
-              // Hierarchy-safe freeze: rest handBone.position + IK-target compensation.
-              // Never write world→local into handBone.position (that detaches the wrist).
-              if (handBone) {
-                this._solveFrozenGrabWrist(hand, handBone, lockedWristWorld, targetHandPos, applyTwoBoneIK);
+            if (handBone) {
+              this._solveFrozenGrabWrist(hand, handBone, freezeWristWorld, targetHandPos, applyTwoBoneIK);
+              if (!ragDummyHold) {
                 const bpFrozen = this._getHandPalmProbeWorldPos(hand, this._palmWorldTmp);
                 stablePalmForNextFrame = bpFrozen.clone();
-              } else {
-                applyTwoBoneIK(true);
               }
+            } else {
+              applyTwoBoneIK(true);
+            }
+            if (ragDummyHold) {
+              this._updateRagdollHoldHaptics(hand, true, handWorldPos);
+            } else {
               this._updateHandHaptics(hand, true, grabActive, grabWasActive);
             }
           } else {
             applyTwoBoneIK(false);
             if (!this.data.isMirror) {
               const envGrabActive = hand === 'left' ? this._grabAnchorActiveLeft : this._grabAnchorActiveRight;
-              const envGrabWas = hand === 'left' ? this._envGrabWasActiveLeft : this._envGrabWasActiveRight;
               if (ragDummyHold) {
                 this._updateRagdollHoldHaptics(hand, true, handWorldPos);
               } else if (!envGrabActive) {
@@ -6804,58 +6912,123 @@
             const stableProbe = new THREE.Vector3();
             let collisionHit = false;
 
+            // Environment via Box3D; character via live Mixamo limb capsules.
+            // Never query misaligned Box3D ragdoll capsules for hand blocking.
+            const ragComp = document.querySelector('#grab-dummy')?.components['grabbable-ragdoll'];
+            if (legIk.physics.setHandCollideRagdoll) {
+              legIk.physics.setHandCollideRagdoll(false);
+            }
+
+            // Bias depenetration toward the shoulder so embeds exit on the
+            // player-facing side (near the controller), not through the wall.
+            const preferToward = shoulderWorldPos;
+            const lastTrackKey = hand === 'left' ? '_lastPalmTrackLeft' : '_lastPalmTrackRight';
+            if (!this[lastTrackKey]) this[lastTrackKey] = new THREE.Vector3();
+            const hasLastTrack = hand === 'left' ? this._hasPalmTrackLeft : this._hasPalmTrackRight;
+            const lastTrack = hasLastTrack ? this[lastTrackKey] : adjustedHandPos;
+            const palmRadius = this.handCollisionRadius || this.palmProbeRadius || 0.026;
+
             collisionHit = legIk.clampHandPalmAlongTracking(
               lastStable,
               boneProbe,
               stableProbe,
               hand,
-              adjustedHandPos
+              adjustedHandPos,
+              { preferToward, lastTrack }
             );
+            let hitCharacterMesh = false;
+
+            // Character path is isolated — must never break environment blocking.
+            try {
+              if (ragComp && ragComp.slidePalmOnMesh) {
+                const meshOut = this._meshPalmResolveTmp || (this._meshPalmResolveTmp = new THREE.Vector3());
+                const meshSlide = ragComp.slidePalmOnMesh(lastStable, boneProbe, meshOut, {
+                  radius: palmRadius,
+                  preferToward,
+                  tracking: adjustedHandPos
+                });
+                if (meshSlide && meshSlide.hit && meshSlide.position) {
+                  const envBlocked = collisionHit
+                    ? stableProbe.distanceToSquared(boneProbe)
+                    : 0;
+                  const meshBlocked = meshOut.distanceToSquared(boneProbe);
+                  if (!collisionHit || meshBlocked >= envBlocked - 1e-8) {
+                    stableProbe.copy(meshOut);
+                    collisionHit = true;
+                    hitCharacterMesh = true;
+                    const debugKey = hand === 'left' ? '_handPalmDebugLeft' : '_handPalmDebugRight';
+                    const n = (meshSlide.normal && meshSlide.normal.clone()) || new THREE.Vector3(0, 1, 0);
+                    legIk[debugKey] = {
+                      hit: true,
+                      sticky: meshOut.clone(),
+                      contactPoint: meshSlide.contactPoint
+                        ? meshSlide.contactPoint.clone()
+                        : meshOut.clone().addScaledVector(n, -palmRadius),
+                      normal: n,
+                      shapeId: 'mesh-limb',
+                      controller: adjustedHandPos.clone(),
+                      contactDistance: meshOut.distanceTo(adjustedHandPos)
+                    };
+                  }
+                }
+              }
+            } catch (meshErr) {
+              console.warn('[mixamo-body] character limb hand collision failed:', meshErr);
+            }
+
+            this[lastTrackKey].copy(adjustedHandPos);
+            if (hand === 'left') this._hasPalmTrackLeft = true;
+            else this._hasPalmTrackRight = true;
 
             // Always keep the corrected probe as next frame's sweep origin so a
             // fast approach can never tunnel through geometry between frames.
-            stablePalmForNextFrame = stableProbe.clone();
             lastProbe.copy(stableProbe);
             if (hand === 'left') {
               this._hasStablePalmLeft = true;
             } else {
               this._hasStablePalmRight = true;
             }
+            stablePalmForNextFrame = stableProbe.clone();
 
             let surfaceGrab = hand === 'left' ? this._grabSurfaceContactLeft : this._grabSurfaceContactRight;
             let dbg = hand === 'left' ? legIk._handPalmDebugLeft : legIk._handPalmDebugRight;
 
             if (grabPressed && collisionHit && !grabWasActive) {
-              // Anchor at the collision-corrected contact — same pose visible pre-grab.
-              // Do NOT raycast to a new point; that was causing a ~10cm teleport on grab.
-              if (dbg && dbg.contactPoint) {
-                anchor.copy(dbg.contactPoint);
-              } else {
-                this._probeWorldToContactWorld(hand, stableProbe, anchor);
-              }
-              if (dbg && dbg.normal) {
-                palmNormal.copy(dbg.normal);
-                if (palmNormal.lengthSq() < 1e-8) palmNormal.set(0, 1, 0);
-                else palmNormal.normalize();
-              } else {
-                this._estimatePalmNormalFromPhysics(anchor, palmNormal);
-              }
+              // Character limb hits must not start environment grab-pull.
+              const hitRagdoll = hitCharacterMesh ||
+                !!(legIk.physics.isRagdollShape && legIk.physics.isRagdollShape(dbg?.shapeId)) ||
+                dbg?.shapeId === 'mesh-limb' ||
+                dbg?.shapeId === 'mesh-character';
+              if (!hitRagdoll) {
+                if (dbg && dbg.contactPoint) {
+                  anchor.copy(dbg.contactPoint);
+                } else {
+                  this._probeWorldToContactWorld(hand, stableProbe, anchor);
+                }
+                if (dbg && dbg.normal) {
+                  palmNormal.copy(dbg.normal);
+                  if (palmNormal.lengthSq() < 1e-8) palmNormal.set(0, 1, 0);
+                  else palmNormal.normalize();
+                } else {
+                  this._estimatePalmNormalFromPhysics(anchor, palmNormal);
+                }
 
-              this._lockGrabHandOrientation(hand, handBone);
-              lockedHandLocal = this._getGrabLockedHandLocal(hand);
-              if (hand === 'left') {
-                this._grabAnchorActiveLeft = true;
-                this._grabSurfaceContactLeft = true;
-              } else {
-                this._grabAnchorActiveRight = true;
-                this._grabSurfaceContactRight = true;
+                this._lockGrabHandOrientation(hand, handBone);
+                lockedHandLocal = this._getGrabLockedHandLocal(hand);
+                if (hand === 'left') {
+                  this._grabAnchorActiveLeft = true;
+                  this._grabSurfaceContactLeft = true;
+                } else {
+                  this._grabAnchorActiveRight = true;
+                  this._grabSurfaceContactRight = true;
+                }
+                grabActive = true;
+                surfaceGrab = true;
+                this._seedGrabPullTracking(hand, anchor);
+                this._resetGrabFingerCurls(hand);
+                stablePalmForNextFrame = stableProbe.clone();
+                lastProbe.copy(stableProbe);
               }
-              grabActive = true;
-              surfaceGrab = true;
-              this._seedGrabPullTracking(hand, anchor);
-              this._resetGrabFingerCurls(hand);
-              stablePalmForNextFrame = stableProbe.clone();
-              lastProbe.copy(stableProbe);
             }
 
             if (collisionHit) {
@@ -6864,9 +7037,16 @@
               );
             }
 
-            // Palm-only rigid block — fingers/knuckles must not hold the palm off,
-            // but we never snap skin through geometry (probe slide only).
-            const rigidHit = this._blockHandRigid(hand, handBone, targetHandPos, applyTwoBoneIK, { palmOnly: true });
+            // Light rigid pass only when palm did not already hit.
+            let rigidHit = false;
+            if (!collisionHit) {
+              rigidHit = this._blockHandRigid(hand, handBone, targetHandPos, applyTwoBoneIK, {
+                palmOnly: true,
+                preferToward,
+                maxDelta: 0.12,
+                singlePass: true
+              });
+            }
             collisionHit = collisionHit || rigidHit;
 
             if (hand === 'left') {
@@ -6884,7 +7064,7 @@
               this.model.updateMatrixWorld(true);
               if (this.skeleton) this.skeleton.update();
               this._restoreHandBoneRestPosition(hand);
-              handBone.getWorldPosition(lockedWristWorld);
+              handBone.getWorldPosition(envLockedWristWorld);
               if (hand === 'left') {
                 this._grabWristCorrLeft.set(0, 0, 0);
               } else {
@@ -6914,6 +7094,12 @@
             }
 
             this._updateHandHaptics(hand, collisionHit, grabActive, grabWasActive);
+
+            // Leave hand queries on ENVIRONMENT-only when done so other systems
+            // (and the far hand next frame) don't pay for ragdoll broadphase hits.
+            if (legIk.physics.setHandCollideRagdoll) {
+              legIk.physics.setHandCollideRagdoll(false);
+            }
           }
 
           if (!this.data.isMirror && handBone) {

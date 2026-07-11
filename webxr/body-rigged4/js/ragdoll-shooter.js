@@ -331,7 +331,17 @@
       this._updateAimLine(this._rayOri, end, !!(hit && !hit.environment));
     },
 
+    /**
+     * Register damage from the skinned-mesh ray. Capsule preview is aim-assist only —
+     * using it for hits made chest shots land on the oversized head/neck capsules.
+     */
     _resolveShotHit: function (comp, fromVrHand) {
+      if (comp?.raycastFromShot) {
+        const meshHit = comp.raycastFromShot(this._rayOri, this._rayDir, MAX_RANGE);
+        if (meshHit) return meshHit;
+      }
+
+      // Fallback when the mesh is thin/misses but the aim line was clearly on the dummy.
       const preview = fromVrHand ? this._vrAimPreview : null;
       if (fromVrHand) {
         if (!preview || preview.environment || !preview.point) return null;
@@ -345,11 +355,9 @@
         };
       }
       if (comp?.raycastAimPreview) {
-        const capsuleHit = comp.raycastAimPreview(this._rayOri, this._rayDir, MAX_RANGE);
-        if (capsuleHit) return capsuleHit;
+        return comp.raycastAimPreview(this._rayOri, this._rayDir, MAX_RANGE);
       }
-      if (!comp?.raycastFromShot) return null;
-      return comp.raycastFromShot(this._rayOri, this._rayDir, MAX_RANGE);
+      return null;
     },
 
     _fireShot: function (fromVrHand) {

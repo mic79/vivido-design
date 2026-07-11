@@ -27,6 +27,7 @@
       this.ragdollActive = false;
       this.ragdollGroup = 1;
       this.playerColliderDisabled = false;
+      this.ragdollShapeIdSet = new Set();
 
       this._capsuleCrouchT = -1;
       this.capsule = {
@@ -315,68 +316,79 @@
     }
 
     // Push a sphere center out of any geometry it overlaps.
-    // `awayRef` (a known collision-free reference such as the previous valid
-    // position) biases the exit direction so we never pop out the wrong side.
-    _depenetrateSphere(center, radius, exclude, awayRef) {
+    // Bias toward a free reference (controller / previous probe), then axis-ray.
+    _depenetrateSphere(center, radius, exclude, awayRef, opts) {
+      opts = opts || {};
       const q = this.queries;
       const overlaps = (p) => q.sphereOverlaps({ x: p.x, y: p.y, z: p.z }, radius, exclude);
       const pos = center.clone();
       if (!overlaps(pos)) return pos;
 
-      if (awayRef) {
-        const dir = awayRef.clone().sub(pos);
-        if (dir.lengthSq() > 1e-10) {
-          dir.normalize();
-          for (let i = 0; i < 40; i++) {
-            if (!overlaps(pos)) break;
-            pos.addScaledVector(dir, radius * 0.25 + 0.004);
-          }
-          if (!overlaps(pos)) return pos;
+      const tryWalk = (target) => {
+        if (!target) return false;
+        const dir = target.clone
+          ? target.clone().sub(center)
+          : new THREE.Vector3(target.x - center.x, target.y - center.y, target.z - center.z);
+        if (dir.lengthSq() < 1e-10) return false;
+        dir.normalize();
+        pos.copy(center);
+        for (let i = 0; i < 48; i++) {
+          if (!overlaps(pos)) return true;
+          pos.addScaledVector(dir, radius * 0.25 + 0.004);
         }
-      }
+        return !overlaps(pos);
+      };
 
-      // Fallback: axis-ray push-out (handles the no-reference / edge cases).
-      const resolved = q.resolveSphereAgainstColliders(pos, radius, {
+      // Prefer shoulder / controller so we exit on the player-facing side.
+      if (tryWalk(opts.preferToward)) return pos;
+      if (tryWalk(opts.tracking || awayRef)) return pos;
+      if (awayRef && awayRef !== opts.tracking && tryWalk(awayRef)) return pos;
+
+      // Axis-ray push-out — the reliable wall blocker.
+      const resolved = q.resolveSphereAgainstColliders(center, radius, {
         excludeShapeIds: exclude,
         maxIterations: 24
       });
       return resolved.position;
     }
 
-    // Continuous collide-and-slide: sweep the sphere from `lastValid`
-    // (guaranteed collision-free) toward `desired`, stopping at surfaces and
-    // sliding along them. Never teleports; never ends inside geometry.
-    slideHandSphere(lastValid, lastTrack, desired, radius, trackingPos) {
+    // Continuous collide-and-slide from a free start toward `desired`.
+    // No soft-clamp: a hit must fully stop the probe or hands tunnel through walls.
+    slideHandSphere(lastValid, lastTrack, desired, radius, trackingPos, opts) {
+      opts = opts || {};
       const exclude = this.playerShapeIds;
       const q = this.queries;
       const skin = 0.0015;
       const overlaps = (p) => q.sphereOverlaps({ x: p.x, y: p.y, z: p.z }, radius, exclude);
+      const preferToward = opts.preferToward || null;
+      const tracking = trackingPos || lastTrack || desired;
+      const depOpts = { preferToward, tracking };
 
       let normal = new THREE.Vector3(0, 1, 0);
+      let hitShapeId = null;
       const finish = (pos, wasHit, n) => {
         if (n && n.lengthSq() > 1e-8) normal.copy(n).normalize();
         return {
           position: pos,
           hit: wasHit,
           normal,
+          shapeId: hitShapeId,
           contactPoint: pos.clone().addScaledVector(normal, -radius)
         };
       };
 
-      // Establish a collision-free start position.
       let pos;
       if (lastValid) {
         pos = overlaps(lastValid)
-          ? this._depenetrateSphere(lastValid, radius, exclude, lastTrack || trackingPos)
+          ? this._depenetrateSphere(lastValid, radius, exclude, lastTrack || tracking, depOpts)
           : lastValid.clone();
       } else {
         if (!overlaps(desired)) {
           return finish(desired.clone(), false, normal);
         }
-        pos = this._depenetrateSphere(desired, radius, exclude, trackingPos || lastTrack);
+        pos = this._depenetrateSphere(desired, radius, exclude, tracking || lastTrack, depOpts);
       }
 
-      // Collide-and-slide toward the desired position.
       let vel = desired.clone().sub(pos);
       let hit = false;
       for (let iter = 0; iter < 6; iter++) {
@@ -389,25 +401,20 @@
           break;
         }
         hit = true;
+        if (sweep.shapeId != null) hitShapeId = sweep.shapeId;
         const n = new THREE.Vector3(sweep.normal.x, sweep.normal.y, sweep.normal.z);
         if (n.lengthSq() < 1e-8) n.set(0, 1, 0);
         else n.normalize();
         normal.copy(n);
 
-        // Advance up to the contact (0 if we start embedded/touching).
         const frac = Math.min(1, Math.max(0, sweep.fraction != null ? sweep.fraction : 0));
         const advance = Math.max(0, frac - 0.001);
         pos.addScaledVector(vel, advance);
         vel.multiplyScalar(1 - advance);
 
-        // Slide: drop the into-surface component, keep tangential motion.
         const vn = vel.dot(n);
         if (vn < 0) vel.addScaledVector(n, -vn);
 
-        // Clear any embedding along the contact normal so the NEXT (now
-        // tangential) sweep starts just outside the surface and can actually
-        // move along it. Without this the sweep keeps hitting at fraction 0 and
-        // the sphere sticks — which felt like friction when sliding.
         let guard = 0;
         while (guard++ < 6 && overlaps(pos)) {
           pos.addScaledVector(n, skin * 3);
@@ -415,13 +422,48 @@
         pos.addScaledVector(n, skin);
       }
 
-      // Numerical safety: if we still ended up overlapping, push back out.
       if (overlaps(pos)) {
-        pos = this._depenetrateSphere(pos, radius, exclude, lastValid || trackingPos);
+        pos = this._depenetrateSphere(pos, radius, exclude, lastValid || tracking, depOpts);
+        hit = true;
+      } else if (overlaps(desired)) {
+        // Sweep missed while desired is embedded (stale/tunneled history).
+        pos = this._depenetrateSphere(desired, radius, exclude, lastValid || tracking, depOpts);
         hit = true;
       }
 
       return finish(pos, hit, normal);
+    }
+
+    /** Enable/disable RAGDOLL in hand sphere queries (call per-hand when near). */
+    setHandCollideRagdoll(enabled) {
+      if (this.queries && this.queries.setHandCollideRagdoll) {
+        this.queries.setHandCollideRagdoll(!!enabled);
+      }
+    }
+
+    registerRagdollQueryShapes(human) {
+      this.ragdollShapeIdSet.clear();
+      if (!human) return;
+      if (human.shapeIds && human.shapeIds.length) {
+        for (let i = 0; i < human.shapeIds.length; i++) {
+          this.ragdollShapeIdSet.add(human.shapeIds[i]);
+        }
+        return;
+      }
+      if (!this.b3 || !this.b3.b3Body_GetShapes || !human.bodies) return;
+      for (let i = 0; i < human.bodies.length; i++) {
+        const shapes = this.b3.b3Body_GetShapes(human.bodies[i]);
+        if (!shapes) continue;
+        for (let s = 0; s < shapes.length; s++) this.ragdollShapeIdSet.add(shapes[s]);
+      }
+    }
+
+    clearRagdollQueryShapes() {
+      this.ragdollShapeIdSet.clear();
+    }
+
+    isRagdollShape(shapeId) {
+      return shapeId != null && this.ragdollShapeIdSet.has(shapeId);
     }
 
     castRay(origin, direction, maxDist) {
@@ -481,6 +523,7 @@
         undefined,
         { dynamicBones: opts.dynamicBones || null }
       );
+      this.registerRagdollQueryShapes(this.ragdollHuman);
       this.ragdollActive = true;
       this.setPlayerColliderEnabled(false);
 
@@ -496,6 +539,8 @@
         window.Box3DRagdoll.destroyHuman(this.b3, this.ragdollHuman);
         this.ragdollHuman = null;
       }
+      this.clearRagdollQueryShapes();
+      this.setHandCollideRagdoll(false);
       if (this.ragdollVisual && this.ragdollVisual.parent) {
         this.ragdollVisual.parent.remove(this.ragdollVisual);
       }

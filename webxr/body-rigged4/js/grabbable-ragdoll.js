@@ -6,32 +6,57 @@
  * It reuses the shared physics world + ragdoll modules but does NOT touch the player's
  * ragdoll or collider: it calls Box3DRagdoll.createHuman directly (not spawnRagdoll).
  */
-// Visible limb segments for palm raycast / nearest-target (matches Mixamo mesh, not raw physics).
+// Bone pairs keyed by Box3D body index (grab targeting + limb capsules).
+// Hand/foot/head use extendB so the capsule covers the visible mesh past the joint bone.
 const MESH_BODY_SEGS = {
-  0: ['hips', 'spine'],
-  1: ['spine', 'spine1'],
-  2: ['spine1', 'spine2'],
-  3: ['spine2', 'neck'],
-  4: ['neck', 'head'],
-  5: ['neck', 'head'],
-  6: ['leftUpLeg', 'leftLeg'],
-  7: ['leftLeg', 'leftFoot'],
-  8: ['rightUpLeg', 'rightLeg'],
-  9: ['rightLeg', 'rightFoot'],
-  10: ['leftUpperArm', 'leftForearm'],
-  11: ['leftForearm', 'leftHand'],
-  12: ['rightUpperArm', 'rightForearm'],
-  13: ['rightForearm', 'rightHand'],
-  14: ['leftForearm', 'leftHand'],
-  15: ['rightForearm', 'rightHand']
+  0: { a: 'hips', b: 'spine', r: 0.14 },
+  1: { a: 'spine', b: 'spine1', r: 0.12 },
+  2: { a: 'spine1', b: 'spine2', r: 0.13 },
+  3: { a: 'spine2', b: 'neck', r: 0.14 },
+  4: { a: 'neck', b: 'head', r: 0.08 },
+  // Head bone is at the skull base — sphere centered up into the cranium.
+  5: { a: 'head', b: 'head', r: 0.125, kind: 'sphere', offsetA: 0.09, along: 'worldUp' },
+  6: { a: 'leftUpLeg', b: 'leftLeg', r: 0.095 },
+  7: { a: 'leftLeg', b: 'leftFoot', r: 0.07 },
+  8: { a: 'rightUpLeg', b: 'rightLeg', r: 0.095 },
+  9: { a: 'rightLeg', b: 'rightFoot', r: 0.07 },
+  10: { a: 'leftUpperArm', b: 'leftForearm', r: 0.08 },
+  11: { a: 'leftForearm', b: 'leftHand', r: 0.055 },
+  12: { a: 'rightUpperArm', b: 'rightForearm', r: 0.08 },
+  13: { a: 'rightForearm', b: 'rightHand', r: 0.055 },
+  // Hand bones are at the wrist — prefer finger tip bone, else extend into the palm.
+  14: { a: 'leftHand', b: 'leftHandTip', r: 0.055, fallbackExtend: 0.12, along: 'hand' },
+  15: { a: 'rightHand', b: 'rightHandTip', r: 0.055, fallbackExtend: 0.12, along: 'hand' }
 };
+
+// Extra mesh-only capsules — joint balls (shoulders/hips) + clavicle links + feet.
+const MESH_EXTRA_CAPS = [
+  // Shoulder balls (upper-arm bone origin sits inside the deltoid).
+  { a: 'leftUpperArm', b: 'leftUpperArm', r: 0.095, kind: 'sphere' },
+  { a: 'rightUpperArm', b: 'rightUpperArm', r: 0.095, kind: 'sphere' },
+  // Clavicle / shoulder girdle into the arm.
+  { a: 'spine2', b: 'leftUpperArm', r: 0.08 },
+  { a: 'spine2', b: 'rightUpperArm', r: 0.08 },
+  { a: 'leftShoulder', b: 'leftUpperArm', r: 0.07 },
+  { a: 'rightShoulder', b: 'rightUpperArm', r: 0.07 },
+  // Hip balls + pelvis-to-thigh links (covers the outer hip mesh).
+  { a: 'leftUpLeg', b: 'leftUpLeg', r: 0.11, kind: 'sphere' },
+  { a: 'rightUpLeg', b: 'rightUpLeg', r: 0.11, kind: 'sphere' },
+  { a: 'hips', b: 'leftUpLeg', r: 0.12 },
+  { a: 'hips', b: 'rightUpLeg', r: 0.12 },
+  { a: 'leftFoot', b: 'leftToe', r: 0.05, fallbackExtend: 0.14, along: 'foot' },
+  { a: 'rightFoot', b: 'rightToe', r: 0.05, fallbackExtend: 0.14, along: 'foot' }
+];
+
+const MESH_CAP_COUNT = 16 + MESH_EXTRA_CAPS.length;
 
 const AIM_SEG_REGIONS = {
   0: 'hips',
   1: 'torso',
   2: 'chest',
-  3: 'neck',
-  4: 'head',
+  // spine2→neck is upper chest for aim assist; mesh raycast owns real registration.
+  3: 'chest',
+  4: 'neck',
   5: 'head',
   6: 'leftThigh',
   7: 'leftShin',
@@ -145,7 +170,11 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     // One-hand hold (and player arm) cannot rise above floor Y + this (metres).
     maxHoldAboveFloor: { type: 'number', default: 1.0 },
     // Extra height when two hands are holding (added to maxHoldAboveFloor).
-    twoHandHoldBonus: { type: 'number', default: 0.45 }
+    twoHandHoldBonus: { type: 'number', default: 0.45 },
+    // Debug: limb capsules used for hand-vs-character collision.
+    showCollisionWireframe: { type: 'boolean', default: false },
+    // Hand only queries character limbs within this radius of the palm (metres).
+    handMeshQueryRadius: { type: 'number', default: 0.32 }
   },
 
   init: function () {
@@ -162,7 +191,14 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this.human = null;
     this.retargetState = null;
     this.ragdollActive = false;
+    this._queryCollidersOnly = false;
     this.group = null;
+    this._collisionWireGroup = null;
+    this._meshHandNear = false;
+    this._lastLimbHitIdx = -1;
+    this._lastLimbContact = null;
+    this._holdHighlight = { left: null, right: null };
+    this._holdHighlightRing = { left: null, right: null };
 
     // Per-hand grab state.
     this._held = { left: -1, right: -1 };
@@ -179,6 +215,20 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this._grabOffsetLocal = { left: new THREE.Vector3(), right: new THREE.Vector3() };
     // World anchor at grab — same role as mixamo-body _grabAnchorLeft on static surfaces.
     this._grabAnchorWorld = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+    // Virtual-palm offset from the controller at grab (controller-local). Hold drives
+    // the contact to controllerPose * this, so the pin stays under the hand that
+    // was touching — not a re-sampled bone palm that can drift from IK.
+    this._grabPalmCtrlLocal = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+    this._grabPalmCtrlReady = { left: false, right: false };
+    // Hand-bone offset from that palm (controller-local). Arm IK targets
+    // anchor + R_ctrl * this so weight limits pull the virtual hand with the body.
+    this._grabPalmToBoneCtrlLocal = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+    this._grabPalmToBoneReady = { left: false, right: false };
+    this._grabReleaseBaseline = { left: 0, right: 0 };
+    // Player wrist / hand pose locked in the grabbed body's local space (static-grab style).
+    this._holdWristLocal = { left: new THREE.Vector3(), right: new THREE.Vector3() };
+    this._holdHandQuatLocal = { left: new THREE.Quaternion(), right: new THREE.Quaternion() };
+    this._holdHandQuatReady = { left: false, right: false };
     this._effectiveHoldPos = { left: new THREE.Vector3(), right: new THREE.Vector3() };
     this._holdSmoothedQuat = { left: new THREE.Quaternion(), right: new THREE.Quaternion() };
     this._holdQuatReady = { left: false, right: false };
@@ -192,9 +242,23 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this._sessionPelvisY = null;
     this._spawnedStanding = false;
     this._playerArmHold = {
-      left: { active: false, wristWorld: new THREE.Vector3(), overloaded: false },
-      right: { active: false, wristWorld: new THREE.Vector3(), overloaded: false }
+      left: {
+        active: false,
+        overloaded: false,
+        wristWorld: new THREE.Vector3(),
+        handQuat: new THREE.Quaternion(),
+        hasHandQuat: false
+      },
+      right: {
+        active: false,
+        overloaded: false,
+        wristWorld: new THREE.Vector3(),
+        handQuat: new THREE.Quaternion(),
+        hasHandQuat: false
+      }
     };
+    // Weight/peel limits ease in over this many seconds after grab.
+    this.HOLD_WEIGHT_BLEND_S = 2.5;
     this._forceDetached = { left: false, right: false };
     this._holdMotionPrev = { left: new THREE.Vector3(), right: new THREE.Vector3() };
     this._holdMotionIntensity = { left: 0, right: 0 };
@@ -204,6 +268,12 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this.FLOOR_Y = 0;
     this.FLOOR_EPS = 0.1;
     this.OVERLOAD_DIST = 0.03;
+    // Peel/detach: controller may leave the grab contact this far before the hold breaks
+    // (same idea as mixamo-body grabReleaseDist on static surfaces).
+    this.HOLD_RELEASE_DIST = 0.14;
+    this.HOLD_RELEASE_UP_M = 0.10;
+    // Hard cap — always break even during the early weight-blend grace period.
+    this.HOLD_DETACH_MAX_M = 0.42;
     // Legacy small deltas — floor-relative cap (maxHoldAboveFloor) is the main limit.
     this.SINGLE_HAND_LIFT_M = 0.06;
     this.TWO_HAND_LIFT_M = 0.35;
@@ -715,16 +785,22 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       mixamorigLeftArm: 'leftUpperArm',
       mixamorigLeftForeArm: 'leftForearm',
       mixamorigLeftHand: 'leftHand',
+      mixamorigLeftHandMiddle3: 'leftHandTip',
       mixamorigRightShoulder: 'rightShoulder',
       mixamorigRightArm: 'rightUpperArm',
       mixamorigRightForeArm: 'rightForearm',
       mixamorigRightHand: 'rightHand',
+      mixamorigRightHandMiddle3: 'rightHandTip',
       mixamorigLeftUpLeg: 'leftUpLeg',
       mixamorigLeftLeg: 'leftLeg',
       mixamorigLeftFoot: 'leftFoot',
+      mixamorigLeftToeBase: 'leftToe',
+      mixamorigLeftFootToeBase: 'leftToe',
       mixamorigRightUpLeg: 'rightUpLeg',
       mixamorigRightLeg: 'rightLeg',
-      mixamorigRightFoot: 'rightFoot'
+      mixamorigRightFoot: 'rightFoot',
+      mixamorigRightToeBase: 'rightToe',
+      mixamorigRightFootToeBase: 'rightToe'
     };
     if (!this.skeleton) return;
     this.skeleton.bones.forEach((bone) => {
@@ -760,11 +836,519 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     if (this.model) this.model.updateMatrixWorld(true);
   },
 
+  /**
+   * Hand-vs-character collision using live Mixamo limb capsules (same segments as
+   * grab targeting). Matches the visible mesh pose — no Box3D proxy, no BVH bake.
+   */
+  _limbSegDef: function (idx) {
+    if (idx < 16) return MESH_BODY_SEGS[idx] || null;
+    return MESH_EXTRA_CAPS[idx - 16] || null;
+  },
+
+  _limbCapsuleRadius: function (idx) {
+    const seg = this._limbSegDef(idx);
+    if (seg && seg.r != null) return seg.r;
+    return 0.06;
+  },
+
+  _boneWorldPos: function (key, dest) {
+    const bone = this.bones[key];
+    if (!bone) return false;
+    bone.getWorldPosition(dest);
+    return true;
+  },
+
+  _extendAlongBone: function (boneKey, along, dist, fromPos, dest) {
+    if (dist <= 0) {
+      dest.copy(fromPos);
+      return;
+    }
+    if (along === 'worldUp') {
+      dest.copy(fromPos).addScaledVector(this._segAB.set(0, 1, 0), dist);
+      return;
+    }
+    const bone = this.bones[boneKey];
+    if (!bone) {
+      dest.copy(fromPos);
+      return;
+    }
+    bone.getWorldQuaternion(this._tmpQ);
+    if (along === 'up') {
+      this._segAB.set(0, 1, 0).applyQuaternion(this._tmpQ).normalize();
+      if (this._segAB.y < 0.35) this._segAB.set(0, 1, 0);
+    } else if (along === 'hand') {
+      this._segAB.set(0, 0, 0);
+      const tipKey = boneKey.indexOf('left') === 0 ? 'leftHandTip' : 'rightHandTip';
+      if (this.bones[tipKey] && tipKey !== boneKey) {
+        this.bones[tipKey].getWorldPosition(this._closestAxis);
+        this._segAB.copy(this._closestAxis).sub(fromPos);
+      }
+      if (this._segAB.lengthSq() < 1e-8) {
+        const foreKey = boneKey.indexOf('left') === 0 ? 'leftForearm' : 'rightForearm';
+        if (this.bones[foreKey]) {
+          this.bones[foreKey].getWorldPosition(this._closestAxis);
+          this._segAB.copy(fromPos).sub(this._closestAxis);
+        }
+      }
+      if (this._segAB.lengthSq() < 1e-8) {
+        this._segAB.set(0, 0, -1).applyQuaternion(this._tmpQ);
+      }
+      this._segAB.normalize();
+    } else if (along === 'foot') {
+      this._segAB.set(0, 0, 1).applyQuaternion(this._tmpQ);
+      this._segAB.y = 0;
+      if (this._segAB.lengthSq() < 1e-8) this._segAB.set(0, 0, 1);
+      else this._segAB.normalize();
+    } else {
+      this._segAB.set(0, 1, 0).applyQuaternion(this._tmpQ).normalize();
+    }
+    dest.copy(fromPos).addScaledVector(this._segAB, dist);
+  },
+
+  _meshCapsuleEndpoints: function (idx, outA, outB) {
+    const seg = this._limbSegDef(idx);
+    if (!seg || !this.skeleton) return false;
+    this._syncMeshWorldMatrices();
+    if (!this._boneWorldPos(seg.a, outA)) return false;
+
+    if (seg.offsetA) {
+      this._extendAlongBone(seg.a, seg.along || 'worldUp', seg.offsetA, outA, outA);
+    }
+
+    if (seg.kind === 'sphere') {
+      outB.copy(outA);
+      return true;
+    }
+
+    if (seg.b && seg.b !== seg.a && this.bones[seg.b]) {
+      this._boneWorldPos(seg.b, outB);
+      if (seg.extendB) {
+        this._extendAlongBone(seg.b, seg.along || 'up', seg.extendB, outB, outB);
+      }
+      return true;
+    }
+
+    const ext = seg.extendB || seg.fallbackExtend || 0.08;
+    this._extendAlongBone(seg.a, seg.along || 'up', ext, outA, outB);
+    return true;
+  },
+
+  _resolveSphereVsLimbCapsules: function (center, radius, preferToward) {
+    const THREE = window.AFRAME.THREE;
+    let bestPen = 0;
+    let bestPos = null;
+    let bestNormal = null;
+    let bestContact = null;
+    let bestIdx = -1;
+
+    for (let i = 0; i < MESH_CAP_COUNT; i++) {
+      if (!this._limbSegDef(i)) continue;
+      if (!this._meshCapsuleEndpoints(i, this._segA, this._segB)) continue;
+      const capR = this._limbCapsuleRadius(i);
+      this._segAB.copy(this._segB).sub(this._segA);
+      const abLen2 = this._segAB.lengthSq() || 1e-6;
+      this._segAP.copy(center).sub(this._segA);
+      let t = this._segAP.dot(this._segAB) / abLen2;
+      t = Math.max(0, Math.min(1, t));
+      this._closestAxis.copy(this._segA).addScaledVector(this._segAB, t);
+      this._segAB.copy(center).sub(this._closestAxis);
+      const dist = this._segAB.length();
+      const need = radius + capR;
+      const pen = need - dist;
+      if (pen <= 1e-5) continue;
+      if (pen <= bestPen) continue;
+
+      let normal;
+      if (dist > 1e-6) {
+        normal = this._segAB.clone().multiplyScalar(1 / dist);
+      } else if (preferToward) {
+        normal = preferToward.clone().sub(this._closestAxis);
+        if (normal.lengthSq() < 1e-10) normal.set(0, 1, 0);
+        else normal.normalize();
+      } else {
+        normal = new THREE.Vector3(0, 1, 0);
+      }
+      bestPen = pen;
+      bestContact = this._closestAxis.clone();
+      bestNormal = normal;
+      bestPos = this._closestAxis.clone().addScaledVector(normal, need + 0.0015);
+      bestIdx = i;
+    }
+
+    if (!bestPos) {
+      return {
+        position: center.clone(),
+        hit: false,
+        normal: new THREE.Vector3(0, 1, 0),
+        contactPoint: center.clone(),
+        shapeId: null,
+        limbIdx: -1
+      };
+    }
+    return {
+      position: bestPos,
+      hit: true,
+      normal: bestNormal,
+      contactPoint: bestContact,
+      shapeId: 'mesh-limb',
+      limbIdx: bestIdx
+    };
+  },
+
+  _invalidatePlayerHandCollisionHistory: function () {
+    const mb = document.querySelector('#local-body')?.components['mixamo-body'];
+    if (mb && mb.invalidateHandCollisionHistory) mb.invalidateHandCollisionHistory();
+  },
+
+  _ensureLimbDebugGroup: function () {
+    if (this._limbDebugGroup) return this._limbDebugGroup;
+    const group = new THREE.Group();
+    group.name = 'grab-dummy-limb-collision-debug';
+    group.frustumCulled = false;
+    this.sceneEl.object3D.add(group);
+    this._limbDebugGroup = group;
+    return group;
+  },
+
+  _disposeLimbDebug: function () {
+    if (!this._limbDebugGroup) return;
+    while (this._limbDebugGroup.children.length) {
+      const m = this._limbDebugGroup.children[0];
+      this._limbDebugGroup.remove(m);
+      if (m.geometry) m.geometry.dispose();
+      if (m.material) m.material.dispose();
+    }
+    if (this._limbDebugGroup.parent) this._limbDebugGroup.parent.remove(this._limbDebugGroup);
+    this._limbDebugGroup = null;
+    this._limbContactMarker = null;
+    this._holdHighlight.left = null;
+    this._holdHighlight.right = null;
+    this._holdHighlightRing.left = null;
+    this._holdHighlightRing.right = null;
+  },
+
+  _syncLimbCollisionDebug: function (activeIdx, contact) {
+    // Hold markers always update (even if limb wires are hidden).
+    if (!this.data.showCollisionWireframe) {
+      if (this._limbDebugGroup) {
+        // Hide limb capsules but keep hold markers if present.
+        for (let i = 0; i < this._limbDebugGroup.children.length; i++) {
+          const m = this._limbDebugGroup.children[i];
+          if (m === this._holdHighlight.left || m === this._holdHighlight.right ||
+              m === this._holdHighlightRing.left || m === this._holdHighlightRing.right) {
+            continue;
+          }
+          if (m === this._limbContactMarker) m.visible = false;
+          else if (m.name && m.name.indexOf('ragdoll-hold-') === 0) continue;
+          else m.visible = false;
+        }
+      }
+      this._syncHoldHighlights(this._ensureLimbDebugGroup());
+      return;
+    }
+    if (!this.modelLoaded || !this.skeleton) {
+      this._syncHoldHighlights(null);
+      return;
+    }
+
+    const group = this._ensureLimbDebugGroup();
+    group.visible = true;
+
+    // Keep the contact marker out of the capsule slot list.
+    if (this._limbContactMarker && this._limbContactMarker.parent === group) {
+      group.remove(this._limbContactMarker);
+    }
+
+    while (group.children.length < MESH_CAP_COUNT) {
+      const geo = new THREE.CapsuleGeometry(0.05, 0.1, 4, 8);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x00e5ff,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.35,
+        depthTest: false,
+        depthWrite: false
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 1004;
+      group.add(mesh);
+    }
+
+    for (let i = 0; i < MESH_CAP_COUNT; i++) {
+      const mesh = group.children[i];
+      if (!mesh) continue;
+      const seg = this._limbSegDef(i);
+      if (!seg || !this._meshCapsuleEndpoints(i, this._segA, this._segB)) {
+        mesh.visible = false;
+        continue;
+      }
+      const capR = this._limbCapsuleRadius(i);
+      this._segAB.copy(this._segB).sub(this._segA);
+      const len = this._segAB.length();
+      const asSphere = seg.kind === 'sphere' || len < capR * 0.35;
+      mesh.visible = true;
+      mesh.position.copy(this._segA).add(this._segB).multiplyScalar(0.5);
+      if (!asSphere && len > 1e-6) {
+        mesh.quaternion.setFromUnitVectors(
+          new THREE.Vector3(0, 1, 0),
+          this._segAB.clone().normalize()
+        );
+      } else {
+        mesh.quaternion.identity();
+      }
+      const cyl = asSphere ? 0 : Math.max(0.001, len - 2 * capR);
+      const shapeKey = asSphere ? 'sphere' : 'capsule';
+      if (mesh.userData.shapeKey !== shapeKey ||
+          !mesh.userData.capR || Math.abs(mesh.userData.capR - capR) > 1e-4 ||
+          Math.abs(mesh.userData.cyl - cyl) > 1e-4) {
+        if (mesh.geometry) mesh.geometry.dispose();
+        mesh.geometry = asSphere
+          ? new THREE.SphereGeometry(capR, 12, 10)
+          : new THREE.CapsuleGeometry(capR, cyl, 4, 8);
+        mesh.userData.shapeKey = shapeKey;
+        mesh.userData.capR = capR;
+        mesh.userData.cyl = cyl;
+        mesh.scale.set(1, 1, 1);
+      }
+      mesh.material.color.setHex(
+        this._isHeldLimbIdx(i) ? 0xffaa33
+          : (i === activeIdx ? 0xff66aa : 0x00e5ff)
+      );
+      mesh.material.opacity = (this._isHeldLimbIdx(i) || i === activeIdx) ? 0.95 : 0.28;
+    }
+
+    if (!this._limbContactMarker) {
+      this._limbContactMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.012, 10, 8),
+        new THREE.MeshBasicMaterial({
+          color: 0xff66aa,
+          depthTest: false,
+          depthWrite: false,
+          transparent: true,
+          opacity: 0.95
+        })
+      );
+      this._limbContactMarker.renderOrder = 1006;
+    }
+    group.add(this._limbContactMarker);
+    if (contact) {
+      this._limbContactMarker.visible = true;
+      this._limbContactMarker.position.copy(contact);
+    } else {
+      this._limbContactMarker.visible = false;
+    }
+
+    this._syncHoldHighlights(group);
+  },
+
+  _isHeldLimbIdx: function (idx) {
+    if (idx < 0 || idx > 15) return false;
+    return this._held.left === idx || this._held.right === idx;
+  },
+
+  _ensureHoldMarker: function (hand, group) {
+    if (this._holdHighlight[hand]) return this._holdHighlight[hand];
+    const color = hand === 'left' ? 0xffcc44 : 0xff8844;
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(0.028, 14, 12),
+      new THREE.MeshBasicMaterial({
+        color,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.95
+      })
+    );
+    sphere.name = `ragdoll-hold-${hand}`;
+    sphere.frustumCulled = false;
+    sphere.renderOrder = 1007;
+    group.add(sphere);
+
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.045, 0.006, 8, 24),
+      new THREE.MeshBasicMaterial({
+        color,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.85
+      })
+    );
+    ring.frustumCulled = false;
+    ring.renderOrder = 1007;
+    group.add(ring);
+
+    this._holdHighlight[hand] = sphere;
+    this._holdHighlightRing[hand] = ring;
+    return sphere;
+  },
+
+  /** Bright markers at each live grab-anchor on the ragdoll. */
+  _syncHoldHighlights: function (group) {
+    // Hold markers are debug-only; keep them hidden in normal play.
+    if (this._holdHighlight.left) this._holdHighlight.left.visible = false;
+    if (this._holdHighlight.right) this._holdHighlight.right.visible = false;
+    if (this._holdHighlightRing.left) this._holdHighlightRing.left.visible = false;
+    if (this._holdHighlightRing.right) this._holdHighlightRing.right.visible = false;
+    return;
+  },
+  /**
+   * Slide a palm sphere on live Mixamo limb capsules near the hand.
+   */
+  slidePalmOnMesh: function (lastValid, desired, dest, opts) {
+    opts = opts || {};
+    try {
+      if (!this.modelLoaded || !this.skeleton) return null;
+
+      const queryR = this.data.handMeshQueryRadius || 0.32;
+      if (!this.isPalmNearRagdoll(desired, queryR)) {
+        return null;
+      }
+
+      const radius = opts.radius != null ? opts.radius : 0.026;
+      const preferToward = opts.preferToward || null;
+
+      // Continuous: resolve along lastValid → desired if we have history.
+      let result;
+      if (lastValid) {
+        const start = this._resolveSphereVsLimbCapsules(lastValid, radius, preferToward);
+        if (start.hit) {
+          result = start;
+        } else {
+          const delta = this._tmpV.copy(desired).sub(lastValid);
+          let lo = 0;
+          let hi = 1;
+          const probe = new THREE.Vector3();
+          for (let i = 0; i < 10; i++) {
+            const mid = (lo + hi) * 0.5;
+            probe.copy(lastValid).addScaledVector(delta, mid);
+            if (this._resolveSphereVsLimbCapsules(probe, radius, preferToward).hit) hi = mid;
+            else lo = mid;
+          }
+          probe.copy(lastValid).addScaledVector(delta, hi);
+          result = this._resolveSphereVsLimbCapsules(probe, radius, preferToward);
+          if (!result.hit) {
+            result = this._resolveSphereVsLimbCapsules(desired, radius, preferToward);
+          }
+        }
+      } else {
+        result = this._resolveSphereVsLimbCapsules(desired, radius, preferToward);
+      }
+
+      this._lastLimbHitIdx = result.hit ? result.limbIdx : -1;
+      this._lastLimbContact = result.hit ? result.contactPoint : null;
+
+      if (dest && result.position) dest.copy(result.position);
+      return result;
+    } catch (e) {
+      console.warn('[grabbable-ragdoll] slidePalmOnMesh failed:', e);
+      return null;
+    }
+  },
+
+  /**
+   * Resolve a world-space sphere against live Mixamo limb capsules (head / probes).
+   * Same geometry as hand collision — not Box3D ragdoll shapes.
+   */
+  resolveSphereOnMesh: function (center, radius, opts) {
+    opts = opts || {};
+    if (!this.modelLoaded || !this.skeleton || !center) return null;
+    const r = radius != null ? radius : 0.2;
+    const queryR = opts.queryRadius != null
+      ? opts.queryRadius
+      : Math.max(0.55, (this.data.handMeshQueryRadius || 0.32) + r);
+    if (!this.isPalmNearRagdoll(center, queryR)) return null;
+
+    const result = this._resolveSphereVsLimbCapsules(center, r, opts.preferToward || null);
+    if (!result.hit) return null;
+
+    if (opts.horizontalOnly) {
+      result.position.y = center.y;
+      if (result.normal) {
+        result.normal.y = 0;
+        if (result.normal.lengthSq() > 1e-8) result.normal.normalize();
+        else result.normal.set(0, 0, 1);
+      }
+    }
+    return result;
+  },
+
+  /**
+   * Depenetrate the player locomotion capsule vs live Mixamo limb capsules.
+   * Returns { hit, dx, dy, dz } to add to player translation, or null.
+   */
+  resolvePlayerCapsuleOnMesh: function (playerPos, capsule, opts) {
+    opts = opts || {};
+    if (!this.modelLoaded || !this.skeleton || !playerPos || !capsule) return null;
+
+    const r = capsule.radius != null ? capsule.radius : 0.18;
+    const c1y = capsule.center1?.y ?? 0.3;
+    const c2y = capsule.center2?.y ?? 1.5;
+    const samples = opts.samples != null ? opts.samples : 4;
+    const horizontalOnly = opts.horizontalOnly !== false;
+    const queryR = opts.queryRadius != null ? opts.queryRadius : 0.9;
+
+    const midY = playerPos.y + (c1y + c2y) * 0.5;
+    this._tmpV.set(playerPos.x, midY, playerPos.z);
+    if (!this.isPalmNearRagdoll(this._tmpV, queryR)) return null;
+
+    let preferToward = opts.preferToward || null;
+    if (!preferToward && this.model) {
+      this.model.getWorldPosition(this._modelCenter);
+      // Push toward a point on the far side of the player from the dummy.
+      this._segAP.set(
+        playerPos.x * 2 - this._modelCenter.x,
+        midY,
+        playerPos.z * 2 - this._modelCenter.z
+      );
+      preferToward = this._segAP;
+    }
+
+    let hit = false;
+    let corrX = 0;
+    let corrY = 0;
+    let corrZ = 0;
+    const probe = this._bonePosTmp;
+
+    for (let i = 0; i < samples; i++) {
+      const t = samples <= 1 ? 0.5 : i / (samples - 1);
+      const ly = c1y + (c2y - c1y) * t;
+      probe.set(playerPos.x, playerPos.y + ly, playerPos.z);
+      const res = this._resolveSphereVsLimbCapsules(probe, r, preferToward);
+      if (!res.hit) continue;
+      hit = true;
+      let dx = res.position.x - probe.x;
+      let dy = res.position.y - probe.y;
+      let dz = res.position.z - probe.z;
+      if (horizontalOnly) dy = 0;
+      if (Math.abs(dx) > Math.abs(corrX)) corrX = dx;
+      if (Math.abs(dy) > Math.abs(corrY)) corrY = dy;
+      if (Math.abs(dz) > Math.abs(corrZ)) corrZ = dz;
+    }
+
+    if (!hit) return null;
+    return { hit: true, dx: corrX, dy: corrY, dz: corrZ };
+  },
+
   _spawnRagdoll: function (opts) {
     opts = opts || {};
     const R = window.Box3DRagdoll;
     const RT = window.Box3DRagdollRetarget;
     if (!R || !RT || !this.b3 || !this.world) return false;
+
+    // Drop leftover idle query capsules if any older session left them around.
+    if (this.human && this._queryCollidersOnly) {
+      if (R.destroyHuman) R.destroyHuman(this.b3, this.human);
+      this.human = null;
+      this._queryCollidersOnly = false;
+      if (this.legIk?.physics?.clearRagdollQueryShapes) {
+        this.legIk.physics.clearRagdollQueryShapes();
+      }
+      this._invalidatePlayerHandCollisionHistory();
+    } else if (this.human) {
+      return true;
+    }
 
     const collapse = opts.collapse === true;
     this._freeRagdollMode = collapse;
@@ -788,14 +1372,14 @@ AFRAME.registerComponent('grabbable-ragdoll', {
         enableJointMotors: collapse ? false : opts.enableJointMotors
       }
     );
+    this._queryCollidersOnly = false;
+    // Hand contact uses Mixamo limb capsules; Box3D ragdoll shapes are for dynamics only.
+    if (this.legIk.physics && this.legIk.physics.clearRagdollQueryShapes) {
+      this.legIk.physics.clearRagdollQueryShapes();
+    }
 
-    // Physics reference has left/right on opposite X from the GLB (model.rotation.y = π).
-    // alignHumanToMeshAnchors only translates — without this yaw the capsules sit on the
-    // wrong sides and grabbing a visible leg/arm picks the opposite physics body.
     if (R.rotateHumanYaw) R.rotateHumanYaw(this.b3, this.human, Math.PI);
 
-    // Snap physics bodies onto the live mesh pose, then calibrate the retarget so
-    // frame 0 reproduces the visible character exactly (no pop).
     RT.alignHumanToMeshAnchors(this, this.b3, this.human);
     RT.snapHandBodiesFromMesh(this, this.b3, this.human);
     this.retargetState = RT.calibrate(this, this.b3, this.human);
@@ -804,6 +1388,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this._pauseIdleAnimation();
     if (collapse && R.wakeAllHumanBodies) R.wakeAllHumanBodies(this.b3, this.human);
     this._ragdollStuckTimer = 0;
+    this._invalidatePlayerHandCollisionHistory();
     return true;
   },
 
@@ -867,6 +1452,11 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this.human = null;
     this.retargetState = null;
     this.ragdollActive = false;
+    this._queryCollidersOnly = false;
+    if (this.legIk?.physics?.clearRagdollQueryShapes) {
+      this.legIk.physics.clearRagdollQueryShapes();
+      this.legIk.physics.setHandCollideRagdoll?.(false);
+    }
 
     if (!this._spawnRagdoll({ collapse: true })) return false;
 
@@ -921,7 +1511,13 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this.human = null;
     this.retargetState = null;
     this.ragdollActive = false;
+    this._queryCollidersOnly = false;
     this.group = null;
+    this._meshHandNear = false;
+    if (this.legIk?.physics?.clearRagdollQueryShapes) {
+      this.legIk.physics.clearRagdollQueryShapes();
+      this.legIk.physics.setHandCollideRagdoll?.(false);
+    }
 
     this._restoreStaticPose();
     this._clearHitReactions();
@@ -932,6 +1528,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       ? new THREE.Euler().setFromQuaternion(this._staticPose.entityQuat).y
       : 0;
     this._resumeIdleAnimation();
+    this._disposeLimbDebug();
   },
 
   _restoreStaticPose: function () {
@@ -998,6 +1595,11 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       this._holdQuatReady[hand] = false;
       this._grabOffsetLocal[hand].set(0, 0, 0);
       this._grabAnchorWorld[hand].set(0, 0, 0);
+      this._grabPalmCtrlLocal[hand].set(0, 0, 0);
+      this._grabPalmCtrlReady[hand] = false;
+      this._grabPalmToBoneCtrlLocal[hand].set(0, 0, 0);
+      this._grabPalmToBoneReady[hand] = false;
+      this._grabReleaseBaseline[hand] = 0;
       this._holdMotionIntensity[hand] = 0;
       this._holdMotionInit[hand] = false;
       this._clearPlayerArmHold(hand);
@@ -1527,10 +2129,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
   },
 
   _aimCapsuleRadius: function (segIdx) {
-    if (segIdx >= 14) return 0.048;
-    if (segIdx >= 10) return 0.052;
-    if (segIdx >= 6) return 0.062;
-    return 0.128;
+    return this._limbCapsuleRadius(segIdx);
   },
 
   _rayIntersectSphere: function (origin, dir, center, radius, maxDist, outPoint, outNormal) {
@@ -1617,13 +2216,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     let bestSeg = -1;
 
     for (let seg = 0; seg <= 15; seg++) {
-      const keys = MESH_BODY_SEGS[seg];
-      if (!keys) continue;
-      const boneA = this.bones[keys[0]];
-      const boneB = this.bones[keys[1]];
-      if (!boneA || !boneB) continue;
-      boneA.getWorldPosition(this._segA);
-      boneB.getWorldPosition(this._segB);
+      if (!this._meshCapsuleEndpoints(seg, this._segA, this._segB)) continue;
       const t = this._rayIntersectCapsule(
         origin,
         dir,
@@ -1887,41 +2480,47 @@ AFRAME.registerComponent('grabbable-ragdoll', {
   // Wrist hand capsules (14/15) only when the palm is actually at the hand.
   _handBodyEligible: function (idx, handPos) {
     if (idx < 14) return true;
-    const keys = MESH_BODY_SEGS[idx];
-    if (!keys || !this.bones) return false;
-    const handBone = this.bones[keys[1]];
+    const handKey = idx === 14 ? 'leftHand' : 'rightHand';
+    const handBone = this.bones[handKey];
     if (!handBone) return false;
     handBone.getWorldPosition(this._tmpV);
-    return this._tmpV.distanceTo(handPos) <= 0.07;
+    return this._tmpV.distanceTo(handPos) <= 0.09;
   },
 
-  // Limbs/hands get a larger effective grab radius; torso is slightly deprioritized.
+  // Slight reach boost for limbs; torso/head use full grab radius (no penalty).
   _grabReachForBody: function (idx, baseDist, handPos) {
     if (idx >= 14) {
-      return (handPos && this._handBodyEligible(idx, handPos)) ? baseDist * 1.2 : 0;
+      return (handPos && this._handBodyEligible(idx, handPos)) ? baseDist * 1.15 : 0;
     }
-    if (idx >= 10) return baseDist * 1.35;
-    if (idx >= 6) return baseDist * 1.2;
-    if (idx <= 5) return baseDist * 0.92;
+    if (idx >= 10) return baseDist * 1.2;
+    if (idx >= 6) return baseDist * 1.12;
     return baseDist;
   },
 
-  _nearestMeshLimbTarget: function (handPos, maxDist) {
+  _meshSegGrabPad: function (idx) {
+    if (idx >= 14) return 0.05;
+    if (idx >= 10) return 0.045;
+    if (idx >= 6) return 0.04;
+    if (idx === 5) return 0.06; // head sphere
+    return 0.05; // torso
+  },
+
+  /**
+   * Nearest grab body by live Mixamo limb/torso capsules (idle + ragdoll).
+   * Searches the full body (0–15) — not limbs-only — so chest/head/hips grab
+   * the same shapes the pink collision highlight shows.
+   */
+  _nearestMeshBodyTarget: function (handPos, maxDist) {
     if (!this.skeleton) return -1;
     this._syncMeshWorldMatrices();
     let best = -1;
     let bestD = maxDist;
-    for (let i = 6; i <= 15; i++) {
+    for (let i = 0; i <= 15; i++) {
       if (!this._handBodyEligible(i, handPos)) continue;
-      const keys = MESH_BODY_SEGS[i];
-      if (!keys) continue;
-      const boneA = this.bones[keys[0]];
-      const boneB = this.bones[keys[1]];
-      if (!boneA || !boneB) continue;
-      boneA.getWorldPosition(this._segA);
-      boneB.getWorldPosition(this._segB);
-      const pad = i >= 14 ? 0.04 : (i >= 10 ? 0.045 : 0.035);
-      const d = this._distToSegment(handPos, this._segA, this._segB) - pad;
+      if (!this._meshCapsuleEndpoints(i, this._segA, this._segB)) continue;
+      const pad = this._meshSegGrabPad(i);
+      const capR = this._limbCapsuleRadius(i);
+      const d = this._distToSegment(handPos, this._segA, this._segB) - pad - capR * 0.15;
       const limit = this._grabReachForBody(i, maxDist, handPos);
       if (limit > 0 && d < limit && d < bestD) {
         bestD = d;
@@ -1931,42 +2530,35 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     return best;
   },
 
+  // Back-compat alias used by preview / palm projection.
+  _nearestMeshLimbTarget: function (handPos, maxDist) {
+    return this._nearestMeshBodyTarget(handPos, maxDist);
+  },
+
   _nearestTargetWithin: function (handPos, maxDist) {
+    // Prefer mesh capsules (match collision debug). Physics capsules only as fallback
+    // while ragdoll is active and mesh endpoints fail.
+    const meshHit = this._nearestMeshBodyTarget(handPos, maxDist);
+    if (meshHit >= 0) return meshHit;
+
+    if (!this.ragdollActive || !this.human) return -1;
+
     let best = -1;
     let bestD = maxDist;
-    const torsoBias = 0.055;
-    if (this.ragdollActive && this.human) {
-      const BONES = window.Box3DRagdoll.BONES;
-      for (let i = 0; i < this.human.bodies.length; i++) {
-        if (!this._handBodyEligible(i, handPos)) continue;
-        const bone = BONES[i];
-        const p = this.b3.b3Body_GetPosition(this.human.bodies[i]);
-        const r = this.b3.b3Body_GetRotation(this.human.bodies[i]);
-        this._segQuat.set(r.v.x, r.v.y, r.v.z, r.s);
-        this._segA.set(bone.c1.x, bone.c1.y, bone.c1.z).applyQuaternion(this._segQuat).add(p);
-        this._segB.set(bone.c2.x, bone.c2.y, bone.c2.z).applyQuaternion(this._segQuat).add(p);
-        const rawD = this._distToSegment(handPos, this._segA, this._segB) - bone.radius;
-        const score = rawD + (i <= 5 ? torsoBias : 0);
-        const limit = this._grabReachForBody(i, maxDist, handPos);
-        if (limit > 0 && score < limit && score < bestD) {
-          bestD = score;
-          best = i;
-        }
-      }
-    } else {
-      const keys = window.Box3DRagdollRetarget?.MIXAMO_BONE_KEYS || [];
-      for (let i = 0; i < keys.length; i++) {
-        if (!this._handBodyEligible(i, handPos)) continue;
-        const bone = this.bones[keys[i]];
-        if (!bone) continue;
-        bone.getWorldPosition(this._tmpV);
-        const rawD = this._tmpV.distanceTo(handPos);
-        const score = rawD + (i <= 5 ? torsoBias : 0);
-        const limit = this._grabReachForBody(i, maxDist, handPos);
-        if (limit > 0 && score < limit && score < bestD) {
-          bestD = score;
-          best = i;
-        }
+    const BONES = window.Box3DRagdoll.BONES;
+    for (let i = 0; i < this.human.bodies.length; i++) {
+      if (!this._handBodyEligible(i, handPos)) continue;
+      const bone = BONES[i];
+      const p = this.b3.b3Body_GetPosition(this.human.bodies[i]);
+      const r = this.b3.b3Body_GetRotation(this.human.bodies[i]);
+      this._segQuat.set(r.v.x, r.v.y, r.v.z, r.s);
+      this._segA.set(bone.c1.x, bone.c1.y, bone.c1.z).applyQuaternion(this._segQuat).add(p);
+      this._segB.set(bone.c2.x, bone.c2.y, bone.c2.z).applyQuaternion(this._segQuat).add(p);
+      const rawD = this._distToSegment(handPos, this._segA, this._segB) - bone.radius;
+      const limit = this._grabReachForBody(i, maxDist, handPos);
+      if (limit > 0 && rawD < limit && rawD < bestD) {
+        bestD = rawD;
+        best = i;
       }
     }
     return best;
@@ -1974,25 +2566,25 @@ AFRAME.registerComponent('grabbable-ragdoll', {
 
   _nearestTarget: function (handPos) {
     const r = this.data.grabRadius;
-    const limb = this._nearestMeshLimbTarget(handPos, r * 1.15);
-    if (limb >= 0) return limb;
-    return this._nearestTargetWithin(handPos, r);
+    // Single pass over all body capsules (torso + limbs). Do NOT prefer limbs first —
+    // that made idle grabs jump to arms/legs when the palm was on the chest/head.
+    return this._nearestMeshBodyTarget(handPos, r * 1.25);
   },
 
-  _isPalmNearRagdoll: function (palmWorld) {
+  _isPalmNearRagdoll: function (palmWorld, pad) {
     if (!this.model || !palmWorld) return false;
     this.model.getWorldPosition(this._modelCenter);
-    const reach = this._ragdollBoundsRadius + this.data.touchRadius + 0.1;
+    const reach = this._ragdollBoundsRadius + this.data.touchRadius + 0.1 + (pad || 0);
     return this._modelCenter.distanceToSquared(palmWorld) <= reach * reach;
   },
 
-  isPalmNearRagdoll: function (palmWorld) {
-    return this._isPalmNearRagdoll(palmWorld);
+  isPalmNearRagdoll: function (palmWorld, pad) {
+    return this._isPalmNearRagdoll(palmWorld, pad);
   },
 
   _nearestPreviewTarget: function (handPos) {
     const r = this.data.touchRadius;
-    const idx = this._nearestMeshLimbTarget(handPos, r);
+    const idx = this._nearestMeshBodyTarget(handPos, r);
     if (idx >= 0) return idx;
     if (!this._skinnedMeshes.length) {
       return this._nearestTargetWithin(handPos, r);
@@ -2174,18 +2766,6 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     }
   },
 
-  _meshCapsuleEndpoints: function (idx, outA, outB) {
-    const keys = MESH_BODY_SEGS[idx];
-    if (!keys || !this.skeleton) return false;
-    const boneA = this.bones[keys[0]];
-    const boneB = this.bones[keys[1]];
-    if (!boneA || !boneB) return false;
-    this._syncMeshWorldMatrices();
-    boneA.getWorldPosition(outA);
-    boneB.getWorldPosition(outB);
-    return true;
-  },
-
   getPlayerArmHold: function () {
     return this._playerArmHold;
   },
@@ -2237,12 +2817,18 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     if (hand) {
       this._playerArmHold[hand].active = false;
       this._playerArmHold[hand].overloaded = false;
+      this._playerArmHold[hand].hasHandQuat = false;
+      this._holdHandQuatReady[hand] = false;
       return;
     }
     this._playerArmHold.left.active = false;
     this._playerArmHold.left.overloaded = false;
+    this._playerArmHold.left.hasHandQuat = false;
     this._playerArmHold.right.active = false;
     this._playerArmHold.right.overloaded = false;
+    this._playerArmHold.right.hasHandQuat = false;
+    this._holdHandQuatReady.left = false;
+    this._holdHandQuatReady.right = false;
   },
 
   _setBodyTransform: function (idx, p, q) {
@@ -2539,44 +3125,64 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     return this._tmpV;
   },
 
-  // Move the effective hold toward the target — horizontal follows quickly; vertical
-  // eases in only when weight/peel limits cap upward motion (never snap/teleport).
+  // Move the effective hold toward the target. Keep motion continuous — never snap.
   _smoothHoldToward: function (hand, target, idx) {
     const eff = this._effectiveHoldPos[hand];
-    // Limb bodies: large body-center→palm offset — smoothing leaves anchor far from palm.
-    if (this._isLimbBody(idx)) {
-      eff.copy(target);
-      return eff;
-    }
-    const nHands = this._heldHandCount();
-    const mass = this._getTotalMass();
-    const capacity = nHands * this.data.liftPerHandKg;
-    const supportRatio = capacity / Math.max(mass, 1);
-    const vertRate = Math.max(10, 28 * Math.min(1, supportRatio));
-    const horizRate = 48;
-    const hAlpha = 1 - Math.exp(-horizRate * this._lastDt);
-    const vAlpha = 1 - Math.exp(-vertRate * this._lastDt);
-    eff.x += (target.x - eff.x) * hAlpha;
-    eff.z += (target.z - eff.z) * hAlpha;
-    eff.y += (target.y - eff.y) * vAlpha;
+    const dt = Math.max(this._lastDt || 0.016, 0.001);
+    // Fast follow so the pin stays under the palm; still eases to avoid one-frame pops.
+    const rate = this._isLimbBody(idx) ? 36 : 22;
+    const alpha = 1 - Math.exp(-rate * dt);
+    eff.lerp(target, alpha);
     return eff;
   },
 
-  _updatePlayerArmHold: function (hand, smoothedBodyPos, anchorWorld) {
+  _holdWeightBlend: function (hand) {
+    const hs = this._holdStart[hand];
+    if (!hs || hs.t0 == null) return 1;
+    const age = (performance.now() - hs.t0) / 1000;
+    const t = Math.max(0, Math.min(1, age / (this.HOLD_WEIGHT_BLEND_S || 2.5)));
+    // Smoothstep — weight limits fade in over ~2.5s.
+    return t * t * (3 - 2 * t);
+  },
+
+  // Break the hold when the controller peels too far from the grab contact.
+  // Without this, weight-capped bodies keep following the controller while the
+  // virtual hand stays on the object — telekinetic drag with no detach.
+  _shouldForceDetachHold: function (hand, ctrl, anchorWorld) {
+    if (!ctrl || !anchorWorld) return false;
+    const dist = ctrl.distanceTo(anchorWorld);
+    if (dist > (this.HOLD_DETACH_MAX_M || 0.42)) return true;
+
+    const blend = this._holdWeightBlend(hand);
+    if (blend < 0.15) return false;
+
+    const baseline = this._grabReleaseBaseline[hand] || 0;
+    if (dist > baseline + (this.HOLD_RELEASE_DIST || 0.14)) return true;
+    if ((ctrl.y - anchorWorld.y) > (this.HOLD_RELEASE_UP_M || 0.10)) return true;
+    return false;
+  },
+
+  _updatePlayerArmHold: function (hand, bodyPos, bodyQuat, anchorWorld) {
     const h = this._playerArmHold[hand];
     h.active = true;
-    const idx = this._held[hand];
-    const ctrl = this._handPos[hand];
-    const weightTarget = idx >= 0
-      ? this._computeHoldTarget(hand, idx, ctrl)
-      : ctrl;
-    // Player arms track the controller; ragdoll anchor is physics-only.
-    h.wristWorld.copy(ctrl);
-    if (ctrl.y > weightTarget.y) {
-      h.wristWorld.y = weightTarget.y;
+    // IK wrist = grab contact + the palm→handBone offset from grab time.
+    // When weight caps the body, the anchor lags the controller and the virtual
+    // hand stays on the object instead of tracking the controller freely.
+    if (this._grabPalmToBoneReady[hand]) {
+      this._segA.copy(this._grabPalmToBoneCtrlLocal[hand])
+        .applyQuaternion(this._handQuat[hand])
+        .add(anchorWorld);
+      h.wristWorld.copy(this._segA);
+    } else {
+      h.wristWorld.copy(anchorWorld);
     }
-    const dY = ctrl.y - h.wristWorld.y;
-    h.overloaded = dY > 0.008 || ctrl.distanceTo(anchorWorld) > 0.22;
+    h.hasHandQuat = false;
+    const ctrl = this._handPos[hand];
+    const blend = this._holdWeightBlend(hand);
+    h.overloaded = blend > 0.35 && (
+      ctrl.distanceTo(anchorWorld) > 0.18 ||
+      (ctrl.y - anchorWorld.y) > 0.05
+    );
   },
 
   _attachBody: function (hand, idx, palmWorld) {
@@ -2603,32 +3209,72 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       lowestY,
       supportY: surfaceY,
       handY: this._handPos[hand].y,
-      upright
+      upright,
+      t0: performance.now()
     };
     const r = this.b3.b3Body_GetRotation(body);
     this._tmpQ.set(r.v.x, r.v.y, r.v.z, r.s);
     const bodyPos = { x: cur.x, y: cur.y, z: cur.z };
-    const contactWorld = this._contactWorldForGrab(idx, palmWorld, this._segA);
-    this._captureGrabAnchor(hand, bodyPos, this._tmpQ, contactWorld);
+
+    // Pin exactly where the virtual palm was at the grab decision — never project
+    // onto the mesh/capsule. Projection was sliding the anchor off the hand by
+    // up to a few cm so the hold marker didn't match the visible palm.
+    const pinPalm = this._segB;
+    if (palmWorld && Number.isFinite(palmWorld.x)) {
+      pinPalm.copy(palmWorld);
+    } else if (this._getPlayerPalm(hand, this._rayOrigin, this._bonePosTmp)) {
+      pinPalm.copy(this._bonePosTmp);
+    } else {
+      pinPalm.copy(this._handPos[hand]);
+    }
+
+    this._captureGrabAnchor(hand, bodyPos, this._tmpQ, pinPalm);
     this._grabRel[hand].copy(this._handQuat[hand]).invert().multiply(this._tmpQ);
+    // Remember where the virtual palm sat relative to the controller at grab.
+    this._grabPalmCtrlLocal[hand].copy(pinPalm).sub(this._handPos[hand]);
+    this._tmpQ2 = this._tmpQ2 || new THREE.Quaternion();
+    this._tmpQ2.copy(this._handQuat[hand]).invert();
+    this._grabPalmCtrlLocal[hand].applyQuaternion(this._tmpQ2);
+    this._grabPalmCtrlReady[hand] = true;
+    this._grabReleaseBaseline[hand] = this._handPos[hand].distanceTo(pinPalm);
+
+    // Palm → hand-bone offset in controller space (for weight-driven arm IK).
+    this._grabPalmToBoneReady[hand] = false;
+    const mb = document.querySelector('#local-body')?.components['mixamo-body'];
+    const handBone = mb?.bones?.[`${hand}HandBone`];
+    if (handBone) {
+      if (mb.model) mb.model.updateMatrixWorld(true);
+      if (mb.skeleton) mb.skeleton.update();
+      handBone.getWorldPosition(this._segAP);
+      this._grabPalmToBoneCtrlLocal[hand].copy(this._segAP).sub(pinPalm);
+      this._tmpQ2.copy(this._handQuat[hand]).invert();
+      this._grabPalmToBoneCtrlLocal[hand].applyQuaternion(this._tmpQ2);
+      this._grabPalmToBoneReady[hand] = true;
+    }
+
+    this._holdHandQuatReady[hand] = false;
+
     const zero = { x: 0, y: 0, z: 0 };
     if (this.b3.b3Body_SetLinearVelocity) this.b3.b3Body_SetLinearVelocity(body, zero);
     if (this.b3.b3Body_SetAngularVelocity) this.b3.b3Body_SetAngularVelocity(body, zero);
     this.b3.b3Body_SetType(body, this.b3.b3BodyType.b3_kinematicBody);
     if (this.b3.b3Body_SetAwake) this.b3.b3Body_SetAwake(body, true);
-    this._holdQuatReady[hand] = false;
+
+    // Keep the body where it is — offset was captured from the live palm, so the
+    // hold marker starts under the hand. No snap/teleport on grab.
     this._holdSmoothedQuat[hand].copy(this._tmpQ);
     this._holdQuatReady[hand] = true;
-    const snapCenter = this._bodyCenterForAnchor(hand, palmWorld, this._tmpQ, this._segA);
-    this._effectiveHoldPos[hand].copy(snapCenter);
+    this._effectiveHoldPos[hand].set(cur.x, cur.y, cur.z);
     this._holdEffReady[hand] = true;
-    this._setBodyTransform(idx, snapCenter, this._tmpQ);
+    this._setBodyTransform(idx, this._effectiveHoldPos[hand], this._tmpQ);
     this._recomputeLiftCeiling();
-    this._anchorWorldFromBody(hand, snapCenter, this._tmpQ, this._segB);
-    this._updatePlayerArmHold(hand, snapCenter, this._segB);
+    this._anchorWorldFromBody(hand, this._effectiveHoldPos[hand], this._tmpQ, this._segB);
+    this._grabAnchorWorld[hand].copy(this._segB);
+    this._updatePlayerArmHold(hand, this._effectiveHoldPos[hand], this._tmpQ, this._segB);
   },
 
-  // Hold: drive the kinematic body toward the weight-clamped goal without teleporting.
+  // Hold: drive the kinematic body so the grab contact follows the virtual palm
+  // (controller + grab-time palm offset), with weight/peel limits fading in.
   _holdBodyAtHand: function (hand, idx) {
     const body = this.human.bodies[idx];
     if (!body) return;
@@ -2638,24 +3284,45 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       this._holdEffReady[hand] = true;
     }
     const ctrl = this._handPos[hand];
-    const probe = this._rayOrigin;
-    const palmContact = this._bonePosTmp;
-    const pullTarget = this._getPlayerPalm(hand, probe, palmContact) ? palmContact : ctrl;
+    // Prefer the grab-time palm-under-controller relationship so the pin stays
+    // where the virtual hand was, instead of a live bone palm that can drift.
+    const pullTarget = this._segAP;
+    if (this._grabPalmCtrlReady[hand]) {
+      pullTarget.copy(this._grabPalmCtrlLocal[hand]).applyQuaternion(this._handQuat[hand]).add(ctrl);
+    } else {
+      const probe = this._rayOrigin;
+      const palmContact = this._bonePosTmp;
+      if (this._getPlayerPalm(hand, probe, palmContact)) {
+        pullTarget.copy(palmContact);
+      } else {
+        pullTarget.copy(ctrl);
+      }
+    }
+
     const targetQuat = this._tmpQ.copy(this._handQuat[hand]).multiply(this._grabRel[hand]);
     const holdQuat = this._holdSmoothedQuat[hand];
     if (!this._holdQuatReady[hand]) {
       holdQuat.copy(targetQuat);
       this._holdQuatReady[hand] = true;
     } else {
-      const qAlpha = 1 - Math.exp(-28 * this._lastDt);
+      const qAlpha = 1 - Math.exp(-18 * this._lastDt);
       holdQuat.slerp(targetQuat, qAlpha);
     }
-    const desiredBodyCenter = this._bodyCenterForAnchor(hand, pullTarget, holdQuat, this._segA);
-    const target = this._computeHoldTarget(hand, idx, desiredBodyCenter);
-    const smoothed = this._smoothHoldToward(hand, target, idx);
+
+    const freeCenter = this._bodyCenterForAnchor(hand, pullTarget, holdQuat, this._segA);
+    const cappedCenter = this._computeHoldTarget(hand, idx, freeCenter);
+    const blend = this._holdWeightBlend(hand);
+    this._closestAxis.copy(freeCenter).lerp(cappedCenter, blend);
+
+    const smoothed = this._smoothHoldToward(hand, this._closestAxis, idx);
     this._setBodyTransform(idx, smoothed, holdQuat);
     const anchorWorld = this._anchorWorldFromBody(hand, smoothed, holdQuat, this._segB);
-    this._updatePlayerArmHold(hand, smoothed, anchorWorld);
+    this._grabAnchorWorld[hand].copy(anchorWorld);
+    this._updatePlayerArmHold(hand, smoothed, holdQuat, this._segB);
+
+    if (this._shouldForceDetachHold(hand, ctrl, anchorWorld)) {
+      this.forceReleaseHand(hand);
+    }
   },
 
   _updateHeldBodies: function () {
@@ -2685,6 +3352,11 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this._holdQuatReady[hand] = false;
     this._grabOffsetLocal[hand].set(0, 0, 0);
     this._grabAnchorWorld[hand].set(0, 0, 0);
+    this._grabPalmCtrlLocal[hand].set(0, 0, 0);
+    this._grabPalmCtrlReady[hand] = false;
+    this._grabPalmToBoneCtrlLocal[hand].set(0, 0, 0);
+    this._grabPalmToBoneReady[hand] = false;
+    this._grabReleaseBaseline[hand] = 0;
     this._cachedRigidLiftMax = null;
     this._cachedRigidLiftRefY = null;
     this._holdMotionIntensity[hand] = 0;
@@ -2766,6 +3438,11 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       this._applyHitReactionsToPose();
       if (this.skeleton) this.skeleton.update();
       if (this.model) this.model.updateMatrixWorld(true);
+      // Always refresh limb wires from the live mesh — never leave them frozen
+      // in world space when the character moves (grab used to skip this path).
+      this._syncLimbCollisionDebug(this._lastLimbHitIdx, this._lastLimbContact);
+      this._lastLimbHitIdx = -1;
+      this._lastLimbContact = null;
       return;
     }
 
@@ -2825,6 +3502,10 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       if (this._zeroGLegModeBlend > 0.001 || this._isZeroGMode()) {
         this._applyZeroGLegsRagdoll(dt);
       }
+      // After retarget so wires stay glued to the visible mesh while holding.
+      this._syncLimbCollisionDebug(this._lastLimbHitIdx, this._lastLimbContact);
+      this._lastLimbHitIdx = -1;
+      this._lastLimbContact = null;
     }
   }
 });

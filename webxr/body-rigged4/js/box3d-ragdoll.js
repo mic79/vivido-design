@@ -240,8 +240,16 @@
 
     const bodies = [];
     const joints = [];
+    const shapeIds = [];
     const dynamicFlags = new Array(BONES.length).fill(true);
     const CATEGORY = window.Box3DCollision?.CATEGORY || { RAGDOLL: 8n, ENVIRONMENT: 1n };
+
+    const collectBodyShapes = (body) => {
+      if (!b3.b3Body_GetShapes) return;
+      const shapes = b3.b3Body_GetShapes(body);
+      if (!shapes) return;
+      for (let s = 0; s < shapes.length; s++) shapeIds.push(shapes[s]);
+    };
 
     for (let i = 0; i < BONES.length; i++) {
       const bone = BONES[i];
@@ -267,10 +275,9 @@
       const shapeDef = b3.b3DefaultShapeDef();
       if (shapeDensity != null) shapeDef.density = shapeDensity;
       shapeDef.baseMaterial.rollingResistance = 0.2;
-      // Category RAGDOLL (not ENVIRONMENT) so the player capsule, its ground rays,
-      // and its hand-grab (all masked to ENVIRONMENT) ignore the ragdoll. Otherwise
-      // the player stands on / gets grab-pulled by a flailing ragdoll. It still
-      // collides with the environment and with itself.
+      // Category RAGDOLL (not ENVIRONMENT) so the player capsule and ground rays
+      // ignore the ragdoll. Hand sphere queries may opt in via handFilter when
+      // near — but env grab-pull still ignores RAGDOLL hits (see mixamo-body).
       shapeDef.filter.categoryBits = CATEGORY.RAGDOLL;
       shapeDef.filter.maskBits = CATEGORY.ENVIRONMENT | CATEGORY.RAGDOLL;
       shapeDef.filter.groupIndex = bone.groupFilter ? -group : 0;
@@ -303,6 +310,7 @@
           radius: FOOT_RADIUS
         });
       }
+      collectBodyShapes(body);
       bodies.push(body);
     }
 
@@ -381,7 +389,7 @@
       joints.push(b3.b3CreateFilterJoint(world, filterDef));
     }
 
-    return { bodies, joints, dynamicFlags, boneNames: BONES.map((b) => b.name) };
+    return { bodies, joints, dynamicFlags, boneNames: BONES.map((b) => b.name), shapeIds };
   }
 
   function destroyHuman(b3, human) {
@@ -654,6 +662,125 @@
     }
   }
 
+  function _capsuleGeomFromCenters(c1, c2, radius, scale) {
+    scale = scale || 1;
+    const axis = new THREE.Vector3(c2.x - c1.x, c2.y - c1.y, c2.z - c1.z);
+    const len = axis.length();
+    const geom = new THREE.CapsuleGeometry(radius * scale, Math.max(0.01, len * scale), 6, 10);
+    if (len > 1e-6) {
+      geom.applyQuaternion(
+        new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.normalize())
+      );
+    }
+    geom.translate(
+      (c1.x + c2.x) * 0.5 * scale,
+      (c1.y + c2.y) * 0.5 * scale,
+      (c1.z + c2.z) * 0.5 * scale
+    );
+    return geom;
+  }
+
+  function _collectBodyCapsuleDefs(b3, body, bone) {
+    const out = [];
+    try {
+      if (b3.b3Body_GetShapes && b3.b3Shape_GetCapsule) {
+        const shapes = b3.b3Body_GetShapes(body);
+        if (shapes && shapes.length) {
+          for (let s = 0; s < shapes.length; s++) {
+            const cap = b3.b3Shape_GetCapsule(shapes[s]);
+            if (cap && cap.radius != null) {
+              out.push({
+                c1: cap.center1,
+                c2: cap.center2,
+                radius: cap.radius
+              });
+            }
+          }
+        }
+      }
+    } catch (e) { /* fall through */ }
+    if (!out.length && bone) {
+      out.push({ c1: bone.c1, c2: bone.c2, radius: bone.radius });
+    }
+    return out;
+  }
+
+  function disposeCollisionWireframes(rootGroup) {
+    if (!rootGroup) return;
+    while (rootGroup.children.length) {
+      const mesh = rootGroup.children[0];
+      rootGroup.remove(mesh);
+      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.material) {
+        if (Array.isArray(mesh.material)) mesh.material.forEach((m) => m.dispose());
+        else mesh.material.dispose();
+      }
+    }
+  }
+
+  /**
+   * Wireframe of every Box3D capsule used for hand/env queries on this human
+   * (including foot capsules). Rebuilds meshes when the shape count changes.
+   */
+  function syncHumanCollisionWireframes(b3, human, rootGroup, opts) {
+    if (!b3 || !human || !rootGroup) return;
+    opts = opts || {};
+    const color = opts.color != null ? opts.color : 0x00e5ff;
+    const opacity = opts.opacity != null ? opts.opacity : 0.9;
+
+    const entries = [];
+    for (let i = 0; i < human.bodies.length; i++) {
+      const body = human.bodies[i];
+      if (!body) continue;
+      const caps = _collectBodyCapsuleDefs(b3, body, BONES[i]);
+      for (let c = 0; c < caps.length; c++) {
+        entries.push({ body, bone: BONES[i], cap: caps[c], bodyIndex: i, shapeIndex: c });
+      }
+    }
+
+    const key = entries.map((e) =>
+      `${e.bodyIndex}:${e.cap.radius.toFixed(3)}:` +
+      `${e.cap.c1.x.toFixed(3)},${e.cap.c1.y.toFixed(3)},${e.cap.c1.z.toFixed(3)}:` +
+      `${e.cap.c2.x.toFixed(3)},${e.cap.c2.y.toFixed(3)},${e.cap.c2.z.toFixed(3)}`
+    ).join('|');
+
+    if (rootGroup.userData.wireKey !== key || rootGroup.children.length !== entries.length) {
+      disposeCollisionWireframes(rootGroup);
+      const mat = new THREE.MeshBasicMaterial({
+        color,
+        wireframe: true,
+        transparent: true,
+        opacity,
+        depthTest: false,
+        depthWrite: false
+      });
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        const geom = _capsuleGeomFromCenters(e.cap.c1, e.cap.c2, e.cap.radius, 1);
+        const mesh = new THREE.Mesh(geom, mat.clone());
+        mesh.renderOrder = 1004;
+        mesh.frustumCulled = false;
+        mesh.userData.bodyIndex = e.bodyIndex;
+        rootGroup.add(mesh);
+      }
+      rootGroup.userData.wireKey = key;
+    }
+
+    for (let i = 0; i < entries.length; i++) {
+      const mesh = rootGroup.children[i];
+      const body = entries[i].body;
+      if (!mesh || !body) continue;
+      const pos = b3.b3Body_GetPosition(body);
+      const rot = b3.b3Body_GetRotation(body);
+      mesh.position.set(pos.x, pos.y, pos.z);
+      mesh.quaternion.set(rot.v.x, rot.v.y, rot.v.z, rot.s);
+      if (mesh.material && mesh.material.color) mesh.material.color.setHex(color);
+      if (mesh.material && mesh.material.opacity != null) mesh.material.opacity = opacity;
+      mesh.visible = true;
+    }
+    rootGroup.visible = true;
+  }
+
   window.Box3DRagdoll = {
     BONES,
     createHuman,
@@ -664,6 +791,8 @@
     setHumanVelocity,
     wakeAllHumanBodies,
     syncHumanToThree,
+    syncHumanCollisionWireframes,
+    disposeCollisionWireframes,
     ensureMirrorVisualMeshes,
     syncMirroredHumanToThree
   };
