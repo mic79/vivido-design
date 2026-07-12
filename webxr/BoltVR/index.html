@@ -80,6 +80,12 @@
       const GOALIE_LEASH_SOFT = 0.75;
       const GOALIE_LEASH_ARM_DIST = 2.5; // only leash once this close to base (travel freely before that)
       const GOALIE_EXIT_NO_THREAT_MS = 5000;
+      const GOALIE_RUSH_DIST = 5;          // beyond this from crease: face goal + boost home
+      const GOALIE_THREAT_DIST = 5;        // opponent within this of own goal → dump/clear if no pass
+      const GOALIE_CATCH_SETTLE_MS = 250;  // brief hold before distribute after catch
+      const GOALIE_PASS_EVAL_MS = 120;
+      const GOALIE_PASS_INTERVAL_MS = 350;
+      const PASS_BLOCKER_RADIUS = 0.45;    // approximate player/bot body radius for pass LOS
       // Temporary test-mode layout (blue goalie vs red shooter)
       const GOALIE_TEST_BOT_COLOR = 'blue';
       const GOALIE_TEST_BOT_ID = 'zerog-bot-blue';
@@ -4395,6 +4401,7 @@ function setGameplayHUD(isPlaying) {
           this.grabbedSurface = { left: null, right: null };
           this.grabInfo = { left: null, right: null };
           this.thrusterActive = { left: false, right: false };
+          this._ballTouching = { left: false, right: false };
 
           // Visual grab-snap: pin the rendered IK hand onto the grabbed surface so it doesn't
           // visually hold air next to a character or sink inside the body. Detection radius is
@@ -5458,8 +5465,11 @@ function setGameplayHUD(isPlaying) {
             thrusterVFX.setAttribute('visible', true);
             thrusterVFX.setAttribute('material', 'opacity', 0.8);
           }
+
+          // Anchor spatial thruster audio at the wrist before playing.
+          this.syncThrusterAudioToWrist(hand);
           
-          // NEW: Play thruster sound (spatial, positioned at controller)
+          // Play thruster sound (positional, at wrist)
           const thrusterSound = hand.querySelector('.thruster-sound');
           if (thrusterSound && thrusterSound.components.sound) {
             thrusterSound.components.sound.playSound();
@@ -5477,6 +5487,58 @@ function setGameplayHUD(isPlaying) {
           if (thrusterSound && thrusterSound.components.sound) {
             thrusterSound.components.sound.stopSound();
           }
+        },
+
+        // Keep each thruster sound at the avatar wrist (where the thruster lives), not at the
+        // controller origin. Updates the sound entity's local offset under the hand every frame.
+        syncThrusterAudioToWrist: function(hand) {
+          if (!hand || !hand.object3D) return;
+          const thrusterSound = hand.querySelector('.thruster-sound');
+          if (!thrusterSound || !thrusterSound.object3D) return;
+
+          if (!this._thrusterWristWorld) this._thrusterWristWorld = new THREE.Vector3();
+          if (!this._thrusterWristLocal) this._thrusterWristLocal = new THREE.Vector3();
+          const world = this._thrusterWristWorld;
+          const local = this._thrusterWristLocal;
+          const avatar = getOwnerBodyAvatar(
+            (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0'
+          );
+          const isLeft = hand.id === 'leftHand';
+          const bone = avatar && avatar.bones
+            ? (isLeft ? avatar.bones.leftHandBone : avatar.bones.rightHandBone)
+            : null;
+
+          if (bone) {
+            bone.getWorldPosition(world);
+          } else {
+            // Fallback: palm probe / controller origin.
+            this.getHandProbePos(hand, world);
+          }
+
+          hand.object3D.updateMatrixWorld(true);
+          local.copy(world);
+          hand.object3D.worldToLocal(local);
+          thrusterSound.object3D.position.copy(local);
+        },
+
+        // Light haptic when a hand first touches the capture ball or the player's own ball
+        // (proximity only — does not require grip).
+        updateBallTouchHaptics: function() {
+          if (!this._ballTouching) this._ballTouching = { left: false, right: false };
+          ['left', 'right'].forEach((handKey) => {
+            const hand = handKey === 'left' ? this.leftHand : this.rightHand;
+            if (!hand) return;
+            // Skip while already holding something with this hand (grab haptic covers that).
+            if (this.isGrabbing && this.isGrabbing[handKey]) {
+              this._ballTouching[handKey] = true;
+              return;
+            }
+            const touching = !!this.findNearestBall(hand);
+            if (touching && !this._ballTouching[handKey]) {
+              this.playHapticFeedback(hand, 0.35, 50);
+            }
+            this._ballTouching[handKey] = touching;
+          });
         },
         
         // Debug arrow functions removed - not useful for this system
@@ -5628,6 +5690,11 @@ function setGameplayHUD(isPlaying) {
           
           // NEW: Continuous ball grabbing while grip is held
           this.updateGripBallGrabbing();
+
+          // Keep thruster audio at each wrist while thrusting; also poll touch haptics.
+          if (this.leftHand) this.syncThrusterAudioToWrist(this.leftHand);
+          if (this.rightHand) this.syncThrusterAudioToWrist(this.rightHand);
+          this.updateBallTouchHaptics();
           
           // NEW: Update physics constraints for player grabs
           this.updatePlayerGrabConstraints();
@@ -8163,8 +8230,12 @@ function setGameplayHUD(isPlaying) {
         },
         
         applyThrusterForces: function(dt) {
-          // Goalie (test or integrated): omnidirectional steer + crease leash.
+          // Goalie (test or integrated): rush home with boost when far; else omni crease + leash.
           if (isActingGoalie(this)) {
+            if (this._goalieRushing) {
+              this.applyGoalieRushForces(dt);
+              return;
+            }
             this.applyGoalieThrusterForces(dt);
             return;
           }
@@ -8224,7 +8295,48 @@ function setGameplayHUD(isPlaying) {
           this.checkCustomCollisionWithSurfaces();
         },
 
-        // Goalie test: omnidirectional thrust only (no facing-aligned thrusters) + leash.
+        // Goalie far from crease: face toward base, use facing thrusters + boost (field max speed).
+        applyGoalieRushForces: function(dt) {
+          if (!this.body || !this.velocity) return;
+
+          if (this._goalieSteer && this._goalieSteer.lengthSq() > 0) {
+            this.velocity.addScaledVector(this._goalieSteer, 1);
+            this._goalieSteer.set(0, 0, 0);
+          }
+
+          let totalThrust = new THREE.Vector3(0, 0, 0);
+          if (this.thrusterActive.left || this.thrusterActive.right) {
+            const forwardDir = new THREE.Vector3(0, 0, 1);
+            forwardDir.applyQuaternion(this.el.object3D.quaternion);
+            totalThrust.add(forwardDir.multiplyScalar(this.data.thrusterForce * dt));
+          }
+          if (totalThrust.length() > 0) {
+            this.velocity.add(totalThrust);
+          }
+
+          this.maybeBoost();
+
+          let maxSpeed = this.data.maxSpeed;
+          if (Date.now() < this.boostUntil) maxSpeed *= this.boostSpeedMult;
+          if (this.velocity.length() > maxSpeed) {
+            this.velocity.normalize().multiplyScalar(maxSpeed);
+          }
+
+          const dampingFactor = Math.pow(this.damping, dt * 60);
+          this.velocity.multiplyScalar(dampingFactor);
+          if (this.velocity.length() < this.minVelocity) {
+            this.velocity.set(0, 0, 0);
+          }
+
+          this.body.velocity.set(this.velocity.x, this.velocity.y, this.velocity.z);
+          this.body.angularVelocity.x = 0;
+          this.body.angularVelocity.z = 0;
+          if (this.velocity.lengthSq() > 0 && typeof this.body.wakeUp === 'function') {
+            this.body.wakeUp();
+          }
+        },
+
+        // Goalie in crease: omnidirectional thrust only (no facing-aligned thrusters) + leash.
         applyGoalieThrusterForces: function(dt) {
           if (!this.body || !this.velocity) return;
 
@@ -9018,7 +9130,7 @@ function setGameplayHUD(isPlaying) {
 
         },
 
-        // Goalie: omnidirectional slide within ~1m of own-goal base; face ball (or field when holding).
+        // Goalie: rush home with face+boost when far; omni crease slide when near; face ball (or field when holding).
         runStationaryGoalieTick: function(dt) {
           const team = this.data.team || (isGoalieTestMode() ? GOALIE_TEST_BOT_COLOR : 'blue');
           const spawn = getGoalieBaseForTeam(team);
@@ -9055,49 +9167,71 @@ function setGameplayHUD(isPlaying) {
             }
           }
 
-          // Desired point: slide toward ball within roam sphere; when holding, settle slightly
-          // toward midfield from base so the held ball clears the goal mouth.
-          const desired = base.clone();
-          if (this.isGrabbingBall) {
-            desired.copy(base).addScaledVector(faceField, 0.35);
-          } else if (ballPos) {
-            const fromBaseToBall = new THREE.Vector3().subVectors(ballPos, base);
-            const distBaseToBall = fromBaseToBall.length();
-            if (distBaseToBall > 0.01 && distBaseToBall < GOALIE_ENGAGE_DIST) {
-              const reach = Math.min(GOALIE_ROAM_RADIUS * 0.85, distBaseToBall);
-              desired.copy(base).addScaledVector(fromBaseToBall.normalize(), reach);
-            }
-          }
-
           const botPos = new THREE.Vector3(
             this.body.position.x, this.body.position.y, this.body.position.z
           );
-          const toDesired = new THREE.Vector3().subVectors(desired, botPos);
-          const distToDesired = toDesired.length();
+          const distFromBase = botPos.distanceTo(base);
+          // Far from crease and not carrying: face the goal and boost home (field thrusters).
+          this._goalieRushing = !this.isGrabbingBall && distFromBase > GOALIE_RUSH_DIST;
 
-          // Omnidirectional move: steer without rotating into the travel direction.
-          if (distToDesired > GOALIE_ARRIVE_EPS) {
-            const dir = toDesired.multiplyScalar(1 / distToDesired);
-            this.targetDirection.copy(dir);
-            this._goalieSteer.copy(dir).multiplyScalar(GOALIE_STEER * dt);
-            this.isMoving = true;
-            this.navigationState = 'thrusting';
-          } else if (this.velocity && this.velocity.lengthSq() > 0.0001) {
-            this.velocity.multiplyScalar(0.82);
-          }
-
-          // Facing is independent of travel:
-          // - chasing: always face the ball
-          // - holding: face midfield so the held ball stays away from own goal
-          if (this.isGrabbingBall) {
-            this.rotateTowards(faceField, dt);
-          } else if (ballPos) {
-            const toBall = new THREE.Vector3().subVectors(ballPos, botPos);
-            if (toBall.lengthSq() > 0.0001) {
-              this.rotateTowards(toBall.normalize(), dt);
+          if (this._goalieRushing) {
+            const toBase = new THREE.Vector3().subVectors(base, botPos);
+            if (toBase.lengthSq() > 0.0001) {
+              const dir = toBase.normalize();
+              this.targetDirection.copy(dir);
+              this._targetDistance = distFromBase;
+              const aligned = this.rotateTowards(dir, dt);
+              this.thrusterActive.left = aligned;
+              this.thrusterActive.right = aligned;
+              // Light assist while turning so we don't crawl sideways forever.
+              if (!aligned) {
+                this._goalieSteer.copy(dir).multiplyScalar(GOALIE_STEER * 0.4 * dt);
+              }
+              this.isMoving = true;
+              this.navigationState = 'thrusting';
             }
           } else {
-            this.rotateTowards(faceField, dt);
+            // Desired point: slide toward ball within roam sphere; when holding, settle slightly
+            // toward midfield from base so the held ball clears the goal mouth.
+            const desired = base.clone();
+            if (this.isGrabbingBall) {
+              desired.copy(base).addScaledVector(faceField, 0.35);
+            } else if (ballPos) {
+              const fromBaseToBall = new THREE.Vector3().subVectors(ballPos, base);
+              const distBaseToBall = fromBaseToBall.length();
+              if (distBaseToBall > 0.01 && distBaseToBall < GOALIE_ENGAGE_DIST) {
+                const reach = Math.min(GOALIE_ROAM_RADIUS * 0.85, distBaseToBall);
+                desired.copy(base).addScaledVector(fromBaseToBall.normalize(), reach);
+              }
+            }
+
+            const toDesired = new THREE.Vector3().subVectors(desired, botPos);
+            const distToDesired = toDesired.length();
+
+            // Omnidirectional move: steer without rotating into the travel direction.
+            if (distToDesired > GOALIE_ARRIVE_EPS) {
+              const dir = toDesired.multiplyScalar(1 / distToDesired);
+              this.targetDirection.copy(dir);
+              this._goalieSteer.copy(dir).multiplyScalar(GOALIE_STEER * dt);
+              this.isMoving = true;
+              this.navigationState = 'thrusting';
+            } else if (this.velocity && this.velocity.lengthSq() > 0.0001) {
+              this.velocity.multiplyScalar(0.82);
+            }
+
+            // Facing is independent of travel:
+            // - chasing: always face the ball
+            // - holding: face midfield so the held ball stays away from own goal
+            if (this.isGrabbingBall) {
+              this.rotateTowards(faceField, dt);
+            } else if (ballPos) {
+              const toBall = new THREE.Vector3().subVectors(ballPos, botPos);
+              if (toBall.lengthSq() > 0.0001) {
+                this.rotateTowards(toBall.normalize(), dt);
+              }
+            } else {
+              this.rotateTowards(faceField, dt);
+            }
           }
 
           if (this.isGrabbingBall) return;
@@ -9188,8 +9322,8 @@ function setGameplayHUD(isPlaying) {
           // Goalie crease play (temporary test bot, or integrated team goalie).
           if (isActingGoalie(this)) {
             this.runStationaryGoalieTick(deltaTime);
-            this.applyThrusterForces(deltaTime); // routes to applyGoalieThrusterForces + leash
-            // Fall through to visual sync + ball-carry positioning (skip pass / throw).
+            this.applyThrusterForces(deltaTime); // rush boost or crease omni + leash
+            // Fall through to visual sync + ball-carry positioning; distribute runs below.
           } else {
             // NEW: Intelligent navigation system
             this.intelligentNavigation(deltaTime);
@@ -9279,8 +9413,13 @@ function setGameplayHUD(isPlaying) {
           }
 
           // Team play: while carrying, pass to a teammate who's closer to the opponent's goal.
-          // Goalie holds; don't pass or throw.
+          // Goalie distributes quickly (pass or threatened clear) instead of camping the ball.
           if (isActingGoalie(this)) {
+            if (this.isGrabbingBall) {
+              this.maybeGoalieDistribute(time);
+            } else {
+              this._goalieCatchTime = 0;
+            }
             return;
           }
 
@@ -9658,26 +9797,180 @@ function setGameplayHUD(isPlaying) {
           this.passBallToTeammate(best, time);
         },
 
+        // Goalie: get the ball out of the crease quickly after a catch.
+        maybeGoalieDistribute: function(time) {
+          if (!this.isGrabbingBall || gameMode !== 'capture') {
+            this._goalieCatchTime = 0;
+            return;
+          }
+          if (!this._goalieCatchTime) this._goalieCatchTime = time;
+          if (time - this._goalieCatchTime < GOALIE_CATCH_SETTLE_MS) return;
+          if (time - this._lastPassEval < GOALIE_PASS_EVAL_MS) return;
+          this._lastPassEval = time;
+          if (time - this._lastPassTime < GOALIE_PASS_INTERVAL_MS) return;
+
+          const captureBall = document.querySelector('#capture-ball');
+          if (!captureBall || !captureBall.components['zerog-ball']) return;
+          const ballPos = new THREE.Vector3();
+          captureBall.object3D.getWorldPosition(ballPos);
+
+          const team = this.data.team || (isGoalieTestMode() ? GOALIE_TEST_BOT_COLOR : 'blue');
+          const ownGoal = getGoalieBaseForTeam(team);
+          const myId = this.getMyOwnerId();
+
+          let best = null;
+          let bestScore = -Infinity;
+          for (const m of this.getTeammates()) {
+            const passDist = ballPos.distanceTo(m.position);
+            if (passDist < this.minPassDistance || passDist > this.maxPassDistance) continue;
+            // Prefer teammates already out of the crease / toward the field.
+            const teammateFromGoal = m.position.distanceTo(ownGoal);
+            if (teammateFromGoal < 3) continue;
+
+            const speed = THREE.MathUtils.clamp(
+              passDist * 1.2,
+              this.data.minThrowForce,
+              this.data.maxThrowForce + 4
+            );
+            const aimPos = this.computeInterceptPoint(ballPos, m.position, m.velocity, speed);
+            if (!this.hasLineOfSight(ballPos, aimPos, {
+              checkOpponents: true,
+              ignoreIds: [myId, m.id]
+            })) continue;
+
+            const score = teammateFromGoal - passDist * 0.05;
+            if (score > bestScore) {
+              bestScore = score;
+              best = m;
+            }
+          }
+
+          if (best) {
+            this.passBallToTeammate(best, time);
+            this._goalieCatchTime = 0;
+            return;
+          }
+
+          // No clear pass and an opponent is threatening the crease: dump to an open angle.
+          if (this.isOpponentNearOwnGoal(GOALIE_THREAT_DIST)) {
+            this.goalieClearBall(time);
+            this._goalieCatchTime = 0;
+          }
+        },
+
+        isOpponentNearOwnGoal: function(radius) {
+          const team = this.data.team || (isGoalieTestMode() ? GOALIE_TEST_BOT_COLOR : 'blue');
+          const base = getGoalieBaseForTeam(team);
+          const myId = this.getMyOwnerId();
+
+          const playerTarget = document.querySelector('#player-target');
+          if (playerTarget) {
+            const pid = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+            if (!areTeammates(myId, pid)) {
+              const pos = new THREE.Vector3();
+              playerTarget.object3D.getWorldPosition(pos);
+              if (pos.distanceTo(base) <= radius) return true;
+            }
+          }
+
+          const bots = document.querySelectorAll('[zerog-bot]');
+          for (let i = 0; i < bots.length; i++) {
+            const b = bots[i];
+            const comp = b.components['zerog-bot'];
+            if (!comp || comp === this || !comp.body) continue;
+            if (!b.getAttribute('visible')) continue;
+            const oid = comp.getMyOwnerId();
+            if (areTeammates(myId, oid)) continue;
+            const pos = new THREE.Vector3().copy(comp.body.position);
+            if (pos.distanceTo(base) <= radius) return true;
+          }
+          return false;
+        },
+
+        // Dump the ball toward midfield at the first open lateral angle (emergency clear).
+        goalieClearBall: function(time) {
+          const captureBall = document.querySelector('#capture-ball');
+          if (!captureBall || !captureBall.components['zerog-ball']) return;
+          const ballComponent = captureBall.components['zerog-ball'];
+          const ballPos = new THREE.Vector3();
+          captureBall.object3D.getWorldPosition(ballPos);
+
+          const team = this.data.team || (isGoalieTestMode() ? GOALIE_TEST_BOT_COLOR : 'blue');
+          const faceField = getGoalieFaceFieldDirForTeam(team);
+          const right = new THREE.Vector3().crossVectors(faceField, new THREE.Vector3(0, 1, 0));
+          if (right.lengthSq() < 0.001) right.set(1, 0, 0);
+          right.normalize();
+
+          const clearDist = 18;
+          const speed = Math.max(this.data.maxThrowForce || 10, 12);
+          const myId = this.getMyOwnerId();
+          const offsets = [0, 3, -3, 6, -6, 9, -9];
+          let aimPos = null;
+          for (let i = 0; i < offsets.length; i++) {
+            const cand = ballPos.clone()
+              .addScaledVector(faceField, clearDist)
+              .addScaledVector(right, offsets[i]);
+            if (this.hasLineOfSight(ballPos, cand, {
+              checkOpponents: true,
+              ignoreIds: [myId]
+            })) {
+              aimPos = cand;
+              break;
+            }
+          }
+          if (!aimPos) {
+            aimPos = ballPos.clone()
+              .addScaledVector(faceField, clearDist)
+              .addScaledVector(right, 5);
+          }
+
+          const dir = new THREE.Vector3().subVectors(aimPos, ballPos);
+          if (dir.lengthSq() < 0.0001) return;
+          dir.normalize();
+
+          this.isGrabbingBall = false;
+          ballComponent.isGrabbed = false;
+          ballComponent.currentOwner = null;
+          ballComponent.lastOwnerChangeTime = Date.now();
+          ballComponent.body.gravity.set(0, 0, 0);
+          ballComponent.body.velocity.set(dir.x * speed, dir.y * speed, dir.z * speed);
+          ballComponent.body.angularVelocity.set(
+            (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 6
+          );
+
+          this.ballStealTimeout = Date.now() + 1500;
+          this._noRegrabUntil = Date.now() + 1500;
+          this.navigationState = 'idle';
+          this.lastCloseTime = Date.now();
+          this._lastPassTime = time;
+          this.lastThrowTime = time;
+          console.log(`🥅 Goalie ${this.el.id} cleared the ball`);
+        },
+
         passBallToTeammate: function(target, time) {
           const captureBall = document.querySelector('#capture-ball');
           if (!captureBall || !captureBall.components['zerog-ball']) return;
           const ballComponent = captureBall.components['zerog-ball'];
 
-          const botPos = new THREE.Vector3().copy(this.body.position);
-          const passDist = botPos.distanceTo(target.position);
+          const ballPos = new THREE.Vector3();
+          captureBall.object3D.getWorldPosition(ballPos);
+          const passDist = ballPos.distanceTo(target.position);
           if (passDist < 0.0001) return;
 
           // Choose a throw speed based on the current gap (harder for longer passes), then LEAD the
           // teammate: in zero-G the ball flies straight at constant speed, so we solve for the time t
           // when the ball meets the moving teammate and aim at that future point.
           const speed = THREE.MathUtils.clamp(passDist * 1.2, this.data.minThrowForce, this.data.maxThrowForce + 4);
-          const aimPos = this.computeInterceptPoint(botPos, target.position, target.velocity, speed);
-          const dir = new THREE.Vector3().subVectors(aimPos, botPos);
+          const aimPos = this.computeInterceptPoint(ballPos, target.position, target.velocity, speed);
+          const dir = new THREE.Vector3().subVectors(aimPos, ballPos);
           if (dir.lengthSq() < 0.0001) return;
           dir.normalize();
 
-          // Don't pass through walls/objects: require a clear path along the ball's flight line.
-          if (!this.hasLineOfSight(botPos, aimPos)) return;
+          // Don't pass through walls/objects/opponents: clear path from ball center to aim point.
+          if (!this.hasLineOfSight(ballPos, aimPos, {
+            checkOpponents: true,
+            ignoreIds: [this.getMyOwnerId(), target.id]
+          })) return;
 
           // Release ownership cleanly (bots don't have hand velocity history, so set velocity ourselves).
           this.isGrabbingBall = false;
@@ -9730,11 +10023,43 @@ function setGameplayHUD(isPlaying) {
           return targetPos.clone().add(v.multiplyScalar(t));
         },
 
+        // Opponent/player positions that can block a pass (excludes self, teammates, and ignoreIds).
+        collectPassBlockers: function(ignoreIds) {
+          const ignore = new Set(ignoreIds || []);
+          const myId = this.getMyOwnerId();
+          ignore.add(myId);
+          const list = [];
+
+          const playerTarget = document.querySelector('#player-target');
+          if (playerTarget) {
+            const pid = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
+            if (!ignore.has(pid) && !areTeammates(myId, pid)) {
+              const pos = new THREE.Vector3();
+              playerTarget.object3D.getWorldPosition(pos);
+              list.push(pos);
+            }
+          }
+
+          const bots = document.querySelectorAll('[zerog-bot]');
+          for (let i = 0; i < bots.length; i++) {
+            const b = bots[i];
+            const comp = b.components['zerog-bot'];
+            if (!comp || !comp.body) continue;
+            if (!b.getAttribute('visible')) continue;
+            const oid = comp.getMyOwnerId();
+            if (ignore.has(oid) || areTeammates(myId, oid)) continue;
+            list.push(new THREE.Vector3().copy(comp.body.position));
+          }
+          return list;
+        },
+
         // Clear-path test between two points: march a ball-sized sphere along the segment and reject if
-        // it would intersect any arena surface. Reuses the same getCollisionResponse() the bot already
-        // uses for movement collisions. Uses the full surface list (not the bot-local culled set) since
-        // the pass line can span the arena. Called only on throttled pass attempts, so cost is bounded.
-        hasLineOfSight: function(fromPos, toPos) {
+        // it would intersect any arena surface or (by default) an opponent. Reuses getCollisionResponse()
+        // for surfaces. Uses the full surface list (not the bot-local culled set) since the pass line
+        // can span the arena. Called only on throttled pass attempts, so cost is bounded.
+        hasLineOfSight: function(fromPos, toPos, opts) {
+          opts = opts || {};
+          const checkOpponents = opts.checkOpponents !== false;
           const seg = new THREE.Vector3().subVectors(toPos, fromPos);
           const dist = seg.length();
           if (dist < 0.001) return true;
@@ -9760,6 +10085,9 @@ function setGameplayHUD(isPlaying) {
             surfList.push({ surface, geometry, sp });
           });
 
+          const blockers = checkOpponents ? this.collectPassBlockers(opts.ignoreIds || []) : [];
+          const hitR = ballRadius + (opts.blockerRadius != null ? opts.blockerRadius : PASS_BLOCKER_RADIUS);
+
           // March along the line, skipping the endpoints (near the players themselves).
           const p = new THREE.Vector3();
           for (let d = step; d < dist; d += step) {
@@ -9767,7 +10095,12 @@ function setGameplayHUD(isPlaying) {
             for (let i = 0; i < surfList.length; i++) {
               const s = surfList[i];
               if (this.getCollisionResponse(p, ballRadius, s.sp, s.geometry, s.surface).length() > 0) {
-                return false; // blocked
+                return false; // blocked by object
+              }
+            }
+            for (let i = 0; i < blockers.length; i++) {
+              if (p.distanceTo(blockers[i]) < hitR) {
+                return false; // blocked by opponent
               }
             }
           }
@@ -21709,9 +22042,9 @@ function setGameplayHUD(isPlaying) {
                              playbackRate: 1.4;
                              positional: true;
                              distanceModel: inverse;
-                             refDistance: 0.5;
-                             maxDistance: 10;
-                             rolloffFactor: 2;
+                             refDistance: 0.2;
+                             maxDistance: 12;
+                             rolloffFactor: 2.5;
                              poolSize: 1;">
             </a-entity>
           </a-entity>
@@ -21737,7 +22070,7 @@ function setGameplayHUD(isPlaying) {
                     visible="false">
             </a-cone>
             
-            <!-- NEW: Thruster sound effect (spatial, looping, higher pitch) -->
+            <!-- Thruster sound (spatial; local offset synced to wrist each frame) -->
             <a-entity class="thruster-sound"
                       sound="src: url(../audio/thrusters_loopwav-14699.mp3);
                              autoplay: false;
@@ -21746,9 +22079,9 @@ function setGameplayHUD(isPlaying) {
                              playbackRate: 1.4;
                              positional: true;
                              distanceModel: inverse;
-                             refDistance: 0.5;
-                             maxDistance: 10;
-                             rolloffFactor: 2;
+                             refDistance: 0.2;
+                             maxDistance: 12;
+                             rolloffFactor: 2.5;
                              poolSize: 1;">
             </a-entity>
           </a-entity>
