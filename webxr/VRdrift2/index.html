@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>VR Drift 2 (Box3D)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Orion Drift–style WebXR locomotion on Box3D: body ball, palm drift, Mixamo avatar, multiplayer ball sync."
+    />
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.6.0/dist/aframe-extras.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.0/umd/index.js"></script>
+    <script>
+      (function () {
+        var w = console.warn;
+        console.warn = function () {
+          if (arguments[0] && String(arguments[0]).indexOf('decodeText') !== -1) return;
+          return w.apply(console, arguments);
+        };
+      })();
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/FBXLoader.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/soccer-ball-texture.js"></script>
+    <script src="js/collision-utils.js"></script>
+    <script src="js/box3d-collision.js"></script>
+    <script src="js/physics-world.js"></script>
+    <script src="js/drift-grip.js"></script>
+    <script src="js/drift-palm-frame.js"></script>
+    <script src="js/mixamo-body-avatar.js"></script>
+    <script src="js/drift-haptics.js"></script>
+    <script src="js/drift-game-ball.js"></script>
+    <script src="js/drift-hand-visual.js"></script>
+    <script src="js/palm-ball.js"></script>
+    <script src="js/locomotion.js"></script>
+    <script src="js/network.js"></script>
+    <script src="js/forward-raycaster.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/drift-shadows.js"></script>
+    <script src="js/drift-floor-grid.js"></script>
+    <script src="js/arena.js"></script>
+    <style>
+      body { margin: 0; background: #0a0e14; }
+      #enter-vr-hint {
+        position: fixed;
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #8ab4f8;
+        font-family: system-ui, sans-serif;
+        font-size: 14px;
+        z-index: 2;
+        pointer-events: none;
+        text-align: center;
+      }
+      #boot {
+        position: fixed;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #9ad0ff;
+        font-family: system-ui, sans-serif;
+        font-size: 13px;
+        z-index: 2;
+        pointer-events: none;
+        transition: opacity 0.6s;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="boot">Loading Box3D…</div>
+    <div id="enter-vr-hint">
+      VR: Enter VR · Plant palm wheels on the floor and swipe to skate · Grip rails · Right stick turn · B/Y boost · Menu: X
+    </div>
+    <a-scene
+      renderer="colorManagement: true; physicallyCorrectLights: true; shadowMapEnabled: true; shadowMapType: PCFSoft"
+      background="color: #0a1020"
+      fog="type: exponential; color: #0a1020; density: 0.008"
+      drift-physics-world
+      drift-ui
+      drift-arena
+      drift-shadows
+      drift-thruster-vfx
+      webxr="requiredFeatures: local-floor"
+    >
+      <a-assets></a-assets>
+
+      <a-entity id="arena" drift-floor-grid="cellM: 1; size: 48">
+        <a-entity light="type: ambient; color: #c8d4ee; intensity: 0.5"></a-entity>
+        <a-entity
+          position="0 11 0"
+          light="type: point; color: #eef4ff; intensity: 0.85; distance: 42; decay: 2"
+        ></a-entity>
+        <a-entity
+          id="shadow-light"
+          position="0 13 -4"
+          rotation="-58 0 0"
+          light="type: directional; color: #f2f6ff; intensity: 0.72; castShadow: true; shadowMapHeight: 2048; shadowMapWidth: 2048; shadowCameraTop: 28; shadowCameraBottom: -28; shadowCameraLeft: -28; shadowCameraRight: 28; shadowCameraNear: 0.25; shadowCameraFar: 65; shadowBias: -0.00035"
+        ></a-entity>
+
+        <a-box
+          position="0 -0.25 0"
+          width="48"
+          height="0.5"
+          depth="48"
+          color="#2a3344"
+          drift-surface
+          drift-floor
+          material="roughness: 0.85; metalness: 0.1"
+        ></a-box>
+
+        <a-box position="0 8 -24" width="48" height="16" depth="1" color="#1e2838" drift-surface drift-wall></a-box>
+        <a-box position="0 8 24" width="48" height="16" depth="1" color="#1e2838" drift-surface drift-wall></a-box>
+        <a-box position="-24 8 0" width="1" height="16" depth="48" color="#1e2838" drift-surface drift-wall></a-box>
+        <a-box position="24 8 0" width="1" height="16" depth="48" color="#1e2838" drift-surface drift-wall></a-box>
+
+        <!-- Low-G ramp: fill slab = walls; thin deck = walkable floor -->
+        <a-entity position="0 -1.69 -13.29" rotation="-18 0 0">
+          <a-box width="14" height="5" depth="10" color="#3d4a5c" drift-surface drift-wall></a-box>
+          <a-box
+            position="0 2.425 0"
+            width="14"
+            height="0.15"
+            depth="10"
+            color="#4a5a6e"
+            drift-surface
+            drift-floor
+          ></a-box>
+        </a-entity>
+
+        <a-box position="-8 2 -6" width="6" height="4" depth="6" color="#445566" drift-surface drift-wall></a-box>
+        <a-box position="10 3.5 4" width="5" height="7" depth="5" color="#445566" drift-surface drift-wall></a-box>
+
+        <a-box
+          id="arena-ceiling"
+          position="0 16 0"
+          width="48"
+          height="0.8"
+          depth="48"
+          color="#1a2230"
+          drift-surface
+          drift-wall
+          material="roughness: 0.9; metalness: 0.05; side: double"
+        ></a-box>
+
+        <a-cylinder
+          position="-6 1.2 -8"
+          radius="0.12"
+          height="4"
+          color="#66ccff"
+          drift-surface
+          drift-grip
+          drift-wall
+          material="emissive: #2288cc; emissiveIntensity: 0.4"
+        ></a-cylinder>
+        <a-cylinder
+          position="6 2.5 2"
+          radius="0.12"
+          height="5"
+          color="#66ccff"
+          drift-surface
+          drift-grip
+          drift-wall
+          material="emissive: #2288cc; emissiveIntensity: 0.4"
+        ></a-cylinder>
+        <a-box
+          position="0 1.5 12"
+          width="8"
+          height="0.5"
+          depth="0.65"
+          color="#88ddff"
+          drift-surface
+          drift-grip
+          drift-wall
+          material="emissive: #44aaff; emissiveIntensity: 0.35"
+        ></a-box>
+
+        <a-cylinder position="0 3 0" radius="1.2" height="6" color="#556677" drift-surface drift-wall></a-cylinder>
+
+        <a-entity
+          id="arena-game-ball"
+          position="0 0.3 -3.5"
+          drift-game-ball="color: #ffdd44; mass: 3"
+        ></a-entity>
+      </a-entity>
+
+      <a-entity id="remotes"></a-entity>
+
+      <a-entity id="player" position="0 0 -8" drift-locomotion="color: #44aaff">
+        <a-entity id="body-collision-debug" visible="false"></a-entity>
+        <a-entity id="rig" position="0 0 0" rotation="0 0 0">
+          <a-entity id="camera" camera look-controls="pointerLockEnabled: false">
+            <a-entity id="hud-speed" position="0 -0.2 -0.6" text="value: 0.0 m/s; align: center; width: 0.45; color: #aaddff"></a-entity>
+            <a-entity id="hud-status" position="0 0.05 -0.6" text="value: ; align: center; width: 0.9; color: #cccccc"></a-entity>
+
+            <a-entity id="game-menu" position="0 0 -0.85" visible="false">
+              <a-plane width="1.1" height="0.78" color="#000000" material="opacity: 0.88; transparent: true" position="0 -0.04 -0.01"></a-plane>
+              <a-text value="VR DRIFT 2" position="0 0.24 0" align="center" width="1" color="#88ccff"></a-text>
+              <a-entity id="menu-solo" position="-0.22 0.08 0" geometry="primitive: plane; width: 0.28; height: 0.07" material="color: #224466" class="clickable">
+                <a-text value="SOLO" align="center" width="0.8" position="0 0 0.01" color="#fff"></a-text>
+              </a-entity>
+              <a-entity id="menu-host" position="0.22 0.08 0" geometry="primitive: plane; width: 0.28; height: 0.07" material="color: #442266" class="clickable">
+                <a-text value="HOST" align="center" width="0.8" position="0 0 0.01" color="#fff"></a-text>
+              </a-entity>
+              <a-entity id="menu-join" position="0 -0.02 0" geometry="primitive: plane; width: 0.28; height: 0.07" material="color: #226644" class="clickable">
+                <a-text value="JOIN" align="center" width="0.8" position="0 0 0.01" color="#fff"></a-text>
+              </a-entity>
+              <a-text value="Lobby" position="-0.28 -0.14 0" align="left" width="0.35" color="#aaa"></a-text>
+              <a-entity id="menu-lobby-minus" position="-0.05 -0.14 0" geometry="primitive: plane; width: 0.05; height: 0.05" material="color: #553333" class="clickable">
+                <a-text value="-" align="center" width="1" position="0 0 0.01"></a-text>
+              </a-entity>
+              <a-text id="menu-lobby-num" value="1" position="0.04 -0.14 0" align="center" width="0.5" color="#fff"></a-text>
+              <a-entity id="menu-lobby-plus" position="0.12 -0.14 0" geometry="primitive: plane; width: 0.05; height: 0.05" material="color: #335533" class="clickable">
+                <a-text value="+" align="center" width="1" position="0 0 0.01"></a-text>
+              </a-entity>
+              <a-text value="Rig height" position="-0.28 -0.24 0" align="left" width="0.4" color="#aaa"></a-text>
+              <a-entity id="menu-rig-minus" position="-0.05 -0.24 0" geometry="primitive: plane; width: 0.05; height: 0.05" material="color: #553333" class="clickable">
+                <a-text value="-" align="center" width="1" position="0 0 0.01"></a-text>
+              </a-entity>
+              <a-text id="menu-rig-num" value="0.0 m" position="0.04 -0.24 0" align="center" width="0.55" color="#fff"></a-text>
+              <a-entity id="menu-rig-plus" position="0.12 -0.24 0" geometry="primitive: plane; width: 0.05; height: 0.05" material="color: #335533" class="clickable">
+                <a-text value="+" align="center" width="1" position="0 0 0.01"></a-text>
+              </a-entity>
+            </a-entity>
+          </a-entity>
+
+          <a-entity
+            id="leftHand"
+            visible="false"
+            custom-hand-controls
+            hand-controls="hand: left; handModelStyle: lowPoly"
+            forward-raycaster="hand: left; lineColor: #ffffff; maxLength: 10; enabled: false; objects: .clickable"
+          >
+            <a-sphere
+              id="left-palm"
+              position="0 -0.03 -0.07"
+              radius="0.075"
+              visible="false"
+              material="visible: false"
+            ></a-sphere>
+            <a-entity class="thruster-vfx" visible="false" position="0 -0.05 0" particle-system="preset: dust; particleCount: 40; maxAge: 0.4; accelerationValue: 0,-2,0; velocityValue: 0 0.4 0; color: #88ddff; opacity: 0.7; size: 0.04"></a-entity>
+          </a-entity>
+          <a-entity
+            id="rightHand"
+            visible="false"
+            custom-hand-controls
+            hand-controls="hand: right; handModelStyle: lowPoly"
+            forward-raycaster="hand: right; lineColor: #ffffff; maxLength: 10; enabled: false; objects: .clickable"
+          >
+            <a-sphere
+              id="right-palm"
+              position="0 -0.03 -0.07"
+              radius="0.075"
+              visible="false"
+              material="visible: false"
+            ></a-sphere>
+            <a-entity class="thruster-vfx" visible="false" position="0 -0.05 0" particle-system="preset: dust; particleCount: 40; maxAge: 0.4; accelerationValue: 0,-2,0; velocityValue: 0 0.4 0; color: #88ddff; opacity: 0.7; size: 0.04"></a-entity>
+          </a-entity>
+        </a-entity>
+      </a-entity>
+
+      <a-entity id="hand-collision-debug" visible="true"></a-entity>
+
+      <a-entity
+        id="local-body"
+        visible="true"
+        mixamo-body-avatar="playerId: local; color: #44aaff; hideHead: true; hideBelowGut: true; lod: high; modelPath: ../assets/Y Bot.fbx"
+      ></a-entity>
+
+      <a-entity id="locomotion-tick" drift-locomotion-tick></a-entity>
+    </a-scene>
+    <script>
+      (function () {
+        var boot = document.getElementById('boot');
+        var scene = document.querySelector('a-scene');
+        scene.addEventListener('drift-physics-ready', function () {
+          boot.textContent = 'Box3D ready';
+        });
+        scene.addEventListener('drift-arena-ready', function () {
+          boot.textContent = 'Ready — Enter VR · Menu: X';
+          setTimeout(function () { boot.style.opacity = '0'; }, 2000);
+        });
+      })();
+    </script>
+  </body>
+</html>

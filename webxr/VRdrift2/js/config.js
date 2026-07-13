@@ -1,0 +1,117 @@
+/* VRdrift2 — Box3D body + palm ball-wheel tuning (aligned with VRdrift skate). */
+window.VRDRIFT = {
+  BODY_BALL_RADIUS: 0.24,
+  BODY_BALL_DENSITY: 950,
+  PLAYER_BALL_FRICTION: 0.08,
+  GAME_BALL_RADIUS: 0.25,
+  GAME_BALL_DENSITY: 45,
+  GAME_BALL_MAX_SPEED: 5,
+  GAME_BALL_RESTITUTION: 0.05,
+  /** Soft body↔ball carry — ~50% of body radius so you don't grab the play ball from as far away */
+  BODY_BALL_CARRY_RADIUS: 0.12,
+  BODY_BALL_CARRY_BLEND: 10,
+  BODY_BALL_CARRY_PUSH: 1.0,
+  /** Palm must approach this fast (m/s) into the ball to "slap" it away */
+  PALM_GAME_BALL_SLAP_SPEED: 1.1,
+  PALM_GAME_BALL_VELOCITY_BLEND: 22,
+  PALM_GAME_BALL_MAX_DV: 2.8,
+  PALM_GAME_BALL_SOFT_MAX_DV: 1.4,
+  /** When touching the play ball, chase hands with velocity (never teleport through) */
+  PALM_GAME_BALL_CHASE_GAIN: 22,
+  PALM_GAME_BALL_TOUCH_GAP: 0.04,
+
+  PALM_SPHERE_RADIUS: 0.05,
+  PALM_SPHERE_MASS: 1.5,
+  PALM_BALL_FRICTION: 0.62,
+  PALM_BALL_RESTITUTION: 0,
+  /** Soft planted chase — high values fight contact and shake */
+  PALM_HAND_CHASE_GAIN: 4.5,
+  PALM_CHASE_MAX_SPEED: 2.2,
+  SHOW_PALM_SPHERE_DEBUG: true,
+  SHOW_HAND_COLLISION_DEBUG: false,
+
+  PALM_RADIUS: 0.055,
+  PALM_CONTACT_COUPLING: 1.25,
+  PALM_CONTACT_MAX_STEP: 0.12,
+  PALM_CONTACT_MIN_INTO: 0.0004,
+  PALM_DELTA_MAX: 0.14,
+  /** Idle plant below these (m/frame) — coast / freewheel */
+  PALM_FLOOR_SKATE_MIN_TANGENT: 0.008,
+  PALM_FLOOR_SKATE_MIN_INTO: 0.003,
+  /** Soft press lifts via rig support; jump needs a clear slap */
+  PALM_FLOOR_LAUNCH_MIN_INTO: 0.028,
+  PALM_FLOOR_LAUNCH_INTO_RATIO: 1.6,
+  PALM_FLOOR_LAUNCH_HAND_SPEED: 1.8,
+  PALM_FLOOR_SKATE_MIN_DRIVE: 0.008,
+  /** Cap on swipe-derived drive speed before impulse (m/s) */
+  PALM_FLOOR_SKATE_MAX_DV: 4.8,
+  /** Softens how much of each swipe applies as Δv (with PALM_SKATE_IMPULSE) */
+  PALM_FLOOR_SKATE_STEER_BLEND: 0.55,
+  /** Fraction of swipe speed added along swipe axis per frame (keeps momentum) */
+  PALM_SKATE_IMPULSE: 0.45,
+  /** Min hand travel (m/frame) before surface-grip hauls the rig */
+  PALM_GRIP_HAUL_MIN: 0.004,
+  PALM_FLOOR_SKATE_INCLINE_NY: 0.92,
+  PALM_FLOOR_SKATE_INCLINE_TANGENT: 0.012,
+  PALM_STATIC_FLOOR_GAP: 0.028,
+  /** Lift body when tracked hand sinks below planted palm */
+  PALM_RIG_SUPPORT_TOLERANCE: 0.018,
+  PALM_RIG_SUPPORT_MAX_STEP: 0.028,
+  PALM_RIG_SUPPORT_BLEND: 0.22,
+  PALM_WALL_TOUCH_GAP: 0.012,
+  PALM_WALL_COUPLE: 1,
+  PALM_WALL_MAX_STEP: 0.1,
+  /** Same soft freewheel/skate as floor */
+  PALM_WALL_SKATE_STEER_BLEND: 0.55,
+  PALM_WALL_SKATE_MAX_DV: 4.8,
+
+  BODY_BACK_OFFSET: 0.15,
+  RIG_Y_OFFSET: 0,
+  RIG_HEIGHT_STEP: 0.1,
+  RIG_Y_MIN: -2,
+  RIG_Y_MAX: 1,
+  MASS: 55,
+  GRAVITY: -3.2,
+  LINEAR_DAMPING: 0.015,
+  ANGULAR_DAMPING: 0.22,
+  MAX_SPEED: 11,
+  THRUSTER_FORCE: 140,
+  ROTATION_SPEED: 2.2,
+  BRAKE_FACTOR: 0.88,
+  /** Surface-grip brake: shed this many m/s² while still fast */
+  FLOOR_GRIP_MAX_DECEL: 18,
+  /** At/below this speed (m/s), grip snaps to a full stop and allows crawl haul */
+  FLOOR_GRIP_FULL_COUPLE_SPEED: 1.35,
+  WALL_JUMP_MIN_SPEED: 2.2,
+  WALL_JUMP_GAIN: 0.9,
+  GRIP_ATTACH_DIST: 0.22,
+  GRIP_MAX_SPEED: 3.2,
+  GROUNDED_NORMAL_Y: 0.45,
+  PHYSICS_HZ: 90,
+  SYNC_HZ: 30,
+  PEER_PREFIX: 'vrdrift2',
+  MAX_LOBBIES: 8,
+  PLAYER_COLORS: ['#44aaff', '#ff6644', '#66ddaa', '#dd66ff', '#ffcc44', '#88eeff', '#ff88cc', '#aaff66'],
+  BALL_NET_IMPULSE_GAIN: 1.8,
+  BALL_NET_IMPULSE_MAX: 4.5,
+  BALL_NET_TOUCH_GAP: 0.04,
+
+  PALM_COLLIDER_OFFSET_X: 0,
+  PALM_COLLIDER_OFFSET_Y: 0,
+  PALM_COLLIDER_OFFSET_Z: 0.02,
+  PALM_LOCAL_ROT_X: -90,
+  PALM_LOCAL_ROT_Y: 0,
+  PALM_LOCAL_ROT_Z: 0,
+  PALM_BONE_CENTER_ALONG_FINGERS: 0.02,
+  PALM_BONE_LOCAL_ROT_X: -90,
+  PALM_BONE_LOCAL_ROT_Y: 0,
+  PALM_BONE_LOCAL_ROT_Z: 90,
+  PALM_BONE_TIP_DEG: 90,
+  PALM_BONE_TIP_AXIS: 'z',
+  PALM_BONE_ROLL_DEG: -16,
+  PALM_PHYSICS_HALF_WIDTH: 0.07,
+  PALM_PHYSICS_HALF_THICK: 0.014,
+  PALM_PHYSICS_HALF_LENGTH: 0.052,
+  PALM_ANCHOR_Y: -0.03,
+  PALM_ANCHOR_Z: -0.07
+};
