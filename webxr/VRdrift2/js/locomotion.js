@@ -15,6 +15,10 @@
   const _handDown = new THREE.Vector3();
   const _track = new THREE.Vector3();
   const _localPalm = new THREE.Vector3();
+  const _head = new THREE.Vector3();
+  const _headPrev = new THREE.Vector3();
+  const _headVel = new THREE.Vector3();
+  const _headPush = new THREE.Vector3();
   const _playerQuat = new THREE.Quaternion();
   const _invPlayer = new THREE.Matrix4();
 
@@ -75,10 +79,23 @@
       this._wallPlantWasContact = { left: false, right: false };
       this._floorLostFrames = { left: 0, right: 0 };
       this._wallLostFrames = { left: 0, right: 0 };
+      this._headPrevReady = false;
+      this._prevPalmSurface = { left: false, right: false };
+      this._prevGameBallTouch = { left: false, right: false };
+      this._lastSkateHaptic = { left: 0, right: 0 };
+      this._lastImpactHaptic = 0;
+      this._prevBodyVel = { x: 0, y: 0, z: 0 };
+      this._prevBodyTouchStatic = false;
+      this._prevBodyTouchBall = false;
+      this._prevHeadTouchStatic = false;
+      this._prevHeadTouchBall = false;
 
       this.el.sceneEl.addEventListener('drift-physics-ready', () => this.onPhysicsReady());
       this.el.sceneEl.addEventListener('enter-vr', () => {
         this._vrActive = true;
+        if (window.VRDriftAudio && window.VRDriftAudio.onEnterVr) {
+          window.VRDriftAudio.onEnterVr();
+        }
         this.ensureHandsVisible();
         this.applyRigOffset();
         this.snapToHeadset();
@@ -1083,6 +1100,245 @@
       }
     },
 
+    /**
+     * Keep head + body ball under ceilings / overhangs.
+     * CapVR head resolve uses horizontalOnly (walls only) so Y is ignored —
+     * without this, thrusters / palm lifts go straight through the ceiling slab.
+     */
+    clampAgainstCeiling: function () {
+      if (!this.phys?.playerBody || !this.phys.resolveSphere) return;
+      const headR =
+        C().HEAD_COLLISION_RADIUS != null ? C().HEAD_COLLISION_RADIUS : 0.2;
+      const bodyR = C().BODY_BALL_RADIUS != null ? C().BODY_BALL_RADIUS : 0.24;
+      let pushed = false;
+
+      if (this.camera) {
+        this.camera.object3D.updateMatrixWorld(true);
+        this.camera.object3D.getWorldPosition(_head);
+        const headEnv = this.phys.resolveSphere(_head, headR, { horizontalOnly: false });
+        if (headEnv.hit) {
+          const dy = headEnv.position.y - _head.y;
+          // Only apply downward corrections (ceiling / underside), never floor lifts
+          if (dy < -1e-4) {
+            if (this.phys.nudgePlayerPosition) this.phys.nudgePlayerPosition(0, dy, 0);
+            else {
+              const p = this.phys.getPlayerPosition();
+              this.phys.setPlayerPosition(p.x, p.y + dy, p.z);
+            }
+            pushed = true;
+          }
+        }
+      }
+
+      const pos = this.phys.getPlayerPosition();
+      _tmp.set(pos.x, pos.y, pos.z);
+      const bodyEnv = this.phys.resolveSphere(_tmp, bodyR, { horizontalOnly: false });
+      if (bodyEnv.hit) {
+        const dy = bodyEnv.position.y - pos.y;
+        if (dy < -1e-4) {
+          if (this.phys.nudgePlayerPosition) this.phys.nudgePlayerPosition(0, dy, 0);
+          else this.phys.setPlayerPosition(pos.x, pos.y + dy, pos.z);
+          pushed = true;
+        }
+      }
+
+      if (pushed) {
+        const vel = this.phys.getPlayerVelocity();
+        if (vel.y > 0) this.phys.setPlayerVelocity(vel.x, 0, vel.z);
+        this.syncPlayerFromBody();
+      }
+    },
+
+    /**
+     * CapVR `_checkHeadCollision` port:
+     * Box3D resolveSphere on the headset (r=0.2, horizontalOnly) → nudge player by
+     * the residual correction. No geometric full-penetration teleports.
+     * Play ball: separate the ball instead of shoving the player.
+     */
+    resolveHeadCollisions: function (dt) {
+      if (!this.phys?.playerBody || !this.camera || !this.phys.resolveSphere) return;
+      const radius =
+        C().HEAD_COLLISION_RADIUS != null ? C().HEAD_COLLISION_RADIUS : 0.2;
+
+      this.camera.object3D.updateMatrixWorld(true);
+      this.camera.object3D.getWorldPosition(_head);
+
+      if (this._headPrevReady && dt > 1e-6) {
+        _headVel.copy(_head).sub(_headPrev).divideScalar(dt);
+      } else {
+        _headVel.set(0, 0, 0);
+        this._headPrevReady = true;
+      }
+
+      // Same path as CapVR leg-ik-box3d `_checkHeadCollision`
+      const env = this.phys.resolveSphere(_head, radius, { horizontalOnly: true });
+      if (env.hit) {
+        _headPush.copy(env.position).sub(_head);
+        _headPush.y = 0;
+        const pushLen = _headPush.length();
+        if (pushLen > 1e-10) {
+          if (this.phys.nudgePlayerPosition) {
+            this.phys.nudgePlayerPosition(_headPush.x, 0, _headPush.z);
+          } else {
+            const pos = this.phys.getPlayerPosition();
+            this.phys.setPlayerPosition(pos.x + _headPush.x, pos.y, pos.z + _headPush.z);
+          }
+          this.syncPlayerFromBody();
+          this.camera.object3D.updateMatrixWorld(true);
+          this.camera.object3D.getWorldPosition(_head);
+
+          // Impact strength from how hard the head was driven into the wall
+          const into =
+            Math.max(0, -(_headVel.x * _headPush.x + _headVel.z * _headPush.z) / Math.max(pushLen, 1e-6));
+          const impact = Math.min(1, Math.max(pushLen * 8, into * 0.18));
+          if (impact >= (C().HAPTIC_IMPACT_MIN != null ? C().HAPTIC_IMPACT_MIN : 0.08)) {
+            if (!this._prevHeadTouchStatic || impact > 0.35) {
+              if (window.VRDriftHaptics) window.VRDriftHaptics.impactBoth(this, impact);
+              if (window.VRDriftAudio) window.VRDriftAudio.bodyOrHeadImpact(impact);
+            }
+          }
+          this._prevHeadTouchStatic = true;
+        } else {
+          this._prevHeadTouchStatic = true;
+        }
+      } else {
+        this._prevHeadTouchStatic = false;
+      }
+
+      // Dynamic play ball — push the ball (player does not bounce off it)
+      const gp = this.phys.getGameBallPosition && this.phys.getGameBallPosition();
+      if (gp) {
+        const gr = C().GAME_BALL_RADIUS != null ? C().GAME_BALL_RADIUS : 0.25;
+        let dx = gp.x - _head.x;
+        let dy = gp.y - _head.y;
+        let dz = gp.z - _head.z;
+        let dist = Math.hypot(dx, dy, dz);
+        const minD = radius + gr;
+        if (dist < minD - 1e-5) {
+          if (dist < 1e-6) {
+            dx = 0;
+            dy = 0;
+            dz = 1;
+            dist = 1;
+          }
+          const nx = dx / dist;
+          const ny = dy / dist;
+          const nz = dz / dist;
+          const pen = minD - dist;
+          if (this.phys.setGameBallPosition) {
+            this.phys.setGameBallPosition(gp.x + nx * pen, gp.y + ny * pen, gp.z + nz * pen);
+          }
+
+          const bv = this.phys.getGameBallVelocity();
+          const pushK = C().HEAD_BALL_PUSH != null ? C().HEAD_BALL_PUSH : 1.15;
+          const closing =
+            (_headVel.x - bv.x) * nx +
+            (_headVel.y - bv.y) * ny +
+            (_headVel.z - bv.z) * nz;
+          let vx = bv.x;
+          let vy = bv.y;
+          let vz = bv.z;
+          if (closing > 0.02) {
+            vx += nx * closing * pushK;
+            vy += ny * closing * pushK * 0.45;
+            vz += nz * closing * pushK;
+          }
+          const intoHead = vx * -nx + vy * -ny + vz * -nz;
+          if (intoHead > 0) {
+            vx += nx * intoHead;
+            vy += ny * intoHead;
+            vz += nz * intoHead;
+          }
+          this.phys.setGameBallVelocity(vx, vy, vz);
+
+          const hitI = Math.min(1, Math.max(0, closing) * 0.22 + pen * 6);
+          if (!this._prevHeadTouchBall || hitI > 0.25) {
+            if (hitI >= (C().HAPTIC_IMPACT_MIN != null ? C().HAPTIC_IMPACT_MIN : 0.08)) {
+              if (window.VRDriftHaptics) window.VRDriftHaptics.impactBoth(this, hitI);
+              if (window.VRDriftAudio) window.VRDriftAudio.ballThud(gp, hitI);
+            }
+          }
+          this._prevHeadTouchBall = true;
+        } else {
+          this._prevHeadTouchBall = false;
+        }
+      }
+
+      this.camera.object3D.updateMatrixWorld(true);
+      this.camera.object3D.getWorldPosition(_head);
+      _headPrev.copy(_head);
+    },
+
+    /** Body-ball impacts vs walls / play ball → both-hand haptics + thud. */
+    resolveBodyImpacts: function (dt) {
+      if (!this.phys?.playerBody || !this.phys.resolveSphere) return;
+      const br = C().BODY_BALL_RADIUS != null ? C().BODY_BALL_RADIUS : 0.24;
+      const pos = this.phys.getPlayerPosition();
+      const vel = this.phys.getPlayerVelocity();
+      _tmp.set(pos.x, pos.y, pos.z);
+
+      const env = this.phys.resolveSphere(_tmp, br * 0.92, { horizontalOnly: false });
+      if (env.hit) {
+        _headPush.copy(env.position).sub(_tmp);
+        const pushLen = _headPush.length();
+        const nLen = Math.max(pushLen, 1e-6);
+        const nx = _headPush.x / nLen;
+        const ny = _headPush.y / nLen;
+        const nz = _headPush.z / nLen;
+        const closing = Math.max(0, -(vel.x * nx + vel.y * ny + vel.z * nz));
+        // Resting on floor overlaps constantly — only thud on hard landings / wall hits
+        const floorish = ny > 0.65;
+        const impact = Math.min(1, closing * 0.16 + (floorish ? 0 : pushLen * 5));
+        const minI = C().HAPTIC_IMPACT_MIN != null ? C().HAPTIC_IMPACT_MIN : 0.08;
+        const hardLand = floorish && closing > 1.4;
+        const wallHit = !floorish && impact >= minI;
+        if ((hardLand || wallHit) && (!this._prevBodyTouchStatic || impact > 0.4 || hardLand)) {
+          const i = hardLand ? Math.min(1, closing * 0.22) : impact;
+          if (window.VRDriftHaptics) window.VRDriftHaptics.impactBoth(this, i);
+          if (window.VRDriftAudio) window.VRDriftAudio.bodyOrHeadImpact(i);
+        }
+        this._prevBodyTouchStatic = true;
+      } else {
+        this._prevBodyTouchStatic = false;
+      }
+
+      const gp = this.phys.getGameBallPosition && this.phys.getGameBallPosition();
+      if (gp) {
+        const gr = C().GAME_BALL_RADIUS != null ? C().GAME_BALL_RADIUS : 0.25;
+        const carryR =
+          C().BODY_BALL_CARRY_RADIUS != null ? C().BODY_BALL_CARRY_RADIUS : br * 0.5;
+        let dx = gp.x - pos.x;
+        let dy = gp.y - pos.y;
+        let dz = gp.z - pos.z;
+        const dist = Math.hypot(dx, dy, dz);
+        const minD = carryR + gr;
+        const touching = dist < minD + 0.02;
+        if (touching) {
+          const inv = dist > 1e-6 ? 1 / dist : 0;
+          const nx = dx * inv;
+          const ny = dy * inv;
+          const nz = dz * inv;
+          const bv = this.phys.getGameBallVelocity();
+          const closing =
+            (vel.x - bv.x) * nx + (vel.y - bv.y) * ny + (vel.z - bv.z) * nz;
+          const impact = Math.min(1, Math.max(0, closing) * 0.2);
+          const minThud =
+            C().SFX_BALL_THUD_MIN_SPEED != null ? C().SFX_BALL_THUD_MIN_SPEED : 0.55;
+          if (!this._prevBodyTouchBall && (impact > 0.12 || Math.abs(closing) > minThud)) {
+            if (window.VRDriftHaptics) window.VRDriftHaptics.impactBoth(this, Math.max(0.2, impact));
+            if (window.VRDriftAudio) window.VRDriftAudio.ballThud(gp, Math.max(0.25, impact));
+          }
+          this._prevBodyTouchBall = true;
+        } else {
+          this._prevBodyTouchBall = false;
+        }
+      }
+
+      this._prevBodyVel.x = vel.x;
+      this._prevBodyVel.y = vel.y;
+      this._prevBodyVel.z = vel.z;
+    },
+
     getNetworkState: function () {
       const p = this.phys.getPlayerPosition();
       const v = this.phys.getPlayerVelocity();
@@ -1134,10 +1390,31 @@
 
       // Camera parent first, then keep world palms/debug glued to that motion
       this.syncPlayerFromBody();
+      if (!blocked && this.isVrActive()) {
+        this.resolveHeadCollisions(dt);
+        this.resolveBodyImpacts(dt);
+        this.clampAgainstCeiling();
+      }
       window.VRDriftPalmBall.snapPalmsToHands(getPose);
       window.VRDriftPalmBall.syncDebugMeshes();
       window.VRDriftPalmBall.driveGameBallFromBody(dt);
       window.VRDriftPalmBall.driveGameBallFromPalms(dt);
+
+      if (!blocked && this.isVrActive()) {
+        try {
+          if (window.VRDriftHaptics) window.VRDriftHaptics.update(this, dt);
+          if (window.VRDriftAudio) {
+            window.VRDriftAudio.updateThrusters(
+              !!this.thrusterActive.left,
+              !!this.thrusterActive.right
+            );
+            window.VRDriftAudio.updateMotionLoops(this, dt);
+            window.VRDriftAudio.updateBallSurface(dt);
+          }
+        } catch (e) {
+          /* audio/haptics must never interrupt locomotion / sync */
+        }
+      }
 
       if (window.VRDriftNet) window.VRDriftNet.tickLocal(this);
 
@@ -1169,10 +1446,13 @@
       const loco = document.querySelector('#player');
       if (!loco || !loco.components['drift-locomotion']) return;
       const L = loco.components['drift-locomotion'];
+      const leftOn = !!(L.thrusterActive && L.thrusterActive.left);
+      const rightOn = !!(L.thrusterActive && L.thrusterActive.right);
       const lh = document.querySelector('#leftHand .thruster-vfx');
       const rh = document.querySelector('#rightHand .thruster-vfx');
-      if (lh) lh.setAttribute('visible', !!(L.thrusterActive && L.thrusterActive.left));
-      if (rh) rh.setAttribute('visible', !!(L.thrusterActive && L.thrusterActive.right));
+      if (lh) lh.setAttribute('visible', leftOn);
+      if (rh) rh.setAttribute('visible', rightOn);
+      if (window.VRDriftAudio) window.VRDriftAudio.updateThrusters(leftOn, rightOn);
     }
   });
 

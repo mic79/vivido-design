@@ -31,6 +31,7 @@
     <script src="js/drift-palm-frame.js"></script>
     <script src="js/mixamo-body-avatar.js"></script>
     <script src="js/drift-haptics.js"></script>
+    <script src="js/drift-audio.js"></script>
     <script src="js/drift-game-ball.js"></script>
     <script src="js/drift-hand-visual.js"></script>
     <script src="js/palm-ball.js"></script>
@@ -83,9 +84,17 @@
       drift-arena
       drift-shadows
       drift-thruster-vfx
+      drift-audio
       webxr="requiredFeatures: local-floor"
     >
       <a-assets></a-assets>
+
+      <a-entity id="sfx-root">
+        <a-entity
+          id="drift-body-roll-sound"
+          sound="src: url(audio/skateboard-rolling.wav); autoplay: false; loop: true; volume: 0; playbackRate: 0.95; positional: true; distanceModel: inverse; refDistance: 0.55; maxDistance: 16; rolloffFactor: 1.6; poolSize: 1"
+        ></a-entity>
+      </a-entity>
 
       <a-entity id="arena" drift-floor-grid="cellM: 1; size: 48">
         <a-entity light="type: ambient; color: #c8d4ee; intensity: 0.5"></a-entity>
@@ -241,6 +250,15 @@
               material="visible: false"
             ></a-sphere>
             <a-entity class="thruster-vfx" visible="false" position="0 -0.05 0" particle-system="preset: dust; particleCount: 40; maxAge: 0.4; accelerationValue: 0,-2,0; velocityValue: 0 0.4 0; color: #88ddff; opacity: 0.7; size: 0.04"></a-entity>
+            <a-entity
+              class="thruster-sound"
+              sound="src: url(audio/thrusters_loopwav-14699.mp3); autoplay: false; loop: true; volume: 0.7; playbackRate: 1.4; positional: true; distanceModel: inverse; refDistance: 0.2; maxDistance: 12; rolloffFactor: 2.5; poolSize: 1"
+            ></a-entity>
+            <a-entity
+              class="palm-roll-sound"
+              position="0 -0.03 -0.07"
+              sound="src: url(audio/skateboard-rolling.wav); autoplay: false; loop: true; volume: 0; playbackRate: 1.5; positional: true; distanceModel: inverse; refDistance: 0.22; maxDistance: 8; rolloffFactor: 2.8; poolSize: 1"
+            ></a-entity>
           </a-entity>
           <a-entity
             id="rightHand"
@@ -257,6 +275,15 @@
               material="visible: false"
             ></a-sphere>
             <a-entity class="thruster-vfx" visible="false" position="0 -0.05 0" particle-system="preset: dust; particleCount: 40; maxAge: 0.4; accelerationValue: 0,-2,0; velocityValue: 0 0.4 0; color: #88ddff; opacity: 0.7; size: 0.04"></a-entity>
+            <a-entity
+              class="thruster-sound"
+              sound="src: url(audio/thrusters_loopwav-14699.mp3); autoplay: false; loop: true; volume: 0.7; playbackRate: 1.4; positional: true; distanceModel: inverse; refDistance: 0.2; maxDistance: 12; rolloffFactor: 2.5; poolSize: 1"
+            ></a-entity>
+            <a-entity
+              class="palm-roll-sound"
+              position="0 -0.03 -0.07"
+              sound="src: url(audio/skateboard-rolling.wav); autoplay: false; loop: true; volume: 0; playbackRate: 1.5; positional: true; distanceModel: inverse; refDistance: 0.22; maxDistance: 8; rolloffFactor: 2.8; poolSize: 1"
+            ></a-entity>
           </a-entity>
         </a-entity>
       </a-entity>

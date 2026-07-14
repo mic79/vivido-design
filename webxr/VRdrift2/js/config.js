@@ -6,7 +6,13 @@ window.VRDRIFT = {
   GAME_BALL_RADIUS: 0.25,
   GAME_BALL_DENSITY: 45,
   GAME_BALL_MAX_SPEED: 5,
-  GAME_BALL_RESTITUTION: 0.05,
+  /**
+   * Bounce vs arena statics. Box3D mixes restitution with max(a,b), so raising
+   * this on the play ball alone makes it lively against soft walls/floors
+   * without making the player or palms bounce off the arena.
+   * (Play ball does not collide with the player body; palm hits stay mostly script-driven.)
+   */
+  GAME_BALL_RESTITUTION: 0.62,
   /** Soft body↔ball carry — ~50% of body radius so you don't grab the play ball from as far away */
   BODY_BALL_CARRY_RADIUS: 0.12,
   BODY_BALL_CARRY_BLEND: 10,
@@ -66,6 +72,11 @@ window.VRDRIFT = {
   PALM_WALL_SKATE_MAX_DV: 4.8,
 
   BODY_BACK_OFFSET: 0.15,
+  /** Headset sphere vs walls/ceiling/ball — CapVR uses 0.2 + Box3D resolveSphere */
+  HEAD_COLLISION_RADIUS: 0.2,
+  MAX_COLLISION_CORRECTION: 0.08,
+  /** How strongly head closing speed transfers into the play ball */
+  HEAD_BALL_PUSH: 1.15,
   RIG_Y_OFFSET: 0,
   RIG_HEIGHT_STEP: 0.1,
   RIG_Y_MIN: -2,
@@ -87,6 +98,23 @@ window.VRDRIFT = {
   GRIP_ATTACH_DIST: 0.22,
   GRIP_MAX_SPEED: 3.2,
   GROUNDED_NORMAL_Y: 0.45,
+
+  HAPTIC_HIT_INTENSITY: 0.48,
+  HAPTIC_HIT_MS: 42,
+  HAPTIC_SKATE_INTENSITY: 0.34,
+  HAPTIC_SKATE_MS: 28,
+  HAPTIC_SKATE_INTERVAL_MS: 45,
+  /** Continuous palm rumble keyed to rig speed while planted */
+  HAPTIC_SKATE_MIN_SPEED: 0.35,
+  HAPTIC_SKATE_MAX_SPEED: 7,
+  HAPTIC_IMPACT_INTENSITY: 0.9,
+  HAPTIC_IMPACT_MS: 55,
+  HAPTIC_IMPACT_INTERVAL_MS: 90,
+  HAPTIC_IMPACT_MIN: 0.08,
+  SFX_SKATE_MIN_SPEED: 0.4,
+  SFX_SKATE_MAX_SPEED: 8,
+  SFX_BALL_THUD_MIN_SPEED: 0.55,
+
   PHYSICS_HZ: 90,
   SYNC_HZ: 30,
   PEER_PREFIX: 'vrdrift2',

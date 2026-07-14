@@ -313,6 +313,31 @@
       return this.b3.b3Body_GetRotation(this.playerBody) || IDENTITY;
     }
 
+    /**
+     * CapVR-style sphere depenetration vs Box3D statics.
+     * Used by headset lean collision (horizontalOnly).
+     */
+    resolveSphere(pos, radius, opts) {
+      if (!this.queries) {
+        return { position: pos.clone ? pos.clone() : new THREE.Vector3(pos.x, pos.y, pos.z), hit: false };
+      }
+      const exclude = [];
+      const addShapes = (ids) => {
+        if (!ids) return;
+        for (let i = 0; i < ids.length; i++) exclude.push(ids[i]);
+      };
+      addShapes(this.playerShapeIds);
+      addShapes(this.palmShapeIds?.left);
+      addShapes(this.palmShapeIds?.right);
+      // Head vs statics only — game ball is handled separately (push the ball)
+      addShapes(this.gameBallShapeIds);
+      if (opts?.exclude) addShapes(opts.exclude);
+      return this.queries.resolveSphereAgainstColliders(pos, radius, {
+        excludeShapeIds: exclude,
+        horizontalOnly: opts?.horizontalOnly
+      });
+    }
+
     setPlayerAngularVelocity(wx, wy, wz) {
       if (!this.playerBody || !this.b3.b3Body_SetAngularVelocity) return;
       this.b3.b3Body_SetAngularVelocity(this.playerBody, { x: wx, y: wy, z: wz });
