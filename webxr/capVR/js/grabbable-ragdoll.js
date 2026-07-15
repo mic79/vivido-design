@@ -180,7 +180,9 @@ AFRAME.registerComponent('grabbable-ragdoll', {
      * body-rigged4 grab-dummy: true (default) — grip picks up and spawns human.
      * Combat death/collapse still calls _spawnRagdoll({ collapse: true }).
      */
-    allowPalmGrab: { type: 'boolean', default: true }
+    allowPalmGrab: { type: 'boolean', default: true },
+    /** CapVR: when true, skip locomotion/idle/hit tick (bots OFF). */
+    paused: { type: 'boolean', default: false }
   },
 
   init: function () {
@@ -3487,6 +3489,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
 
   tick: function (time, deltaTime) {
     if (!this.modelLoaded || !this.b3) return;
+    if (this.data.paused && !this.ragdollActive && !(this._shards && this._shards.length)) return;
     const dt = Math.min(deltaTime / 1000, 0.05);
     if (dt <= 0) return;
     this._lastDt = dt;
@@ -3548,6 +3551,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
 
   tock: function (time, deltaTime) {
     if (!this.modelLoaded || !this.b3) return;
+    if (this.data.paused && !this.ragdollActive) return;
     const dt = Math.min(deltaTime / 1000, 0.05);
     const palmGrab = this.data.allowPalmGrab !== false;
 

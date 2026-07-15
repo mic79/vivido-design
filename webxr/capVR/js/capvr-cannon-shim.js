@@ -197,10 +197,24 @@
         } else if (shape.type === 'box') {
           const he = shape.halfExtents;
           this._b3Body = phys.addArenaStaticBox(p.x, p.y, p.z, he.x, he.y, he.z, quat, { el: this.el });
-        } else if (shape.type === 'convex' && shape.vertices?.length && shape.faces?.length) {
-          // Octahedron / tetrahedron — full triangle mesh (NOT the old 1m stub box)
-          this._b3Body = phys.addArenaStaticConvex(
-            p.x, p.y, p.z, quat, shape.vertices, shape.faces, { el: this.el }
+        } else if (shape.type === 'convex' && shape.vertices?.length) {
+          // CapVR mistake was baking every octa/tetra as a triangle mesh soup.
+          // BoltVR uses a simple convex; Box3D AABB box around verts matches gameplay
+          // and is what the shim already fell back to — use it first.
+          let minX = Infinity, minY = Infinity, minZ = Infinity;
+          let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+          shape.vertices.forEach((v) => {
+            minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
+            minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
+            minZ = Math.min(minZ, v.z); maxZ = Math.max(maxZ, v.z);
+          });
+          this._b3Body = phys.addArenaStaticBox(
+            p.x, p.y, p.z,
+            Math.max(0.05, (maxX - minX) * 0.5),
+            Math.max(0.05, (maxY - minY) * 0.5),
+            Math.max(0.05, (maxZ - minZ) * 0.5),
+            quat,
+            { el: this.el }
           );
         } else if (this.el && typeof phys.addArenaStaticFromEl === 'function') {
           // Torus / unknown — bake visual mesh
@@ -242,18 +256,21 @@
 
     _syncFromB3(phys) {
       if (!this._b3Body || !phys) return;
+      // Statics never move in CapVR — reading them every frame was pure waste
+      // (Arena One = hundreds of grab-surface bodies × getBodyPosition/frame).
+      // BoltVR/Cannon does not do this; CapVR shim invented it.
+      if (this.mass <= 0) return;
       const pos = phys.getBodyPosition(this._b3Body);
       this.position.set(pos.x, pos.y, pos.z);
-      if (this.mass > 0) {
-        const vel = phys.getBodyVelocity(this._b3Body);
-        this.velocity.set(vel.x, vel.y, vel.z);
-        const q = phys.getBodyQuaternion(this._b3Body);
-        this.quaternion.set(q.x, q.y, q.z, q.w);
-      }
+      const vel = phys.getBodyVelocity(this._b3Body);
+      this.velocity.set(vel.x, vel.y, vel.z);
+      const q = phys.getBodyQuaternion(this._b3Body);
+      this.quaternion.set(q.x, q.y, q.z, q.w);
     }
 
     _syncToB3(phys) {
       if (!this._b3Body || !phys) return;
+      if (this._capvrFrozen) return;
       phys.setBodyPosition(this._b3Body, this.position.x, this.position.y, this.position.z);
       if (this.mass > 0) {
         phys.setBodyVelocity(this._b3Body, this.velocity.x, this.velocity.y, this.velocity.z);
@@ -323,7 +340,7 @@
     syncBodiesFromB3(phys) {
       if (!phys?.world) return;
       this.bodies.forEach((b) => {
-        if (b._b3Body) b._syncFromB3(phys);
+        if (b.mass > 0 && b._b3Body) b._syncFromB3(phys);
       });
     }
 

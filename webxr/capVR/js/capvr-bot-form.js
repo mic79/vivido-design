@@ -80,10 +80,14 @@
   }
 
   function syncBotBodies() {
+    const botsOn = !(window.perfConfig && window.perfConfig.botLogicEnabled === false);
     BOT_VIS.forEach(({ bot, body, team }) => {
       const botEl = document.getElementById(bot);
       const bodyEl = document.getElementById(body);
       if (!botEl || !bodyEl?.object3D) return;
+      if (!botsOn || bodyEl.components?.['grabbable-ragdoll']?.data?.paused) {
+        return;
+      }
 
       leashBotPhysics(botEl);
 
@@ -154,21 +158,30 @@
     };
   }
 
-  function tick() {
-    syncBotBodies();
-    requestAnimationFrame(tick);
-  }
-
+  // Drive syncBotBodies from an A-Frame tick, NOT window.requestAnimationFrame.
+  // window.rAF is paused during an immersive WebXR session, so the old rAF loop
+  // stopped positioning bots in VR (and double-ran on flatscreen). A registered
+  // component tick runs on the XR render loop.
   function boot() {
     patchBotHeadCollision();
     patchGrabbableDriveVel();
     setTimeout(patchBotHeadCollision, 800);
     setTimeout(patchBotHeadCollision, 2500);
-    requestAnimationFrame(tick);
-    console.log('[CapVR] bot-fix: unified combat body (loco+shatter) + Box3D head collide');
+    console.log('[CapVR] bot-form: combat body sync (BoltVR collision, no CapVR resolve stack)');
+  }
+
+  if (window.AFRAME && !AFRAME.components['capvr-bot-form-sync']) {
+    AFRAME.registerComponent('capvr-bot-form-sync', {
+      tick: function () { syncBotBodies(); }
+    });
   }
 
   const scene = document.querySelector('a-scene');
-  if (scene?.hasLoaded) setTimeout(boot, 300);
-  else scene?.addEventListener('loaded', () => setTimeout(boot, 300), { once: true });
+  function attach() {
+    boot();
+    const s = document.querySelector('a-scene');
+    if (s && !s.hasAttribute('capvr-bot-form-sync')) s.setAttribute('capvr-bot-form-sync', '');
+  }
+  if (scene?.hasLoaded) setTimeout(attach, 300);
+  else scene?.addEventListener('loaded', () => setTimeout(attach, 300), { once: true });
 })();

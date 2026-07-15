@@ -126,7 +126,26 @@
     });
   }
 
-  /** Spaceshooter impact-spark-burst (compact, no smoke dependency). */
+  /**
+   * Spaceshooter impact-spark-burst (compact, no smoke dependency).
+   *
+   * IMPORTANT: driven by updateHitSparks(dt) from the A-Frame tick — NOT
+   * window.requestAnimationFrame. In an immersive WebXR session window.rAF is
+   * paused, so the old rAF version never animated OR cleaned up: every shot
+   * leaked its spheres into the scene permanently. This pool advances + disposes
+   * on the XR render loop and is hard-capped so it can never accumulate.
+   */
+  const SPARKS = [];
+  const SPARK_MAX = 90; // hard cap across all bursts (≈ 7 recent shots)
+  const SHARED_SPARK_GEO = new THREE.SphereGeometry(0.008, 5, 3);
+
+  function disposeSpark(spark) {
+    if (spark._sceneObj && spark.mesh) spark._sceneObj.remove(spark.mesh);
+    // Geometry is shared — only dispose the per-spark material.
+    spark.mesh?.material?.dispose?.();
+    spark.mesh = null;
+  }
+
   function spawnHitSparks(position) {
     const sceneObj = document.querySelector('a-scene')?.object3D;
     if (!sceneObj || !position) return;
@@ -135,10 +154,9 @@
       position.y != null ? position.y : position.Y,
       position.z != null ? position.z : position.Z
     );
-    const sparks = [];
-    const count = 8 + Math.floor(Math.random() * 5);
+    const count = 6 + Math.floor(Math.random() * 4);
     const colors = [0xFFFF00, 0xFF8800, 0xFF4400, 0xFF6600];
-    const burstDuration = 0.8;
+    const burstDuration = 0.7;
     for (let i = 0; i < count; i++) {
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.random() * Math.PI * 0.5;
@@ -149,9 +167,8 @@
         Math.sin(phi) * Math.sin(theta) * speed
       );
       const color = colors[Math.floor(Math.random() * colors.length)];
-      const size = 0.006 + Math.random() * 0.004;
       const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(size, 6, 4),
+        SHARED_SPARK_GEO,
         new THREE.MeshBasicMaterial({
           color: new THREE.Color(color),
           transparent: true,
@@ -161,11 +178,11 @@
         })
       );
       mesh.position.copy(origin);
-      mesh.frustumCulled = false;
       mesh.renderOrder = 10010;
       sceneObj.add(mesh);
-      sparks.push({
+      SPARKS.push({
         mesh,
+        _sceneObj: sceneObj,
         velocity,
         age: 0,
         maxAge: burstDuration,
@@ -174,36 +191,32 @@
         originalOpacity: 0.9
       });
     }
-    const t0 = performance.now();
-    function step(now) {
-      const dt = Math.min(0.05, (now - (step._last || now)) / 1000) || 0.016;
-      step._last = now;
-      const elapsed = (now - t0) / 1000;
-      sparks.forEach((spark) => {
-        spark.age += dt;
-        if (spark.age > spark.maxAge) {
-          spark.mesh.visible = false;
-          return;
-        }
-        spark.mesh.position.x += spark.velocity.x * dt;
-        spark.mesh.position.y += spark.velocity.y * dt;
-        spark.mesh.position.z += spark.velocity.z * dt;
-        spark.velocity.y -= 2.0 * dt;
-        const progress = spark.age / spark.maxAge;
-        spark.mesh.material.color.copy(spark.startColor).lerp(spark.endColor, progress);
-        spark.mesh.material.opacity = spark.originalOpacity * (1 - progress);
-      });
-      if (elapsed < burstDuration) {
-        requestAnimationFrame(step);
-        return;
-      }
-      sparks.forEach((spark) => {
-        sceneObj.remove(spark.mesh);
-        spark.mesh.geometry.dispose();
-        spark.mesh.material.dispose();
-      });
+    // Enforce the global cap — drop oldest so a rapid-fire spree can't pile up.
+    while (SPARKS.length > SPARK_MAX) {
+      disposeSpark(SPARKS.shift());
     }
-    requestAnimationFrame(step);
+  }
+
+  /** Advance + retire all live sparks. Called from capvr-combat tick (XR-safe). */
+  function updateHitSparks(dt) {
+    if (!SPARKS.length) return;
+    const step = Math.min(0.05, dt || 0.016);
+    for (let i = SPARKS.length - 1; i >= 0; i--) {
+      const spark = SPARKS[i];
+      spark.age += step;
+      if (spark.age >= spark.maxAge || !spark.mesh) {
+        disposeSpark(spark);
+        SPARKS.splice(i, 1);
+        continue;
+      }
+      spark.mesh.position.x += spark.velocity.x * step;
+      spark.mesh.position.y += spark.velocity.y * step;
+      spark.mesh.position.z += spark.velocity.z * step;
+      spark.velocity.y -= 2.0 * step;
+      const progress = spark.age / spark.maxAge;
+      spark.mesh.material.color.copy(spark.startColor).lerp(spark.endColor, progress);
+      spark.mesh.material.opacity = spark.originalOpacity * (1 - progress);
+    }
   }
 
   function playImpactSfx(pos) {
@@ -1381,6 +1394,7 @@
     },
 
     tick: function (t, dt) {
+      updateHitSparks((dt || 16) / 1000); // XR-safe spark lifecycle (must run even when dead)
       syncBotBodies();
       hideLocalHead();
       this._tickBotRespawns();

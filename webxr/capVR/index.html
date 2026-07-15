@@ -30,9 +30,9 @@
     <script src="js/gravity-mode.js"></script>
     <script src="js/box3d-physics-world.js"></script>
     <script src="js/capvr-box3d-ext.js?v=wake1"></script>
-    <script src="js/capvr-physics.js?v=lean2"></script>
+    <script src="js/capvr-physics.js?v=lean3"></script>
     <script src="js/zerog-legs.js"></script>
-    <script src="js/grabbable-ragdoll.js?v=nograb1"></script>
+    <script src="js/grabbable-ragdoll.js?v=pause1"></script>
     <script src="js/body-foundation.js"></script>
     <script>
       // Early CapVR hand-id bridge (before scene entities init mixamo-body).
@@ -51,7 +51,7 @@
         };
       })();
     </script>
-    <script src="js/capvr-cannon-shim.js?v=contact1"></script>
+    <script src="js/capvr-cannon-shim.js?v=static1"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/FBXLoader.js"></script>
@@ -621,6 +621,7 @@
         botLogicEnabled: true,
         glowEnabled: true
       };
+      window.perfConfig = perfConfig;
 
       // Gridline visibility levels (line reflectivity + faint self-lit baseline). "Med" matches the
       // distance-grid component defaults (strength 0.1 / emissive 0.01). The distance-grid component
@@ -12011,6 +12012,43 @@ function setGameplayHUD(isPlaying) {
         updateConfigDisplay();
       }
       
+      function setCapVrBotBodiesPaused(paused) {
+        ['bot-red-body', 'bot-blue-body', 'bot-green-body'].forEach((id) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          const grab = el.components && el.components['grabbable-ragdoll'];
+          if (grab) {
+            el.setAttribute('grabbable-ragdoll', 'paused', !!paused);
+            if (paused && grab.model) {
+              grab.model.visible = false;
+            } else if (!paused && grab.model) {
+              grab.model.visible = true;
+            }
+          } else {
+            el.setAttribute('visible', !paused);
+          }
+          // Keep physics spheres from burning Box3D contacts when AI is off
+          const map = {
+            'bot-red-body': 'zerog-bot-red',
+            'bot-blue-body': 'zerog-bot-blue',
+            'bot-green-body': 'zerog-bot-green'
+          };
+          const botEl = document.getElementById(map[id]);
+          const body = botEl && (botEl.body || botEl.components?.['zerog-bot']?.body);
+          if (body) {
+            if (paused) {
+              body.velocity.set(0, 0, 0);
+              body.angularVelocity.set(0, 0, 0);
+              body._capvrFrozen = true;
+              if (typeof body.sleep === 'function') body.sleep();
+            } else {
+              body._capvrFrozen = false;
+              if (typeof body.wakeUp === 'function') body.wakeUp();
+            }
+          }
+        });
+      }
+
       function toggleBotLogic() {
         perfConfig.botLogicEnabled = !perfConfig.botLogicEnabled;
         console.log('🤖 Bot logic:', perfConfig.botLogicEnabled ? 'ON' : 'OFF');
@@ -12040,6 +12078,10 @@ function setGameplayHUD(isPlaying) {
             }
           }
         });
+
+        // CapVR: bots OFF must also pause grabbable-ragdoll + character.glb (config used to
+        // only freeze AI spheres while 3 skinned ZeroGLegs kept ticking every frame).
+        setCapVrBotBodiesPaused(!perfConfig.botLogicEnabled);
         
         updateConfigDisplay();
       }
@@ -23286,9 +23328,9 @@ function setGameplayHUD(isPlaying) {
     </script>
     <!-- CapVR CTF / sticky layer — keeps BoltVR UI, Mixamo bots, arenas, PeerJS -->
     <script src="js/capvr-ctf-rules.js?v=flagux3"></script>
-    <script src="js/capvr-combat.js?v=nocyl1"></script>
+    <script src="js/capvr-combat.js?v=sparkpool1"></script>
     <script src="js/capvr-boot.js?v=noleg1"></script>
-    <script src="js/capvr-bot-form.js?v=nostack1"></script>
+    <script src="js/capvr-bot-form.js?v=tick1"></script>
     <script src="js/capvr-mp.js?v=nophantom1"></script>
     <script src="js/capvr-arena-fixtures.js?v=fixtures1"></script>
   </body>

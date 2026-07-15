@@ -101,7 +101,7 @@
       if (cw?.syncBodiesFromB3) cw.syncBodiesFromB3(phys);
       else if (cw?.bodies) {
         cw.bodies.forEach((b) => {
-          if (b._b3Body) b._syncFromB3?.(phys);
+          if (b.mass > 0 && b._b3Body) b._syncFromB3?.(phys);
         });
       }
       cw?._emitProximityCollides?.();
