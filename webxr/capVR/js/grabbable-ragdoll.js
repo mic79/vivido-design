@@ -349,17 +349,19 @@ AFRAME.registerComponent('grabbable-ragdoll', {
   },
 
   _loadWhenReady: function () {
+    const host = window.CapVRPhysics?.host?.() || this.sceneEl.components['capvr-physics'];
+    const phys = window.CapVRPhysics?.get?.() || host?.physics;
     const ready =
       window.BodyRiggedLoaders?.ready &&
-      this.sceneEl.components['leg-ik-world']?.b3 &&
-      this.sceneEl.components['leg-ik-world']?.world;
+      phys?.b3 &&
+      phys?.world;
     if (!ready) {
       setTimeout(() => this._loadWhenReady(), 100);
       return;
     }
-    this.legIk = this.sceneEl.components['leg-ik-world'];
-    this.b3 = this.legIk.b3;
-    this.world = this.legIk.world;
+    this.legIk = host || null;
+    this.b3 = phys.b3;
+    this.world = phys.world;
     this._loadModel();
   },
 

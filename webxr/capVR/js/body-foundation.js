@@ -2601,6 +2601,12 @@
         },
         
         _initLegIK: function() {
+          // CapVR / locked zero-g: grounded MixamoLegIK is unused and was spinning retries
+          // forever without leg-ik-world — never create it.
+          if (window.BodyRiggedGravity?.isZeroG?.() || document.querySelector('[zerog-player]')) {
+            this.legIK = null;
+            return;
+          }
           // IMPORTANT: read the scene's legIkWorld FRESH each retry. The physics code
           // REPLACES scene.legIkWorld with a new object once Box3D is ready, so a
           // captured reference would stay ready:false forever and the IK would never

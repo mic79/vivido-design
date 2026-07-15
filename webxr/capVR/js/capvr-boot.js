@@ -18,6 +18,7 @@
     'Sticky: intentional throw only; attach = ~3 laser hits',
     'Bot Box3D head/torso collide (arena walls, not just grab-surface)',
     'Bot body = grabbable-ragdoll (ZeroGLegs loco + hit react + limb shatter)',
+    'Lean Box3D host [capvr-physics] — no leg-ik-world / ground IK',
     'Combat: shatter only via HP; full collapse at 0 (no mesh/AI desync)',
     'Flags: no throw on drop; kinematic pin home/drop; match combat reset',
     'Local body tint follows YOUR team (not forced blue)'
@@ -546,8 +547,7 @@
     _booted = true;
     aliasHands();
     lockZeroG();
-    skipBrokenObstacles();
-    patchLegIkForBoltVRLocomotion();
+    // leg-ik-world removed — Box3D hosted by [capvr-physics]
     patchStickyBombs();
     patchGrabSurfaceAllShapes();
     patchFlagHold();

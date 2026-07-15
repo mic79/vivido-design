@@ -1851,7 +1851,7 @@
           gravityY = g.y;
         } else {
           const scene = typeof document !== 'undefined' ? document.querySelector('a-scene') : null;
-          const phys = scene?.components?.['leg-ik-world']?.physics;
+          const phys = window.CapVRPhysics?.get?.() || scene?.components?.['capvr-physics']?.physics;
           const pg = phys?.getGravity?.();
           if (pg && typeof pg.y === 'number' && pg.y !== 0) gravityY = pg.y;
         }

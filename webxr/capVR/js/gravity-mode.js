@@ -104,8 +104,7 @@
     }
 
     _getPhysics() {
-      const scene = document.querySelector('a-scene');
-      return scene?.components?.['leg-ik-world']?.physics || null;
+      return window.CapVRPhysics?.get?.() || null;
     }
 
     _applyPhysicsGravity() {
@@ -116,25 +115,20 @@
     }
 
     _resetPlayerVelocityForMode(previous, mode) {
-      const scene = document.querySelector('a-scene');
-      const legIk = scene?.components?.['leg-ik-world'];
+      const phys = this._getPhysics();
       const zc = document.getElementById('rig')?.components?.['zerog-locomotion'];
 
       if (mode === MODES.ZEROG) {
-        if (legIk) {
-          legIk.playerVelY = 0;
-          legIk.playerGrounded = false;
-          if (legIk._grabMomentum) {
-            legIk._grabMomentum.set(0, 0, 0);
-            legIk._grabMomentumActive = false;
-          }
+        if (phys) {
+          phys.playerVelY = 0;
+          phys.playerGrounded = false;
         }
-        if (zc && zc.resetForEnterZeroG) zc.resetForEnterZeroG(legIk);
+        if (zc && zc.resetForEnterZeroG) zc.resetForEnterZeroG(null);
       } else if (previous === MODES.ZEROG) {
-        if (zc && zc.resetForLeaveZeroG) zc.resetForLeaveZeroG(legIk);
-        if (legIk) {
-          legIk.playerVelY = -2;
-          if (legIk.physics) legIk.playerGrounded = !!legIk.physics.playerGrounded;
+        if (zc && zc.resetForLeaveZeroG) zc.resetForLeaveZeroG(null);
+        if (phys) {
+          phys.playerVelY = -2;
+          phys.playerGrounded = !!phys.playerGrounded;
         }
       }
     }

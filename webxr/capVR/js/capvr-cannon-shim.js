@@ -285,6 +285,7 @@
       this.broadphase = { dirty: false };
       this.solver = { iterations: 10 };
       this._contacts = [];
+      window.CapVRCannonWorld = this;
       console.log('[CapVR] Box3D-backed CANNON.World created (shim)');
     }
 
@@ -310,25 +311,29 @@
       }
     }
 
-    step(dt) {
-      const phys = window.CapVRPhysics?.get?.();
+    /** Sync JS ↔ Box3D without stepping (used by [capvr-physics]). */
+    syncBodies(phys) {
       if (!phys?.world) return;
-
-      // Push JS → Box3D for dynamic bodies that game code mutated
       this.bodies.forEach((b) => {
         if (!b._b3Body) b._ensureB3(phys);
         if (b.mass > 0 && b._b3Body) b._syncToB3(phys);
       });
-
-      phys.stepWorld(dt || 1 / 60);
-
-      // Pull Box3D → JS
       this.bodies.forEach((b) => {
         if (b._b3Body) b._syncFromB3(phys);
       });
-
-      // Soft collide events for balls vs bots/player (distance-based, feeds existing listeners)
       this._emitProximityCollides();
+    }
+
+    step(dt) {
+      // No-op for Box3D stepping. [capvr-physics] steps once/frame.
+      // Old 240Hz physics-world multi-step was stepping Box3D many times/frame.
+      const phys = window.CapVRPhysics?.get?.();
+      if (!phys?.world) return;
+      // Cheap mid-frame sync only if capvr-physics hasn't run yet this frame
+      if (!phys._capvrFrameSynced) {
+        this.syncBodies(phys);
+        phys._capvrFrameSynced = true;
+      }
     }
 
     _emitProximityCollides() {

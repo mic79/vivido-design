@@ -310,7 +310,10 @@
 
   window.CapVRPhysics = {
     get() {
-      return document.querySelector('a-scene')?.components?.['leg-ik-world']?.physics || null;
+      const scene = document.querySelector('a-scene');
+      return scene?.components?.['capvr-physics']?.physics
+        || scene?.components?.['leg-ik-world']?.physics
+        || null;
     },
     ready(cb) {
       const tryIt = () => {
@@ -319,6 +322,13 @@
         setTimeout(tryIt, 50);
       };
       tryIt();
+    },
+    /** Host component (queries / stub accessors). */
+    host() {
+      const scene = document.querySelector('a-scene');
+      return scene?.components?.['capvr-physics']
+        || scene?.components?.['leg-ik-world']
+        || null;
     }
   };
 

@@ -81,7 +81,10 @@
     },
 
     _getCollisionQueries: function () {
-      return this.el.sceneEl?.legIkWorld?.queries || null;
+      return window.CapVRPhysics?.get?.()?.queries
+        || this.el.sceneEl?.components?.['capvr-physics']?.queries
+        || this.el.sceneEl?.legIkWorld?.queries
+        || null;
     },
 
     _getRightTrigger: function () {
