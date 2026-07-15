@@ -21,6 +21,9 @@
   const _headPush = new THREE.Vector3();
   const _playerQuat = new THREE.Quaternion();
   const _invPlayer = new THREE.Matrix4();
+  const _netLq = new THREE.Quaternion();
+  const _netRq = new THREE.Quaternion();
+  const _netRp = new THREE.Vector3();
 
   AFRAME.registerComponent('drift-locomotion', {
     schema: {
@@ -1342,7 +1345,7 @@
     getNetworkState: function () {
       const p = this.phys.getPlayerPosition();
       const v = this.phys.getPlayerVelocity();
-      return {
+      const state = {
         px: p.x,
         py: p.y,
         pz: p.z,
@@ -1353,6 +1356,60 @@
         tl: !!this.thrusterActive.left,
         tr: !!this.thrusterActive.right
       };
+
+      // CapVR-style Mixamo bodyPose so remotes render full IK bodies
+      try {
+        const localBody = document.querySelector('#local-body');
+        if (this.camera && this.leftHand && this.rightHand && localBody) {
+          this.camera.object3D.getWorldPosition(_head);
+          this.camera.object3D.getWorldQuaternion(_playerQuat);
+          this.leftHand.object3D.getWorldPosition(_palm);
+          this.leftHand.object3D.getWorldQuaternion(_netLq);
+          this.rightHand.object3D.getWorldPosition(_netRp);
+          this.rightHand.object3D.getWorldQuaternion(_netRq);
+          const bp = localBody.object3D.position;
+          const bq = localBody.object3D.quaternion;
+          const avatar = localBody.components['mixamo-body-avatar'];
+          const hv = (avatar && avatar.headVelocity) || v;
+          state.bodyPose = {
+            bodyX: bp.x,
+            bodyY: bp.y,
+            bodyZ: bp.z,
+            bodyQX: bq.x,
+            bodyQY: bq.y,
+            bodyQZ: bq.z,
+            bodyQW: bq.w,
+            headX: _head.x,
+            headY: _head.y,
+            headZ: _head.z,
+            headQX: _playerQuat.x,
+            headQY: _playerQuat.y,
+            headQZ: _playerQuat.z,
+            headQW: _playerQuat.w,
+            lhX: _palm.x,
+            lhY: _palm.y,
+            lhZ: _palm.z,
+            lhQX: _netLq.x,
+            lhQY: _netLq.y,
+            lhQZ: _netLq.z,
+            lhQW: _netLq.w,
+            rhX: _netRp.x,
+            rhY: _netRp.y,
+            rhZ: _netRp.z,
+            rhQX: _netRq.x,
+            rhQY: _netRq.y,
+            rhQZ: _netRq.z,
+            rhQW: _netRq.w,
+            velX: hv.x || 0,
+            velY: hv.y || 0,
+            velZ: hv.z || 0,
+            fingerCurls: avatar && avatar.currentCurls ? avatar.currentCurls : null
+          };
+        }
+      } catch (e) {
+        /* net must never break locomotion */
+      }
+      return state;
     },
 
     /** Main simulation — after XR poses (order 1); Mixamo follows at order 2. */
@@ -1399,6 +1456,7 @@
       window.VRDriftPalmBall.syncDebugMeshes();
       window.VRDriftPalmBall.driveGameBallFromBody(dt);
       window.VRDriftPalmBall.driveGameBallFromPalms(dt);
+      window.VRDriftPalmBall.driveGameBallFromRemotes(dt);
 
       if (!blocked && this.isVrActive()) {
         try {
@@ -1459,31 +1517,28 @@
   AFRAME.registerComponent('drift-remote', {
     schema: {
       color: { type: 'color', default: '#ff6644' },
-      playerId: { type: 'string', default: '' }
+      playerId: { type: 'string', default: '' },
+      slot: { type: 'number', default: -1 }
     },
     init: function () {
-      const col = new THREE.Color(this.data.color);
-      const r = C().BODY_BALL_RADIUS || 0.24;
-      this.el.setObject3D(
-        'mesh',
-        new THREE.Mesh(
-          new THREE.SphereGeometry(r, 20, 14),
-          new THREE.MeshStandardMaterial({
-            color: col,
-            emissive: col,
-            emissiveIntensity: 0.25,
-            transparent: true,
-            opacity: 0.85
-          })
-        )
-      );
+      // Invisible pose anchor — Mixamo #remote-body-N is the visible character
       this.target = new THREE.Vector3();
       this.targetRot = 0;
+      this.vel = new THREE.Vector3();
     },
     applyState: function (s) {
       if (!s) return;
       this.target.set(s.px, s.py, s.pz);
       this.targetRot = s.ry || 0;
+      this.vel.set(s.vx || 0, s.vy || 0, s.vz || 0);
+      const slot = this.data.slot >= 0 ? this.data.slot : s.slot;
+      if (s.bodyPose && slot >= 0) {
+        const body = document.getElementById('remote-body-' + slot);
+        if (body && body.components && body.components['mixamo-body-avatar']) {
+          body.setAttribute('visible', true);
+          body.components['mixamo-body-avatar'].updateRemotePoseData(s.bodyPose);
+        }
+      }
     },
     tick: function (t, dtMs) {
       const dt = Math.min((dtMs || 16) / 1000, 0.033);

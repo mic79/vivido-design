@@ -482,14 +482,20 @@
         dvz *= s;
       }
       phys.setGameBallVelocity(gb.x + dvx, gb.y + dvy, gb.z + dvz);
+      if (window.VRDriftNet && window.VRDriftNet.noteLocalBallTouch) {
+        window.VRDriftNet.noteLocalBallTouch();
+      }
     },
 
-    driveGameBallFromBody: function (dt) {
+    /**
+     * Soft body-ball carry used for local player and remote pose proxies (host).
+     * Returns true when the body is close enough to interact.
+     */
+    driveGameBallFromBodyAt: function (pp, pv, dt) {
       const phys = window.DriftPhys;
-      if (!phys?.gameBallBody || !phys.playerBody || !dt) return;
+      if (!phys?.gameBallBody || !pp || !pv || !dt) return false;
       const gp = phys.getGameBallPosition();
-      const pp = phys.getPlayerPosition();
-      if (!gp || !pp) return;
+      if (!gp) return false;
 
       const carryR =
         C().BODY_BALL_CARRY_RADIUS != null
@@ -510,7 +516,7 @@
       }
       const minD = carryR + gr;
       const gap = dist - minD;
-      if (gap > 0.12) return;
+      if (gap > 0.12) return false;
 
       let nx = dx / dist;
       let ny = dy / dist;
@@ -521,7 +527,6 @@
         phys.setGameBallPosition(gp.x + nx * fix, gp.y + ny * fix, gp.z + nz * fix);
       }
 
-      const pv = phys.getPlayerVelocity();
       const bv = phys.getGameBallVelocity();
       const blend = C().BODY_BALL_CARRY_BLEND != null ? C().BODY_BALL_CARRY_BLEND : 10;
       const pushK = C().BODY_BALL_CARRY_PUSH != null ? C().BODY_BALL_CARRY_PUSH : 1;
@@ -545,6 +550,39 @@
       }
 
       phys.setGameBallVelocity(vx, vy, vz);
+      return true;
+    },
+
+    driveGameBallFromBody: function (dt) {
+      const phys = window.DriftPhys;
+      if (!phys?.gameBallBody || !phys.playerBody || !dt) return;
+      const pp = phys.getPlayerPosition();
+      const pv = phys.getPlayerVelocity();
+      if (!pp || !pv) return;
+      const hit = this.driveGameBallFromBodyAt(pp, pv, dt);
+      if (hit && window.VRDriftNet && window.VRDriftNet.noteLocalBallTouch) {
+        window.VRDriftNet.noteLocalBallTouch();
+      }
+    },
+
+    /** Host: apply the same body-ball soft push using remote players' networked poses. */
+    driveGameBallFromRemotes: function (dt) {
+      const net = window.VRDriftNet;
+      if (!net || !net.isMultiplayer || !net.isMultiplayer() || !net.isHost || !net.isHost()) return;
+      if (!net.getRemotePoses) return;
+      const poses = net.getRemotePoses();
+      if (!poses || !poses.forEach) return;
+      const owner = net.getBallOwnerSlot ? net.getBallOwnerSlot() : null;
+      poses.forEach((data, slot) => {
+        if (!data || data.px == null) return;
+        // Owner already authorizes ball state — don't double-push their body proxy
+        if (owner != null && (slot === owner || data.slot === owner)) return;
+        this.driveGameBallFromBodyAt(
+          { x: data.px, y: data.py, z: data.pz },
+          { x: data.vx || 0, y: data.vy || 0, z: data.vz || 0 },
+          dt
+        );
+      });
     }
   };
 })();

@@ -9,8 +9,8 @@
           hideBelowGut: { type: 'boolean', default: false },
           /** Hide skinned arm/hand meshes (use controller hand-controls models in VR) */
           hideArms: { type: 'boolean', default: false },
-          /** TEMP: 0–1 opacity on hips/chest skinned verts (1 = solid). Use 0.2 to see body ball. */
-          ghostTorsoOpacity: { type: 'number', default: 0 },
+          /** 0–1 opacity on hips/chest skinned verts (1 = solid). */
+          ghostTorsoOpacity: { type: 'number', default: 1 },
           lod: { type: 'string', default: 'high' } // high, medium, low
         },
 
@@ -656,83 +656,64 @@
         },
 
         updateRemoteBody: function(dt) {
-          // Remote body updates from network data
-          // If no network data yet, position at the remote player entity's location
+          // Wait for networked bodyPose — no-op while hidden / not joined yet
           if (!this.remotePoseData) {
-            // Position at remote player entity's initial position
-            let remotePlayerEntity;
-            if (this.data.playerId === 'player_0') {
-              remotePlayerEntity = document.querySelector('#remote-player-0');
-            } else if (this.data.playerId === 'player_1') {
-              remotePlayerEntity = document.querySelector('#remote-player-1');
-            } else if (this.data.playerId === 'player_2') {
-              remotePlayerEntity = document.querySelector('#remote-player-2');
-            } else if (this.data.playerId === 'player_3') {
-              remotePlayerEntity = document.querySelector('#remote-player-3');
-            }
-            
-            if (remotePlayerEntity) {
-              const remoteWorldPos = new THREE.Vector3();
-              remotePlayerEntity.object3D.getWorldPosition(remoteWorldPos);
-              this.el.object3D.position.copy(remoteWorldPos);
-              
-              // Simple idle pose at remote player position
-              const idleHeadPos = remoteWorldPos.clone();
-              idleHeadPos.y += 0.2; // Head offset
-              const idleHeadQuat = new THREE.Quaternion();
-              const idleLeftHand = remoteWorldPos.clone();
-              idleLeftHand.x -= 0.3; // Left hand offset
-              const idleRightHand = remoteWorldPos.clone();
-              idleRightHand.x += 0.3; // Right hand offset
-              
-              this.headVelocity.set(0, 0, 0);
-              this.updateBones(idleHeadPos, idleHeadQuat, idleLeftHand, idleRightHand,
-                              idleHeadQuat, idleHeadQuat, dt);
-            } else {
-              // Debug: entity not found
-              if (!this.remoteEntityWarned) {
-                console.error(`[Body Avatar] âŒ REMOTE PLAYER ENTITY NOT FOUND for ${this.data.playerId}`);
-                this.remoteEntityWarned = true;
-              }
-            }
+            if (!this.el.object3D || !this.el.object3D.visible) return;
+            // VRdrift2 pose anchors are #remote-N (not CapVR #remote-player-N)
+            const m = String(this.data.playerId || '').match(/(\d+)$/);
+            const slot = m ? m[1] : null;
+            const remotePlayerEntity = slot != null
+              ? document.querySelector('#remote-' + slot) ||
+                document.querySelector('#remote-player-' + slot)
+              : null;
+            if (!remotePlayerEntity || !remotePlayerEntity.object3D) return;
+
+            const remoteWorldPos = new THREE.Vector3();
+            remotePlayerEntity.object3D.getWorldPosition(remoteWorldPos);
+            this.el.object3D.position.copy(remoteWorldPos);
+            const idleHeadPos = remoteWorldPos.clone();
+            idleHeadPos.y += 0.2;
+            const idleHeadQuat = new THREE.Quaternion();
+            const idleLeftHand = remoteWorldPos.clone();
+            idleLeftHand.x -= 0.3;
+            const idleRightHand = remoteWorldPos.clone();
+            idleRightHand.x += 0.3;
+            this.headVelocity.set(0, 0, 0);
+            this.updateBones(
+              idleHeadPos,
+              idleHeadQuat,
+              idleLeftHand,
+              idleRightHand,
+              idleHeadQuat,
+              idleHeadQuat,
+              dt
+            );
             return;
           }
-          
+
           const data = this.remotePoseData;
-          
-          // CRITICAL: For remote players, position body at their rig position to avoid "orbiting" effect
-          // When a player rotates via thumbstick, their rig rotates around its center
-          // We want the body to stay at the rig center, not follow the head's orbit
-          
-          // Check if we have rig data (from playerState.rig)
-          // Note: rig data is in data.state.rig, but bodyPose is in data.state.bodyPose
-          // We need to check the parent data structure
-          
-          // For now, use the body position data as-is since it's already correctly calculated
-          // The body position should represent where the player's torso actually is
           this.el.object3D.position.set(data.bodyX, data.bodyY, data.bodyZ);
           this.el.object3D.quaternion.set(data.bodyQX, data.bodyQY, data.bodyQZ, data.bodyQW);
-          
-          // CRITICAL: Set torsoRotation to match body's world quaternion for correct head orientation
-          // (For remote bodies, the body quaternion IS the world quaternion since body is at root level)
           this.torsoRotation.copy(this.el.object3D.quaternion);
-          
-          // Reconstruct head and hand positions from data
+
           const headWorldPos = new THREE.Vector3(data.headX, data.headY, data.headZ);
           const headWorldQuat = new THREE.Quaternion(data.headQX, data.headQY, data.headQZ, data.headQW);
           const leftHandWorldPos = new THREE.Vector3(data.lhX, data.lhY, data.lhZ);
           const leftHandWorldQuat = new THREE.Quaternion(data.lhQX, data.lhQY, data.lhQZ, data.lhQW);
           const rightHandWorldPos = new THREE.Vector3(data.rhX, data.rhY, data.rhZ);
           const rightHandWorldQuat = new THREE.Quaternion(data.rhQX, data.rhQY, data.rhQZ, data.rhQW);
-          
-          // Set velocity for leg animation
+
           this.headVelocity.set(data.velX || 0, data.velY || 0, data.velZ || 0);
-          
-          // Update bones
-          this.updateBones(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos,
-                          leftHandWorldQuat, rightHandWorldQuat, dt);
-          
-          // Update finger curls if provided
+          this.updateBones(
+            headWorldPos,
+            headWorldQuat,
+            leftHandWorldPos,
+            rightHandWorldPos,
+            leftHandWorldQuat,
+            rightHandWorldQuat,
+            dt
+          );
+
           if (data.fingerCurls) {
             this.currentCurls = data.fingerCurls;
             this.applyFingerCurls('left', this.currentCurls.left);

@@ -123,6 +123,10 @@ window.VRDRIFT = {
   BALL_NET_IMPULSE_GAIN: 1.8,
   BALL_NET_IMPULSE_MAX: 4.5,
   BALL_NET_TOUCH_GAP: 0.04,
+  /** Soft ball correction for non-owners (hard snaps cause stutter) */
+  BALL_NET_CORRECT_K: 0.28,
+  /** How long a palm/body touch claims ball authority (ms) */
+  BALL_NET_OWNER_MS: 450,
 
   PALM_COLLIDER_OFFSET_X: 0,
   PALM_COLLIDER_OFFSET_Y: 0,
