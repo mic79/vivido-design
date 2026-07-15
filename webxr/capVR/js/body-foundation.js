@@ -346,6 +346,21 @@
           if (!this.rig) this.rig = document.querySelector('#rig');
         },
 
+        /**
+         * Hand-vs-static surface clamp host.
+         * CapVR removed leg-ik-world; palm blocking lives on [capvr-physics] now.
+         * Requires Box3D ready — body-rigged4 slideHandSphere only (no AABB fallback).
+         */
+        _getHandPhysicsHost: function () {
+          const scene = this.el?.sceneEl;
+          if (!scene) return null;
+          const leg = scene.components?.['leg-ik-world'];
+          if (leg?.physics?.slideHandSphere && leg.clampHandPalmAlongTracking) return leg;
+          const cap = scene.components?.['capvr-physics'];
+          if (cap?.ready && cap.physics?.slideHandSphere && cap.clampHandPalmAlongTracking) return cap;
+          return null;
+        },
+
         init: function() {
           this.camera = document.querySelector('#camera');
           this._resolveControllers();
@@ -4158,7 +4173,7 @@
         },
 
         _syncHandCollisionRadiiToLegIk: function () {
-          const legIk = this.el.sceneEl.components['leg-ik-world'];
+          const legIk = this._getHandPhysicsHost();
           if (!legIk) return;
           legIk.handCollisionRadius = this.palmProbeRadius;
           legIk.fingerCollisionRadius = this.fingerCollisionRadius;
@@ -4606,7 +4621,7 @@
         // penetration and the surface is continuous, so motion stays smooth.
         _blockHandRigid: function (hand, handBone, targetHandPos, applyTwoBoneIK, options) {
           options = options || {};
-          const legIk = this.el.sceneEl.components['leg-ik-world'];
+          const legIk = this._getHandPhysicsHost();
           if (!legIk || !legIk.physics || !legIk.physics.slideHandSphere) return false;
 
           const probes = this._collectHandCollisionProbes(hand, options);
@@ -6494,7 +6509,7 @@
           }
 
           let stablePalmForNextFrame = null;
-          const legIk = this.el.sceneEl.components['leg-ik-world'];
+          const legIk = this._getHandPhysicsHost();
           let lockedHandLocal = null;
 
           const applyTwoBoneIK = (lockWristTarget) => {
@@ -6742,7 +6757,7 @@
               });
               ragComp = bestR;
             }
-            if (legIk.physics.setHandCollideRagdoll) {
+            if (legIk.physics?.setHandCollideRagdoll) {
               legIk.physics.setHandCollideRagdoll(false);
             }
 
@@ -6823,7 +6838,7 @@
             if (grabPressed && collisionHit && !grabWasActive) {
               // Character limb hits must not start environment grab-pull.
               const hitRagdoll = hitCharacterMesh ||
-                !!(legIk.physics.isRagdollShape && legIk.physics.isRagdollShape(dbg?.shapeId)) ||
+                !!(legIk.physics?.isRagdollShape && legIk.physics.isRagdollShape(dbg?.shapeId)) ||
                 dbg?.shapeId === 'mesh-limb' ||
                 dbg?.shapeId === 'mesh-character';
               if (!hitRagdoll) {
@@ -6924,7 +6939,7 @@
 
             // Leave hand queries on ENVIRONMENT-only when done so other systems
             // (and the far hand next frame) don't pay for ragdoll broadphase hits.
-            if (legIk.physics.setHandCollideRagdoll) {
+            if (legIk.physics?.setHandCollideRagdoll) {
               legIk.physics.setHandCollideRagdoll(false);
             }
           }

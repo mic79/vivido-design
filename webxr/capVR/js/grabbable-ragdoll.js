@@ -2213,7 +2213,9 @@ AFRAME.registerComponent('grabbable-ragdoll', {
   },
 
   _aimCapsuleRadius: function (segIdx) {
-    return this._limbCapsuleRadius(segIdx);
+    // Grab radii are padded; aim uses a tighter hull so open-air shots past a
+    // shoulder/neck don't register as mid-air hits a few meters out.
+    return this._limbCapsuleRadius(segIdx) * 0.78;
   },
 
   _rayIntersectSphere: function (origin, dir, center, radius, maxDist, outPoint, outNormal) {

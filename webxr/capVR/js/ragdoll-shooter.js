@@ -164,8 +164,23 @@
       return this._aimFromRightController();
     },
 
-    /** Box3D environment ray — floor, walls, blocks (cheap WASM, not skinned mesh). */
+    /** Environment ray — CapVR combat mesh (BattleVR/spaceshooter style), not Box3D AABB. */
     _raycastEnvironment: function (origin, direction, maxDist) {
+      const combatCast = window.CapVRCombat?.castEnvRay;
+      if (typeof combatCast === 'function') {
+        const hit = combatCast(origin, direction, maxDist);
+        if (!hit?.point) return null;
+        const point = this._envHitPoint.set(hit.point.x, hit.point.y, hit.point.z);
+        const n = hit.normal || { x: 0, y: 1, z: 0 };
+        const normal = this._envHitNormal.set(n.x, n.y, n.z);
+        return {
+          point,
+          normal,
+          distance: hit.distance != null ? hit.distance : origin.distanceTo(point),
+          environment: true
+        };
+      }
+
       const queries = this._getCollisionQueries();
       if (!queries?.castRay) return null;
 

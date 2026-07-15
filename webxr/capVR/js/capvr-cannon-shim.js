@@ -167,22 +167,49 @@
       });
     }
 
-    /** Create / refresh underlying Box3D body once physics is ready. */
+    /** Create / refresh underlying Box3D body once physics is ready.
+     * Always bake from the entity's LIVE world matrix so CapVR arenas (nested /
+     * rotated) match what the player AABB path and visuals actually use.
+     * That Box3D ENV volume is what mixamo palm slideHandSphere queries. */
     _ensureB3(phys) {
       if (this._b3Body || !phys?.b3) return;
       const shape = this.shape || this.shapes[0];
       if (!shape) return;
-      const p = this.position;
-      const quat = {
+
+      let p = { x: this.position.x, y: this.position.y, z: this.position.z };
+      let quat = {
         x: this.quaternion.x, y: this.quaternion.y, z: this.quaternion.z, w: this.quaternion.w
       };
+      let sx = 1, sy = 1, sz = 1;
+      if (this.el?.object3D) {
+        const T = (window.AFRAME && window.AFRAME.THREE) || window.THREE;
+        if (T) {
+          const wp = new T.Vector3();
+          const wq = new T.Quaternion();
+          const ws = new T.Vector3();
+          this.el.object3D.updateWorldMatrix(true, false);
+          this.el.object3D.matrixWorld.decompose(wp, wq, ws);
+          p = { x: wp.x, y: wp.y, z: wp.z };
+          quat = { x: wq.x, y: wq.y, z: wq.z, w: wq.w };
+          sx = Math.max(1e-4, Math.abs(ws.x));
+          sy = Math.max(1e-4, Math.abs(ws.y));
+          sz = Math.max(1e-4, Math.abs(ws.z));
+          // Keep Cannon body pose in sync for consistency
+          this.position.set(p.x, p.y, p.z);
+          this.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+        }
+      }
 
       if (this.mass === 0) {
         if (shape.type === 'sphere') {
-          this._b3Body = phys.addArenaStaticSphere(p.x, p.y, p.z, shape.radius, { quat, el: this.el });
+          this._b3Body = phys.addArenaStaticSphere(
+            p.x, p.y, p.z,
+            (shape.radius || 0.5) * Math.max(sx, sy, sz),
+            { quat, el: this.el }
+          );
         } else if (shape.type === 'cylinder') {
-          const r = shape.radiusTop || shape.radiusBottom || 0.5;
-          const h = shape.height || 1;
+          const r = (shape.radiusTop || shape.radiusBottom || 0.5) * Math.max(sx, sz);
+          const h = (shape.height || 1) * sy;
           const def = phys.b3.b3DefaultBodyDef();
           def.position = { x: p.x, y: p.y, z: p.z };
           def.rotation = { v: { x: quat.x, y: quat.y, z: quat.z }, s: quat.w };
@@ -196,50 +223,53 @@
           phys.arenaBodies.push(this._b3Body);
         } else if (shape.type === 'box') {
           const he = shape.halfExtents;
-          this._b3Body = phys.addArenaStaticBox(p.x, p.y, p.z, he.x, he.y, he.z, quat, { el: this.el });
-        } else if (shape.type === 'convex' && shape.vertices?.length) {
-          // CapVR mistake was baking every octa/tetra as a triangle mesh soup.
-          // BoltVR uses a simple convex; Box3D AABB box around verts matches gameplay
-          // and is what the shim already fell back to — use it first.
-          let minX = Infinity, minY = Infinity, minZ = Infinity;
-          let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-          shape.vertices.forEach((v) => {
-            minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
-            minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
-            minZ = Math.min(minZ, v.z); maxZ = Math.max(maxZ, v.z);
-          });
           this._b3Body = phys.addArenaStaticBox(
             p.x, p.y, p.z,
-            Math.max(0.05, (maxX - minX) * 0.5),
-            Math.max(0.05, (maxY - minY) * 0.5),
-            Math.max(0.05, (maxZ - minZ) * 0.5),
+            he.x * sx, he.y * sy, he.z * sz,
             quat,
             { el: this.el }
           );
+        } else if (shape.type === 'convex' && shape.vertices?.length) {
+          // Octa / tetra MUST stay true convex→trimesh. Bounding-box proxies miss
+          // faces (palms pass through) and inflate volumes (hands teleport on contact).
+          const verts = shape.vertices.map((v) => ({
+            x: v.x * sx,
+            y: v.y * sy,
+            z: v.z * sz
+          }));
+          if (shape.faces?.length && typeof phys.addArenaStaticConvex === 'function') {
+            this._b3Body = phys.addArenaStaticConvex(
+              p.x, p.y, p.z, quat, verts, shape.faces, { el: this.el }
+            );
+          }
+          if (!this._b3Body && this.el && typeof phys.addArenaStaticFromEl === 'function') {
+            this._b3Body = phys.addArenaStaticFromEl(this.el, { el: this.el });
+          }
         } else if (this.el && typeof phys.addArenaStaticFromEl === 'function') {
-          // Torus / unknown — bake visual mesh
           this._b3Body = phys.addArenaStaticFromEl(this.el, { el: this.el });
         }
 
-        if (!this._b3Body && shape.vertices?.length) {
-          let minX = Infinity, minY = Infinity, minZ = Infinity;
-          let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-          shape.vertices.forEach((v) => {
-            minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
-            minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
-            minZ = Math.min(minZ, v.z); maxZ = Math.max(maxZ, v.z);
-          });
+        if (!this._b3Body && shape.vertices?.length && shape.faces?.length
+            && typeof phys.addArenaStaticConvex === 'function') {
+          const verts = shape.vertices.map((v) => ({
+            x: v.x * sx, y: v.y * sy, z: v.z * sz
+          }));
+          this._b3Body = phys.addArenaStaticConvex(
+            p.x, p.y, p.z, quat, verts, shape.faces, { el: this.el }
+          );
+        }
+        if (!this._b3Body && this.el && typeof phys.addArenaStaticFromEl === 'function') {
+          this._b3Body = phys.addArenaStaticFromEl(this.el, { el: this.el });
+        }
+        if (!this._b3Body && shape.type === 'box' && shape.halfExtents) {
+          const he = shape.halfExtents;
           this._b3Body = phys.addArenaStaticBox(
-            p.x, p.y, p.z,
-            Math.max(0.05, (maxX - minX) * 0.5),
-            Math.max(0.05, (maxY - minY) * 0.5),
-            Math.max(0.05, (maxZ - minZ) * 0.5),
-            quat,
-            { el: this.el }
+            p.x, p.y, p.z, he.x * sx, he.y * sy, he.z * sz, quat, { el: this.el }
           );
         }
         if (!this._b3Body) {
-          this._b3Body = phys.addArenaStaticBox(p.x, p.y, p.z, 0.5, 0.5, 0.5, quat, { el: this.el });
+          // Last resort only — never prefer this for octa/tetra.
+          this._b3Body = phys.addArenaStaticBox(p.x, p.y, p.z, 0.5 * sx, 0.5 * sy, 0.5 * sz, quat, { el: this.el });
         }
       } else {
         const r = shape.type === 'sphere' ? shape.radius : 0.2;

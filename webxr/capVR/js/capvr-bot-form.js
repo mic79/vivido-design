@@ -3,30 +3,90 @@
  * - ONE visible body per bot: grabbable-ragdoll (ZeroGLegs loco + hit react + shatter)
  * - Upright yaw (BattleVR) — already enforced in zerog-bot; body follows yaw-only
  * - Feed thruster velocity into ZeroGLegs
- * - Do NOT stack CapVR Box3D resolveSphere on top of BoltVR bot surface collision
+ * - Wall collision = HEAD sphere (same as player camera probe), not waist/torso center
  */
 (function () {
   'use strict';
 
   const THREE = (window.AFRAME && window.AFRAME.THREE) || window.THREE;
 
-  // body id = combat mesh (grabbable-ragdoll). No separate invisible proxy.
   const BOT_VIS = [
-    { bot: 'zerog-bot-red', body: 'bot-red-body', team: 'red' },
-    { bot: 'zerog-bot-blue', body: 'bot-blue-body', team: 'blue' },
-    { bot: 'zerog-bot-green', body: 'bot-green-body', team: 'blue' }
+    { bot: 'zerog-bot-red', body: 'bot-red-body', team: 'red', target: 'bot-target' },
+    { bot: 'zerog-bot-blue', body: 'bot-blue-body', team: 'blue', target: 'bot-blue-target' },
+    { bot: 'zerog-bot-green', body: 'bot-green-body', team: 'blue', target: 'bot-green-target' }
   ];
 
+  // Physics body ≈ Mixamo chest; feet at body.y-1 → head ≈ body.y+0.58
+  const HEAD_Y = 0.58;
+  // Match player checkAndResolveCollisions head probe (radius 0.25)
+  const HEAD_R = 0.25;
+
+  /**
+   * Player walls collide at the camera (head). Bot Cannon/sphere was left at the
+   * physics waist/chest, so Mixamo heads went through walls. Resolve only a head
+   * sphere — same radius/idea as the player — and keep the visible bot-target there.
+   */
   function patchBotHeadCollision() {
-    // CapVR mistake: we replaced BoltVR's single-sphere surface walk with
-    // resolveSphere × many probes × 3 iters AND kept the surface forEach.
-    // That was CapVR glue, not a BoltVR / Box3D flaw. Leave the BoltVR method alone.
     const comp = AFRAME.components['zerog-bot'];
     const proto = comp?.Component?.prototype;
-    if (!proto || !proto._capvrHeadCollide) return;
-    // If a prior tab/hot session already overwrote the method, we can't restore it here.
-    // Hard refresh loads the original registerComponent body from index.html.
-    delete proto._capvrHeadCollide;
+    if (!proto?.checkCustomCollisionWithSurfaces || !proto.getCollisionResponse) return;
+    // Versioned so hot sessions replace older waist-only / torso+head patches.
+    if (proto._capvrHeadCollide === 3) return;
+    proto._capvrHeadCollide = 3;
+
+    const _head = new THREE.Vector3();
+    const _surfacePos = new THREE.Vector3();
+    const _push = new THREE.Vector3();
+
+    proto.checkCustomCollisionWithSurfaces = function () {
+      if (!this.body) return;
+
+      const collisionCulling = this.el.sceneEl.components['collision-culling'];
+      const botId = this.el.id;
+      const surfaces = collisionCulling && collisionCulling.data.enabled
+        && collisionCulling.culledSurfaces.bots[botId]
+        && collisionCulling.culledSurfaces.bots[botId].length > 0
+        ? collisionCulling.culledSurfaces.bots[botId]
+        : document.querySelectorAll('[grab-surface]');
+
+      // Default: head above physics center (waist/chest). Live bone wins when mesh is ready.
+      _head.set(this.body.position.x, this.body.position.y + HEAD_Y, this.body.position.z);
+      const owner = botId?.replace('zerog-', '');
+      const bodyEl = owner && document.getElementById(`${owner}-body`);
+      const headBone = bodyEl?.components?.['grabbable-ragdoll']?.bones?.head;
+      if (headBone) {
+        bodyEl.object3D.updateWorldMatrix(true, false);
+        headBone.getWorldPosition(_head);
+      }
+
+      _push.set(0, 0, 0);
+      for (let s = 0; s < surfaces.length; s++) {
+        const surface = surfaces[s];
+        if (surface.hasAttribute?.('data-visual-only')
+          || surface.classList?.contains('wireframe-visual-only')) {
+          continue;
+        }
+        if (!surface.object3D) continue;
+        surface.object3D.getWorldPosition(_surfacePos);
+        const geometry = surface.getAttribute('geometry');
+        if (!geometry) continue;
+        const collision = this.getCollisionResponse(
+          _head, HEAD_R, _surfacePos, geometry, surface
+        );
+        if (collision.lengthSq() > 0) _push.add(collision);
+      }
+
+      if (_push.lengthSq() <= 0) return;
+      if (_push.length() > 0.4) _push.setLength(0.4);
+      this.body.position.x += _push.x;
+      this.body.position.y += _push.y;
+      this.body.position.z += _push.z;
+      if (this.velocity) {
+        const n = _push.clone().normalize();
+        const vn = this.velocity.dot(n);
+        if (vn < 0) this.velocity.sub(n.multiplyScalar(vn));
+      }
+    };
   }
 
   function showCombatMesh(el) {
@@ -39,7 +99,6 @@
       const mats = Array.isArray(n.material) ? n.material : [n.material];
       mats.forEach((m) => {
         if (!m) return;
-        // Undo any prior proxy-hide pass
         if (m.opacity === 0 || m.colorWrite === false) {
           m.transparent = false;
           m.opacity = 1;
@@ -51,7 +110,6 @@
     });
   }
 
-  // Keep physics bots from drifting outside the CTF field and sniping from void.
   const PLAY = { x: 20, yMin: 0.4, yMax: 11, z: 40 };
 
   function leashBotPhysics(botEl) {
@@ -79,9 +137,27 @@
     }
   }
 
+  /** Keep the visible grab/hit sphere on the Mixamo head (was glued at waist = body origin). */
+  function syncBotTargetToHead(botEl, bodyEl, targetId) {
+    const target = (targetId && document.getElementById(targetId))
+      || botEl?.querySelector?.('.grabbable-player');
+    if (!target?.object3D) return;
+
+    let localY = HEAD_Y;
+    const headBone = bodyEl?.components?.['grabbable-ragdoll']?.bones?.head;
+    if (headBone && botEl.object3D) {
+      const hp = new THREE.Vector3();
+      headBone.getWorldPosition(hp);
+      botEl.object3D.updateWorldMatrix(true, false);
+      const local = botEl.object3D.worldToLocal(hp.clone());
+      localY = local.y;
+    }
+    target.object3D.position.set(0, localY, 0);
+  }
+
   function syncBotBodies() {
     const botsOn = !(window.perfConfig && window.perfConfig.botLogicEnabled === false);
-    BOT_VIS.forEach(({ bot, body, team }) => {
+    BOT_VIS.forEach(({ bot, body, team, target }) => {
       const botEl = document.getElementById(bot);
       const bodyEl = document.getElementById(body);
       if (!botEl || !bodyEl?.object3D) return;
@@ -93,20 +169,16 @@
 
       const grab = bodyEl.components?.['grabbable-ragdoll'];
       const owner = bot.replace('zerog-', '');
-      // Premature ragdoll while still alive freezes the mesh -> phantom lasers. Undo it.
       if (grab?.ragdollActive && window.CapVRCombat?.isBotAlive?.(owner)) {
         try { grab.resetRagdoll?.(); } catch (e) { /* */ }
       }
-      // While full physics ragdoll / shatter collapse is active on a dead bot, don't teleport
       if (grab?.ragdollActive) return;
 
       const p = botEl.body?.position || botEl.object3D.position;
-      // Feet hang: hips ~1m below chest physics center (same convention as updateBotBody)
       const y = (p.y || 0) - 1.0;
       bodyEl.object3D.position.set(p.x, y, p.z);
 
       const yaw = botEl.object3D.rotation.y;
-      // Mixamo faces -Z; bot thrusters face +Z → +π
       bodyEl.object3D.rotation.set(0, yaw + Math.PI, 0);
 
       if (grab) {
@@ -120,6 +192,7 @@
       }
 
       showCombatMesh(bodyEl);
+      syncBotTargetToHead(botEl, bodyEl, target);
 
       if (!bodyEl._capvrTinted && grab?.modelLoaded) {
         const color = team === 'red' ? '#ff3355' : '#3388ff';
@@ -158,16 +231,12 @@
     };
   }
 
-  // Drive syncBotBodies from an A-Frame tick, NOT window.requestAnimationFrame.
-  // window.rAF is paused during an immersive WebXR session, so the old rAF loop
-  // stopped positioning bots in VR (and double-ran on flatscreen). A registered
-  // component tick runs on the XR render loop.
   function boot() {
     patchBotHeadCollision();
     patchGrabbableDriveVel();
     setTimeout(patchBotHeadCollision, 800);
     setTimeout(patchBotHeadCollision, 2500);
-    console.log('[CapVR] bot-form: combat body sync (BoltVR collision, no CapVR resolve stack)');
+    console.log('[CapVR] bot-form: head-sphere wall collision (player-matched) + mesh sync');
   }
 
   if (window.AFRAME && !AFRAME.components['capvr-bot-form-sync']) {

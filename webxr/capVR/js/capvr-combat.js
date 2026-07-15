@@ -965,17 +965,18 @@
     console.log('[CapVR] combat match reset');
   }
 
-  const _losRaycaster = new THREE.Raycaster();
-  const _losBox = new THREE.Box3();
+  let _losRaycaster = null;
+  /** Entity roots with grab-surface — BattleVR fireLaser pattern (recursive mesh hits). */
   const _losRoots = [];
   let _losRootCacheAt = 0;
 
   function _isLosIgnoredEl(el) {
     if (!el) return true;
-    // Anything under the shooter / UI must never count as a wall hit.
+    // NEVER use closest('[capvr-combat]') — combat lives on <a-scene>, so every
+    // arena wall is under it and would be treated as "ignore" (static lasers miss).
     if (el.closest?.(
       '#player, #rig, #camera, #local-body, #leftHand, #rightHand, #left-hand, #right-hand, '
-      + 'a-camera, #capvr-menu, #menu, #hud, #score-display, [zerog-player], [capvr-combat]'
+      + 'a-camera, #capvr-menu, #menu, #hud, #score-display'
     )) return true;
     if (el.hasAttribute?.('data-visual-only') || el.classList?.contains('wireframe-visual-only')) return true;
     if (el.id === 'red-goal' || el.id === 'blue-goal' || el.id === 'capture-ball') return true;
@@ -983,12 +984,13 @@
     if (el.hasAttribute?.('grabbable-ragdoll') || el.hasAttribute?.('mixamo-body')
       || el.hasAttribute?.('mixamo-body-avatar')) return true;
     if (el.hasAttribute?.('zerog-bot') || el.hasAttribute?.('zerog-ball')) return true;
-    if (el.hasAttribute?.('zerog-player') || el.hasAttribute?.('capvr-combat')) return true;
+    if (el.hasAttribute?.('zerog-player')) return true;
     if (el.classList?.contains('clickable') || el.classList?.contains('menu')) return true;
     if (el.classList?.contains('thruster-vfx') || el.classList?.contains('ctf-flag-xray')) return true;
     if (el.classList?.contains('ctf-flag-ball') || el.dataset?.flagTeam) return true;
     if (el.classList?.contains('capvr-contour') || el.classList?.contains('capvr-health-bar')) return true;
     if (el.id === 'flag-red' || el.id === 'flag-blue') return true;
+    if (el.id === 'terrain') return true;
     return false;
   }
 
@@ -1001,131 +1003,84 @@
     return null;
   }
 
-  function _refreshLosRoots() {
-    _losRoots.length = 0;
-    // Arena occluders: grab surfaces + common static props (cover without grab-surface).
-    const sels = [
-      '[grab-surface]',
-      'a-box:not([data-visual-only])',
-      'a-cylinder:not([data-visual-only])',
-      'a-sphere.arena-cover',
-      'a-octahedron',
-      'a-tetrahedron',
-      'a-plane.arena-cover'
-    ];
-    document.querySelectorAll(sels.join(',')).forEach((el) => {
-      if (_isLosIgnoredEl(el) || !el.object3D) return;
-      // Skip tiny HUD / menu planes
-      if (el.closest?.('#menu, #capvr-menu, #hud, [capvr-combat]')) return;
-      _losRoots.push(el.object3D);
-    });
-  }
-
-  /** Ray vs world AABB of an object (covers rotated arena props better than raw geometry attrs). */
-  function _rayAabbDistance(ori, dir, box, maxDist) {
-    // Slab test
-    let tmin = 0;
-    let tmax = maxDist;
-    const axes = [
-      { o: ori.x, d: dir.x, min: box.min.x, max: box.max.x },
-      { o: ori.y, d: dir.y, min: box.min.y, max: box.max.y },
-      { o: ori.z, d: dir.z, min: box.min.z, max: box.max.z }
-    ];
-    for (let a = 0; a < 3; a++) {
-      const A = axes[a];
-      if (Math.abs(A.d) < 1e-9) {
-        if (A.o < A.min || A.o > A.max) return null;
-        continue;
-      }
-      let t1 = (A.min - A.o) / A.d;
-      let t2 = (A.max - A.o) / A.d;
-      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
-      tmin = Math.max(tmin, t1);
-      tmax = Math.min(tmax, t2);
-      if (tmin > tmax) return null;
+  function _isHitMeshSkipped(mesh) {
+    if (!mesh) return true;
+    if (mesh.visible === false) return true;
+    const mat = mesh.material;
+    const mats = Array.isArray(mat) ? mat : (mat ? [mat] : []);
+    // Wireframe overlays sit just outside solid faces — skip so we land on the solid.
+    if (mats.length && mats.every((m) => m && m.wireframe)) return true;
+    if (mats.length && mats.every((m) => m && m.transparent && m.opacity != null && m.opacity < 0.15)) {
+      return true;
     }
-    if (tmin < 0.03 || tmin >= maxDist) return null;
-    return tmin;
+    return false;
   }
 
   /**
-   * Nearest occluder along a ray. Combines:
-   *  1) Box3D ENVIRONMENT cast
-   *  2) THREE mesh raycast against [grab-surface] (BattleVR-style)
-   *  3) World AABB fallback on those surfaces
-   * Returns { point, distance, normal } or null.
+   * BattleVR fireLaser: [grab-surface] triangle hits, near≈0.
+   * CapVRRegression: filtering via closest('[capvr-combat]') emptied this list because
+   * capvr-combat is on <a-scene> — every wall is a descendant.
    */
-  // Skip self / muzzle-adjacent garbage. Real walls farther than this still hit fine
-  // when you're floating right next to them — we reject SELF meshes separately.
-  const ENV_HIT_MIN_DIST = 0.35;
+  function _refreshLosRoots() {
+    _losRoots.length = 0;
+    const T = (window.AFRAME && window.AFRAME.THREE) || window.THREE;
+    document.querySelectorAll('[grab-surface]').forEach((el) => {
+      if (_isLosIgnoredEl(el) || !el.object3D) return;
+      if (el.object3D.visible === false) return;
+      // HUD / menu only — NOT [capvr-combat] (that's the scene root)
+      if (el.closest?.('#menu, #capvr-menu, #hud, #score-display')) return;
+      _losRoots.push(el.object3D);
+    });
+    if (!_losRoots.length && !window.__capvrLosEmptyLogged) {
+      window.__capvrLosEmptyLogged = true;
+      console.warn('[CapVR] castEnvRay: no [grab-surface] occluders found');
+    }
+  }
+
+  // Only skip tiny muzzle self-hits. Large near clips cause octa/tet back-face hits.
+  const ENV_HIT_MIN_DIST = 0.02;
 
   function castEnvRay(ori, dir, maxDist) {
     if (!ori || !dir || !(maxDist > ENV_HIT_MIN_DIST)) return null;
+    const T = (window.AFRAME && window.AFRAME.THREE) || window.THREE;
+    if (!T) return null;
     const len = Math.hypot(dir.x, dir.y, dir.z) || 1;
-    const nd = new THREE.Vector3(dir.x / len, dir.y / len, dir.z / len);
-    const origin = ori.isVector3 ? ori : new THREE.Vector3(ori.x, ori.y, ori.z);
-    let bestDist = maxDist;
-    let bestPoint = null;
-    let bestNormal = null;
+    const nd = new T.Vector3(dir.x / len, dir.y / len, dir.z / len);
+    const origin = ori.isVector3 ? ori : new T.Vector3(ori.x, ori.y, ori.z);
 
-    // 1) Box3D environment only (not player/hand/ragdoll categories)
-    try {
-      const phys = window.CapVRPhysics?.get?.();
-      const q = phys?.queries;
-      if (q?.castRay) {
-        const hit = q.castRay(
-          { x: origin.x, y: origin.y, z: origin.z },
-          { x: nd.x, y: nd.y, z: nd.z },
-          maxDist,
-          q.envFilter || undefined
-        );
-        if (hit && hit.hit !== false && hit.fraction != null) {
-          const dist = (hit.timeOfImpact != null) ? hit.timeOfImpact : (hit.fraction * maxDist);
-          if (dist > ENV_HIT_MIN_DIST && dist < bestDist - 1e-4) {
-            bestDist = dist;
-            bestPoint = hit.point
-              ? new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z)
-              : origin.clone().addScaledVector(nd, dist);
-            bestNormal = hit.normal
-              ? new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z)
-              : nd.clone().negate();
-          }
-        }
-      }
-    } catch (e) { /* */ }
-
-    // 2) THREE mesh raycast — grab-surface walls/platforms only
     const now = performance.now();
-    if (!_losRoots.length || now - _losRootCacheAt > 600) {
+    if (now - _losRootCacheAt > 400 || !_losRoots.length) {
       _refreshLosRoots();
       _losRootCacheAt = now;
     }
-    if (_losRoots.length) {
-      _losRaycaster.set(origin, nd);
-      _losRaycaster.near = ENV_HIT_MIN_DIST;
-      _losRaycaster.far = maxDist;
-      const hits = _losRaycaster.intersectObjects(_losRoots, true);
-      for (let i = 0; i < hits.length; i++) {
-        const h = hits[i];
-        if (!h || !(h.distance > ENV_HIT_MIN_DIST) || h.distance >= bestDist) continue;
-        const hitEl = _elFromObject3D(h.object);
-        if (_isLosIgnoredEl(hitEl)) continue;
-        // Skip invisible / fully transparent materials
-        const mat = h.object?.material;
-        const mats = Array.isArray(mat) ? mat : (mat ? [mat] : []);
-        const seethrough = mats.length && mats.every((m) => m && (m.opacity != null && m.opacity < 0.15) && m.transparent);
-        if (seethrough) continue;
-        bestDist = h.distance;
-        bestPoint = h.point.clone();
-        bestNormal = h.face?.normal
-          ? h.face.normal.clone().transformDirection(h.object.matrixWorld).normalize()
-          : nd.clone().negate();
-        break;
-      }
-    }
+    if (!_losRoots.length) return null;
 
-    if (!bestPoint || bestDist >= maxDist - 0.02) return null;
-    return { point: bestPoint, distance: bestDist, normal: bestNormal || nd.clone().negate() };
+    // Always use A-Frame's THREE.Raycaster (dual Three.js copies otherwise miss all meshes)
+    if (!_losRaycaster || _losRaycaster.__capvrT !== T) {
+      _losRaycaster = new T.Raycaster();
+      _losRaycaster.__capvrT = T;
+    }
+    _losRaycaster.set(origin, nd);
+    _losRaycaster.near = ENV_HIT_MIN_DIST;
+    _losRaycaster.far = maxDist;
+    const hits = _losRaycaster.intersectObjects(_losRoots, true);
+    for (let i = 0; i < hits.length; i++) {
+      const h = hits[i];
+      if (!h || !(h.distance > ENV_HIT_MIN_DIST) || h.distance >= maxDist - 0.02) continue;
+      const hitEl = _elFromObject3D(h.object);
+      if (_isLosIgnoredEl(hitEl)) continue;
+      if (_isHitMeshSkipped(h.object)) continue;
+      const normal = h.face?.normal
+        ? h.face.normal.clone().transformDirection(h.object.matrixWorld).normalize()
+        : nd.clone().negate();
+      if (normal.dot(nd) > 0) normal.negate();
+      return {
+        point: h.point.clone(),
+        distance: h.distance,
+        normal
+      };
+    }
+    return null;
   }
 
   /**
@@ -1304,8 +1259,10 @@
       let bestDist = MAX_RANGE;
       document.querySelectorAll('[grabbable-ragdoll]').forEach((el) => {
         if (!el.object3D?.visible) return;
+        // Skip practice dummies / paused / non-combat proxies (phantom mid-air capsules).
+        if (el.id === 'grab-dummy' || el.dataset?.botId == null) return;
         const grab = el.components?.['grabbable-ragdoll'];
-        if (!grab) return;
+        if (!grab || grab.data?.paused) return;
         const hit = (fastHit && grab.raycastAimPreview)
           ? grab.raycastAimPreview(this._rayOri, this._rayDir, MAX_RANGE)
           : grab.raycastFromShot?.(this._rayOri, this._rayDir, MAX_RANGE);
@@ -1651,8 +1608,9 @@
       let bestDist = MAX_RANGE;
       document.querySelectorAll('[grabbable-ragdoll]').forEach((el) => {
         if (!el.object3D?.visible) return;
+        if (el.id === 'grab-dummy' || el.dataset?.botId == null) return;
         const grab = el.components?.['grabbable-ragdoll'];
-        if (!grab) return;
+        if (!grab || grab.data?.paused) return;
         const hit = (fastHit && grab.raycastAimPreview)
           ? grab.raycastAimPreview(this._ori, this._dir, MAX_RANGE)
           : grab.raycastFromShot?.(this._ori, this._dir, MAX_RANGE);

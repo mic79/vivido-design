@@ -339,6 +339,66 @@
       return scene?.components?.['capvr-physics']
         || scene?.components?.['leg-ik-world']
         || null;
+    },
+    /**
+     * Rebuild EVERY grab-surface into Box3D ENVIRONMENT statics from live world
+     * matrices. body-rigged4 hands query ENV; CapVR walls lived only in DOM AABB
+     * (player) until this runs — palms could tunnel. Call after physics + arena load.
+     */
+    rebuildArenaStatics() {
+      const phys = this.get();
+      if (!phys?.b3 || !phys.world) return 0;
+
+      // Drop prior bake so stale / wrong-transform ENV shapes cannot linger.
+      document.querySelectorAll('[grab-surface]').forEach((el) => {
+        const body = el.components?.['grab-surface']?.body || el.body;
+        if (body) body._b3Body = null;
+      });
+      if (typeof phys.clearArenaBodies === 'function') {
+        try { phys.clearArenaBodies(); } catch (e) { /* */ }
+      }
+
+      let n = 0;
+      document.querySelectorAll('[grab-surface]').forEach((el) => {
+        if (el.hasAttribute('data-visual-only') || el.classList?.contains('wireframe-visual-only')) {
+          return;
+        }
+        if (el.dataset?.arenaFixture === 'spawn' || el.classList?.contains('arena-fixture')) {
+          // Editor spawn markers — not walls
+          if (el.dataset?.fixtureSlot != null) return;
+        }
+        // Goal rings stay fly-through.
+        if (el.closest?.('#red-goal, #blue-goal') || el.hasAttribute('goal-ring')) return;
+
+        const gs = el.components?.['grab-surface'];
+        let body = gs?.body || el.body;
+        if (!body && typeof gs?.createPhysicsBody === 'function') {
+          try { gs.createPhysicsBody(); } catch (e) { /* */ }
+          body = gs?.body || el.body;
+        }
+
+        if (body && body.mass > 0) return;
+
+        if (body && typeof body._ensureB3 === 'function') {
+          body._ensureB3(phys);
+          if (body._b3Body) {
+            n++;
+            return;
+          }
+        }
+
+        // No Cannon body (torus / race): bake mesh directly from the visual.
+        if (typeof phys.addArenaStaticFromEl === 'function') {
+          const b3 = phys.addArenaStaticFromEl(el, { el });
+          if (b3) {
+            if (body) body._b3Body = b3;
+            n++;
+          }
+        }
+      });
+      console.log('[CapVR] rebuilt Box3D arena statics for hands:', n,
+        '(grab-surface=', document.querySelectorAll('[grab-surface]').length, ')');
+      return n;
     }
   };
 
