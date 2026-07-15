@@ -139,6 +139,31 @@
   const SPARK_MAX = 90; // hard cap across all bursts (≈ 7 recent shots)
   const SHARED_SPARK_GEO = new THREE.SphereGeometry(0.008, 5, 3);
 
+  // Combat visual FX (laser beams, impact orbs, hit sparks). Re-ENABLED by default:
+  // FX also fire on wall hits, which hold 72 fps, so FX are not the dip cause.
+  // Toggle live: __capvrFx(false) to suppress beams/sparks.
+  if (window.__capvrFxOff === undefined) window.__capvrFxOff = false;
+  if (!window.__capvrFx) {
+    window.__capvrFx = function (on) {
+      window.__capvrFxOff = (on === false);
+      console.log('[CapVR] combat FX ' + (window.__capvrFxOff ? 'DISABLED (no beams/sparks)' : 'ENABLED'));
+      return !window.__capvrFxOff;
+    };
+  }
+
+  // DIAGNOSTIC: BOT HIT-RESPONSE off-switch. When on, a laser that hits a bot still
+  // registers (beam/FX show, ray terminates on the bot) but the bot runs NONE of its
+  // response: no HP change, no hit-reaction animation, no region/part removal, no
+  // shatter, no death/respawn. This isolates whether the shooting-bots dip lives in
+  // the dynamic hit-response path (vs static-object hits, which hold 72 fps).
+  // Default DISABLED (response off) for this test. Toggle live: __capvrBotHit(true).
+  if (window.__capvrBotHitOff === undefined) window.__capvrBotHitOff = true;
+  window.__capvrBotHit = function (on) {
+    window.__capvrBotHitOff = (on === false);
+    console.log('[CapVR] bot hit-response ' + (window.__capvrBotHitOff ? 'DISABLED (bots ignore hits)' : 'ENABLED'));
+    return !window.__capvrBotHitOff;
+  };
+
   function disposeSpark(spark) {
     if (spark._sceneObj && spark.mesh) spark._sceneObj.remove(spark.mesh);
     // Geometry is shared — only dispose the per-spark material.
@@ -147,6 +172,7 @@
   }
 
   function spawnHitSparks(position) {
+    if (window.__capvrFxOff === true) return;
     const sceneObj = document.querySelector('a-scene')?.object3D;
     if (!sceneObj || !position) return;
     const origin = new THREE.Vector3(
@@ -246,6 +272,7 @@
   /* ── laser visuals + deathcam linger (BattleVR killingShot) ── */
   function spawnLaserVisuals(from, to, opts) {
     opts = opts || {};
+    if (window.__capvrFxOff === true) return null;
     const scene = document.querySelector('a-scene');
     if (!scene || !from || !to) return null;
     const color = opts.color || '#00ffff';
@@ -806,6 +833,9 @@
     opts = opts || {};
     const st = botState[owner];
     if (!st?.alive) return false;
+    // DIAGNOSTIC: skip the entire bot hit-response (damage, hit-react/shatter,
+    // part removal, sfx, death/respawn) to isolate its cost. Re-enable: __capvrBotHit(true).
+    if (window.__capvrBotHitOff === true) return false;
     const grabPre = opts.bodyEl?.components?.['grabbable-ragdoll'];
     // Head/neck fully destroyed ⇒ death (HP irrelevant)
     const headKill = willDestroyHeadRegion(grabPre, opts.regionId)
@@ -1266,13 +1296,19 @@
         return;
       }
 
+      // Prefer capsule aim preview over skinned-mesh raycastFromShot (55k tris ×
+      // bone re-skin per body per shot = the measured shooting-bots hitch).
+      // Toggle: __capvrShooterFast(false) for precise mesh hits.
+      const fastHit = window.__capvrShooterFastHit !== false;
       let best = null;
       let bestDist = MAX_RANGE;
       document.querySelectorAll('[grabbable-ragdoll]').forEach((el) => {
         if (!el.object3D?.visible) return;
         const grab = el.components?.['grabbable-ragdoll'];
-        if (!grab?.raycastFromShot) return;
-        const hit = grab.raycastFromShot(this._rayOri, this._rayDir, MAX_RANGE);
+        if (!grab) return;
+        const hit = (fastHit && grab.raycastAimPreview)
+          ? grab.raycastAimPreview(this._rayOri, this._rayDir, MAX_RANGE)
+          : grab.raycastFromShot?.(this._rayOri, this._rayDir, MAX_RANGE);
         if (hit && hit.distance < bestDist) {
           bestDist = hit.distance;
           best = { grab, hit, el };
@@ -1610,13 +1646,16 @@
     },
 
     _raycast: function () {
+      const fastHit = window.__capvrShooterFastHit !== false;
       let best = null;
       let bestDist = MAX_RANGE;
       document.querySelectorAll('[grabbable-ragdoll]').forEach((el) => {
         if (!el.object3D?.visible) return;
         const grab = el.components?.['grabbable-ragdoll'];
-        if (!grab?.raycastFromShot) return;
-        const hit = grab.raycastFromShot(this._ori, this._dir, MAX_RANGE);
+        if (!grab) return;
+        const hit = (fastHit && grab.raycastAimPreview)
+          ? grab.raycastAimPreview(this._ori, this._dir, MAX_RANGE)
+          : grab.raycastFromShot?.(this._ori, this._dir, MAX_RANGE);
         if (hit && hit.distance < bestDist) {
           bestDist = hit.distance;
           best = { el, point: hit.point, normal: hit.normal, regionId: hit.regionId, distance: hit.distance };
@@ -1633,6 +1672,10 @@
       if (!botState[owner]?.alive) return;
       const recentShot = (performance.now() - (window.CapVRCombat?._lastShotAt || 0)) < HIT_CREDIT_MS;
       if (!detail?.credited && !recentShot && !detail?.force) return;
+      // DIAGNOSTIC: must gate BEFORE knockback. damageBot alone was returning early
+      // while the velocity shove below still ran — bots "relocated" on every hit and
+      // that shove was the leftover response the earlier kill-switch missed.
+      if (window.__capvrBotHitOff === true) return;
       const dmg = detail.damage || LASER_DAMAGE;
       damageBot(owner, dmg, {
         bodyEl: el,
@@ -1642,10 +1685,11 @@
       });
       const botEl = document.getElementById(botId);
       const bc = botEl?.components?.['zerog-bot'];
-      if (bc?.velocity && this._dir) {
-        bc.velocity.x += this._dir.x * 3;
-        bc.velocity.y += this._dir.y * 3 + 1;
-        bc.velocity.z += this._dir.z * 3;
+      const knockDir = detail.dir || this._dir;
+      if (bc?.velocity && knockDir) {
+        bc.velocity.x += knockDir.x * 3;
+        bc.velocity.y += knockDir.y * 3 + 1;
+        bc.velocity.z += knockDir.z * 3;
       }
     },
 

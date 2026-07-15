@@ -524,8 +524,14 @@
   const MAX_SHARDS_PER_SHOT = 28;
   /** Final blow that tears off a region — needs more pieces to replace hidden skin. */
   const MAX_SHARDS_FULL_DESTROY = 52;
-  /** Cap live debris — oldest shards are removed when this limit is exceeded. */
-  const MAX_ACTIVE_SHARDS = 128;
+  /**
+   * Cap live debris — oldest shards are removed when this limit is exceeded.
+   * This is PER RAGDOLL: CapVR fights 3 bots at once, so the effective on-screen
+   * shard count is ~3× this. 128/bot (=~384 total) was the measured cause of the
+   * sustained 8–10 ms/frame in syncShards when shooting bots. Keep it modest for
+   * Quest. Tune live (per ragdoll) with window.__capvrMaxShards — no rebuild.
+   */
+  const MAX_ACTIVE_SHARDS = 48;
   let _shardSpawnSeq = 0;
 
   /** Box3D ragdoll body names to activate when a region is fully destroyed (pelvis stays kinematic). */
@@ -1509,6 +1515,12 @@
         maxShardsPerShot = null
       } = opts;
 
+      // DIAGNOSTIC KILL-SWITCH: when disabled, create NO shatter shards at all.
+      // Hit detection / damage / laser still run (they don't go through fracture),
+      // so this isolates whether the shard system is the sole cause of the
+      // shooting-bots dip. Toggle live with window.__capvrShatter(true|false).
+      if (window.__capvrShatterOff === true) return [];
+
       if (!root || !skinnedMeshes?.length || !b3 || !world) return [];
 
       let bucketEntries;
@@ -1730,6 +1742,8 @@
         collisionSpeed = 0
       } = opts;
 
+      if (window.__capvrShatterOff === true) return [];
+
       if (!root || !shards || shardIndex < 0 || shardIndex >= shards.length) {
         return [];
       }
@@ -1859,6 +1873,15 @@
         gravityY = 0;
       }
 
+      // Reuse scratch vectors across all shards. The old `new V3()` ×3 per shard
+      // per frame was heavy GC churn (hundreds of allocs/frame with 3 bots' worth
+      // of debris) — a prime suspect behind the 111–153 ms shatter-frame stalls.
+      // Each is fully overwritten before use every iteration, so this is behaviorally
+      // identical to allocating fresh vectors.
+      let worldPos = null;
+      let localPos = null;
+      let desired = null;
+
       for (let i = 0; i < shards.length; i++) {
         const s = shards[i];
         if (!s.mesh || !s.velocity) continue;
@@ -1870,9 +1893,7 @@
         const mesh = s.mesh;
         const parent = mesh.parent;
         const V3 = s.V3Class || mesh.position.constructor;
-        const worldPos = new V3();
-        const localPos = new V3();
-        const desired = new V3();
+        if (!worldPos) { worldPos = new V3(); localPos = new V3(); desired = new V3(); }
         const maxSpd = s.maxSpeed || 7;
         const radius = s.radius || shardCollisionRadius(mesh);
 
@@ -2019,7 +2040,8 @@
         }
       }
 
-      queueOldestShardRemovals(shards, pendingRemovals, MAX_ACTIVE_SHARDS);
+      const shardCap = (window.__capvrMaxShards | 0) > 0 ? (window.__capvrMaxShards | 0) : MAX_ACTIVE_SHARDS;
+      queueOldestShardRemovals(shards, pendingRemovals, shardCap);
 
       if (pendingRemovals.length) {
         pendingRemovals.sort((a, b) => b - a);
@@ -2054,4 +2076,14 @@
   };
 
   window.RagdollShatter = RagdollShatter;
+
+  // Shatter shards re-ENABLED by default. (Shard-off testing proved shards are only
+  // part of the story; the shooting-bots dip persisted without them, so we now
+  // isolate the bot hit-response path instead.) Toggle live: __capvrShatter(false).
+  if (window.__capvrShatterOff === undefined) window.__capvrShatterOff = false;
+  window.__capvrShatter = function (on) {
+    window.__capvrShatterOff = (on === false);
+    console.log('[CapVR] shatter shards ' + (window.__capvrShatterOff ? 'DISABLED (no shards)' : 'ENABLED'));
+    return !window.__capvrShatterOff;
+  };
 })();

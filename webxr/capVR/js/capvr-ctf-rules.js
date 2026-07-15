@@ -5,6 +5,15 @@
 (function () {
   'use strict';
 
+  // DIAGNOSTIC: bot shooting is DISABLED BY DEFAULT (no hits → no shatter) so we can
+  // confirm whether the 72→36 dip is the fragment churn. Re-enable with __capvrBotsFire(true).
+  if (window.__capvrBotFireOff === undefined) window.__capvrBotFireOff = true;
+  window.__capvrBotsFire = function (on) {
+    window.__capvrBotFireOff = (on === false);
+    console.log('[CapVR] bot firing ' + (window.__capvrBotFireOff ? 'DISABLED (no shatter)' : 'ENABLED'));
+    return !window.__capvrBotFireOff;
+  };
+
   // Pedestals offset inset from goal colliders so home flags aren't bouncing in the goal body.
   const HOME = {
     red: { x: 0, y: 2.6, z: -36.5 },
@@ -1386,6 +1395,10 @@
 
     const FIRE_COOLDOWN = 700;
     const FIRE_RANGE = 24;
+    // Target + line-of-sight scanning is expensive (full-arena raycasts per candidate).
+    // Running it every frame per bot was the CapVR-only bot-aim perf sink. Re-scan a few
+    // times a second and cheaply track the cached target's position in between.
+    const THREAT_EVAL_MS = 150;
     // ~75° half-angle — was 60° and combined with strafe-facing meant bots almost never shot.
     const FIRE_AIM_COS = Math.cos((75 * Math.PI) / 180);
     const FLAG_GRAB_RANGE = 2.35;
@@ -1652,7 +1665,58 @@
       return best;
     }
 
+    // Cheaply update a cached threat's position/distance without any raycast, so aim
+    // tracks a moving target between full LOS re-scans. Returns false if the target
+    // is gone/dead (forcing a fresh scan on the next eval tick).
+    function refreshThreatPos(bot, threat) {
+      if (!threat || !bot?.body) return false;
+      const bp = bot.body.position;
+      _aimFrom.set(bp.x, bp.y + 0.35, bp.z);
+      if (threat.type === 'player') {
+        if (!getPlayerAimPos(threat.pos)) return false;
+      } else if (threat.type === 'bot') {
+        if (!isBotAlive(threat.owner)) return false;
+        const el = document.getElementById('zerog-' + threat.owner);
+        const p = el?.body?.position || el?.object3D?.position;
+        if (!p) return false;
+        threat.pos.set(p.x, (p.y || 0) + 1.0, p.z);
+      } else if (threat.type === 'human') {
+        const idx = String(threat.playerId).replace('player_', '');
+        const parent = document.getElementById('remote-player-' + idx);
+        const el = document.getElementById('remote-target-' + idx) || parent;
+        const pVis = parent?.getAttribute?.('visible');
+        if (!el?.object3D || pVis === false || pVis === 'false') return false;
+        el.object3D.getWorldPosition(threat.pos);
+      } else {
+        return false;
+      }
+      if (!inPlayVolume(threat.pos)) return false;
+      threat.dist = _aimFrom.distanceTo(threat.pos);
+      return threat.dist <= FIRE_RANGE;
+    }
+
+    // Throttled threat acquisition. Staggered per bot so all three don't scan the
+    // same frame. Between scans the cached target is position-refreshed for free.
+    function getThreatThrottled(bot, myTeam) {
+      const now = performance.now();
+      if (bot._capvrThreatPhase == null) bot._capvrThreatPhase = Math.random() * THREAT_EVAL_MS;
+      const due = now - (bot._capvrThreatAt || 0) >= THREAT_EVAL_MS + bot._capvrThreatPhase;
+      if (!due && bot._capvrThreat) {
+        if (refreshThreatPos(bot, bot._capvrThreat)) return bot._capvrThreat;
+        // Cached target invalid — fall through to a fresh scan.
+      }
+      if (!due && !bot._capvrThreat) return null;
+      bot._capvrThreatAt = now;
+      bot._capvrThreatPhase = 0;
+      bot._capvrThreat = bestEnemyTarget(bot, myTeam);
+      return bot._capvrThreat;
+    }
+
     function fireAt(bot, myTeam, target) {
+      // DIAGNOSTIC: run with __capvrBotsFire(false) to stop all bot shooting →
+      // no laser hits → no shatter fragments. If the frame STILL dips to 36 with
+      // firing off, the dip is not the shatter churn. Toggle back with (true).
+      if (window.__capvrBotFireOff === true || window.perfConfig?.botFiringEnabled === false) return;
       if (!target?.pos || !bot.body) return;
       if (!shooterCanFire(bot)) return;
       const now = performance.now();
@@ -1782,8 +1846,9 @@
 
         this._capvrBehavior = mission.behavior;
 
-        // Engage nearby threats: strafe + shoot (BattleVR-style)
-        const threat = bestEnemyTarget(this, myTeam);
+        // Engage nearby threats: strafe + shoot (BattleVR-style).
+        // Throttled — full LOS scanning every frame per bot was the perf sink.
+        const threat = getThreatThrottled(this, myTeam);
         const flagDist = flagGrabDistance(this, mission);
         // Prefer flag snatch when almost on it — don't get stuck dueling and never grab
         const nearFlag = !!(mission.grabTeam && flagDist < FLAG_GRAB_RANGE + 0.8);

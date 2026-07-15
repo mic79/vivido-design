@@ -12,6 +12,18 @@
   const SHOT_STRENGTH = 1;
   const FLASH_MS = 280;
 
+  // Fast shot registration: use the cheap per-frame capsule aim preview instead of the
+  // expensive skinned-mesh raycast on each fire. ON by default (fixes the shooting-
+  // characters hitch). __capvrShooterFastHit is the boolean state; flip it live with
+  // __capvrShooterFast(true|false) to compare precision vs. cost.
+  if (window.__capvrShooterFastHit === undefined) window.__capvrShooterFastHit = true;
+  window.__capvrShooterFast = function (on) {
+    window.__capvrShooterFastHit = (on !== false);
+    console.log('[CapVR] shooter fast-hit ' +
+      (window.__capvrShooterFastHit ? 'ON (capsule, no skinned raycast)' : 'OFF (precise skinned raycast)'));
+    return window.__capvrShooterFastHit;
+  };
+
   AFRAME.registerComponent('ragdoll-shooter', {
     schema: {
       desktopKey: { type: 'string', default: 'KeyH' }
@@ -338,11 +350,19 @@
      * Register damage from the skinned-mesh ray. Capsule preview is aim-assist only —
      * using it for hits made chest shots land on the oversized head/neck capsules.
      */
-    _resolveShotHit: function (comp, fromVrHand) {
-      if (comp?.raycastFromShot) {
-        const meshHit = comp.raycastFromShot(this._rayOri, this._rayDir, MAX_RANGE);
-        if (meshHit) return meshHit;
-      }
+  _resolveShotHit: function (comp, fromVrHand) {
+    // FAST PATH (default on): skip raycastFromShot. That call runs
+    // THREE.Raycaster.intersectObject() against the ~55k-tri SKINNED character mesh,
+    // which re-skins every vertex through its bones on the render thread — a 10–30 ms
+    // hitch per shot whenever the aim ray is on a character. That is the measured
+    // shooting-characters fps dip (ragdoll-shooter.tock spiking to 1–1.6 ms avg,
+    // frames latching to 36 fps). The capsule preview below is already computed every
+    // frame and is effectively free. Toggle back to precise mesh hits: __capvrShooterFastHit(false).
+    const fastHit = window.__capvrShooterFastHit !== false;
+    if (!(fastHit && fromVrHand) && comp?.raycastFromShot) {
+      const meshHit = comp.raycastFromShot(this._rayOri, this._rayDir, MAX_RANGE);
+      if (meshHit) return meshHit;
+    }
 
       // Fallback when the mesh is thin/misses but the aim line was clearly on the dummy.
       const preview = fromVrHand ? this._vrAimPreview : null;
