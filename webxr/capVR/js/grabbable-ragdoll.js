@@ -174,7 +174,13 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     // Debug: limb capsules used for hand-vs-character collision.
     showCollisionWireframe: { type: 'boolean', default: false },
     // Hand only queries character limbs within this radius of the palm (metres).
-    handMeshQueryRadius: { type: 'number', default: 0.32 }
+    handMeshQueryRadius: { type: 'number', default: 0.32 },
+    /**
+     * CapVR combat bots: false — grip must NOT spawn a physics ragdoll.
+     * body-rigged4 grab-dummy: true (default) — grip picks up and spawns human.
+     * Combat death/collapse still calls _spawnRagdoll({ collapse: true }).
+     */
+    allowPalmGrab: { type: 'boolean', default: true }
   },
 
   init: function () {
@@ -1058,6 +1064,10 @@ AFRAME.registerComponent('grabbable-ragdoll', {
   },
 
   _syncLimbCollisionDebug: function (activeIdx, contact) {
+    // CapVR bots / no debug: skip entirely (was still creating hold-highlight groups every frame).
+    if (!this.data.showCollisionWireframe && this._heldHandCount() === 0) {
+      return;
+    }
     // Hold markers always update (even if limb wires are hidden).
     if (!this.data.showCollisionWireframe) {
       if (this._limbDebugGroup) {
@@ -3482,7 +3492,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     this._lastDt = dt;
 
     if (this._shards?.length && window.RagdollShatter?.syncShards) {
-      window.RagdollShatter.syncShards(this._shards, this.b3, dt, this.legIk?.queries, {
+      window.RagdollShatter.syncShards(this._shards, this.b3, dt, this.legIk?.queries || window.CapVRPhysics?.get?.()?.queries, {
         root: this._shardRoot,
         refMesh: this._shatterRefMesh || this._shards[0]?.mesh,
         spaceInverse: this._shardsWorldSpace ? null : this._shatterSpaceInverse,
@@ -3490,11 +3500,14 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       });
     }
 
-    // Grip + hand pose must run while idle too — tock uses this for first grab → ragdoll spawn.
-    ['left', 'right'].forEach((hand) => {
-      this._updateHand(hand, dt);
-      this._grabPressed[hand] = this._isGrabPressed(hand);
-    });
+    const palmGrab = this.data.allowPalmGrab !== false;
+    // Player hand tracking only when this instance is a grab-dummy (or already a live ragdoll hold).
+    if (palmGrab || this.ragdollActive) {
+      ['left', 'right'].forEach((hand) => {
+        this._updateHand(hand, dt);
+        this._grabPressed[hand] = this._isGrabPressed(hand);
+      });
+    }
 
     if (!this.ragdollActive) {
       this._updateHitReactions(dt);
@@ -3508,10 +3521,8 @@ AFRAME.registerComponent('grabbable-ragdoll', {
         this._applyZeroGLegs(dt);
       }
       this._applyHitReactionsToPose();
-      if (this.skeleton) this.skeleton.update();
+      // Avoid a second full skeleton pass — hit-react already had one update above.
       if (this.model) this.model.updateMatrixWorld(true);
-      // Always refresh limb wires from the live mesh — never leave them frozen
-      // in world space when the character moves (grab used to skip this path).
       this._syncLimbCollisionDebug(this._lastLimbHitIdx, this._lastLimbContact);
       this._lastLimbHitIdx = -1;
       this._lastLimbContact = null;
@@ -3538,29 +3549,35 @@ AFRAME.registerComponent('grabbable-ragdoll', {
   tock: function (time, deltaTime) {
     if (!this.modelLoaded || !this.b3) return;
     const dt = Math.min(deltaTime / 1000, 0.05);
+    const palmGrab = this.data.allowPalmGrab !== false;
 
-    const palmProbe = this._rayOrigin;
-    const palmContact = this._bonePosTmp;
+    // Combat bots: no palm-grip → ragdoll. Death/collapse still enables ragdollActive.
+    if (palmGrab || this.ragdollActive) {
+      const palmProbe = this._rayOrigin;
+      const palmContact = this._bonePosTmp;
 
-    ['left', 'right'].forEach((hand) => {
-      const pressed = this._isGrabPressed(hand);
-      this._grabPressed[hand] = pressed;
-      if (!pressed || this._held[hand] >= 0) return;
-      if (performance.now() < (this._grabCooldownUntil || 0)) return;
-      const query = this._getPlayerPalm(hand, palmProbe, palmContact)
-        ? palmContact
-        : this._handPos[hand];
-      const idx = this._nearestTarget(query);
-      if (idx < 0) return;
-      if (!this.ragdollActive) {
-        if (!this._spawnRagdoll()) return;
+      if (palmGrab) {
+        ['left', 'right'].forEach((hand) => {
+          const pressed = this._isGrabPressed(hand);
+          this._grabPressed[hand] = pressed;
+          if (!pressed || this._held[hand] >= 0) return;
+          if (performance.now() < (this._grabCooldownUntil || 0)) return;
+          const query = this._getPlayerPalm(hand, palmProbe, palmContact)
+            ? palmContact
+            : this._handPos[hand];
+          const idx = this._nearestTarget(query);
+          if (idx < 0) return;
+          if (!this.ragdollActive) {
+            if (!this._spawnRagdoll()) return;
+          }
+          this._held[hand] = idx;
+          this._attachBody(hand, idx, query);
+        });
       }
-      this._held[hand] = idx;
-      this._attachBody(hand, idx, query);
-    });
 
-    if (this._heldHandCount() > 0) {
-      this._repinHeldBodies();
+      if (this._heldHandCount() > 0) {
+        this._repinHeldBodies();
+      }
     }
 
     if (this.ragdollActive && this.human && this.retargetState && window.Box3DRagdollRetarget) {
@@ -3574,7 +3591,6 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       if (this._zeroGLegModeBlend > 0.001 || this._isZeroGMode()) {
         this._applyZeroGLegsRagdoll(dt);
       }
-      // After retarget so wires stay glued to the visible mesh while holding.
       this._syncLimbCollisionDebug(this._lastLimbHitIdx, this._lastLimbContact);
       this._lastLimbHitIdx = -1;
       this._lastLimbContact = null;

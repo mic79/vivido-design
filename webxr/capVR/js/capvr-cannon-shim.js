@@ -311,63 +311,76 @@
       }
     }
 
-    /** Sync JS ↔ Box3D without stepping (used by [capvr-physics]). */
-    syncBodies(phys) {
+    /** Sync JS → Box3D (push only). Pull + contacts happen after step in [capvr-physics]. */
+    syncBodiesToB3(phys) {
       if (!phys?.world) return;
       this.bodies.forEach((b) => {
         if (!b._b3Body) b._ensureB3(phys);
         if (b.mass > 0 && b._b3Body) b._syncToB3(phys);
       });
+    }
+
+    syncBodiesFromB3(phys) {
+      if (!phys?.world) return;
       this.bodies.forEach((b) => {
         if (b._b3Body) b._syncFromB3(phys);
       });
+    }
+
+    /** @deprecated use syncBodiesToB3 / syncBodiesFromB3 — kept for old callers */
+    syncBodies(phys) {
+      this.syncBodiesToB3(phys);
+      this.syncBodiesFromB3(phys);
       this._emitProximityCollides();
     }
 
-    step(dt) {
-      // No-op for Box3D stepping. [capvr-physics] steps once/frame.
-      // Old 240Hz physics-world multi-step was stepping Box3D many times/frame.
-      const phys = window.CapVRPhysics?.get?.();
-      if (!phys?.world) return;
-      // Cheap mid-frame sync only if capvr-physics hasn't run yet this frame
-      if (!phys._capvrFrameSynced) {
-        this.syncBodies(phys);
-        phys._capvrFrameSynced = true;
-      }
+    step(/* dt */) {
+      // True no-op. BoltVR's physics-world still calls world.step() up to 8×/frame;
+      // CapVR must NOT sync/emit here (that was waking every body + spam collide mid-frame).
+      // [capvr-physics] owns the single Box3D step.
+    }
+
+    _pairKey(a, b) {
+      const ia = this.bodies.indexOf(a);
+      const ib = this.bodies.indexOf(b);
+      return ia < ib ? ia + ':' + ib : ib + ':' + ia;
     }
 
     _emitProximityCollides() {
+      // Mimic Cannon beginContact: fire collide once when a pair enters proximity,
+      // not every frame while overlapping (old CapVR shim bug).
+      if (!this._activePairs) this._activePairs = new Set();
+      const next = new Set();
       const balls = this.bodies.filter((b) => b.mass > 0 && b.shape?.type === 'sphere' && b.el);
-      const others = this.bodies.filter((b) => b !== balls[0] && b.el);
       for (const ball of balls) {
         const br = ball.shape.radius || 0.1;
         for (const other of this.bodies) {
           if (other === ball || !other.el) continue;
-          // Goals: sensor check
+          let hit = false;
           if (other.mass === 0 && other.shape?.type === 'cylinder') {
             const dx = ball.position.x - other.position.x;
             const dz = ball.position.z - other.position.z;
             const dy = Math.abs(ball.position.y - other.position.y);
             const r = other.shape.radiusTop || 0.8;
-            if (Math.hypot(dx, dz) < r + br && dy < 1.5) {
-              ball._emit('collide', { body: other, target: ball, type: 'collide' });
-              other._emit('collide', { body: ball, target: other, type: 'collide' });
-            }
-            continue;
+            hit = Math.hypot(dx, dz) < r + br && dy < 1.5;
+          } else if (other.mass > 0) {
+            const or = other.shape?.radius || 0.2;
+            const d = Math.hypot(
+              ball.position.x - other.position.x,
+              ball.position.y - other.position.y,
+              ball.position.z - other.position.z
+            );
+            hit = d < br + or + 0.05;
           }
-          if (other.mass <= 0) continue;
-          const or = other.shape?.radius || 0.2;
-          const d = Math.hypot(
-            ball.position.x - other.position.x,
-            ball.position.y - other.position.y,
-            ball.position.z - other.position.z
-          );
-          if (d < br + or + 0.05) {
-            ball._emit('collide', { body: other, target: ball, type: 'collide' });
-            other._emit('collide', { body: ball, target: other, type: 'collide' });
-          }
+          if (!hit) continue;
+          const key = this._pairKey(ball, other);
+          next.add(key);
+          if (this._activePairs.has(key)) continue; // still overlapping — skip
+          ball._emit('collide', { body: other, target: ball, type: 'collide' });
+          other._emit('collide', { body: ball, target: other, type: 'collide' });
         }
       }
+      this._activePairs = next;
     }
   }
 

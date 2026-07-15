@@ -29,10 +29,10 @@
     <script src="js/box3d-ragdoll-retarget.js"></script>
     <script src="js/gravity-mode.js"></script>
     <script src="js/box3d-physics-world.js"></script>
-    <script src="js/capvr-box3d-ext.js"></script>
-    <script src="js/capvr-physics.js?v=lean1"></script>
+    <script src="js/capvr-box3d-ext.js?v=wake1"></script>
+    <script src="js/capvr-physics.js?v=lean2"></script>
     <script src="js/zerog-legs.js"></script>
-    <script src="js/grabbable-ragdoll.js?v=ragdoll1"></script>
+    <script src="js/grabbable-ragdoll.js?v=nograb1"></script>
     <script src="js/body-foundation.js"></script>
     <script>
       // Early CapVR hand-id bridge (before scene entities init mixamo-body).
@@ -51,7 +51,7 @@
         };
       })();
     </script>
-    <script src="js/capvr-cannon-shim.js"></script>
+    <script src="js/capvr-cannon-shim.js?v=contact1"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://unpkg.com/aframe-glow-component@1.0.0/dist/aframe-glow-component.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/FBXLoader.js"></script>
@@ -22251,7 +22251,7 @@ function setGameplayHUD(isPlaying) {
                 class="combatant"
                 data-team="red"
                 data-bot-id="zerog-bot-red"
-                grabbable-ragdoll="x: -2; y: 0; z: -30; modelPath: character.glb; showCollisionWireframe: false"
+                grabbable-ragdoll="x: -2; y: 0; z: -30; modelPath: character.glb; showCollisionWireframe: false; allowPalmGrab: false"
                 visible="true">
       </a-entity>
 
@@ -22259,7 +22259,7 @@ function setGameplayHUD(isPlaying) {
                 class="combatant"
                 data-team="blue"
                 data-bot-id="zerog-bot-blue"
-                grabbable-ragdoll="x: 2; y: 0; z: 30; modelPath: character.glb; showCollisionWireframe: false"
+                grabbable-ragdoll="x: 2; y: 0; z: 30; modelPath: character.glb; showCollisionWireframe: false; allowPalmGrab: false"
                 visible="true">
       </a-entity>
 
@@ -22267,7 +22267,7 @@ function setGameplayHUD(isPlaying) {
                 class="combatant"
                 data-team="blue"
                 data-bot-id="zerog-bot-green"
-                grabbable-ragdoll="x: -2; y: 0; z: 30; modelPath: character.glb; showCollisionWireframe: false"
+                grabbable-ragdoll="x: -2; y: 0; z: 30; modelPath: character.glb; showCollisionWireframe: false; allowPalmGrab: false"
                 visible="true">
       </a-entity>
 
@@ -23288,7 +23288,7 @@ function setGameplayHUD(isPlaying) {
     <script src="js/capvr-ctf-rules.js?v=flagux3"></script>
     <script src="js/capvr-combat.js?v=nocyl1"></script>
     <script src="js/capvr-boot.js?v=noleg1"></script>
-    <script src="js/capvr-bot-form.js?v=state2"></script>
+    <script src="js/capvr-bot-form.js?v=nostack1"></script>
     <script src="js/capvr-mp.js?v=nophantom1"></script>
     <script src="js/capvr-arena-fixtures.js?v=fixtures1"></script>
   </body>

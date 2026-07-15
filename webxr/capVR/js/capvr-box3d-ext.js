@@ -256,10 +256,15 @@
     return { x: p.x, y: p.y, z: p.z };
   };
 
-  Proto.setBodyPosition = function (body, x, y, z) {
+  Proto.setBodyPosition = function (body, x, y, z, opts) {
     if (!this.b3 || !body) return;
+    const cur = this.b3.b3Body_GetPosition?.(body);
+    if (cur && Math.abs(cur.x - x) < 1e-6 && Math.abs(cur.y - y) < 1e-6 && Math.abs(cur.z - z) < 1e-6) {
+      return; // identical — do not SetTransform / wake (CapVR shim sync used to kill sleep every frame)
+    }
     const r = this.b3.b3Body_GetRotation?.(body) || { v: { x: 0, y: 0, z: 0 }, s: 1 };
     this.b3.b3Body_SetTransform(body, { x, y, z }, r);
+    if (opts?.wake === false) return;
     if (this.b3.b3Body_SetAwake) this.b3.b3Body_SetAwake(body, true);
   };
 
@@ -269,9 +274,14 @@
     return { x: v.x, y: v.y, z: v.z };
   };
 
-  Proto.setBodyVelocity = function (body, x, y, z) {
+  Proto.setBodyVelocity = function (body, x, y, z, opts) {
     if (!this.b3?.b3Body_SetLinearVelocity || !body) return;
+    const cur = this.b3.b3Body_GetLinearVelocity?.(body);
+    if (cur && Math.abs(cur.x - x) < 1e-5 && Math.abs(cur.y - y) < 1e-5 && Math.abs(cur.z - z) < 1e-5) {
+      return;
+    }
     this.b3.b3Body_SetLinearVelocity(body, { x, y, z });
+    if (opts?.wake === false) return;
     if (this.b3.b3Body_SetAwake) this.b3.b3Body_SetAwake(body, true);
   };
 

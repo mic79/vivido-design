@@ -89,26 +89,22 @@
       const phys = this.physics;
       const dt = Math.min((deltaTime || 16.6) / 1000, 0.05);
       const cw = window.CapVRCannonWorld;
-      // Push → step → pull
-      if (cw?.bodies) {
+      // Push only if JS moved the body (setBodyPosition skips identical + no wake).
+      if (cw?.syncBodiesToB3) cw.syncBodiesToB3(phys);
+      else if (cw?.bodies) {
         cw.bodies.forEach((b) => {
           if (!b._b3Body) b._ensureB3?.(phys);
           if (b.mass > 0 && b._b3Body) b._syncToB3?.(phys);
         });
       }
-      phys._capvrFrameSynced = false;
       phys.stepWorld(dt);
-      if (cw?.syncBodies) {
-        cw.bodies.forEach((b) => {
-          if (b._b3Body) b._syncFromB3?.(phys);
-        });
-        cw._emitProximityCollides?.();
-      } else if (cw?.bodies) {
+      if (cw?.syncBodiesFromB3) cw.syncBodiesFromB3(phys);
+      else if (cw?.bodies) {
         cw.bodies.forEach((b) => {
           if (b._b3Body) b._syncFromB3?.(phys);
         });
       }
-      phys._capvrFrameSynced = true;
+      cw?._emitProximityCollides?.();
     }
   });
 
