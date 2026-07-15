@@ -2,7 +2,7 @@
         schema: {
           playerId: { type: 'string', default: 'local' },
           color: { type: 'color', default: '#4A90E2' },
-          modelPath: { type: 'string', default: '../assets/Y Bot.fbx' },
+          modelPath: { type: 'string', default: 'character.glb' },
           isRemote: { type: 'boolean', default: false },
           isBot: { type: 'boolean', default: false },
           hideHead: { type: 'boolean', default: false },
@@ -282,27 +282,66 @@
         },
 
         loadModel: function() {
-          // Load model directly like reference project (NO CACHING)
-          const loader = new THREE.FBXLoader();
-          loader.load(
-            this.data.modelPath,
-            (fbx) => this.onModelLoaded(fbx),
+          const path = this.data.modelPath || 'character.glb';
+          const isGlb = /\.glb$/i.test(path) || /\.gltf$/i.test(path);
+
+          // CapVR pattern: character.glb via GLTFLoader (FBX is optional fallback)
+          if (isGlb) {
+            const tryGltf = () => {
+              const LoaderCtor =
+                (window.BodyRiggedLoaders && window.BodyRiggedLoaders.GLTFLoader) ||
+                (window.THREE && window.THREE.GLTFLoader) ||
+                (window.AFRAME && window.AFRAME.THREE && window.AFRAME.THREE.GLTFLoader);
+              if (!LoaderCtor) {
+                if (!window.BodyRiggedLoaders || !window.BodyRiggedLoaders.ready) {
+                  setTimeout(tryGltf, 50);
+                  return;
+                }
+                console.error('[Body Avatar] No GLTFLoader for', path);
+                return;
+              }
+              new LoaderCtor().load(
+                path,
+                (gltf) => this.onModelLoaded(gltf.scene || gltf, { isGltf: true }),
+                undefined,
+                (error) => console.error('[Body Avatar] GLB load error:', error)
+              );
+            };
+            tryGltf();
+            return;
+          }
+
+          const FBXCtor =
+            (window.BodyRiggedLoaders && window.BodyRiggedLoaders.FBXLoader) ||
+            (window.THREE && window.THREE.FBXLoader);
+          if (!FBXCtor) {
+            console.error('[Body Avatar] No FBXLoader for', path);
+            return;
+          }
+          new FBXCtor().load(
+            path,
+            (fbx) => this.onModelLoaded(fbx, { isGltf: false }),
             undefined,
-            (error) => console.error('[Body Avatar] Load error:', error)
+            (error) => console.error('[Body Avatar] FBX load error:', error)
           );
         },
 
-        onModelLoaded: function(fbx) {
+        onModelLoaded: function(fbx, meta) {
           this.modelLoaded = true;
           this.model = fbx;
-          
-          // Scale and rotate exactly like reference
-          fbx.scale.set(0.01, 0.01, 0.01);
+          this.isGltf = !!(meta && meta.isGltf);
+
+          // FBX Mixamo is cm-scale; CapVR character.glb is already metres
+          if (this.isGltf) {
+            fbx.scale.set(1, 1, 1);
+            fbx.position.y = 0.05;
+          } else {
+            fbx.scale.set(0.01, 0.01, 0.01);
+          }
           fbx.rotation.y = Math.PI;
-          
+
           this.el.object3D.add(fbx);
-          
-          // Set up materials with player color
+
           fbx.traverse((node) => {
             if (node.isSkinnedMesh && node.skeleton) {
               this.skeleton = node.skeleton;
@@ -317,8 +356,12 @@
               node.material.color.set(this.data.color);
             }
           });
-          
-          // console.log(`[Body Avatar] âœ“ Loaded for ${this.data.playerId}`);
+
+          console.log(
+            '[Body Avatar] Loaded for ' +
+              this.data.playerId +
+              (this.isGltf ? ' (glb)' : ' (fbx)')
+          );
         },
 
         mapBones: function() {

@@ -12,6 +12,19 @@
     <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.6.0/dist/aframe-extras.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.0/umd/index.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.173.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.173.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module">
+      import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+      import { FBXLoader as FBXMod } from 'three/addons/loaders/FBXLoader.js';
+      window.BodyRiggedLoaders = { GLTFLoader, FBXLoader: FBXMod, ready: true };
+    </script>
     <script>
       (function () {
         var w = console.warn;
@@ -201,22 +214,22 @@
       <a-entity
         id="remote-body-0"
         visible="false"
-        mixamo-body-avatar="playerId: player_0; color: #44aaff; isRemote: true; hideHead: false; hideBelowGut: false; lod: high; modelPath: ../assets/Y Bot.fbx; ghostTorsoOpacity: 1"
+        mixamo-body-avatar="playerId: player_0; color: #44aaff; isRemote: true; hideHead: false; hideBelowGut: false; lod: high; modelPath: character.glb; ghostTorsoOpacity: 1"
       ></a-entity>
       <a-entity
         id="remote-body-1"
         visible="false"
-        mixamo-body-avatar="playerId: player_1; color: #ff6644; isRemote: true; hideHead: false; hideBelowGut: false; lod: high; modelPath: ../assets/Y Bot.fbx; ghostTorsoOpacity: 1"
+        mixamo-body-avatar="playerId: player_1; color: #ff6644; isRemote: true; hideHead: false; hideBelowGut: false; lod: high; modelPath: character.glb; ghostTorsoOpacity: 1"
       ></a-entity>
       <a-entity
         id="remote-body-2"
         visible="false"
-        mixamo-body-avatar="playerId: player_2; color: #66ddaa; isRemote: true; hideHead: false; hideBelowGut: false; lod: high; modelPath: ../assets/Y Bot.fbx; ghostTorsoOpacity: 1"
+        mixamo-body-avatar="playerId: player_2; color: #66ddaa; isRemote: true; hideHead: false; hideBelowGut: false; lod: high; modelPath: character.glb; ghostTorsoOpacity: 1"
       ></a-entity>
       <a-entity
         id="remote-body-3"
         visible="false"
-        mixamo-body-avatar="playerId: player_3; color: #dd66ff; isRemote: true; hideHead: false; hideBelowGut: false; lod: high; modelPath: ../assets/Y Bot.fbx; ghostTorsoOpacity: 1"
+        mixamo-body-avatar="playerId: player_3; color: #dd66ff; isRemote: true; hideHead: false; hideBelowGut: false; lod: high; modelPath: character.glb; ghostTorsoOpacity: 1"
       ></a-entity>
 
       <a-entity id="player" position="0 0 -8" drift-locomotion="color: #44aaff">
@@ -315,7 +328,7 @@
       <a-entity
         id="local-body"
         visible="true"
-        mixamo-body-avatar="playerId: local; color: #44aaff; hideHead: true; hideBelowGut: true; lod: high; modelPath: ../assets/Y Bot.fbx; ghostTorsoOpacity: 1"
+        mixamo-body-avatar="playerId: local; color: #44aaff; hideHead: true; hideBelowGut: true; lod: high; modelPath: character.glb; ghostTorsoOpacity: 1"
       ></a-entity>
 
       <a-entity id="locomotion-tick" drift-locomotion-tick></a-entity>
