@@ -8,10 +8,10 @@ Everything needed at runtime lives **inside this folder** (no `../assets` depend
 
 | Asset | Path |
 |--------|------|
-| Character (CapVR GLB) | `character.glb` |
+| Character (Mixamo Y Bot) | `YBot.fbx` |
 | Thruster / roll / impact SFX | `audio/` |
 
-Deploy the whole `VRdrift2/` directory (including `character.glb` ~2.7MB and `audio/`).
+Deploy the whole `VRdrift2/` directory (including `YBot.fbx` and `audio/`).
 
 ## Run
 
@@ -20,7 +20,7 @@ Serve this folder (or the parent WebXR tree) over HTTPS/localhost. Open `index.h
 ## What's included
 
 - Box3D body-ball locomotion + palm skate
-- Mixamo-compatible body avatar (`character.glb`)
+- Mixamo Y Bot avatar (`YBot.fbx`, legs hidden via `hideBelowGut`)
 - Soccer-ball textures, floor grid, shadows
 - Full arena (ramp slab, parkour, rails, ceiling)
 - In-VR menu (Solo / Host / Join / lobby / rig height)

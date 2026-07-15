@@ -2,7 +2,7 @@
         schema: {
           playerId: { type: 'string', default: 'local' },
           color: { type: 'color', default: '#4A90E2' },
-          modelPath: { type: 'string', default: 'character.glb' },
+          modelPath: { type: 'string', default: 'YBot.fbx' },
           isRemote: { type: 'boolean', default: false },
           isBot: { type: 'boolean', default: false },
           hideHead: { type: 'boolean', default: false },
@@ -282,35 +282,8 @@
         },
 
         loadModel: function() {
-          const path = this.data.modelPath || 'character.glb';
-          const isGlb = /\.glb$/i.test(path) || /\.gltf$/i.test(path);
-
-          // CapVR pattern: character.glb via GLTFLoader (FBX is optional fallback)
-          if (isGlb) {
-            const tryGltf = () => {
-              const LoaderCtor =
-                (window.BodyRiggedLoaders && window.BodyRiggedLoaders.GLTFLoader) ||
-                (window.THREE && window.THREE.GLTFLoader) ||
-                (window.AFRAME && window.AFRAME.THREE && window.AFRAME.THREE.GLTFLoader);
-              if (!LoaderCtor) {
-                if (!window.BodyRiggedLoaders || !window.BodyRiggedLoaders.ready) {
-                  setTimeout(tryGltf, 50);
-                  return;
-                }
-                console.error('[Body Avatar] No GLTFLoader for', path);
-                return;
-              }
-              new LoaderCtor().load(
-                path,
-                (gltf) => this.onModelLoaded(gltf.scene || gltf, { isGltf: true }),
-                undefined,
-                (error) => console.error('[Body Avatar] GLB load error:', error)
-              );
-            };
-            tryGltf();
-            return;
-          }
-
+          // VRdrift2 uses in-project Mixamo FBX (same upright cm-scale setup as before).
+          const path = this.data.modelPath || 'YBot.fbx';
           const FBXCtor =
             (window.BodyRiggedLoaders && window.BodyRiggedLoaders.FBXLoader) ||
             (window.THREE && window.THREE.FBXLoader);
@@ -320,24 +293,18 @@
           }
           new FBXCtor().load(
             path,
-            (fbx) => this.onModelLoaded(fbx, { isGltf: false }),
+            (fbx) => this.onModelLoaded(fbx),
             undefined,
             (error) => console.error('[Body Avatar] FBX load error:', error)
           );
         },
 
-        onModelLoaded: function(fbx, meta) {
+        onModelLoaded: function(fbx) {
           this.modelLoaded = true;
           this.model = fbx;
-          this.isGltf = !!(meta && meta.isGltf);
 
-          // FBX Mixamo is cm-scale; CapVR character.glb is already metres
-          if (this.isGltf) {
-            fbx.scale.set(1, 1, 1);
-            fbx.position.y = 0.05;
-          } else {
-            fbx.scale.set(0.01, 0.01, 0.01);
-          }
+          // Mixamo FBX is cm-scale — same transform that worked before
+          fbx.scale.set(0.01, 0.01, 0.01);
           fbx.rotation.y = Math.PI;
 
           this.el.object3D.add(fbx);
@@ -357,11 +324,7 @@
             }
           });
 
-          console.log(
-            '[Body Avatar] Loaded for ' +
-              this.data.playerId +
-              (this.isGltf ? ' (glb)' : ' (fbx)')
-          );
+          console.log('[Body Avatar] Loaded for ' + this.data.playerId + ' (fbx)');
         },
 
         mapBones: function() {
