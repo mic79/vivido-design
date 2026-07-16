@@ -161,7 +161,20 @@
       const botEl = document.getElementById(bot);
       const bodyEl = document.getElementById(body);
       if (!botEl || !bodyEl?.object3D) return;
-      if (!botsOn || bodyEl.components?.['grabbable-ragdoll']?.data?.paused) {
+
+      const botComp = botEl.components?.['zerog-bot'];
+      const enabled = !!(botsOn
+        && botComp
+        && botComp.data.enabled !== false
+        && botEl.getAttribute('visible') !== false
+        && botEl.getAttribute('visible') !== 'false');
+
+      // Slot off: force-hide mesh (showCombatMesh used to re-show every frame)
+      if (!enabled || bodyEl.components?.['grabbable-ragdoll']?.data?.paused) {
+        bodyEl.setAttribute('visible', false);
+        if (bodyEl.object3D) bodyEl.object3D.visible = false;
+        const grabOff = bodyEl.components?.['grabbable-ragdoll'];
+        if (grabOff?.model) grabOff.model.visible = false;
         return;
       }
 
@@ -194,6 +207,8 @@
         else grab._driveVel.set(0, 0, 0);
       }
 
+      bodyEl.setAttribute('visible', true);
+      if (bodyEl.object3D) bodyEl.object3D.visible = true;
       showCombatMesh(bodyEl);
       syncBotTargetToHead(botEl, bodyEl, target);
 

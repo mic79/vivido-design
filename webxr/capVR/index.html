@@ -13267,39 +13267,37 @@ function setGameplayHUD(isPlaying) {
                 localBody.components['mixamo-body'] || localBody.components['mixamo-body-avatar']
               );
               if (bodyComponent) {
-                // Get velocity for leg animation
                 const velocity = bodyComponent.headVelocity || new THREE.Vector3();
-                
-                // CRITICAL FIX: Use rig position as body root to prevent "orbiting" during rotation
-                // When player rotates via thumbstick, body should rotate around rig center, not orbit
-                const bodyBasePos = rig ? rig.object3D.getWorldPosition(new THREE.Vector3()) : localBody.object3D.getWorldPosition(new THREE.Vector3());
-                
-                // World yaw-only — full local quat made remotes tip horizontal (pitch/roll + space mismatch)
-                const worldQuat = new THREE.Quaternion();
-                localBody.object3D.getWorldQuaternion(worldQuat);
-                const look = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat);
-                look.y = 0;
-                if (look.lengthSq() < 1e-6) look.set(0, 0, -1);
-                else look.normalize();
-                const yawOnly = new THREE.Quaternion().setFromUnitVectors(
-                  new THREE.Vector3(0, 0, -1),
-                  look
+
+                // Body root = under the headset (same formula as mixamo-body-avatar local path).
+                // Do NOT reuse `worldQuat` — that is the CAMERA quat for head sync.
+                const bodyWorldPos = new THREE.Vector3();
+                if (localBody.object3D) {
+                  localBody.object3D.getWorldPosition(bodyWorldPos);
+                } else if (rig) {
+                  rig.object3D.getWorldPosition(bodyWorldPos);
+                }
+                // CapVR upright: yaw from headset only (never pitch/roll the remote root)
+                const headLook = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat);
+                headLook.y = 0;
+                if (headLook.lengthSq() < 1e-6) headLook.set(0, 0, -1);
+                else headLook.normalize();
+                const bodyYaw = Math.atan2(headLook.x, -headLook.z);
+                const yawOnly = new THREE.Quaternion().setFromEuler(
+                  new THREE.Euler(0, bodyYaw, 0, 'YXZ')
                 );
-                const bodyYaw = new THREE.Euler().setFromQuaternion(yawOnly, 'YXZ').y;
-                
-                // Compile body pose data
+
                 playerState.bodyPose = {
-                  // Body transform (use rig position as anchor point)
-                  bodyX: bodyBasePos.x,
-                  bodyY: bodyBasePos.y,
-                  bodyZ: bodyBasePos.z,
+                  bodyX: bodyWorldPos.x,
+                  bodyY: bodyWorldPos.y,
+                  bodyZ: bodyWorldPos.z,
                   bodyQX: yawOnly.x,
                   bodyQY: yawOnly.y,
                   bodyQZ: yawOnly.z,
                   bodyQW: yawOnly.w,
                   bodyYaw: bodyYaw,
-                  
-                  // Head (for neck/head orientation)
+
+                  // Head = CAMERA world pose (must stay camera — not body)
                   headX: worldPos.x,
                   headY: worldPos.y,
                   headZ: worldPos.z,
@@ -20234,46 +20232,49 @@ function setGameplayHUD(isPlaying) {
           }
           
           const data = this.remotePoseData;
-          
-          // CRITICAL: For remote players, position body at their rig position to avoid "orbiting" effect
-          // When a player rotates via thumbstick, their rig rotates around its center
-          // We want the body to stay at the rig center, not follow the head's orbit
-          
-          // Check if we have rig data (from playerState.rig)
-          // Note: rig data is in data.state.rig, but bodyPose is in data.state.bodyPose
-          // We need to check the parent data structure
-          
-          // Position + yaw-only (never apply full pitched quat — remotes were horizontal)
-          this.el.object3D.position.set(data.bodyX, data.bodyY, data.bodyZ);
-          let yaw = typeof data.bodyYaw === 'number'
-            ? data.bodyYaw
-            : new THREE.Euler().setFromQuaternion(
-                new THREE.Quaternion(data.bodyQX, data.bodyQY, data.bodyQZ, data.bodyQW),
-                'YXZ'
-              ).y;
-          this.el.object3D.rotation.set(0, yaw, 0);
+
+          // CapVR upright remotes (BattleVR/bot style): yaw-only root, never full pitched quat.
+          const headWorldPos = new THREE.Vector3(data.headX, data.headY, data.headZ);
+          const headWorldQuat = new THREE.Quaternion(data.headQX, data.headQY, data.headQZ, data.headQW);
+
+          // Place body under headset (same offsets as local mixamo-body-avatar path)
+          const desiredHipsY = headWorldPos.y - 0.65;
+          const modelHipsLocalY = 1.0;
+          const bodyY = desiredHipsY - modelHipsLocalY;
+          const bodyX = (typeof data.bodyX === 'number') ? data.bodyX : headWorldPos.x;
+          const bodyZ = (typeof data.bodyZ === 'number') ? data.bodyZ : headWorldPos.z;
+          this.el.object3D.position.set(bodyX, bodyY, bodyZ);
+
+          let yaw = typeof data.bodyYaw === 'number' ? data.bodyYaw : null;
+          if (yaw == null) {
+            const look = new THREE.Vector3(0, 0, -1).applyQuaternion(headWorldQuat);
+            look.y = 0;
+            if (look.lengthSq() < 1e-6) look.set(0, 0, -1);
+            else look.normalize();
+            yaw = Math.atan2(look.x, -look.z);
+          }
+          // Force upright — clear any leftover pitch/roll on the Object3D
+          this.el.object3D.rotation.set(0, yaw, 0, 'YXZ');
+          this.el.object3D.quaternion.setFromEuler(this.el.object3D.rotation);
           if (this.model) {
             this.model.rotation.x = 0;
             this.model.rotation.z = 0;
+            // character.glb already has model.rotation.y = π from onModelLoaded
           }
           this.torsoRotation.copy(this.el.object3D.quaternion);
-          
-          // Reconstruct head and hand positions from data
-          const headWorldPos = new THREE.Vector3(data.headX, data.headY, data.headZ);
-          const headWorldQuat = new THREE.Quaternion(data.headQX, data.headQY, data.headQZ, data.headQW);
+          // Remotes stay upright — no velocity lean tipping the mesh
+          this.torsoLean.set(0, 0, 0);
+
           const leftHandWorldPos = new THREE.Vector3(data.lhX, data.lhY, data.lhZ);
           const leftHandWorldQuat = new THREE.Quaternion(data.lhQX, data.lhQY, data.lhQZ, data.lhQW);
           const rightHandWorldPos = new THREE.Vector3(data.rhX, data.rhY, data.rhZ);
           const rightHandWorldQuat = new THREE.Quaternion(data.rhQX, data.rhQY, data.rhQZ, data.rhQW);
-          
-          // Set velocity for leg animation
+
           this.headVelocity.set(data.velX || 0, data.velY || 0, data.velZ || 0);
-          
-          // Update bones
+
           this.updateBones(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos,
                           leftHandWorldQuat, rightHandWorldQuat, dt);
-          
-          // Update finger curls if provided
+
           if (data.fingerCurls) {
             this.currentCurls = data.fingerCurls;
             this.applyFingerCurls('left', this.currentCurls.left);
@@ -20815,7 +20816,9 @@ function setGameplayHUD(isPlaying) {
           if (this.bones.spine || this.bones.spine1 || this.bones.spine2) {
             // Bot spine twist (enhancement #5) - upper body leads turns
             const spineTwistAmount = this.data.isBot && this.botAnimState ? this.botAnimState.spineFlexAmount : 0;
-            
+            // Remotes: keep spine upright (lean was tipping meshes when velocity/IK were noisy)
+            const leanScale = this.data.isRemote ? 0 : 1;
+
             const spineRotations = [
               { bone: this.bones.hips, amount: 1.5, breathingAmount: 0.0, twistAmount: 0.0 },
               { bone: this.bones.spine, amount: -1.0, breathingAmount: 0.3, twistAmount: 0.3 },
@@ -20829,9 +20832,9 @@ function setGameplayHUD(isPlaying) {
                 const spineTwist = spineTwistAmount * twistAmount; // Upper spine twists more
                 
                 const euler = new THREE.Euler(
-                  -totalForwardLean * amount + breathingLean,
+                  (-totalForwardLean * amount + breathingLean) * leanScale,
                   spineTwist, // Y-axis twist for turning
-                  -totalSideLean * amount,
+                  (-totalSideLean * amount) * leanScale,
                   'YXZ'
                 );
                 bone.quaternion.setFromEuler(euler);
@@ -23448,18 +23451,19 @@ function setGameplayHUD(isPlaying) {
       });
       // Function to manage active players and bots
       function manageActivePlayersAndBots() {
-        // Count humans per team so blue human ≠ bot-blue + bot-green (3 blues)
+        // Humans occupy their team — bots ONLY fill teams with zero humans (no teammate bots).
         let redHumans = 0;
         let blueHumans = 0;
         for (let i = 0; i < 4; i++) {
           const id = `player_${i}`;
           const present = !isMultiplayer
-            ? (id === 'player_0' || id === (myPlayerId || 'player_0'))
+            ? (id === (myPlayerId || 'player_0'))
             : (activePlayers.has(id) || id === myPlayerId);
           if (!present) continue;
-          const team = playerTeams.get(id) || (id === (myPlayerId || 'player_0') ? 'red' : null);
+          const team = playerTeams.get(id);
           if (team === 'red') redHumans++;
           else if (team === 'blue') blueHumans++;
+          else if (!isMultiplayer) redHumans++; // default
         }
         if (!isMultiplayer && redHumans + blueHumans === 0) {
           const t = playerTeams.get(myPlayerId || 'player_0') || 'red';
@@ -23467,18 +23471,30 @@ function setGameplayHUD(isPlaying) {
           else redHumans = 1;
         }
 
-        // Aim ~2 per side (fill with bots). bot-red → red; bot-blue then bot-green → blue.
-        const wantRedBots = isGoalieTestMode() ? 0 : Math.max(0, 2 - redHumans);
-        const wantBlueBots = isGoalieTestMode()
-          ? 1
-          : Math.max(0, 2 - blueHumans);
+        const humanCount = redHumans + blueHumans;
+        let botsLeft = isGoalieTestMode() ? 1 : Math.max(0, 4 - humanCount);
+
+        // Empty teams get bots first (balance), never stack a bot on a human's team.
+        let wantRedBots = 0;
+        let wantBlueBots = 0;
+        if (isGoalieTestMode()) {
+          wantBlueBots = 1;
+          botsLeft = 0;
+        } else {
+          if (redHumans === 0 && botsLeft > 0) {
+            wantRedBots = Math.min(2, botsLeft);
+            botsLeft -= wantRedBots;
+          }
+          if (blueHumans === 0 && botsLeft > 0) {
+            wantBlueBots = Math.min(2, botsLeft);
+            botsLeft -= wantBlueBots;
+          }
+        }
 
         const enableMap = {
-          'zerog-bot-red': !isGoalieTestMode() && wantRedBots >= 1,
-          'zerog-bot-blue': isGoalieTestMode()
-            ? true
-            : wantBlueBots >= 1,
-          'zerog-bot-green': !isGoalieTestMode() && wantBlueBots >= 2
+          'zerog-bot-red': wantRedBots >= 1,
+          'zerog-bot-blue': wantBlueBots >= 1 || isGoalieTestMode(),
+          'zerog-bot-green': wantBlueBots >= 2
         };
 
         Object.keys(enableMap).forEach((botId) => {
@@ -23486,8 +23502,17 @@ function setGameplayHUD(isPlaying) {
           if (!bot) return;
           const shouldEnable = !!enableMap[botId];
           bot.setAttribute('visible', shouldEnable);
+          if (bot.object3D) bot.object3D.visible = shouldEnable;
           if (bot.components['zerog-bot']) {
             bot.components['zerog-bot'].data.enabled = shouldEnable;
+            if (!shouldEnable) {
+              const bc = bot.components['zerog-bot'];
+              if (bc.thrusterActive) {
+                bc.thrusterActive.left = false;
+                bc.thrusterActive.right = false;
+              }
+              if (bc.velocity) bc.velocity.set(0, 0, 0);
+            }
           }
           const bodyId = botId === 'zerog-bot-red' ? 'bot-red-body'
             : botId === 'zerog-bot-blue' ? 'bot-blue-body'
@@ -23495,9 +23520,14 @@ function setGameplayHUD(isPlaying) {
           const botBody = document.querySelector(`#${bodyId}`);
           if (!botBody) return;
           botBody.setAttribute('visible', shouldEnable);
+          if (botBody.object3D) botBody.object3D.visible = shouldEnable;
+          try {
+            botBody.setAttribute('grabbable-ragdoll', 'paused', !shouldEnable);
+          } catch (e) { /* */ }
+          const grab = botBody.components?.['grabbable-ragdoll'];
+          if (grab?.model) grab.model.visible = shouldEnable;
           const botTeam = bot.components['zerog-bot']?.data?.team;
           const teamColor = botTeam === 'red' ? '#ff3355' : (botTeam === 'blue' ? '#3388ff' : null);
-          const grab = botBody.components?.['grabbable-ragdoll'];
           if (shouldEnable && teamColor && grab?.model) {
             grab.model.traverse((node) => {
               if (!node.isMesh || !node.material) return;
@@ -23574,9 +23604,9 @@ function setGameplayHUD(isPlaying) {
     </script>
     <!-- CapVR CTF / sticky layer — keeps BoltVR UI, Mixamo bots, arenas, PeerJS -->
     <script src="js/capvr-ctf-rules.js?v=drop30"></script>
-    <script src="js/capvr-combat.js?v=mpteam1"></script>
+    <script src="js/capvr-combat.js?v=mporient2"></script>
     <script src="js/capvr-boot.js?v=noleg1"></script>
-    <script src="js/capvr-bot-form.js?v=aimfwd1"></script>
+    <script src="js/capvr-bot-form.js?v=botslot2"></script>
     <script src="js/capvr-mp.js?v=nophantom1"></script>
     <script src="js/capvr-arena-fixtures.js?v=fixtures1"></script>
   </body>
