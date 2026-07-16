@@ -13281,7 +13281,7 @@ function setGameplayHUD(isPlaying) {
 
                 playerState.bodyPose = {
                   bodyX: worldPos.x,
-                  bodyY: worldPos.y - 1.65,
+                  bodyY: worldPos.y - 1.0,
                   bodyZ: worldPos.z,
                   bodyQX: yawOnly.x,
                   bodyQY: yawOnly.y,
@@ -16363,7 +16363,7 @@ function setGameplayHUD(isPlaying) {
         updateVersionDisplay: function() {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
-            versionDisplay.setAttribute('text', 'value', `Zero-G v1.37 | ${this.fps} FPS`);
+            versionDisplay.setAttribute('text', 'value', `Zero-G v1.38 | ${this.fps} FPS`);
           }
         }
       });
@@ -20159,131 +20159,104 @@ function setGameplayHUD(isPlaying) {
                           leftHandWorldQuat, rightHandWorldQuat, dt);
         },
 
-        _remoteSyntheticHandPos: function(side, anchor, bodyForward, bodyRight) {
-          const out = anchor.clone();
-          out.add(bodyRight.clone().multiplyScalar(side === 'left' ? -0.25 : 0.25));
-          out.add(bodyForward.clone().multiplyScalar(0.2));
-          return out;
-        },
-
         /**
-         * Remote humans must stay upright regardless of HMD pitch or VR hand tracking.
-         * Host/client packing differs (desktop vs Quest) — never feed raw hands/HMD into IK.
-         * Mirror bot path: yaw-only root, synthetic hands, hips identity (not tipped bind pose).
+         * Remote humans — same upright contract as CapVR bots (capvr-bot-form):
+         *   entity: position + yaw only
+         *   model: rotation.y = π (set on load)
+         *   bones: KEEP Mixamo bind pose (never hips.identity — that tips character.glb flat)
+         *   legs: ZeroGLegs rest (same as grabbable-ragdoll bots)
+         * No arm IK / no neck-from-HMD — those paths made remotes horizontal.
          */
-        _applyRemoteRootPose: function(data, headWorldPos) {
-          // Always derive feet from headset — ignore packed bodyY (local-body is feet-anchored
-          // under the rig; VR vs desktop camera local-Y made host/client disagree).
-          const bodyX = headWorldPos.x;
-          const bodyY = headWorldPos.y - 1.65;
-          const bodyZ = headWorldPos.z;
-          this.el.object3D.position.set(bodyX, bodyY, bodyZ);
+        updateRemoteBody: function(dt) {
+          dt = Math.min(dt || 0.016, 0.05);
 
-          const headWorldQuat = new THREE.Quaternion(
-            data.headQX || 0, data.headQY || 0, data.headQZ || 0,
-            (typeof data.headQW === 'number' ? data.headQW : 1)
-          );
-          let yaw = typeof data.bodyYaw === 'number' && Number.isFinite(data.bodyYaw)
-            ? data.bodyYaw
-            : null;
-          if (yaw == null) {
-            const look = new THREE.Vector3(0, 0, -1).applyQuaternion(headWorldQuat);
-            look.y = 0;
-            if (look.lengthSq() < 1e-6) look.set(0, 0, -1);
-            else look.normalize();
-            yaw = Math.atan2(look.x, -look.z);
+          let headX; let headY; let headZ; let yaw;
+
+          if (this.remotePoseData) {
+            const data = this.remotePoseData;
+            headX = data.headX;
+            headY = data.headY;
+            headZ = data.headZ;
+            if (typeof data.bodyYaw === 'number' && Number.isFinite(data.bodyYaw)) {
+              yaw = data.bodyYaw;
+            } else {
+              const hq = new THREE.Quaternion(
+                data.headQX || 0, data.headQY || 0, data.headQZ || 0,
+                (typeof data.headQW === 'number' ? data.headQW : 1)
+              );
+              const look = new THREE.Vector3(0, 0, -1).applyQuaternion(hq);
+              look.y = 0;
+              if (look.lengthSq() < 1e-6) look.set(0, 0, -1);
+              else look.normalize();
+              yaw = Math.atan2(look.x, -look.z);
+            }
+            this.headVelocity.set(data.velX || 0, data.velY || 0, data.velZ || 0);
+          } else {
+            const idx = this.data.playerId && this.data.playerId.split('_')[1];
+            const remotePlayerEntity = idx != null
+              ? document.querySelector('#remote-player-' + idx)
+              : null;
+            if (!remotePlayerEntity) {
+              if (!this.remoteEntityWarned) {
+                console.error(`[Body Avatar] REMOTE PLAYER ENTITY NOT FOUND for ${this.data.playerId}`);
+                this.remoteEntityWarned = true;
+              }
+              return;
+            }
+            const p = new THREE.Vector3();
+            remotePlayerEntity.object3D.getWorldPosition(p);
+            headX = p.x; headY = p.y; headZ = p.z;
+            yaw = this._remoteYawSmooth != null ? this._remoteYawSmooth : 0;
+            this.headVelocity.set(0, 0, 0);
           }
+
+          // Same vertical offset as bot bodies (chest/entity − 1.0 ≈ feet under headset)
+          this.el.object3D.position.set(headX, headY - 1.0, headZ);
+
           if (this._remoteYawSmooth == null) this._remoteYawSmooth = yaw;
           let dy = yaw - this._remoteYawSmooth;
           while (dy > Math.PI) dy -= Math.PI * 2;
           while (dy < -Math.PI) dy += Math.PI * 2;
           this._remoteYawSmooth += dy * Math.min(1, 0.35);
 
-          // Force upright — clear A-Frame attr sync by writing both euler + quat
-          this.el.object3D.rotation.set(0, this._remoteYawSmooth, 0, 'YXZ');
+          // BattleVR / bot-form: yaw ONLY — never pitch/roll the entity
+          this.el.object3D.rotation.set(0, this._remoteYawSmooth, 0);
           this.el.object3D.quaternion.setFromEuler(this.el.object3D.rotation);
-          if (this.model) {
-            this.model.rotation.set(0, Math.PI, 0);
-          }
           this.torsoRotation.copy(this.el.object3D.quaternion);
           this.torsoLean.set(0, 0, 0);
-        },
 
-        updateRemoteBones: function(leftHandPos, rightHandPos, handQuat) {
-          // Same as local mixamo-body / bots: identity hips/spine — Mixamo bind hips can tip
-          // the mesh horizontal if restored verbatim.
-          if (this.bones.hips) {
-            this.bones.hips.quaternion.identity();
-            if (this.initialBonePositions && this.initialBonePositions[this.bones.hips.name]) {
-              this.bones.hips.position.copy(this.initialBonePositions[this.bones.hips.name]);
+          // model.rotation.y = π is set once in onModelLoaded (same as grabbable-ragdoll)
+          if (this.model) {
+            this.model.rotation.x = 0;
+            this.model.rotation.z = 0;
+            if (Math.abs(this.model.rotation.y - Math.PI) > 0.01) {
+              this.model.rotation.y = Math.PI;
             }
           }
-          if (this.bones.spine) this.bones.spine.quaternion.identity();
-          if (this.bones.spine1) this.bones.spine1.quaternion.identity();
-          if (this.bones.spine2) this.bones.spine2.quaternion.identity();
-          if (this.bones.neck) this.bones.neck.quaternion.identity();
-          if (this.bones.head) this.bones.head.quaternion.identity();
 
-          this.solveArmIK('left', leftHandPos, handQuat);
-          this.solveArmIK('right', rightHandPos, handQuat);
+          // Restore bind pose — critical for character.glb (hips are NOT identity)
+          if (this.skeleton && this.initialBoneRotations) {
+            this.skeleton.bones.forEach((bone) => {
+              const q = this.initialBoneRotations[bone.name];
+              if (q) bone.quaternion.copy(q);
+              const p0 = this.initialBonePositions && this.initialBonePositions[bone.name];
+              if (p0) bone.position.copy(p0);
+            });
+          }
 
-          this.applyLegPose('left', this.legPoses.rest);
-          this.applyLegPose('right', this.legPoses.rest);
+          // Same leg driver as upright CapVR bots
+          if (window.ZeroGLegs && this.bones) {
+            if (!this.zeroGLegs) this.zeroGLegs = new window.ZeroGLegs();
+            this.zeroGLegs.update(
+              this.bones,
+              this.headVelocity,
+              this.el.object3D.quaternion,
+              dt,
+              1
+            );
+          }
 
           if (this.skeleton) this.skeleton.update();
-        },
-
-        updateRemoteBody: function(dt) {
-          const resolveRemotePlayerEntity = () => {
-            const idx = this.data.playerId && this.data.playerId.split('_')[1];
-            return idx != null ? document.querySelector('#remote-player-' + idx) : null;
-          };
-
-          const poseFromHead = (headX, headY, headZ, headQX, headQY, headQZ, headQW, bodyYaw) => {
-            const data = {
-              headX, headY, headZ, headQX, headQY, headQZ, headQW, bodyYaw
-            };
-            const headWorldPos = new THREE.Vector3(headX, headY, headZ);
-            this._applyRemoteRootPose(data, headWorldPos);
-
-            const torsoQuat = this.el.object3D.quaternion.clone();
-            const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(torsoQuat);
-            const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(torsoQuat);
-            const chest = this.el.object3D.position.clone();
-            chest.y += 1.0;
-            const leftHand = this._remoteSyntheticHandPos('left', chest, bodyForward, bodyRight);
-            const rightHand = this._remoteSyntheticHandPos('right', chest, bodyForward, bodyRight);
-            const handQuat = torsoQuat.clone().multiply(
-              new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
-            );
-            this.headVelocity.set(0, 0, 0);
-            this.updateRemoteBones(leftHand, rightHand, handQuat);
-          };
-
-          if (!this.remotePoseData) {
-            const remotePlayerEntity = resolveRemotePlayerEntity();
-            if (remotePlayerEntity) {
-              const remoteWorldPos = new THREE.Vector3();
-              remotePlayerEntity.object3D.getWorldPosition(remoteWorldPos);
-              // remote-player entity carries full HMD euler — use position only, never its pitch
-              poseFromHead(
-                remoteWorldPos.x, remoteWorldPos.y, remoteWorldPos.z,
-                0, 0, 0, 1,
-                this._remoteYawSmooth != null ? this._remoteYawSmooth : 0
-              );
-            } else if (!this.remoteEntityWarned) {
-              console.error(`[Body Avatar] REMOTE PLAYER ENTITY NOT FOUND for ${this.data.playerId}`);
-              this.remoteEntityWarned = true;
-            }
-            return;
-          }
-
-          const data = this.remotePoseData;
-          poseFromHead(
-            data.headX, data.headY, data.headZ,
-            data.headQX, data.headQY, data.headQZ, data.headQW,
-            data.bodyYaw
-          );
         },
 
         updateBotBody: function(dt) {
@@ -20774,7 +20747,7 @@ function setGameplayHUD(isPlaying) {
         },
 
         updateBones: function(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat, dt) {
-          // Remotes use updateRemoteBody → updateRemoteBones exclusively (never this path).
+          // Remotes never use this path (updateRemoteBody owns upright pose).
           if (this.data.isRemote) return;
 
           // Reset bones
