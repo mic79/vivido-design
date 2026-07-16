@@ -433,16 +433,20 @@
         }, 2200);
       }
     });
-    // Local tint follows YOUR team (was wrongly forced cyan/white)
+    // Local tint follows YOUR team (re-runnable — team switches must retint)
     const local = document.getElementById('local-body');
-    if (local && !local._capvrVis) {
-      local._capvrVis = true;
+    if (local) {
       const tintLocal = () => {
         const team = window.CapVRGame?.playerTeams?.get?.(localId()) || 'red';
         applyCharacterVisibility(local, team, { local: true });
       };
-      setTimeout(tintLocal, 1200);
-      setTimeout(tintLocal, 4000);
+      if (!local._capvrVisBoot) {
+        local._capvrVisBoot = true;
+        setTimeout(tintLocal, 1200);
+        setTimeout(tintLocal, 4000);
+      } else {
+        tintLocal();
+      }
     }
   }
 
@@ -1991,6 +1995,7 @@
     MAX_HP,
     LASER_DAMAGE,
     STICKY_ATTACH_DAMAGE,
+    applyCharacterVisibility,
     isBotAlive(owner) { return !!botState[owner]?.alive; },
     creditShotHit() { window.CapVRCombat._lastShotAt = performance.now(); },
     hasLineOfSight,

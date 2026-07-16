@@ -1459,6 +1459,108 @@
         }
       }
       
+      function isLocalPlayerId(playerId) {
+        if (!playerId) return false;
+        if (myPlayerId && playerId === myPlayerId) return true;
+        if (!myPlayerId && (playerId === 'player_0' || !isMultiplayer)) return true;
+        return false;
+      }
+
+      /** Slot index among humans on the same team (for staggered spawns). */
+      function teamSpawnSlotIndex(playerId, team) {
+        let idx = 0;
+        for (let i = 0; i < 4; i++) {
+          const id = `player_${i}`;
+          if (id === playerId) return idx;
+          const onTeam = playerTeams.get(id) === team;
+          const present = !isMultiplayer
+            ? (id === 'player_0')
+            : (activePlayers.has(id) || id === myPlayerId);
+          if (onTeam && present) idx++;
+        }
+        return idx;
+      }
+
+      function tintAvatarForTeam(playerId, team) {
+        if (!playerId || !team) return;
+        const apply = window.CapVRCombat?.applyCharacterVisibility;
+        if (isLocalPlayerId(playerId)) {
+          const local = document.getElementById('local-body');
+          if (local && apply) apply(local, team, { local: true });
+          return;
+        }
+        const playerIndex = parseInt(String(playerId).split('_')[1], 10);
+        if (Number.isNaN(playerIndex)) return;
+        const remoteBody = document.getElementById(`remote-body-${playerIndex}`);
+        if (!remoteBody) return;
+        const teamColor = team === 'red' ? '#ff0000' : '#0000ff';
+        const bodyComponent = remoteBody.components?.['mixamo-body-avatar'];
+        if (bodyComponent) bodyComponent.data.color = teamColor;
+        if (apply) {
+          apply(remoteBody, team, { local: false });
+        } else if (bodyComponent?.model && window.CapVRMaterials) {
+          window.CapVRMaterials.applyAvatarTint(bodyComponent.model, { color: teamColor });
+        }
+        setRemoteBodySlotActive(playerIndex, true);
+      }
+
+      function respawnPlayerForTeam(playerId, team) {
+        if (!team) return;
+        const slot = teamSpawnSlotIndex(playerId, team);
+        const spawn = getTeamSpawnPosition(team, slot);
+        if (isLocalPlayerId(playerId)) {
+          placeLocalPlayerAtWorldSpawn(spawn);
+          return spawn;
+        }
+        return spawn;
+      }
+
+      /**
+       * Authoritative team change: map + sphere + mesh tint + optional respawn.
+       * Host also rebalances bots and broadcasts.
+       */
+      function applyPlayerTeamChange(playerId, team, opts) {
+        opts = opts || {};
+        if (!playerId || (team !== 'red' && team !== 'blue')) return null;
+        playerTeams.set(playerId, team);
+        updatePlayerTeamColor(playerId, team);
+        tintAvatarForTeam(playerId, team);
+        let spawn = null;
+        if (opts.respawn !== false) {
+          spawn = respawnPlayerForTeam(playerId, team);
+        }
+        if (isHost || !isMultiplayer) {
+          manageActivePlayersAndBots();
+          // Move bots to fill team slots after human team changes
+          if (typeof spawnAllPlayersAtStartPositions === 'function' && opts.rebalanceBots !== false) {
+            // Only re-place bots (not every human): spawnAll moves local too — skip if
+            // we already respawned the local changer; still need bots relocated.
+            const canMoveBots = !isMultiplayer || isHost;
+            if (canMoveBots) {
+              const counters = { red: 0, blue: 0 };
+              // Reserve human slots first so bots don't stack on humans
+              for (let i = 0; i < 4; i++) {
+                const id = `player_${i}`;
+                const t = playerTeams.get(id);
+                if (!t) continue;
+                const present = !isMultiplayer ? id === 'player_0' : activePlayers.has(id);
+                if (present) counters[t] = (counters[t] || 0) + 1;
+              }
+              ['red', 'blue', 'green'].forEach((color) => {
+                const botEl = document.querySelector(`#zerog-bot-${color}`);
+                if (!botEl?.components?.['zerog-bot']) return;
+                if (botEl.getAttribute('visible') === false || botEl.getAttribute('visible') === 'false') return;
+                const botTeam = botEl.components['zerog-bot'].data.team || (color === 'red' ? 'red' : 'blue');
+                const s = getTeamSpawnPosition(botTeam, counters[botTeam] || 0);
+                counters[botTeam] = (counters[botTeam] || 0) + 1;
+                placeBotAtWorldSpawn(botEl, s);
+              });
+            }
+          }
+        }
+        return spawn;
+      }
+
       // Helper: update player color based on team
       function updatePlayerTeamColor(playerId, team) {
         const teamColors = {
@@ -1469,15 +1571,12 @@
         const color = teamColors[team];
         if (!color) return;
         
-        // CRITICAL FIX: Update LOCAL player target if this is for the current player
-        // In singleplayer, myPlayerId might be null but we still want to update player_0
-        const isLocalPlayer = (playerId === myPlayerId) || (playerId === 'player_0' && !isMultiplayer);
-        if (isLocalPlayer) {
+        if (isLocalPlayerId(playerId)) {
           updateLocalPlayerColor(color);
         }
         
-        // Also update remote player colors if this is for a remote player
-        if (playerId !== myPlayerId) {
+        // Remote sphere / lights (other players only)
+        if (!isLocalPlayerId(playerId)) {
           const playerIndex = parseInt(playerId.split('_')[1]);
           const remoteTarget = document.querySelector(`#remote-target-${playerIndex}`);
           const remoteImpact = document.querySelector(`#remote-impact-${playerIndex}`);
@@ -1779,6 +1878,9 @@
             case 'team-assignments':
               handleTeamAssignments(data);
               break;
+            case 'team-change-ack':
+              handleTeamChangeAck(data);
+              break;
             case 'capture-ball-grabbed':
               handleCaptureBallGrabbed(data);
               // If host receives capture-ball-grabbed from client, broadcast to all other clients
@@ -1976,6 +2078,9 @@
             activePlayers.add(playerId);
           });
         }
+
+        // Rebalance visible bots from host player count (fixes 3 blues on join)
+        manageActivePlayersAndBots();
         
         // If client doesn't have a player ID yet, request assignment
         if (!isHost && !myPlayerId) {
@@ -2001,12 +2106,9 @@
         
         myPlayerId = data.playerId;
         
-        // Set team assignment from host
+        // Set team assignment from host — tint mesh + sphere + spawn on that side
         if (data.team) {
-          playerTeams.set(myPlayerId, data.team);
-          
-          // CRITICAL FIX: Update client's own body color immediately
-          updatePlayerTeamColor(myPlayerId, data.team);
+          applyPlayerTeamChange(myPlayerId, data.team, { respawn: true, rebalanceBots: false });
         }
         
         // Add self to active players
@@ -3740,21 +3842,45 @@
       
       function handleClientTeamSelection(data) {
         // Host receives team selection from client
-        if (!isHost) {
-          return; // Only host should handle client team selections
-        }
-        
-        // Update the team assignment
-        playerTeams.set(data.playerId, data.team);
-        
-        // Update the remote player's color
-        updatePlayerTeamColor(data.playerId, data.team);
-        
-        // Update ball colors
+        if (!isHost || !data?.playerId || !data?.team) return;
+
+        const spawn = applyPlayerTeamChange(data.playerId, data.team, { respawn: false });
         updateBallColors();
-        
-        // Send updated team assignments to all OTHER clients (not back to sender)
-        sendTeamAssignmentsExcept(data.playerId);
+
+        // Tell the changer to respawn (and confirm team); broadcast map to everyone
+        const ack = {
+          type: 'team-change-ack',
+          playerId: data.playerId,
+          team: data.team,
+          spawn: spawn || getTeamSpawnPosition(data.team, teamSpawnSlotIndex(data.playerId, data.team))
+        };
+        connections.forEach((conn) => {
+          if (!conn?.open) return;
+          const pid = connectionToPlayer.get(conn);
+          if (pid === data.playerId) conn.send(ack);
+        });
+        sendTeamAssignments();
+        makeAllRemotePlayersVisible();
+      }
+
+      function handleTeamChangeAck(data) {
+        if (!data?.playerId || !data?.team) return;
+        playerTeams.set(data.playerId, data.team);
+        if (isLocalPlayerId(data.playerId)) {
+          applyPlayerTeamChange(data.playerId, data.team, { respawn: false, rebalanceBots: false });
+          if (data.spawn) placeLocalPlayerAtWorldSpawn(data.spawn);
+          else respawnPlayerForTeam(data.playerId, data.team);
+          updateBallColors();
+          updateTeamDisplay?.();
+          const currentTeamDisplay = document.querySelector('#menu-current-team');
+          if (currentTeamDisplay) {
+            currentTeamDisplay.setAttribute('text', 'value', `Team: ${data.team.toUpperCase()}`);
+            currentTeamDisplay.setAttribute('text', 'color', data.team === 'red' ? '#ff0000' : '#0000ff');
+          }
+        } else {
+          updatePlayerTeamColor(data.playerId, data.team);
+          tintAvatarForTeam(data.playerId, data.team);
+        }
       }
       
       function updateGameModeUI(mode) {
@@ -13148,8 +13274,18 @@ function setGameplayHUD(isPlaying) {
                 // When player rotates via thumbstick, body should rotate around rig center, not orbit
                 const bodyBasePos = rig ? rig.object3D.getWorldPosition(new THREE.Vector3()) : localBody.object3D.getWorldPosition(new THREE.Vector3());
                 
-                // Get body's actual quaternion (includes torso orientation + body tilt)
-                const bodyQuat = localBody.object3D.quaternion;
+                // World yaw-only — full local quat made remotes tip horizontal (pitch/roll + space mismatch)
+                const worldQuat = new THREE.Quaternion();
+                localBody.object3D.getWorldQuaternion(worldQuat);
+                const look = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat);
+                look.y = 0;
+                if (look.lengthSq() < 1e-6) look.set(0, 0, -1);
+                else look.normalize();
+                const yawOnly = new THREE.Quaternion().setFromUnitVectors(
+                  new THREE.Vector3(0, 0, -1),
+                  look
+                );
+                const bodyYaw = new THREE.Euler().setFromQuaternion(yawOnly, 'YXZ').y;
                 
                 // Compile body pose data
                 playerState.bodyPose = {
@@ -13157,10 +13293,11 @@ function setGameplayHUD(isPlaying) {
                   bodyX: bodyBasePos.x,
                   bodyY: bodyBasePos.y,
                   bodyZ: bodyBasePos.z,
-                  bodyQX: bodyQuat.x,
-                  bodyQY: bodyQuat.y,
-                  bodyQZ: bodyQuat.z,
-                  bodyQW: bodyQuat.w,
+                  bodyQX: yawOnly.x,
+                  bodyQY: yawOnly.y,
+                  bodyQZ: yawOnly.z,
+                  bodyQW: yawOnly.w,
+                  bodyYaw: bodyYaw,
                   
                   // Head (for neck/head orientation)
                   headX: worldPos.x,
@@ -16513,37 +16650,29 @@ function setGameplayHUD(isPlaying) {
         },
         
         selectTeam: function(team) {
-          // Set the player's team
+          // Never invent player_0 for a client — wait until host assigns myPlayerId
+          if (isMultiplayer && !isHost && !myPlayerId) {
+            console.warn('[CapVR] selectTeam ignored — no myPlayerId yet');
+            return;
+          }
           const currentPlayerId = myPlayerId || 'player_0';
-          playerTeams.set(currentPlayerId, team);
-          
-          // CRITICAL FIX: Use proper team colors now that green glow is eliminated
-          const teamColor = team === 'red' ? '#ff0000' : '#0000ff';  // Pure red and blue
-          updateLocalPlayerColor(teamColor);
-          
-          // CRITICAL: Force immediate visibility of local player target
+
+          applyPlayerTeamChange(currentPlayerId, team, { respawn: true });
+
           const playerTarget = document.querySelector('#player-target');
-          if (playerTarget) {
-            playerTarget.setAttribute('visible', true);
-          }
-          
-          // Hide only the client's own remote player to prevent self-interference
+          if (playerTarget) playerTarget.setAttribute('visible', true);
+
           if (myPlayerId) {
-            const playerIndex = parseInt(myPlayerId.split('_')[1]);
+            const playerIndex = parseInt(myPlayerId.split('_')[1], 10);
             const remotePlayer = document.querySelector(`#remote-player-${playerIndex}`);
-            if (remotePlayer) {
-              remotePlayer.setAttribute('visible', false);
-            }
+            if (remotePlayer) remotePlayer.setAttribute('visible', false);
           }
-          
-          // Update ball colors for team assignments
+
           updateBallColors();
-          
-          // CRITICAL FIX: Send team change to host if client, or to all clients if host
-          if (isHost) {
+
+          if (isHost || !isMultiplayer) {
             sendTeamAssignments();
           } else {
-            // Client sends their team selection to host
             const hostConnection = connections.get('host');
             if (hostConnection && hostConnection.open) {
               hostConnection.send({
@@ -16553,37 +16682,22 @@ function setGameplayHUD(isPlaying) {
               });
             }
           }
-          
 
-          
-          // Update bot ball assignments for team change
-          const redBot = document.querySelector('#zerog-bot-red');
-          const blueBot = document.querySelector('#zerog-bot-blue');
-          const greenBot = document.querySelector('#zerog-bot-green');
-          if (redBot && redBot.components['zerog-bot']) {
-            redBot.components['zerog-bot'].updateBallAssignment();
-          }
-          if (blueBot && blueBot.components['zerog-bot']) {
-            blueBot.components['zerog-bot'].updateBallAssignment();
-          }
-          if (greenBot && greenBot.components['zerog-bot']) {
-            greenBot.components['zerog-bot'].updateBallAssignment();
-          }
-          
-          // Force release any currently grabbed balls that are no longer owned
+          ['#zerog-bot-red', '#zerog-bot-blue', '#zerog-bot-green'].forEach((sel) => {
+            const bot = document.querySelector(sel);
+            bot?.components?.['zerog-bot']?.updateBallAssignment?.();
+          });
+
           this.releaseNonOwnedBalls();
-          
-          // Update the team display
+
           const currentTeamDisplay = document.querySelector('#menu-current-team');
           if (currentTeamDisplay) {
             currentTeamDisplay.setAttribute('text', 'value', `Team: ${team.toUpperCase()}`);
             currentTeamDisplay.setAttribute('text', 'color', team === 'red' ? '#ff0000' : '#0000ff');
           }
-          
-          // Update button highlighting
+
           const redButton = document.querySelector('#menu-team-red');
           const blueButton = document.querySelector('#menu-team-blue');
-          
           if (redButton && blueButton) {
             if (team === 'red') {
               redButton.setAttribute('material', 'opacity', 1.0);
@@ -20129,13 +20243,19 @@ function setGameplayHUD(isPlaying) {
           // Note: rig data is in data.state.rig, but bodyPose is in data.state.bodyPose
           // We need to check the parent data structure
           
-          // For now, use the body position data as-is since it's already correctly calculated
-          // The body position should represent where the player's torso actually is
+          // Position + yaw-only (never apply full pitched quat — remotes were horizontal)
           this.el.object3D.position.set(data.bodyX, data.bodyY, data.bodyZ);
-          this.el.object3D.quaternion.set(data.bodyQX, data.bodyQY, data.bodyQZ, data.bodyQW);
-          
-          // CRITICAL: Set torsoRotation to match body's world quaternion for correct head orientation
-          // (For remote bodies, the body quaternion IS the world quaternion since body is at root level)
+          let yaw = typeof data.bodyYaw === 'number'
+            ? data.bodyYaw
+            : new THREE.Euler().setFromQuaternion(
+                new THREE.Quaternion(data.bodyQX, data.bodyQY, data.bodyQZ, data.bodyQW),
+                'YXZ'
+              ).y;
+          this.el.object3D.rotation.set(0, yaw, 0);
+          if (this.model) {
+            this.model.rotation.x = 0;
+            this.model.rotation.z = 0;
+          }
           this.torsoRotation.copy(this.el.object3D.quaternion);
           
           // Reconstruct head and hand positions from data
@@ -23184,37 +23304,33 @@ function setGameplayHUD(isPlaying) {
       }
       
       function handleTeamAssignments(data) {
-        // Mark that we received team assignments
         this.teamAssignmentsReceived = true;
-        
-        // Update local team assignments from host
+
         if (data.teams) {
+          // Host is authoritative — apply ALL teams including self (mesh + sphere)
           Object.entries(data.teams).forEach(([playerId, team]) => {
-            // CRITICAL FIX: Completely ignore team assignments for self
-            // Only process team assignments for other players
-            if (playerId !== myPlayerId) {
+            if (team !== 'red' && team !== 'blue') return;
+            // Bots are not humans
+            if (String(playerId).startsWith('bot-')) {
               playerTeams.set(playerId, team);
-              updatePlayerTeamColor(playerId, team);
+              return;
             }
+            playerTeams.set(playerId, team);
+            updatePlayerTeamColor(playerId, team);
+            tintAvatarForTeam(playerId, team);
           });
-          
-          // Update ball colors based on new team assignments
+
           updateBallColors();
-          
-          // Update team display in menu
           updateTeamDisplay();
-          
-          // Update menu display colors
           updateMenuDisplay();
-          
-          // Ensure remote players are visible for hit effects (but hide own remote player)
           makeAllRemotePlayersVisible();
-          
-          // Re-apply team colors after making remote players visible (to prevent color override)
+          manageActivePlayersAndBots();
+
           Object.entries(data.teams).forEach(([playerId, team]) => {
-            if (playerId !== myPlayerId) {
-              updatePlayerTeamColor(playerId, team);
-            }
+            if (String(playerId).startsWith('bot-')) return;
+            if (team !== 'red' && team !== 'blue') return;
+            updatePlayerTeamColor(playerId, team);
+            tintAvatarForTeam(playerId, team);
           });
         }
       }
@@ -23332,74 +23448,69 @@ function setGameplayHUD(isPlaying) {
       });
       // Function to manage active players and bots
       function manageActivePlayersAndBots() {
-        const humanPlayerCount = isMultiplayer ? activePlayers.size : 1;
-        const maxPlayers = 4; // Always 4 players total in both modes
-        const botsNeeded = Math.max(0, maxPlayers - humanPlayerCount); // Aim for 4 total players
-        
-        // Bot management logging disabled to reduce console clutter
+        // Count humans per team so blue human ≠ bot-blue + bot-green (3 blues)
+        let redHumans = 0;
+        let blueHumans = 0;
+        for (let i = 0; i < 4; i++) {
+          const id = `player_${i}`;
+          const present = !isMultiplayer
+            ? (id === 'player_0' || id === (myPlayerId || 'player_0'))
+            : (activePlayers.has(id) || id === myPlayerId);
+          if (!present) continue;
+          const team = playerTeams.get(id) || (id === (myPlayerId || 'player_0') ? 'red' : null);
+          if (team === 'red') redHumans++;
+          else if (team === 'blue') blueHumans++;
+        }
+        if (!isMultiplayer && redHumans + blueHumans === 0) {
+          const t = playerTeams.get(myPlayerId || 'player_0') || 'red';
+          if (t === 'blue') blueHumans = 1;
+          else redHumans = 1;
+        }
 
-        
-        // Get bot entities
-        const redBot = document.querySelector('#zerog-bot-red');
-        const blueBot = document.querySelector('#zerog-bot-blue');
-        const greenBot = document.querySelector('#zerog-bot-green');
-        
-        const bots = [redBot, blueBot, greenBot].filter(bot => bot); // Filter out null bots
-        
-        // Enable/disable bots based on need
-        bots.forEach((bot, index) => {
-          // Goalie test: only the dedicated blue goalie bot is active.
-          const shouldEnable = isGoalieTestMode()
-            ? (bot.id === GOALIE_TEST_BOT_ID)
-            : (index < botsNeeded);
-          if (bot) {
-            bot.setAttribute('visible', shouldEnable);
-            if (bot.components['zerog-bot']) {
-              // Update the component's enabled property directly
-              bot.components['zerog-bot'].data.enabled = shouldEnable;
-            }
-            
-            // CRITICAL: Also show/hide and update bot body entities
-            const botId = bot.getAttribute('id');
-            let botBodyId = null;
-            
-            // Map bot entity ID to body entity ID
-            if (botId === 'zerog-bot-red') {
-              botBodyId = 'bot-red-body';
-            } else if (botId === 'zerog-bot-blue') {
-              botBodyId = 'bot-blue-body';
-            } else if (botId === 'zerog-bot-green') {
-              botBodyId = 'bot-green-body';
-            }
-            
-            if (botBodyId) {
-              const botBody = document.querySelector(`#${botBodyId}`);
-              if (botBody) {
-                botBody.setAttribute('visible', shouldEnable);
-                const botComponent = bot.components['zerog-bot'];
-                const botTeam = botComponent ? botComponent.data.team : null;
-                const teamColor = botTeam === 'red' ? '#ff3355' : (botTeam === 'blue' ? '#3388ff' : null);
-                const grab = botBody.components?.['grabbable-ragdoll'];
-                if (shouldEnable && teamColor && grab?.model) {
-                  grab.model.traverse((node) => {
-                    if (!node.isMesh || !node.material) return;
-                    const mats = Array.isArray(node.material) ? node.material : [node.material];
-                    mats.forEach((m) => {
-                      if (m?.color) m.color.set(teamColor);
-                      if (m?.emissive) m.emissive.set(teamColor);
-                    });
-                  });
-                }
-              }
-            }
+        // Aim ~2 per side (fill with bots). bot-red → red; bot-blue then bot-green → blue.
+        const wantRedBots = isGoalieTestMode() ? 0 : Math.max(0, 2 - redHumans);
+        const wantBlueBots = isGoalieTestMode()
+          ? 1
+          : Math.max(0, 2 - blueHumans);
+
+        const enableMap = {
+          'zerog-bot-red': !isGoalieTestMode() && wantRedBots >= 1,
+          'zerog-bot-blue': isGoalieTestMode()
+            ? true
+            : wantBlueBots >= 1,
+          'zerog-bot-green': !isGoalieTestMode() && wantBlueBots >= 2
+        };
+
+        Object.keys(enableMap).forEach((botId) => {
+          const bot = document.querySelector(`#${botId}`);
+          if (!bot) return;
+          const shouldEnable = !!enableMap[botId];
+          bot.setAttribute('visible', shouldEnable);
+          if (bot.components['zerog-bot']) {
+            bot.components['zerog-bot'].data.enabled = shouldEnable;
+          }
+          const bodyId = botId === 'zerog-bot-red' ? 'bot-red-body'
+            : botId === 'zerog-bot-blue' ? 'bot-blue-body'
+              : 'bot-green-body';
+          const botBody = document.querySelector(`#${bodyId}`);
+          if (!botBody) return;
+          botBody.setAttribute('visible', shouldEnable);
+          const botTeam = bot.components['zerog-bot']?.data?.team;
+          const teamColor = botTeam === 'red' ? '#ff3355' : (botTeam === 'blue' ? '#3388ff' : null);
+          const grab = botBody.components?.['grabbable-ragdoll'];
+          if (shouldEnable && teamColor && grab?.model) {
+            grab.model.traverse((node) => {
+              if (!node.isMesh || !node.material) return;
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              mats.forEach((m) => {
+                if (m?.color) m.color.set(teamColor);
+                if (m?.emissive) m.emissive.set(teamColor);
+              });
+            });
           }
         });
-        
-        // Manage ball visibility
+
         manageBallVisibility();
-        
-        const actualBots = Math.min(botsNeeded, 3); // Now we have 3 bots available
-        const totalPlayers = humanPlayerCount + actualBots;
       }
 
       // Function to manage ball visibility based on active players
@@ -23463,7 +23574,7 @@ function setGameplayHUD(isPlaying) {
     </script>
     <!-- CapVR CTF / sticky layer — keeps BoltVR UI, Mixamo bots, arenas, PeerJS -->
     <script src="js/capvr-ctf-rules.js?v=drop30"></script>
-    <script src="js/capvr-combat.js?v=humanlos1"></script>
+    <script src="js/capvr-combat.js?v=mpteam1"></script>
     <script src="js/capvr-boot.js?v=noleg1"></script>
     <script src="js/capvr-bot-form.js?v=aimfwd1"></script>
     <script src="js/capvr-mp.js?v=nophantom1"></script>
