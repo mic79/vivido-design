@@ -21,7 +21,7 @@
   };
   /** Score when carrier evidence (hand/flag follow pos) is within this radius of goal center. */
   const GOAL_SCORE_RADIUS = 3.0;
-  const DROP_MS = 20000;
+  const DROP_MS = 30000;
   const FLAG_GRAB_DIST = 1.25;
   let lastScoreAt = 0;
   const _prevFlagPos = { red: null, blue: null };
@@ -1452,19 +1452,35 @@
     }
 
     function getPlayerAimPos(out) {
-      // Aim at torso for lead; damage LOS separately requires camera/head clear.
-      const player = document.getElementById('player') || document.getElementById('rig');
-      if (player?.object3D) {
-        player.object3D.getWorldPosition(out);
-        out.y += 1.05;
-        return out;
-      }
+      // #player origin ≈ headset in zero-g — aim at camera (chest = camera - 0.25).
+      // Old player.y+1.05 put the aim point in the ceiling so bots never acquired you.
       const cam = document.getElementById('camera');
       if (cam?.object3D) {
         cam.object3D.getWorldPosition(out);
+        out.y -= 0.25;
+        return out;
+      }
+      const player = document.getElementById('player') || document.getElementById('rig');
+      if (player?.object3D) {
+        player.object3D.getWorldPosition(out);
         return out;
       }
       return null;
+    }
+
+    function ownerCarriesEnemyFlag(ownerId, myTeam) {
+      if (!ownerId || !myTeam) return false;
+      const enemy = myTeam === 'red' ? 'blue' : 'red';
+      return window.CapVRFlags?.getCarrier?.(enemy) === ownerId
+        || sameOwner(window.CapVRFlags?.getCarrier?.(enemy), ownerId);
+    }
+
+    /** Lower score = better target. Prefer humans & flag carriers over bots. */
+    function threatScore(dist, kind, isFlagCarrier) {
+      let s = dist;
+      if (kind === 'player' || kind === 'human') s -= 8;
+      if (isFlagCarrier) s -= 14;
+      return s;
     }
 
     function shooterCanFire(bot) {
@@ -1476,15 +1492,16 @@
       return true;
     }
 
-    /** BattleVR-style facing gate: must roughly face the target to shoot. */
+    /** Must roughly face the target to shoot — same -Z forward as Mixamo / ZeroGLegs. */
     function isFacingTarget(bot, toDir) {
       if (!bot?.el?.object3D || !toDir) return false;
-      const forward = new THREE.Vector3(0, 0, 1);
+      // character.glb + model.rotation.y=π → visual nose is -Z on the bot entity.
+      const forward = new THREE.Vector3(0, 0, -1);
       forward.applyQuaternion(bot.el.object3D.quaternion);
       forward.y = 0;
       if (forward.lengthSq() < 1e-6) return false;
       forward.normalize();
-      // Compare on XZ — upright bots yaw-only (BattleVR did the same style check).
+      // Compare on XZ — upright bots yaw-only.
       const aim = new THREE.Vector3(toDir.x, 0, toDir.z);
       if (aim.lengthSq() < 1e-6) return true; // target nearly above/below — allow
       aim.normalize();
@@ -1560,7 +1577,7 @@
       if (!bot.targetDirection) bot.targetDirection = new THREE.Vector3();
       bot.targetDirection.set(thrustX, thrustY, thrustZ);
       const faceDir = new THREE.Vector3(aimX, 0, aimZ);
-      if (faceDir.lengthSq() < 1e-6) faceDir.set(0, 0, 1);
+      if (faceDir.lengthSq() < 1e-6) faceDir.set(0, 0, -1);
       else faceDir.normalize();
       const facing = typeof bot.rotateTowards === 'function'
         ? bot.rotateTowards(faceDir, dt)
@@ -1597,22 +1614,25 @@
 
     function bestEnemyTarget(bot, myTeam) {
       let best = null;
-      let bestDist = FIRE_RANGE;
+      let bestScore = Infinity;
       const bp = bot.body?.position;
       if (!bp || !inPlayVolume(bp)) return null;
 
       _aimFrom.set(bp.x, bp.y + 0.35, bp.z);
 
       const teamsMap = window.CapVRGame?.playerTeams;
-      // Local human — only if BOTH head and torso are exposed (real cover blocks)
       const localPid = localOwnerId();
       const playerTeam = window.CapVRFlags.resolveTeamForOwner(localPid);
       if (playerTeam && playerTeam !== myTeam && getPlayerAimPos(_aimTo)) {
         if (inPlayVolume(_aimTo)) {
           const d = _aimFrom.distanceTo(_aimTo);
-          if (d < bestDist && hasLosToLocalPlayer(_aimFrom)) {
-            bestDist = d;
-            best = { type: 'player', playerId: localPid, pos: _aimTo.clone(), dist: d };
+          if (d <= FIRE_RANGE && hasLosToLocalPlayer(_aimFrom)) {
+            const carrier = ownerCarriesEnemyFlag(localPid, myTeam);
+            const score = threatScore(d, 'player', carrier);
+            if (score < bestScore) {
+              bestScore = score;
+              best = { type: 'player', playerId: localPid, pos: _aimTo.clone(), dist: d };
+            }
           }
         }
       }
@@ -1633,9 +1653,13 @@
         el.object3D.getWorldPosition(pos);
         if (!inPlayVolume(pos)) continue;
         const d = _aimFrom.distanceTo(pos);
-        if (d < bestDist && hasCombatLos(_aimFrom, pos)) {
-          bestDist = d;
-          best = { type: 'human', playerId: pid, pos: pos.clone(), dist: d };
+        if (d <= FIRE_RANGE && hasCombatLos(_aimFrom, pos)) {
+          const carrier = ownerCarriesEnemyFlag(pid, myTeam);
+          const score = threatScore(d, 'human', carrier);
+          if (score < bestScore) {
+            bestScore = score;
+            best = { type: 'human', playerId: pid, pos: pos.clone(), dist: d };
+          }
         }
       }
 
@@ -1650,16 +1674,20 @@
         if (!inPlayVolume(p)) return;
         const pos = new THREE.Vector3(p.x, (p.y || 0) + 1.0, p.z);
         const d = _aimFrom.distanceTo(pos);
-        if (d < bestDist && hasCombatLos(_aimFrom, pos)) {
-          bestDist = d;
-          best = {
-            type: 'bot',
-            owner,
-            bodyEl: document.getElementById(`${owner}-body`)
-              || document.querySelector(`[data-bot-id="${id}"]`),
-            pos,
-            dist: d
-          };
+        if (d <= FIRE_RANGE && hasCombatLos(_aimFrom, pos)) {
+          const carrier = ownerCarriesEnemyFlag(owner, myTeam);
+          const score = threatScore(d, 'bot', carrier);
+          if (score < bestScore) {
+            bestScore = score;
+            best = {
+              type: 'bot',
+              owner,
+              bodyEl: document.getElementById(`${owner}-body`)
+                || document.querySelector(`[data-bot-id="${id}"]`),
+              pos,
+              dist: d
+            };
+          }
         }
       });
       return best;

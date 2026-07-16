@@ -1142,8 +1142,9 @@
   }
 
   /**
-   * Local player must be exposed at BOTH head (camera) and torso — cover that
-   * hides your view must also stop incoming bot lasers.
+   * Local player exposed at head (camera) + chest below headset.
+   * IMPORTANT: #player origin is already near headset height in zero-g — do NOT
+   * add +1m to it (that aimed into the ceiling and made bots never shoot humans).
    */
   function hasLosToLocalPlayer(fromPos, slack) {
     if (!fromPos) return false;
@@ -1152,19 +1153,13 @@
     const head = new THREE.Vector3();
     const torso = new THREE.Vector3();
     const cam = document.getElementById('camera');
-    if (cam?.object3D) cam.object3D.getWorldPosition(head);
-    else return false;
-    const player = document.getElementById('player') || document.getElementById('rig');
-    if (player?.object3D) {
-      player.object3D.getWorldPosition(torso);
-      torso.y += 1.05;
-    } else {
-      torso.copy(head);
-      torso.y -= 0.35;
-    }
+    if (!cam?.object3D) return false;
+    cam.object3D.getWorldPosition(head);
+    torso.copy(head);
+    torso.y -= 0.4;
     // Head is what you see — if head is blocked you're in cover
     if (!hasCombatLos(from, head, s)) return false;
-    // Torso too (stops “head only” corner cheese the other way)
+    // Chest slightly below headset (not player.y+1 — that was above the skull)
     if (!hasCombatLos(from, torso, s)) return false;
     return true;
   }

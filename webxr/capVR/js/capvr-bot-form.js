@@ -178,12 +178,15 @@
       const y = (p.y || 0) - 1.0;
       bodyEl.object3D.position.set(p.x, y, p.z);
 
+      // Match zerog-bot / ZeroGLegs / character.glb forward (-Z after model yaw π).
+      // Do NOT add +π here — grabbable-ragdoll already applies model.rotation.y = π,
+      // and a second π made the mesh face opposite the aim/fire cone.
       const yaw = botEl.object3D.rotation.y;
-      bodyEl.object3D.rotation.set(0, yaw + Math.PI, 0);
+      bodyEl.object3D.rotation.set(0, yaw, 0);
 
       if (grab) {
         if (grab._entityBasePos) grab._entityBasePos.set(p.x, y, p.z);
-        grab._entityBaseRotY = yaw + Math.PI;
+        grab._entityBaseRotY = yaw;
         if (grab._staticPose?.entityPos) grab._staticPose.entityPos.set(p.x, y, p.z);
         if (!grab._driveVel) grab._driveVel = new THREE.Vector3();
         const bc = botEl.components?.['zerog-bot'];

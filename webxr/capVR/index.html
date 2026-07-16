@@ -8379,14 +8379,15 @@ function setGameplayHUD(isPlaying) {
         // Player-like locomotion methods (3D rotation now handled in rotateTowards)
         
         rotateTowards: function(targetDirection, dt) {
-          // CapVR/BattleVR: yaw only — never pitch/roll the bot (BoltVR used full 3D aim).
+          // CapVR: yaw only — never pitch/roll the bot.
+          // Forward is -Z (Mixamo / character.glb / ZeroGLegs), not +Z.
           const targetDir = new THREE.Vector3(targetDirection.x, 0, targetDirection.z);
           if (targetDir.length() < 0.001) {
             return true;
           }
           targetDir.normalize();
 
-          const currentForward = new THREE.Vector3(0, 0, 1);
+          const currentForward = new THREE.Vector3(0, 0, -1);
           const currentEuler = new THREE.Euler().setFromQuaternion(this.el.object3D.quaternion, 'YXZ');
           currentForward.applyAxisAngle(new THREE.Vector3(0, 1, 0), currentEuler.y);
 
@@ -8429,8 +8430,8 @@ function setGameplayHUD(isPlaying) {
           
           // Simulate left and right thrusters based on navigation needs
           if (this.thrusterActive.left || this.thrusterActive.right) {
-            // Get forward direction from bot orientation (positive Z is forward)
-            const forwardDir = new THREE.Vector3(0, 0, 1);
+            // Mixamo / character.glb forward (-Z), same as local player & fire cone
+            const forwardDir = new THREE.Vector3(0, 0, -1);
             forwardDir.applyQuaternion(this.el.object3D.quaternion);
             
             // CRITICAL FIX: Use same incremental force system as humans
@@ -8498,7 +8499,7 @@ function setGameplayHUD(isPlaying) {
 
           let totalThrust = new THREE.Vector3(0, 0, 0);
           if (this.thrusterActive.left || this.thrusterActive.right) {
-            const forwardDir = new THREE.Vector3(0, 0, 1);
+            const forwardDir = new THREE.Vector3(0, 0, -1);
             forwardDir.applyQuaternion(this.el.object3D.quaternion);
             totalThrust.add(forwardDir.multiplyScalar(this.data.thrusterForce * dt));
           }
@@ -8710,7 +8711,7 @@ function setGameplayHUD(isPlaying) {
           if (moved < 0.15) {
             const fwd = (this.targetDirection && this.targetDirection.length() > 0)
               ? this.targetDirection.clone().normalize()
-              : new THREE.Vector3(0, 0, 1).applyQuaternion(this.el.object3D.quaternion);
+              : new THREE.Vector3(0, 0, -1).applyQuaternion(this.el.object3D.quaternion);
             const up = new THREE.Vector3(0, 1, 0);
             let right = new THREE.Vector3().crossVectors(fwd, up);
             if (right.length() < 0.001) right.set(1, 0, 0); // target dir nearly vertical
@@ -23461,10 +23462,10 @@ function setGameplayHUD(isPlaying) {
       
     </script>
     <!-- CapVR CTF / sticky layer — keeps BoltVR UI, Mixamo bots, arenas, PeerJS -->
-    <script src="js/capvr-ctf-rules.js?v=carryrun1"></script>
-    <script src="js/capvr-combat.js?v=matpool1"></script>
+    <script src="js/capvr-ctf-rules.js?v=drop30"></script>
+    <script src="js/capvr-combat.js?v=humanlos1"></script>
     <script src="js/capvr-boot.js?v=noleg1"></script>
-    <script src="js/capvr-bot-form.js?v=headwall2"></script>
+    <script src="js/capvr-bot-form.js?v=aimfwd1"></script>
     <script src="js/capvr-mp.js?v=nophantom1"></script>
     <script src="js/capvr-arena-fixtures.js?v=fixtures1"></script>
   </body>
