@@ -13261,14 +13261,19 @@ function setGameplayHUD(isPlaying) {
                 playerState.boost = playerComponent.boostActive;
               }
               
-              // Body avatar pose — upright yaw from headset only. Apply side ignores hands/bodyY
-              // (VR client hands + feet-anchored local-body made host see client horizontal).
+              // BoltVR-style bodyPose: upright yaw root + head/hands for remote IK
               {
                 const localBody = document.querySelector('#local-body');
                 const bodyComponent = localBody && (
                   localBody.components['mixamo-body'] || localBody.components['mixamo-body-avatar']
                 );
-                const velocity = (bodyComponent && bodyComponent.headVelocity) || { x: 0, y: 0, z: 0 };
+                let velocity = (bodyComponent && bodyComponent.headVelocity) || { x: 0, y: 0, z: 0 };
+                const zc = document.querySelector('#rig')?.components?.['zerog-locomotion']
+                  || document.querySelector('[zerog-locomotion]')?.components?.['zerog-locomotion'];
+                if (zc?.getVelocity) {
+                  const tv = zc.getVelocity();
+                  if (tv && (tv.x || tv.y || tv.z)) velocity = tv;
+                }
 
                 const headLook = new THREE.Vector3(0, 0, -1).applyQuaternion(worldQuat);
                 headLook.y = 0;
@@ -13279,7 +13284,7 @@ function setGameplayHUD(isPlaying) {
                   new THREE.Euler(0, bodyYaw, 0, 'YXZ')
                 );
 
-                playerState.bodyPose = {
+                const bodyPose = {
                   bodyX: worldPos.x,
                   bodyY: worldPos.y - 1.0,
                   bodyZ: worldPos.z,
@@ -13299,8 +13304,35 @@ function setGameplayHUD(isPlaying) {
 
                   velX: velocity.x || 0,
                   velY: velocity.y || 0,
-                  velZ: velocity.z || 0
+                  velZ: velocity.z || 0,
+
+                  fingerCurls: bodyComponent && bodyComponent.currentCurls
+                    ? JSON.parse(JSON.stringify(bodyComponent.currentCurls))
+                    : null
                 };
+                if (playerState.leftHand) {
+                  bodyPose.lhX = playerState.leftHand.x;
+                  bodyPose.lhY = playerState.leftHand.y;
+                  bodyPose.lhZ = playerState.leftHand.z;
+                  if (leftHand && leftWorldQuat) {
+                    bodyPose.lhQX = leftWorldQuat.x;
+                    bodyPose.lhQY = leftWorldQuat.y;
+                    bodyPose.lhQZ = leftWorldQuat.z;
+                    bodyPose.lhQW = leftWorldQuat.w;
+                  }
+                }
+                if (playerState.rightHand) {
+                  bodyPose.rhX = playerState.rightHand.x;
+                  bodyPose.rhY = playerState.rightHand.y;
+                  bodyPose.rhZ = playerState.rightHand.z;
+                  if (rightHand && rightWorldQuat) {
+                    bodyPose.rhQX = rightWorldQuat.x;
+                    bodyPose.rhQY = rightWorldQuat.y;
+                    bodyPose.rhQZ = rightWorldQuat.z;
+                    bodyPose.rhQW = rightWorldQuat.w;
+                  }
+                }
+                playerState.bodyPose = bodyPose;
               }
               
               sendPlayerState(playerState);
@@ -16363,7 +16395,7 @@ function setGameplayHUD(isPlaying) {
         updateVersionDisplay: function() {
           const versionDisplay = document.getElementById('version-display');
           if (versionDisplay) {
-            versionDisplay.setAttribute('text', 'value', `Zero-G v1.38 | ${this.fps} FPS`);
+            versionDisplay.setAttribute('text', 'value', `Zero-G v1.39 | ${this.fps} FPS`);
           }
         }
       });
@@ -20160,20 +20192,39 @@ function setGameplayHUD(isPlaying) {
         },
 
         /**
-         * Remote humans — same upright contract as CapVR bots (capvr-bot-form):
-         *   entity: position + yaw only
-         *   model: rotation.y = π (set on load)
-         *   bones: KEEP Mixamo bind pose (never hips.identity — that tips character.glb flat)
-         *   legs: ZeroGLegs rest (same as grabbable-ragdoll bots)
-         * No arm IK / no neck-from-HMD — those paths made remotes horizontal.
+         * Remote humans — BoltVR dynamics on CapVR upright contract:
+         *   entity: yaw only (never pitch/roll)
+         *   hips: KEEP character.glb bind pose (hips.identity tips flat)
+         *   arms: solveArmIK from networked hands (BoltVR)
+         *   legs: ZeroGLegs from velocity (same as CapVR bots)
+         *   neck: clamped look from HMD
          */
+        _remoteValidHand: function(x, y, z, headPos) {
+          if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return null;
+          if (x === 0 && y === 0 && z === 0) return null;
+          const dx = x - headPos.x;
+          const dy = y - headPos.y;
+          const dz = z - headPos.z;
+          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (dist < 0.05 || dist > 1.8) return null;
+          return new THREE.Vector3(x, y, z);
+        },
+
+        _remoteSyntheticHand: function(side, chest, forward, right) {
+          const out = chest.clone();
+          out.add(right.clone().multiplyScalar(side === 'left' ? -0.28 : 0.28));
+          out.add(forward.clone().multiplyScalar(0.22));
+          out.y -= 0.05;
+          return out;
+        },
+
         updateRemoteBody: function(dt) {
           dt = Math.min(dt || 0.016, 0.05);
 
           let headX; let headY; let headZ; let yaw;
+          let data = this.remotePoseData;
 
-          if (this.remotePoseData) {
-            const data = this.remotePoseData;
+          if (data) {
             headX = data.headX;
             headY = data.headY;
             headZ = data.headZ;
@@ -20208,9 +20259,10 @@ function setGameplayHUD(isPlaying) {
             headX = p.x; headY = p.y; headZ = p.z;
             yaw = this._remoteYawSmooth != null ? this._remoteYawSmooth : 0;
             this.headVelocity.set(0, 0, 0);
+            data = null;
           }
 
-          // Same vertical offset as bot bodies (chest/entity − 1.0 ≈ feet under headset)
+          const headWorldPos = new THREE.Vector3(headX, headY, headZ);
           this.el.object3D.position.set(headX, headY - 1.0, headZ);
 
           if (this._remoteYawSmooth == null) this._remoteYawSmooth = yaw;
@@ -20219,13 +20271,10 @@ function setGameplayHUD(isPlaying) {
           while (dy < -Math.PI) dy += Math.PI * 2;
           this._remoteYawSmooth += dy * Math.min(1, 0.35);
 
-          // BattleVR / bot-form: yaw ONLY — never pitch/roll the entity
           this.el.object3D.rotation.set(0, this._remoteYawSmooth, 0);
           this.el.object3D.quaternion.setFromEuler(this.el.object3D.rotation);
           this.torsoRotation.copy(this.el.object3D.quaternion);
-          this.torsoLean.set(0, 0, 0);
 
-          // model.rotation.y = π is set once in onModelLoaded (same as grabbable-ragdoll)
           if (this.model) {
             this.model.rotation.x = 0;
             this.model.rotation.z = 0;
@@ -20234,7 +20283,7 @@ function setGameplayHUD(isPlaying) {
             }
           }
 
-          // Restore bind pose — critical for character.glb (hips are NOT identity)
+          // Bind pose first — never hips.identity() on character.glb
           if (this.skeleton && this.initialBoneRotations) {
             this.skeleton.bones.forEach((bone) => {
               const q = this.initialBoneRotations[bone.name];
@@ -20244,7 +20293,81 @@ function setGameplayHUD(isPlaying) {
             });
           }
 
-          // Same leg driver as upright CapVR bots
+          // Mild spine lean on spine bones only (hips stay bind)
+          const invTorso = this.torsoRotation.clone().invert();
+          const localVel = this.headVelocity.clone().applyQuaternion(invTorso);
+          const targetLean = new THREE.Vector3(
+            THREE.MathUtils.clamp(localVel.z * 0.35, -0.2, 0.2),
+            0,
+            THREE.MathUtils.clamp(-localVel.x * 0.3, -0.18, 0.18)
+          );
+          this.torsoLean.lerp(targetLean, Math.min(1, dt * 6));
+          const breathe = Math.sin(this.breathingPhase || 0) * (this.breathingAmount || 0.01);
+          [
+            { bone: this.bones.spine, amount: 0.35, breathe: 0.3 },
+            { bone: this.bones.spine1, amount: 0.45, breathe: 0.4 },
+            { bone: this.bones.spine2, amount: 0.5, breathe: 0.3 }
+          ].forEach(({ bone, amount, breathe: bAmt }) => {
+            if (!bone || !this.initialBoneRotations) return;
+            const base = this.initialBoneRotations[bone.name];
+            if (!base) return;
+            const leanQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+              -this.torsoLean.x * amount - breathe * bAmt,
+              0,
+              -this.torsoLean.z * amount,
+              'YXZ'
+            ));
+            bone.quaternion.copy(base).multiply(leanQ);
+          });
+
+          // Neck from HMD (clamped) — replace local neck rot like BoltVR (torso is already yaw-only)
+          if (this.bones.neck && data) {
+            const headWorldQuat = new THREE.Quaternion(
+              data.headQX || 0, data.headQY || 0, data.headQZ || 0,
+              (typeof data.headQW === 'number' ? data.headQW : 1)
+            );
+            const relative = headWorldQuat.clone().premultiply(this.torsoRotation.clone().invert());
+            const euler = new THREE.Euler().setFromQuaternion(relative, 'YXZ');
+            euler.x = THREE.MathUtils.clamp(-euler.x, -0.55, 0.55);
+            euler.y = THREE.MathUtils.clamp(euler.y, -0.7, 0.7);
+            euler.z = THREE.MathUtils.clamp(-euler.z, -0.25, 0.25);
+            this.bones.neck.quaternion.setFromEuler(euler);
+          }
+
+          this.el.object3D.updateMatrixWorld(true);
+
+          // Hands: networked IK targets (BoltVR) with synthetic fallback
+          const torsoQuat = this.el.object3D.quaternion;
+          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(torsoQuat);
+          const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(torsoQuat);
+          const chest = this.el.object3D.position.clone();
+          chest.y += 1.0;
+
+          let leftPos = data
+            ? this._remoteValidHand(data.lhX, data.lhY, data.lhZ, headWorldPos)
+            : null;
+          let rightPos = data
+            ? this._remoteValidHand(data.rhX, data.rhY, data.rhZ, headWorldPos)
+            : null;
+          if (!leftPos) leftPos = this._remoteSyntheticHand('left', chest, bodyForward, bodyRight);
+          if (!rightPos) rightPos = this._remoteSyntheticHand('right', chest, bodyForward, bodyRight);
+
+          const defaultHandQuat = torsoQuat.clone().multiply(
+            new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
+          );
+          let leftQuat = defaultHandQuat;
+          let rightQuat = defaultHandQuat;
+          if (data && typeof data.lhQW === 'number') {
+            leftQuat = new THREE.Quaternion(data.lhQX || 0, data.lhQY || 0, data.lhQZ || 0, data.lhQW);
+          }
+          if (data && typeof data.rhQW === 'number') {
+            rightQuat = new THREE.Quaternion(data.rhQX || 0, data.rhQY || 0, data.rhQZ || 0, data.rhQW);
+          }
+
+          this.solveArmIK('left', leftPos, leftQuat);
+          this.solveArmIK('right', rightPos, rightQuat);
+
+          // Legs — same driver as CapVR bots
           if (window.ZeroGLegs && this.bones) {
             if (!this.zeroGLegs) this.zeroGLegs = new window.ZeroGLegs();
             this.zeroGLegs.update(
@@ -20254,6 +20377,12 @@ function setGameplayHUD(isPlaying) {
               dt,
               1
             );
+          }
+
+          if (data && data.fingerCurls) {
+            this.currentCurls = data.fingerCurls;
+            if (data.fingerCurls.left) this.applyFingerCurls('left', data.fingerCurls.left);
+            if (data.fingerCurls.right) this.applyFingerCurls('right', data.fingerCurls.right);
           }
 
           if (this.skeleton) this.skeleton.update();
