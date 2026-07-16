@@ -144,6 +144,11 @@
         }
       });
       L.push('-- scene graph -- object3Ds=' + objs + '  meshes=' + meshes + '  uniqueMaterials=' + matSet.size);
+      if (window.CapVRMaterials && typeof window.CapVRMaterials.getStats === 'function') {
+        const ms = window.CapVRMaterials.getStats();
+        L.push('-- CapVRMaterials -- arenaPool=' + ms.arenaPool + '  avatarPool=' + ms.avatarPool +
+          '  lastReplace=' + (ms.last && ms.last.replaced) + '/' + (ms.last && ms.last.kept));
+      }
       const tm = topMeshes(scene.object3D, 14);
       L.push('-- geometry present=' + tm._totalTris + ' tris  |  effectively DRAWN=' + tm._drawnTris +
         ' tris  (hidden by ancestor=' + (tm._totalTris - tm._drawnTris) + ')');

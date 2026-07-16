@@ -374,20 +374,46 @@
     if (!bodyEl?.object3D) return;
     opts = opts || {};
     const hex = team === 'red' ? 0xff2a3a : 0x2a7fff;
-    bodyEl.object3D.traverse((n) => {
-      if (!n.isMesh || !n.material) return;
-      const mats = Array.isArray(n.material) ? n.material : [n.material];
-      mats.forEach((m) => {
-        if (!m) return;
-        if (m.emissive) m.emissive.setHex(hex);
-        if (typeof m.emissiveIntensity === 'number') {
-          m.emissiveIntensity = Math.max(opts.local ? 0.35 : 0.55, m.emissiveIntensity || 0);
-        } else {
-          m.emissiveIntensity = opts.local ? 0.35 : 0.55;
-        }
-        m.needsUpdate = true;
+    const intensity = opts.local ? 0.35 : 0.55;
+    // Local dissolve mutates mats in place — keep private.
+    if (opts.local) {
+      bodyEl.object3D.traverse((n) => {
+        if (!n.isMesh || !n.material) return;
+        const mats = Array.isArray(n.material) ? n.material : [n.material];
+        mats.forEach((m) => {
+          if (!m) return;
+          m.userData = m.userData || {};
+          m.userData.capvrNoShare = true;
+          if (m.emissive) m.emissive.setHex(hex);
+          if (typeof m.emissiveIntensity === 'number') {
+            m.emissiveIntensity = Math.max(intensity, m.emissiveIntensity || 0);
+          } else {
+            m.emissiveIntensity = intensity;
+          }
+          m.needsUpdate = true;
+        });
       });
-    });
+    } else if (window.CapVRMaterials) {
+      window.CapVRMaterials.applyAvatarTint(bodyEl.object3D, {
+        emissive: hex,
+        emissiveIntensity: intensity
+      });
+    } else {
+      bodyEl.object3D.traverse((n) => {
+        if (!n.isMesh || !n.material) return;
+        const mats = Array.isArray(n.material) ? n.material : [n.material];
+        mats.forEach((m) => {
+          if (!m) return;
+          if (m.emissive) m.emissive.setHex(hex);
+          if (typeof m.emissiveIntensity === 'number') {
+            m.emissiveIntensity = Math.max(intensity, m.emissiveIntensity || 0);
+          } else {
+            m.emissiveIntensity = intensity;
+          }
+          m.needsUpdate = true;
+        });
+      });
+    }
     // Remove legacy semi-transparent team cylinders (mesh tint is enough)
     bodyEl.querySelectorAll?.('.capvr-contour').forEach((el) => el.remove());
   }

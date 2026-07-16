@@ -707,7 +707,15 @@ AFRAME.registerComponent('grabbable-ragdoll', {
         node.castShadow = true;
         node.receiveShadow = true;
         node.frustumCulled = false;
-        if (node.material) node.material = node.material.clone();
+        if (node.material) {
+          // Share by look across bots of the same source mesh; team emissive
+          // swaps to a pooled variant in CapVRCombat.applyCharacterVisibility.
+          if (window.CapVRMaterials) {
+            node.material = window.CapVRMaterials.avatarTint(node.material, {});
+          } else {
+            node.material = node.material.clone();
+          }
+        }
       }
       if (node.isSkinnedMesh && node.skeleton) {
         this.skeleton = node.skeleton;

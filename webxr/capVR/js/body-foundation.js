@@ -840,6 +840,10 @@
           this.el.object3D.add(modelRoot);
           
           const allMaterials = [];
+          // Local body dissolves in place — keep private materials.
+          // Mirrors/remotes share by tint via CapVRMaterials.
+          const shareMats = !!(window.CapVRMaterials) && !!this.data.isMirror;
+          const tintOpts = shareMats ? { color: this.data.color } : null;
           modelRoot.traverse((node) => {
             if (node.isMesh) {
               node.castShadow = true;
@@ -853,17 +857,27 @@
               node.frustumCulled = false;
               
               if (node.material) {
-                node.material = node.material.clone();
-                if (this.data.isMirror && node.material.color) {
-                  node.material.color.set(this.data.color);
+                if (shareMats) {
+                  node.material = window.CapVRMaterials.avatarTint(node.material, tintOpts);
+                } else {
+                  node.material = node.material.clone();
+                  node.material.userData.capvrNoShare = true;
+                  if (this.data.isMirror && node.material.color) {
+                    node.material.color.set(this.data.color);
+                  }
                 }
                 allMaterials.push(node.material);
               }
             } else if (node.isMesh) {
               if (node.material) {
-                node.material = node.material.clone();
-                if (this.data.isMirror && node.material.color) {
-                  node.material.color.set(this.data.color);
+                if (shareMats) {
+                  node.material = window.CapVRMaterials.avatarTint(node.material, tintOpts);
+                } else {
+                  node.material = node.material.clone();
+                  node.material.userData.capvrNoShare = true;
+                  if (this.data.isMirror && node.material.color) {
+                    node.material.color.set(this.data.color);
+                  }
                 }
                 allMaterials.push(node.material);
               }

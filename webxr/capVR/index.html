@@ -7,7 +7,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
-    <script src="js/capvr-profiler.js?v=prof5"></script>
+    <script src="js/capvr-profiler.js?v=matpool1"></script>
+    <script src="js/capvr-materials.js?v=matpool1"></script>
     <script type="importmap">
       {
         "imports": {
@@ -33,8 +34,8 @@
     <script src="js/capvr-box3d-ext.js?v=handsurf4"></script>
     <script src="js/capvr-physics.js?v=handsurf4"></script>
     <script src="js/zerog-legs.js"></script>
-    <script src="js/grabbable-ragdoll.js?v=bodygrab1"></script>
-    <script src="js/body-foundation.js?v=handsurf4"></script>
+    <script src="js/grabbable-ragdoll.js?v=matpool1"></script>
+    <script src="js/body-foundation.js?v=matpool1"></script>
     <script>
       // Early CapVR hand-id bridge (before scene entities init mixamo-body).
       (function () {
@@ -2200,9 +2201,8 @@
               if (leftArm) leftArm.setAttribute('visible', false);
               if (rightArm) rightArm.setAttribute('visible', false);
               
-              // CRITICAL: Also hide the remote body for our own slot
-              const remoteBody = document.querySelector(`#remote-body-${i}`);
-              if (remoteBody) remoteBody.setAttribute('visible', false);
+              // Own slot: never load/tick a remote body (local-body is the avatar).
+              setRemoteBodySlotActive(i, false);
               
               console.log(`👤 Hidden own remote player: player_${i}`);
               continue;
@@ -2222,6 +2222,7 @@
                 remotePlayer.setAttribute('position', slot.position);
                 remotePlayer.setAttribute('rotation', slot.rotation);
                 remotePlayer.setAttribute('visible', true);
+                setRemoteBodySlotActive(i, true);
                 
                 console.log(`👤 Showing remote player ${playerId} at ${slot.position} (hasData: ${hasReceivedData}, inActive: ${isInActivePlayers})`);
                 
@@ -2237,8 +2238,10 @@
                     const bodyComponent = remoteBody.components['mixamo-body-avatar'];
                     bodyComponent.data.color = teamColor;
                     
-                    // Update materials directly if model is loaded
-                    if (bodyComponent.model) {
+                    // Swap to pooled team-tint material (do not mutate shared mats)
+                    if (bodyComponent.model && window.CapVRMaterials) {
+                      window.CapVRMaterials.applyAvatarTint(bodyComponent.model, { color: teamColor });
+                    } else if (bodyComponent.model) {
                       bodyComponent.model.traverse((node) => {
                         if (node.isMesh && node.material) {
                           node.material.color.set(teamColor);
@@ -2291,8 +2294,9 @@
                 console.warn(`⚠️ No slot data for player ${playerId}`);
               }
             } else {
-              // Hide if not connected
+              // Hide if not connected — also park the avatar so it does not tick/skin.
               remotePlayer.setAttribute('visible', false);
+              setRemoteBodySlotActive(i, false);
               console.log(`👤 Hidden inactive remote player: player_${i}`);
             }
           } else {
@@ -3002,14 +3006,12 @@
             if (remoteBody) {
               // CRITICAL: Don't show our own remote body - we have local-body for that
               if (data.playerId === myPlayerId) {
-                remoteBody.setAttribute('visible', false);
+                setRemoteBodySlotActive(playerIndex, false);
                 return;
               }
               
-              // Make remote body visible when we receive data from OTHER players
-              remoteBody.setAttribute('visible', true);
-              
-              // Update the avatar component with network data
+              // Activate (lazy-loads) + apply pose for OTHER humans only
+              setRemoteBodySlotActive(playerIndex, true);
               if (remoteBody.components['mixamo-body-avatar']) {
                 remoteBody.components['mixamo-body-avatar'].updateRemotePoseData(data.state.bodyPose);
               }
@@ -4095,6 +4097,12 @@
         const playerToRemove = actualPlayerId || playerId;
         if (playerToRemove) {
           activePlayers.delete(playerToRemove);
+
+          // Park that human avatar slot (stops tick; keeps model cached for rejoins).
+          if (String(playerToRemove).startsWith('player_')) {
+            const leaveIdx = parseInt(String(playerToRemove).split('_')[1], 10);
+            if (!Number.isNaN(leaveIdx)) setRemoteBodySlotActive(leaveIdx, false);
+          }
           
           // Update bot management for new player count
           manageActivePlayersAndBots();
@@ -4116,6 +4124,7 @@
           // Clear current state but keep multiplayer flag
           myPlayerId = null;
           activePlayers.clear();
+          for (let ri = 0; ri < 4; ri++) setRemoteBodySlotActive(ri, false);
           
           // Set a flag to prevent manual mode switches during reconnection
           window.isReconnecting = true;
@@ -8051,9 +8060,15 @@ function setGameplayHUD(isPlaying) {
                 };
                 mat.userData.gridUniforms = u;
                 mat.userData.gridHook = this.buildHook(u);
-                mat.userData.gridKey = 'distance-grid-' + (AFRAME.__gridProgramId = (AFRAME.__gridProgramId || 0) + 1);
+                // ONE shared program family for every distance-grid surface.
+                // Per-material uniforms still differ; Three.js reuses the compiled shader.
+                mat.userData.gridKey = 'distance-grid-shared';
                 mat.userData.gridReHooks = 0;
                 this.hooked.push(u);
+              } else if (mat.userData.gridUniforms &&
+                         this.hooked.indexOf(mat.userData.gridUniforms) < 0) {
+                // Re-register after CapVRMaterials consolidate cleared this.hooked.
+                this.hooked.push(mat.userData.gridUniforms);
               }
 
               // Install our hook and force a recompile whenever it isn't currently active (fresh or
@@ -11602,6 +11617,7 @@ function setGameplayHUD(isPlaying) {
           // Wait a frame for new objects to be fully initialized
           setTimeout(() => {
             this.updateSurfaceCache();
+            if (window.CapVRMaterials) window.CapVRMaterials.scheduleConsolidate(100);
           }, 100);
         },
         
@@ -11624,17 +11640,13 @@ function setGameplayHUD(isPlaying) {
           this.allSurfaces = Array.from(surfaces);
           this.stats.totalSurfaces = this.allSurfaces.length;
           
-          // Store original materials for each surface
+          // Snapshot colors only — do NOT clone (arena materials are pooled for batching).
+          // Debug viz clones lazily when V is pressed.
           this.allSurfaces.forEach(surface => {
             if (!this.originalMaterials.has(surface)) {
               surface.object3D.traverse((node) => {
                 if (node.isMesh && node.material) {
                   if (!this.originalMaterials.has(node)) {
-                    // Clone material to avoid modifying shared materials
-                    if (!node.userData.hasOwnMaterial) {
-                      node.material = node.material.clone();
-                      node.userData.hasOwnMaterial = true;
-                    }
                     this.originalMaterials.set(node, {
                       color: node.material.color ? node.material.color.getHex() : 0x888888,
                       emissive: node.material.emissive ? node.material.emissive.getHex() : 0x000000,
@@ -11645,6 +11657,13 @@ function setGameplayHUD(isPlaying) {
               });
             }
           });
+        },
+
+        _ensureDebugOwnMaterial: function(node) {
+          if (!node || !node.material || node.userData._debugMatBackup) return;
+          node.userData._debugMatBackup = node.material;
+          node.material = node.material.clone();
+          node.userData.hasOwnMaterial = true;
         },
         
         getCulledSurfacesForEntity: function(entityPosition, entityId, entityType) {
@@ -11806,6 +11825,7 @@ function setGameplayHUD(isPlaying) {
             
             surface.object3D.traverse((node) => {
               if (node.isMesh && node.material) {
+                this._ensureDebugOwnMaterial(node);
                 // Ensure material has color and emissive properties
                 if (!node.material.color) {
                   node.material.color = new THREE.Color(0x888888);
@@ -11834,7 +11854,15 @@ function setGameplayHUD(isPlaying) {
         restoreOriginalMaterials: function() {
           this.allSurfaces.forEach(surface => {
             surface.object3D.traverse((node) => {
-              if (node.isMesh && node.material && this.originalMaterials.has(node)) {
+              if (!node.isMesh) return;
+              // Prefer swapping back to the shared/pooled material.
+              if (node.userData._debugMatBackup) {
+                node.material = node.userData._debugMatBackup;
+                delete node.userData._debugMatBackup;
+                delete node.userData.hasOwnMaterial;
+                return;
+              }
+              if (node.material && this.originalMaterials.has(node)) {
                 const original = this.originalMaterials.get(node);
                 
                 // Ensure material has color and emissive properties before restoring
@@ -12053,6 +12081,14 @@ function setGameplayHUD(isPlaying) {
         updateConfigDisplay();
       }
       
+      /** Enable/disable a remote human avatar slot (lazy-loads character.glb on first use). */
+      function setRemoteBodySlotActive(playerIndex, active) {
+        const remoteBody = document.getElementById('remote-body-' + playerIndex);
+        const c = remoteBody?.components?.['mixamo-body-avatar'];
+        if (c?.setSlotActive) c.setSlotActive(!!active);
+        else if (remoteBody) remoteBody.setAttribute('visible', !!active);
+      }
+
       function setCapVrBotBodiesPaused(paused) {
         ['bot-red-body', 'bot-blue-body', 'bot-green-body'].forEach((id) => {
           const el = document.getElementById(id);
@@ -19653,9 +19689,44 @@ function setGameplayHUD(isPlaying) {
           
           // Remote body pose data
           this.remotePoseData = null;
-          
-          // Load model (with caching)
-          this.loadModel();
+
+          // Empty MP slots: do not load/skin until a human occupies the slot.
+          // Local/bot avatars still load immediately.
+          this._slotActive = !this.data.isRemote;
+          this._loadStarted = false;
+          if (this._slotActive) {
+            this._loadStarted = true;
+            this.loadModel();
+          }
+        },
+
+        /**
+         * Activate/deactivate a remote player slot. Inactive = no tick, model hidden
+         * (and never loaded until first activation). Safe to call repeatedly.
+         */
+        setSlotActive: function (active) {
+          active = !!active;
+          if (!this.data.isRemote) {
+            this._slotActive = true;
+            return;
+          }
+          if (this._slotActive === active) {
+            if (active) this.el.setAttribute('visible', true);
+            return;
+          }
+          this._slotActive = active;
+          if (active) {
+            if (!this._loadStarted) {
+              this._loadStarted = true;
+              this.loadModel();
+            }
+            if (this.model) this.model.visible = true;
+            this.el.setAttribute('visible', true);
+          } else {
+            this.remotePoseData = null;
+            this.el.setAttribute('visible', false);
+            if (this.model) this.model.visible = false;
+          }
         },
 
         loadModel: function() {
@@ -19713,20 +19784,34 @@ function setGameplayHUD(isPlaying) {
           
           this.el.object3D.add(fbx);
           
-          // Set up materials with player color
+          // Share materials by tint key (team color) — remotes of same team batch.
+          const tintOpts = { color: this.data.color };
           fbx.traverse((node) => {
             if (node.isSkinnedMesh && node.skeleton) {
               this.skeleton = node.skeleton;
               this.mapBones();
               this.skinnedMesh = node;
-              node.material = node.material.clone();
-              node.material.color.set(this.data.color);
-            }
-            if (node.isMesh && !node.isSkinnedMesh) {
-              node.material = node.material.clone();
-              node.material.color.set(this.data.color);
+              if (node.material && window.CapVRMaterials) {
+                node.material = window.CapVRMaterials.avatarTint(node.material, tintOpts);
+              } else if (node.material) {
+                node.material = node.material.clone();
+                node.material.color.set(this.data.color);
+              }
+            } else if (node.isMesh && node.material) {
+              if (window.CapVRMaterials) {
+                node.material = window.CapVRMaterials.avatarTint(node.material, tintOpts);
+              } else {
+                node.material = node.material.clone();
+                node.material.color.set(this.data.color);
+              }
             }
           });
+
+          // Slot may have been deactivated while the GLB/FBX was in flight.
+          if (this.data.isRemote && !this._slotActive) {
+            fbx.visible = false;
+            this.el.setAttribute('visible', false);
+          }
           
           console.log(`[Body Avatar] ✓ Loaded for ${this.data.playerId}${this.isGltf ? ' (glb)' : ' (fbx)'}`);
         },
@@ -19802,6 +19887,8 @@ function setGameplayHUD(isPlaying) {
         },
 
         tick: function(time, deltaTime) {
+          // Empty human slots: zero cost until setSlotActive(true).
+          if (this.data.isRemote && !this._slotActive) return;
           if (!this.modelLoaded || !this.skeleton) return;
           
           const dt = Math.min(deltaTime / 1000, 0.1);
@@ -21264,6 +21351,7 @@ function setGameplayHUD(isPlaying) {
 
         // Update remote pose data (called by network sync)
         updateRemotePoseData: function(poseData) {
+          if (!this._slotActive) this.setSlotActive(true);
           this.remotePoseData = poseData;
         }
       });
@@ -22295,11 +22383,13 @@ function setGameplayHUD(isPlaying) {
       <!-- Practice / shatter target -->
       <!-- Practice shatter dummy removed from CapVR match — body-rigged lab prop only -->
 
-      <!-- Remote / bot avatars only (local uses #local-body mixamo-body above) -->
+      <!-- Remote human avatars only (local = #local-body; bots = grabbable-ragdoll).
+           Slots lazy-load character.glb when a human joins; empty slots cost ~0. -->
       <a-entity id="remote-body-0" 
                 mixamo-body-avatar="playerId: player_0; 
                                     color: #ff0000; 
-                                    isRemote: true; 
+                                    isRemote: true;
+                                    modelPath: character.glb;
                                     lod: high"
                 visible="false">
       </a-entity>
@@ -22307,7 +22397,8 @@ function setGameplayHUD(isPlaying) {
       <a-entity id="remote-body-1" 
                 mixamo-body-avatar="playerId: player_1; 
                                     color: #00ff00; 
-                                    isRemote: true; 
+                                    isRemote: true;
+                                    modelPath: character.glb;
                                     lod: high"
                 visible="false">
       </a-entity>
@@ -22315,7 +22406,8 @@ function setGameplayHUD(isPlaying) {
       <a-entity id="remote-body-2" 
                 mixamo-body-avatar="playerId: player_2; 
                                     color: #ff00ff; 
-                                    isRemote: true; 
+                                    isRemote: true;
+                                    modelPath: character.glb;
                                     lod: high"
                 visible="false">
       </a-entity>
@@ -22323,7 +22415,8 @@ function setGameplayHUD(isPlaying) {
       <a-entity id="remote-body-3" 
                 mixamo-body-avatar="playerId: player_3; 
                                     color: #ffff00; 
-                                    isRemote: true; 
+                                    isRemote: true;
+                                    modelPath: character.glb;
                                     lod: high"
                 visible="false">
       </a-entity>
@@ -23369,7 +23462,7 @@ function setGameplayHUD(isPlaying) {
     </script>
     <!-- CapVR CTF / sticky layer — keeps BoltVR UI, Mixamo bots, arenas, PeerJS -->
     <script src="js/capvr-ctf-rules.js?v=carryrun1"></script>
-    <script src="js/capvr-combat.js?v=bothit1"></script>
+    <script src="js/capvr-combat.js?v=matpool1"></script>
     <script src="js/capvr-boot.js?v=noleg1"></script>
     <script src="js/capvr-bot-form.js?v=headwall2"></script>
     <script src="js/capvr-mp.js?v=nophantom1"></script>
