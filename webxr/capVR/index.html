@@ -13287,7 +13287,7 @@ function setGameplayHUD(isPlaying) {
                   new THREE.Euler(0, bodyYaw, 0, 'YXZ')
                 );
 
-                playerState.bodyPose = {
+                const bodyPose = {
                   bodyX: bodyWorldPos.x,
                   bodyY: bodyWorldPos.y,
                   bodyZ: bodyWorldPos.z,
@@ -13305,33 +13305,38 @@ function setGameplayHUD(isPlaying) {
                   headQY: worldQuat.y,
                   headQZ: worldQuat.z,
                   headQW: worldQuat.w,
-                  
-                  // Left hand (for arm IK) - FIXED: Use world quaternions
-                  lhX: playerState.leftHand ? playerState.leftHand.x : 0,
-                  lhY: playerState.leftHand ? playerState.leftHand.y : 0,
-                  lhZ: playerState.leftHand ? playerState.leftHand.z : 0,
-                  lhQX: leftHand && leftWorldQuat ? leftWorldQuat.x : 0,
-                  lhQY: leftHand && leftWorldQuat ? leftWorldQuat.y : 0,
-                  lhQZ: leftHand && leftWorldQuat ? leftWorldQuat.z : 0,
-                  lhQW: leftHand && leftWorldQuat ? leftWorldQuat.w : 1,
-                  
-                  // Right hand (for arm IK) - FIXED: Use world quaternions
-                  rhX: playerState.rightHand ? playerState.rightHand.x : 0,
-                  rhY: playerState.rightHand ? playerState.rightHand.y : 0,
-                  rhZ: playerState.rightHand ? playerState.rightHand.z : 0,
-                  rhQX: rightHand && rightWorldQuat ? rightWorldQuat.x : 0,
-                  rhQY: rightHand && rightWorldQuat ? rightWorldQuat.y : 0,
-                  rhQZ: rightHand && rightWorldQuat ? rightWorldQuat.z : 0,
-                  rhQW: rightHand && rightWorldQuat ? rightWorldQuat.w : 1,
-                  
+
                   // Velocity for leg animation
                   velX: velocity.x,
                   velY: velocity.y,
                   velZ: velocity.z,
-                  
+
                   // Optional: Finger curls (can be throttled for bandwidth)
                   fingerCurls: bodyComponent.currentCurls
                 };
+                if (playerState.leftHand) {
+                  bodyPose.lhX = playerState.leftHand.x;
+                  bodyPose.lhY = playerState.leftHand.y;
+                  bodyPose.lhZ = playerState.leftHand.z;
+                  if (leftHand && leftWorldQuat) {
+                    bodyPose.lhQX = leftWorldQuat.x;
+                    bodyPose.lhQY = leftWorldQuat.y;
+                    bodyPose.lhQZ = leftWorldQuat.z;
+                    bodyPose.lhQW = leftWorldQuat.w;
+                  }
+                }
+                if (playerState.rightHand) {
+                  bodyPose.rhX = playerState.rightHand.x;
+                  bodyPose.rhY = playerState.rightHand.y;
+                  bodyPose.rhZ = playerState.rightHand.z;
+                  if (rightHand && rightWorldQuat) {
+                    bodyPose.rhQX = rightWorldQuat.x;
+                    bodyPose.rhQY = rightWorldQuat.y;
+                    bodyPose.rhQZ = rightWorldQuat.z;
+                    bodyPose.rhQW = rightWorldQuat.w;
+                  }
+                }
+                playerState.bodyPose = bodyPose;
               }
               
               sendPlayerState(playerState);
@@ -19931,10 +19936,12 @@ function setGameplayHUD(isPlaying) {
 
         mapBones: function() {
           this.initialBoneRotations = {};
+          this.initialBonePositions = {};
           
           this.skeleton.bones.forEach((bone) => {
             const name = bone.name;
             this.initialBoneRotations[name] = bone.quaternion.clone();
+            this.initialBonePositions[name] = bone.position.clone();
             
             // Map bones EXACTLY like reference project (explicit mappings)
             if (name === this.boneNames.hips) this.bones.hips = bone;
@@ -20188,63 +20195,52 @@ function setGameplayHUD(isPlaying) {
                           leftHandWorldQuat, rightHandWorldQuat, dt);
         },
 
-        updateRemoteBody: function(dt) {
-          // Remote body updates from network data
-          // If no network data yet, position at the remote player entity's location
-          if (!this.remotePoseData) {
-            // Position at remote player entity's initial position
-            let remotePlayerEntity;
-            if (this.data.playerId === 'player_0') {
-              remotePlayerEntity = document.querySelector('#remote-player-0');
-            } else if (this.data.playerId === 'player_1') {
-              remotePlayerEntity = document.querySelector('#remote-player-1');
-            } else if (this.data.playerId === 'player_2') {
-              remotePlayerEntity = document.querySelector('#remote-player-2');
-            } else if (this.data.playerId === 'player_3') {
-              remotePlayerEntity = document.querySelector('#remote-player-3');
-            }
-            
-            if (remotePlayerEntity) {
-              const remoteWorldPos = new THREE.Vector3();
-              remotePlayerEntity.object3D.getWorldPosition(remoteWorldPos);
-              this.el.object3D.position.copy(remoteWorldPos);
-              
-              // Simple idle pose at remote player position
-              const idleHeadPos = remoteWorldPos.clone();
-              idleHeadPos.y += 0.2; // Head offset
-              const idleHeadQuat = new THREE.Quaternion();
-              const idleLeftHand = remoteWorldPos.clone();
-              idleLeftHand.x -= 0.3; // Left hand offset
-              const idleRightHand = remoteWorldPos.clone();
-              idleRightHand.x += 0.3; // Right hand offset
-              
-              this.headVelocity.set(0, 0, 0);
-              this.updateBones(idleHeadPos, idleHeadQuat, idleLeftHand, idleRightHand,
-                              idleHeadQuat, idleHeadQuat, dt);
-            } else {
-              // Debug: entity not found
-              if (!this.remoteEntityWarned) {
-                console.error(`[Body Avatar] ❌ REMOTE PLAYER ENTITY NOT FOUND for ${this.data.playerId}`);
-                this.remoteEntityWarned = true;
-              }
-            }
-            return;
-          }
-          
-          const data = this.remotePoseData;
+        _restoreBindPose: function() {
+          if (!this.skeleton || !this.initialBoneRotations) return;
+          this.skeleton.bones.forEach((bone) => {
+            const initQ = this.initialBoneRotations[bone.name];
+            if (initQ) bone.quaternion.copy(initQ);
+            const initP = this.initialBonePositions && this.initialBonePositions[bone.name];
+            if (initP) bone.position.copy(initP);
+          });
+        },
 
-          // CapVR upright remotes (BattleVR/bot style): yaw-only root, never full pitched quat.
-          const headWorldPos = new THREE.Vector3(data.headX, data.headY, data.headZ);
+        _validRemoteHandPos: function(x, y, z, headPos) {
+          if (typeof x !== 'number' || typeof y !== 'number' || typeof z !== 'number') return null;
+          if (x === 0 && y === 0 && z === 0) return null;
+          const dx = x - headPos.x;
+          const dy = y - headPos.y;
+          const dz = z - headPos.z;
+          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (dist < 0.08 || dist > 1.6) return null;
+          return new THREE.Vector3(x, y, z);
+        },
+
+        _remoteSyntheticHandPos: function(side, anchor, bodyForward, bodyRight) {
+          const out = anchor.clone();
+          out.add(bodyRight.clone().multiplyScalar(side === 'left' ? -0.25 : 0.25));
+          out.add(bodyForward.clone().multiplyScalar(0.2));
+          return out;
+        },
+
+        _remoteHeadQuatForNeck: function(data, torsoQuat) {
           const headWorldQuat = new THREE.Quaternion(data.headQX, data.headQY, data.headQZ, data.headQW);
+          const rel = headWorldQuat.clone().premultiply(torsoQuat.clone().invert());
+          const euler = new THREE.Euler().setFromQuaternion(rel, 'YXZ');
+          euler.x = THREE.MathUtils.clamp(-euler.x, -0.45, 0.45);
+          euler.z = 0;
+          return torsoQuat.clone().multiply(new THREE.Quaternion().setFromEuler(euler));
+        },
 
-          // Place body under headset (same offsets as local mixamo-body-avatar path)
-          const desiredHipsY = headWorldPos.y - 0.65;
-          const modelHipsLocalY = 1.0;
-          const bodyY = desiredHipsY - modelHipsLocalY;
+        _applyRemoteRootPose: function(data, headWorldPos) {
           const bodyX = (typeof data.bodyX === 'number') ? data.bodyX : headWorldPos.x;
+          const bodyY = (typeof data.bodyY === 'number')
+            ? data.bodyY
+            : (headWorldPos.y - 1.65);
           const bodyZ = (typeof data.bodyZ === 'number') ? data.bodyZ : headWorldPos.z;
           this.el.object3D.position.set(bodyX, bodyY, bodyZ);
 
+          const headWorldQuat = new THREE.Quaternion(data.headQX, data.headQY, data.headQZ, data.headQW);
           let yaw = typeof data.bodyYaw === 'number' ? data.bodyYaw : null;
           if (yaw == null) {
             const look = new THREE.Vector3(0, 0, -1).applyQuaternion(headWorldQuat);
@@ -20253,27 +20249,111 @@ function setGameplayHUD(isPlaying) {
             else look.normalize();
             yaw = Math.atan2(look.x, -look.z);
           }
-          // Force upright — clear any leftover pitch/roll on the Object3D
-          this.el.object3D.rotation.set(0, yaw, 0, 'YXZ');
+          if (this._remoteYawSmooth == null) this._remoteYawSmooth = yaw;
+          let dy = yaw - this._remoteYawSmooth;
+          while (dy > Math.PI) dy -= Math.PI * 2;
+          while (dy < -Math.PI) dy += Math.PI * 2;
+          this._remoteYawSmooth += dy * Math.min(1, 0.35);
+
+          this.el.object3D.rotation.set(0, this._remoteYawSmooth, 0, 'YXZ');
           this.el.object3D.quaternion.setFromEuler(this.el.object3D.rotation);
           if (this.model) {
             this.model.rotation.x = 0;
             this.model.rotation.z = 0;
-            // character.glb already has model.rotation.y = π from onModelLoaded
           }
           this.torsoRotation.copy(this.el.object3D.quaternion);
-          // Remotes stay upright — no velocity lean tipping the mesh
           this.torsoLean.set(0, 0, 0);
+        },
 
-          const leftHandWorldPos = new THREE.Vector3(data.lhX, data.lhY, data.lhZ);
-          const leftHandWorldQuat = new THREE.Quaternion(data.lhQX, data.lhQY, data.lhQZ, data.lhQW);
-          const rightHandWorldPos = new THREE.Vector3(data.rhX, data.rhY, data.rhZ);
-          const rightHandWorldQuat = new THREE.Quaternion(data.rhQX, data.rhQY, data.rhQZ, data.rhQW);
+        updateRemoteBones: function(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat) {
+          this._restoreBindPose();
+
+          if (this.bones.neck) {
+            const relativeHeadQuat = headQuat.clone().premultiply(this.torsoRotation.clone().invert());
+            const euler = new THREE.Euler().setFromQuaternion(relativeHeadQuat, 'YXZ');
+            euler.x = THREE.MathUtils.clamp(-euler.x, -0.45, 0.45);
+            euler.z = 0;
+            this.bones.neck.quaternion.setFromEuler(euler);
+          }
+
+          this.solveArmIK('left', leftHandPos, leftHandQuat);
+          this.solveArmIK('right', rightHandPos, rightHandQuat);
+
+          this.applyLegPose('left', this.legPoses.rest);
+          this.applyLegPose('right', this.legPoses.rest);
+
+          if (this.skeleton) this.skeleton.update();
+        },
+
+        updateRemoteBody: function(dt) {
+          const resolveRemotePlayerEntity = () => {
+            const idx = this.data.playerId && this.data.playerId.split('_')[1];
+            return idx != null ? document.querySelector('#remote-player-' + idx) : null;
+          };
+
+          const applyIdleUprightPose = (worldPos) => {
+            const idleData = {
+              headX: worldPos.x,
+              headY: worldPos.y + 0.2,
+              headZ: worldPos.z,
+              headQX: 0, headQY: 0, headQZ: 0, headQW: 1,
+              bodyX: worldPos.x,
+              bodyY: worldPos.y - 1.0,
+              bodyZ: worldPos.z,
+              bodyYaw: this._remoteYawSmooth != null ? this._remoteYawSmooth : 0
+            };
+            this._applyRemoteRootPose(idleData, new THREE.Vector3(idleData.headX, idleData.headY, idleData.headZ));
+            const torsoQuat = this.el.object3D.quaternion.clone();
+            const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(torsoQuat);
+            const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(torsoQuat);
+            const chest = this.el.object3D.position.clone();
+            chest.y += 1.0;
+            const leftHand = this._remoteSyntheticHandPos('left', chest, bodyForward, bodyRight);
+            const rightHand = this._remoteSyntheticHandPos('right', chest, bodyForward, bodyRight);
+            const handQuat = torsoQuat.clone().multiply(
+              new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
+            );
+            this.headVelocity.set(0, 0, 0);
+            this.updateRemoteBones(chest.clone().add(new THREE.Vector3(0, 0.2, 0)), torsoQuat,
+              leftHand, rightHand, handQuat, handQuat);
+          };
+
+          if (!this.remotePoseData) {
+            const remotePlayerEntity = resolveRemotePlayerEntity();
+            if (remotePlayerEntity) {
+              const remoteWorldPos = new THREE.Vector3();
+              remotePlayerEntity.object3D.getWorldPosition(remoteWorldPos);
+              applyIdleUprightPose(remoteWorldPos);
+            } else if (!this.remoteEntityWarned) {
+              console.error(`[Body Avatar] REMOTE PLAYER ENTITY NOT FOUND for ${this.data.playerId}`);
+              this.remoteEntityWarned = true;
+            }
+            return;
+          }
+
+          const data = this.remotePoseData;
+          const headWorldPos = new THREE.Vector3(data.headX, data.headY, data.headZ);
+          this._applyRemoteRootPose(data, headWorldPos);
+
+          const torsoQuat = this.el.object3D.quaternion.clone();
+          const bodyForward = new THREE.Vector3(0, 0, -1).applyQuaternion(torsoQuat);
+          const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(torsoQuat);
+          const chest = this.el.object3D.position.clone();
+          chest.y += 1.0;
+
+          const leftHandWorldPos = this._validRemoteHandPos(data.lhX, data.lhY, data.lhZ, headWorldPos)
+            || this._remoteSyntheticHandPos('left', chest, bodyForward, bodyRight);
+          const rightHandWorldPos = this._validRemoteHandPos(data.rhX, data.rhY, data.rhZ, headWorldPos)
+            || this._remoteSyntheticHandPos('right', chest, bodyForward, bodyRight);
+
+          const handQuat = torsoQuat.clone().multiply(
+            new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
+          );
+          const headQuat = this._remoteHeadQuatForNeck(data, torsoQuat);
 
           this.headVelocity.set(data.velX || 0, data.velY || 0, data.velZ || 0);
-
-          this.updateBones(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos,
-                          leftHandWorldQuat, rightHandWorldQuat, dt);
+          this.updateRemoteBones(headWorldPos, headQuat, leftHandWorldPos, rightHandWorldPos,
+            handQuat, handQuat);
 
           if (data.fingerCurls) {
             this.currentCurls = data.fingerCurls;
@@ -20770,11 +20850,18 @@ function setGameplayHUD(isPlaying) {
         },
 
         updateBones: function(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat, dt) {
+          if (this.data.isRemote) {
+            return this.updateRemoteBones(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
+          }
+
           // Reset bones
           if (this.bones.hips) this.bones.hips.quaternion.identity();
           if (this.bones.spine) this.bones.spine.quaternion.identity();
           if (this.bones.spine1) this.bones.spine1.quaternion.identity();
           if (this.bones.spine2) this.bones.spine2.quaternion.identity();
+          if (this.bones.hips && this.initialBonePositions && this.initialBonePositions[this.bones.hips.name]) {
+            this.bones.hips.position.copy(this.initialBonePositions[this.bones.hips.name]);
+          }
           
           // Spine bending
           const bodyCenter = headPos.clone();
