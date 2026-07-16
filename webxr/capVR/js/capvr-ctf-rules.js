@@ -5,12 +5,12 @@
 (function () {
   'use strict';
 
-  // DIAGNOSTIC: bot shooting is DISABLED BY DEFAULT (no hits → no shatter) so we can
-  // confirm whether the 72→36 dip is the fragment churn. Re-enable with __capvrBotsFire(true).
-  if (window.__capvrBotFireOff === undefined) window.__capvrBotFireOff = true;
+  // Bot laser fire — ON by default. Toggle live: __capvrBotsFire(false).
+  // Pair with __capvrShatter(false) if shards cause hitching while bots still shoot.
+  if (window.__capvrBotFireOff === undefined) window.__capvrBotFireOff = false;
   window.__capvrBotsFire = function (on) {
     window.__capvrBotFireOff = (on === false);
-    console.log('[CapVR] bot firing ' + (window.__capvrBotFireOff ? 'DISABLED (no shatter)' : 'ENABLED'));
+    console.log('[CapVR] bot firing ' + (window.__capvrBotFireOff ? 'DISABLED' : 'ENABLED'));
     return !window.__capvrBotFireOff;
   };
 
@@ -1848,6 +1848,7 @@
 
         // Engage nearby threats: strafe + shoot (BattleVR-style).
         // Throttled — full LOS scanning every frame per bot was the perf sink.
+        // CARRY never engages: flag carriers must run to goal, not orbit fights.
         const threat = getThreatThrottled(this, myTeam);
         const flagDist = flagGrabDistance(this, mission);
         // Prefer flag snatch when almost on it — don't get stuck dueling and never grab
@@ -1855,8 +1856,7 @@
         const engage =
           !nearFlag && threat && threat.dist < 16 &&
           (mission.behavior === 'DEFEND' || mission.behavior === 'RECOVER' ||
-           mission.behavior === 'ESCORT' || mission.behavior === 'ATTACK' ||
-           mission.behavior === 'CARRY');
+           mission.behavior === 'ESCORT' || mission.behavior === 'ATTACK');
 
         let dist;
         if (engage && threat) {
@@ -1877,6 +1877,7 @@
           });
           if (threat && threat.dist < FIRE_RANGE) fireAt(this, myTeam, threat);
         } else if (mission.behavior === 'CARRY') {
+          // Straight to own goal; may shoot while flying but never holdRange-orbit.
           dist = steerBot(this, mission.target, dt);
           this.isGrabbingBall = true;
           if (threat && threat.dist < 10) fireAt(this, myTeam, threat);

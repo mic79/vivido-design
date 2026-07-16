@@ -2077,10 +2077,10 @@
 
   window.RagdollShatter = RagdollShatter;
 
-  // Shatter shards re-ENABLED by default. (Shard-off testing proved shards are only
-  // part of the story; the shooting-bots dip persisted without them, so we now
-  // isolate the bot hit-response path instead.) Toggle live: __capvrShatter(false).
-  if (window.__capvrShatterOff === undefined) window.__capvrShatterOff = false;
+  // Shatter shards DEFAULT OFF (debris / convex hulls are the heavy hit cost).
+  // Hit HP, hit-react, region hide, and death ragdoll still run via shatterFromShot;
+  // fracture() just returns [] when this is off. Toggle live: __capvrShatter(true).
+  if (window.__capvrShatterOff === undefined) window.__capvrShatterOff = true;
   window.__capvrShatter = function (on) {
     window.__capvrShatterOff = (on === false);
     console.log('[CapVR] shatter shards ' + (window.__capvrShatterOff ? 'DISABLED (no shards)' : 'ENABLED'));

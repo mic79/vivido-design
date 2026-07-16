@@ -23,7 +23,7 @@
       window.BodyRiggedLoaders = { GLTFLoader, FBXLoader: FBXMod, ConvexGeometry, ready: true };
     </script>
     <!-- Box3D ONLY — no Cannon CDN -->
-    <script src="js/ragdoll-shatter.js?v=shatteron1"></script>
+    <script src="js/ragdoll-shatter.js?v=shatteroff2"></script>
     <script src="js/ragdoll-shooter.js?v=meshhit1"></script>
     <script src="js/box3d-collision.js"></script>
     <script src="js/box3d-ragdoll.js"></script>
@@ -33,7 +33,7 @@
     <script src="js/capvr-box3d-ext.js?v=handsurf4"></script>
     <script src="js/capvr-physics.js?v=handsurf4"></script>
     <script src="js/zerog-legs.js"></script>
-    <script src="js/grabbable-ragdoll.js?v=aimcap1"></script>
+    <script src="js/grabbable-ragdoll.js?v=bodygrab1"></script>
     <script src="js/body-foundation.js?v=handsurf4"></script>
     <script>
       // Early CapVR hand-id bridge (before scene entities init mixamo-body).
@@ -1001,7 +1001,7 @@
       }
 
       // Helper: resolve an owner id to its body component.
-      // Local uses body-rigged4 mixamo-body on #local-body; remotes/bots use mixamo-body-avatar.
+      // Local: mixamo-body. Remotes: mixamo-body-avatar. Bots: grabbable-ragdoll.
       function getOwnerBodyAvatar(ownerId) {
         if (!ownerId) return null;
         const localId = (typeof myPlayerId !== 'undefined' && myPlayerId) ? myPlayerId : 'player_0';
@@ -1015,7 +1015,10 @@
           el = document.querySelector(`#bot-${key}-body`);
         }
         if (!el?.components) return null;
-        return el.components['mixamo-body'] || el.components['mixamo-body-avatar'] || null;
+        return el.components['mixamo-body']
+          || el.components['mixamo-body-avatar']
+          || el.components['grabbable-ragdoll']
+          || null;
       }
 
       // Helper: the spine2 (chest) bone Object3D for an owner, or null if not loaded yet.
@@ -5891,7 +5894,7 @@ function setGameplayHUD(isPlaying) {
           let nearestPlayer = null;
           let nearestDistance = Infinity;
           
-          // Look for grabbable players (remote targets and bots)
+          // Look for grabbable players (remote targets, bots, and full-body limb markers)
           const grabbablePlayers = document.querySelectorAll('.grabbable-player');
           
           for (const playerTarget of grabbablePlayers) {
@@ -5930,6 +5933,40 @@ function setGameplayHUD(isPlaying) {
             if (distance <= handRadius + targetRadius && distance < nearestDistance) {
               nearestPlayer = playerTarget;
               nearestDistance = distance;
+            }
+          }
+
+          // Capsule fallback: palm against live limb surfaces (covers gaps between markers).
+          if (!this._grabContactTmp) this._grabContactTmp = new THREE.Vector3();
+          const contact = this._grabContactTmp;
+          const avatarEls = document.querySelectorAll('[grabbable-ragdoll], [mixamo-body-avatar]');
+          for (const el of avatarEls) {
+            const av = el.components?.['grabbable-ragdoll']
+              || el.components?.['mixamo-body-avatar'];
+            if (!av?.ensureGraspCapsules) continue;
+            if (av.data?.paused) continue;
+            let pid = el.getAttribute('data-player-id');
+            if (!pid && av._resolveGrabPlayerId) pid = av._resolveGrabPlayerId();
+            if (!pid && el.id?.startsWith('remote-body-')) {
+              pid = 'player_' + el.id.replace('remote-body-', '');
+            }
+            if (!pid) continue;
+            const currentPlayerId = myPlayerId || 'player_0';
+            if (pid === currentPlayerId) continue;
+            if (this.playerGrabTimeouts.has(pid) && Date.now() < this.playerGrabTimeouts.get(pid)) {
+              continue;
+            }
+            if (pid.startsWith('player_') && el.getAttribute('visible') === false) continue;
+
+            const sd = this.nearestCapsuleSurface(av, handPos, contact);
+            if (sd === false || sd > handRadius) continue;
+            // Map to a marker (or head target) for this player so grabPlayer has a DOM target.
+            const marker = document.querySelector(`.grabbable-player[data-player-id="${pid}"]`);
+            if (!marker) continue;
+            const d = Math.max(0, sd);
+            if (d < nearestDistance) {
+              nearestPlayer = marker;
+              nearestDistance = d;
             }
           }
           
@@ -23331,8 +23368,8 @@ function setGameplayHUD(isPlaying) {
       
     </script>
     <!-- CapVR CTF / sticky layer — keeps BoltVR UI, Mixamo bots, arenas, PeerJS -->
-    <script src="js/capvr-ctf-rules.js?v=firetoggle2"></script>
-    <script src="js/capvr-combat.js?v=meshhit3"></script>
+    <script src="js/capvr-ctf-rules.js?v=carryrun1"></script>
+    <script src="js/capvr-combat.js?v=bothit1"></script>
     <script src="js/capvr-boot.js?v=noleg1"></script>
     <script src="js/capvr-bot-form.js?v=headwall2"></script>
     <script src="js/capvr-mp.js?v=nophantom1"></script>

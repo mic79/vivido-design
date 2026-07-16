@@ -151,13 +151,10 @@
     };
   }
 
-  // DIAGNOSTIC: BOT HIT-RESPONSE off-switch. When on, a laser that hits a bot still
-  // registers (beam/FX show, ray terminates on the bot) but the bot runs NONE of its
-  // response: no HP change, no hit-reaction animation, no region/part removal, no
-  // shatter, no death/respawn. This isolates whether the shooting-bots dip lives in
-  // the dynamic hit-response path (vs static-object hits, which hold 72 fps).
-  // Default DISABLED (response off) for this test. Toggle live: __capvrBotHit(true).
-  if (window.__capvrBotHitOff === undefined) window.__capvrBotHitOff = true;
+  // BOT HIT-RESPONSE gate. When off, lasers still register (beam/FX, ray stops on bot)
+  // but bots skip HP / hit-react / shatter / death. Default ON. Toggle: __capvrBotHit(false).
+  // Pair with __capvrShatter(false) to keep debris shards off while hits still land.
+  if (window.__capvrBotHitOff === undefined) window.__capvrBotHitOff = false;
   window.__capvrBotHit = function (on) {
     window.__capvrBotHitOff = (on === false);
     console.log('[CapVR] bot hit-response ' + (window.__capvrBotHitOff ? 'DISABLED (bots ignore hits)' : 'ENABLED'));
@@ -1173,6 +1170,118 @@
     return to;
   }
 
+  /**
+   * True when the local shooting arm is clipping static geometry.
+   * Uses the RAW controller pose (not IK-clamped palm) — IK can park the visual
+   * hand on the near face while the tracker is deep inside / through the far side.
+   * Fire-only: a few short env rays + optional Box3D overlaps (cheap).
+   */
+  const _clipShoulder = new THREE.Vector3();
+  const _clipMuzzle = new THREE.Vector3();
+  const _clipCtrl = new THREE.Vector3();
+  const _clipProbe = new THREE.Vector3();
+  const _clipDir = new THREE.Vector3();
+
+  function _pointInsideEnv(p, radius) {
+    const phys = window.CapVRPhysics?.get?.();
+    const q = phys?.queries;
+    if (!q?.sphereOverlaps || !p) return false;
+    const r = radius != null ? radius : 0.035;
+    try {
+      return !!q.sphereOverlaps(
+        { x: p.x, y: p.y, z: p.z },
+        r,
+        phys.playerShapeIds || null
+      );
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** Wall between A and B (hand past the hit surface / punched through). */
+  function _segmentCrossesEnv(from, to, slack) {
+    _clipDir.copy(to).sub(from);
+    const dist = _clipDir.length();
+    if (dist < 0.06) return false;
+    _clipDir.multiplyScalar(1 / dist);
+    const skin = slack != null ? slack : 0.05;
+    const hit = castEnvRay(from, _clipDir, dist);
+    return !!(hit && hit.distance < dist - skin);
+  }
+
+  function isLocalWeaponArmClipping(hand, muzzleOpt) {
+    hand = hand || 'right';
+    const mixamo = localMixamo();
+    const ctrl = handEl(hand);
+    const aim = muzzleOpt?.origin
+      ? muzzleOpt
+      : (mixamo?.getHandShotAim ? mixamo.getHandShotAim(hand) : null);
+
+    // True tracked hand — not the IK palm that collision clamps onto the surface.
+    if (ctrl?.object3D) {
+      ctrl.object3D.getWorldPosition(_clipCtrl);
+    } else if (aim?.origin) {
+      _clipCtrl.copy(aim.origin);
+    } else {
+      return false;
+    }
+
+    if (aim?.origin) _clipMuzzle.copy(aim.origin);
+    else _clipMuzzle.copy(_clipCtrl);
+
+    const shoulderBone = mixamo?.bones?.[`${hand}UpperArm`]
+      || mixamo?.bones?.[`${hand}Shoulder`];
+    if (shoulderBone) {
+      shoulderBone.getWorldPosition(_clipShoulder);
+    } else {
+      const cam = document.getElementById('camera');
+      if (!cam?.object3D) return false;
+      cam.object3D.getWorldPosition(_clipShoulder);
+      _clipShoulder.y -= 0.15;
+    }
+
+    // Primary: wall between shoulder and REAL controller (covers deep embed + punch-through).
+    if (_segmentCrossesEnv(_clipShoulder, _clipCtrl, 0.04)) return true;
+
+    // IK muzzle can still sit past cover if clamp lost tracking.
+    if (_segmentCrossesEnv(_clipShoulder, _clipMuzzle, 0.04)) return true;
+
+    // Solid ENV volumes (boxes): overlap at controller + mid-arm samples.
+    // Trimesh interiors often miss overlaps — segment test above is the mesh path.
+    if (_pointInsideEnv(_clipCtrl, 0.045)) return true;
+    if (_pointInsideEnv(_clipMuzzle, 0.04)) return true;
+    for (let t = 0.35; t <= 0.85; t += 0.25) {
+      _clipProbe.copy(_clipShoulder).lerp(_clipCtrl, t);
+      if (_pointInsideEnv(_clipProbe, 0.04)) return true;
+    }
+
+    // Controller deep past the posed/clamped palm = still shoved into the wall.
+    // (Palm sits on near face; tracker is further along the same direction.)
+    const palmToCtrl = _clipCtrl.distanceTo(_clipMuzzle);
+    if (palmToCtrl > 0.06) {
+      if (_segmentCrossesEnv(_clipMuzzle, _clipCtrl, 0.02)) return true;
+      _clipDir.copy(_clipCtrl).sub(_clipShoulder);
+      const armLen = _clipDir.length() || 1;
+      _clipDir.multiplyScalar(1 / armLen);
+      _clipProbe.copy(_clipMuzzle).sub(_clipShoulder);
+      const muzzleAlong = _clipProbe.dot(_clipDir);
+      if (armLen - muzzleAlong > 0.07) return true;
+    }
+
+    return false;
+  }
+
+  function refuseFireIfArmClipping(hand, muzzleOpt) {
+    const clipping = isLocalWeaponArmClipping(hand || 'right', muzzleOpt);
+    const combat = document.querySelector('[capvr-combat]')?.components?.['capvr-combat'];
+    if (combat) {
+      combat._armClipping = clipping;
+      combat._armClippingHand = hand || 'right';
+      combat._armClippingAt = performance.now();
+    }
+    return clipping;
+  }
+
   function applyStickyShatters(bodyEl, center, count) {
     const grab = bodyEl?.components?.['grabbable-ragdoll'];
     if (!grab?.shatterFromShot || !center) return;
@@ -1203,7 +1312,6 @@
       const combat = document.querySelector('[capvr-combat]')?.components?.['capvr-combat'];
       if (combat && !combat.alive) return;
       if (combat && performance.now() < (combat._nextFireAt || 0)) return;
-      if (combat) combat._nextFireAt = performance.now() + FIRE_COOLDOWN_MS;
 
       if (fromVrHand) {
         const mixamo = localMixamo();
@@ -1217,6 +1325,13 @@
       } else if (!this._aimFromCamera?.()) {
         return;
       }
+
+      // Hand / arm through static geometry → no shot (blocks "fire from inside wall").
+      if (refuseFireIfArmClipping('right', { ok: true, origin: this._rayOri })) {
+        return;
+      }
+
+      if (combat) combat._nextFireAt = performance.now() + FIRE_COOLDOWN_MS;
 
       playLaserFireSfx();
 
@@ -1535,6 +1650,8 @@
     fire: function () {
       if (!this.alive || !this._aim()) return;
       if (performance.now() < this._nextFireAt) return;
+      // Hand / arm clipping statics → refuse fire entirely (no beam through walls).
+      if (refuseFireIfArmClipping('right', { ok: true, origin: this._ori })) return;
       this._nextFireAt = performance.now() + FIRE_COOLDOWN_MS;
       playLaserFireSfx();
       const bodyHit = this._raycast();
@@ -1860,6 +1977,8 @@
     hasLosToLocalPlayer,
     castEnvRay,
     clipRayToCover,
+    /** True if local weapon hand/arm is through static geometry (muzzle inside or shoulder→hand blocked). */
+    isLocalWeaponArmClipping,
     placeBot,
     killBot,
     damageBot,

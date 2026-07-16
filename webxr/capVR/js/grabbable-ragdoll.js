@@ -747,7 +747,103 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       this._hipsRestPos = this.bones.hips.position.clone();
     }
     this._scheduleShatterCacheBake();
+    this.ensureGrabColliders();
     console.log('[grabbable-ragdoll] ready at', this.data.x, this.data.z);
+  },
+
+  /**
+   * CapVR hitch-a-ride: bone-local .grabbable-player markers so zerog-player can grab
+   * anywhere on the visible body (not just the head hit sphere). Does NOT enable
+   * allowPalmGrab ragdoll pickup — tether grab stays on BoltVR playerGrab path.
+   */
+  _resolveGrabPlayerId: function () {
+    let pid = this.el.getAttribute('data-player-id');
+    if (pid) return pid;
+    const botId = this.el.getAttribute('data-bot-id') || '';
+    if (botId.startsWith('zerog-bot-')) return 'bot_' + botId.slice('zerog-bot-'.length);
+    if (botId.startsWith('bot_') || botId.startsWith('bot-')) {
+      return botId.replace(/^bot-/, 'bot_');
+    }
+    return null;
+  },
+
+  ensureGrabColliders: function () {
+    if (this.grabCollidersBuilt) return;
+    if (!this.bones || !this.bones.head) return;
+    const pid = this._resolveGrabPlayerId();
+    if (!pid) return;
+
+    const b = this.bones;
+    const handL = b.leftHandBone || b.leftHand;
+    const handR = b.rightHandBone || b.rightHand;
+    const parts = [
+      [b.spine2, 0.18], [b.hips, 0.18],
+      [b.leftUpperArm, 0.11], [b.rightUpperArm, 0.11],
+      [b.leftForearm, 0.10], [b.rightForearm, 0.10],
+      [handL, 0.12], [handR, 0.12],
+      [b.leftUpLeg, 0.12], [b.rightUpLeg, 0.12],
+      [b.leftLeg, 0.10], [b.rightLeg, 0.10],
+      [b.leftFoot, 0.10], [b.rightFoot, 0.10],
+      [b.head, 0.14], [b.neck, 0.10]
+    ];
+
+    this.grabMarkers = [];
+    parts.forEach((p) => {
+      const bone = p[0];
+      if (!bone) return;
+      const marker = document.createElement('a-entity');
+      marker.classList.add('grabbable-player');
+      marker.setAttribute('data-player-id', pid);
+      marker.setAttribute('radius', p[1]);
+      marker.setAttribute('data-body-collider', 'true');
+      this.el.appendChild(marker);
+      this.grabMarkers.push({ marker: marker, bone: bone, radius: p[1] });
+      if (window.__grabVizOn && window.__addGrabViz) window.__addGrabViz(marker);
+    });
+
+    this._colliderTmp = this._colliderTmp || new THREE.Vector3();
+    this.grabCollidersBuilt = true;
+  },
+
+  updateGrabColliders: function () {
+    this.ensureGrabColliders();
+    if (!this.grabCollidersBuilt || !this.grabMarkers) return;
+    const tmp = this._colliderTmp;
+    for (let i = 0; i < this.grabMarkers.length; i++) {
+      const gm = this.grabMarkers[i];
+      if (!gm.marker?.object3D || !gm.bone) continue;
+      gm.bone.getWorldPosition(tmp);
+      const parent = gm.marker.object3D.parent;
+      if (parent) {
+        parent.updateWorldMatrix(true, false);
+        gm.marker.object3D.position.copy(parent.worldToLocal(tmp.clone()));
+      }
+    }
+  },
+
+  /** Same limb capsules as mixamo-body-avatar — used by zerog-player grab-snap / finger grasp. */
+  ensureGraspCapsules: function () {
+    if (this.graspCapsules) return this.graspCapsules;
+    if (!this.bones || !this.bones.head) return null;
+    const b = this.bones;
+    const handL = b.leftHandBone || b.leftHand;
+    const handR = b.rightHandBone || b.rightHand;
+    const defs = [
+      [b.leftUpperArm, b.leftForearm, 0.055],
+      [b.leftForearm, handL, 0.045],
+      [b.rightUpperArm, b.rightForearm, 0.055],
+      [b.rightForearm, handR, 0.045],
+      [b.leftUpLeg, b.leftLeg, 0.085],
+      [b.leftLeg, b.leftFoot, 0.06],
+      [b.rightUpLeg, b.rightLeg, 0.085],
+      [b.rightLeg, b.rightFoot, 0.06],
+      [b.hips, b.spine2, 0.13],
+      [b.head, b.head, 0.10]
+    ];
+    this.graspCapsules = defs
+      .filter((d) => d[0] && d[1])
+      .map((d) => ({ a: d[0], b: d[1], r: d[2] }));
+    return this.graspCapsules;
   },
 
   _scheduleShatterCacheBake: function () {
@@ -3528,6 +3624,7 @@ AFRAME.registerComponent('grabbable-ragdoll', {
       this._applyHitReactionsToPose();
       // Avoid a second full skeleton pass — hit-react already had one update above.
       if (this.model) this.model.updateMatrixWorld(true);
+      this.updateGrabColliders();
       this._syncLimbCollisionDebug(this._lastLimbHitIdx, this._lastLimbContact);
       this._lastLimbHitIdx = -1;
       this._lastLimbContact = null;
