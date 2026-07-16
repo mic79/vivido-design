@@ -23451,7 +23451,9 @@ function setGameplayHUD(isPlaying) {
       });
       // Function to manage active players and bots
       function manageActivePlayersAndBots() {
-        // Humans occupy their team — bots ONLY fill teams with zero humans (no teammate bots).
+        // Fill each team toward 2 combatants (humans + bots) so you always get a
+        // teammate bot when alone on a side — without stacking to 3 blues
+        // (bot-blue + bot-green + human) when a blue human already exists.
         let redHumans = 0;
         let blueHumans = 0;
         for (let i = 0; i < 4; i++) {
@@ -23471,29 +23473,22 @@ function setGameplayHUD(isPlaying) {
           else redHumans = 1;
         }
 
-        const humanCount = redHumans + blueHumans;
-        let botsLeft = isGoalieTestMode() ? 1 : Math.max(0, 4 - humanCount);
-
-        // Empty teams get bots first (balance), never stack a bot on a human's team.
         let wantRedBots = 0;
         let wantBlueBots = 0;
         if (isGoalieTestMode()) {
           wantBlueBots = 1;
-          botsLeft = 0;
         } else {
-          if (redHumans === 0 && botsLeft > 0) {
-            wantRedBots = Math.min(2, botsLeft);
-            botsLeft -= wantRedBots;
-          }
-          if (blueHumans === 0 && botsLeft > 0) {
-            wantBlueBots = Math.min(2, botsLeft);
-            botsLeft -= wantBlueBots;
-          }
+          wantRedBots = Math.max(0, 2 - redHumans);
+          wantBlueBots = Math.max(0, 2 - blueHumans);
+          // Only one red bot entity exists — clamp
+          wantRedBots = Math.min(1, wantRedBots);
+          // Blue has bot-blue + bot-green — up to 2, but never more than needed
+          wantBlueBots = Math.min(2, wantBlueBots);
         }
 
         const enableMap = {
           'zerog-bot-red': wantRedBots >= 1,
-          'zerog-bot-blue': wantBlueBots >= 1 || isGoalieTestMode(),
+          'zerog-bot-blue': wantBlueBots >= 1,
           'zerog-bot-green': wantBlueBots >= 2
         };
 
@@ -23606,7 +23601,7 @@ function setGameplayHUD(isPlaying) {
     <script src="js/capvr-ctf-rules.js?v=drop30"></script>
     <script src="js/capvr-combat.js?v=mporient2"></script>
     <script src="js/capvr-boot.js?v=noleg1"></script>
-    <script src="js/capvr-bot-form.js?v=botslot2"></script>
+    <script src="js/capvr-bot-form.js?v=botslot3"></script>
     <script src="js/capvr-mp.js?v=nophantom1"></script>
     <script src="js/capvr-arena-fixtures.js?v=fixtures1"></script>
   </body>
