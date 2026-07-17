@@ -657,10 +657,16 @@
       let teamScores = { red: 0, blue: 0 };
       let gameMode = 'capture'; // 'dodgeball' or 'capture'
 
+      /** CapVR CTF (flag mode) — not legacy soccer capture-ball scoring. */
+      function isCapVrCtfMode() {
+        return !!(window.CapVRFlags);
+      }
+
       // CapVR external modules (ctf-rules / combat) cannot see block-scoped lets — bridge them.
       window.CapVRGame = {
         get gameMode() { return gameMode; },
         set gameMode(v) { gameMode = v; },
+        isCapVrCtfMode,
         get myPlayerId() { return myPlayerId || 'player_0'; },
         get playerTeams() { return playerTeams; },
         get teamScores() { return teamScores; },
@@ -2442,6 +2448,8 @@
             activePlayers.add(playerId);
           }
           
+          window.CapVRMp?.initPlayerHpNet?.(playerId);
+          
           // Update bot management for new player count
           manageActivePlayersAndBots();
           
@@ -3282,6 +3290,11 @@
       }
       
       function handleGoalNotification(data) {
+        // Dedupe: host may rebroadcast or multiple paths can fire for one CTF score.
+        if (data.timestamp) {
+          if (window._capvrLastGoalNotifyTs === data.timestamp) return;
+          window._capvrLastGoalNotifyTs = data.timestamp;
+        }
         // CLIENT: Handle goal notification from host
         console.log(`📡 CLIENT: Received goal notification - ${data.scoringTeam} scored!`);
         
@@ -3318,6 +3331,16 @@
       
       // CENTRALIZED GOAL PROCESSING SYSTEM
       function processGoalScored(scoringTeam, goalTeam) {
+        // CapVR CTF: block legacy soccer / duplicate goal bursts (CTF uses tryScore cooldown).
+        if (isCapVrCtfMode()) {
+          const now = Date.now();
+          window._capvrLastProcessGoal = window._capvrLastProcessGoal || 0;
+          if (now - window._capvrLastProcessGoal < 1400) {
+            return;
+          }
+          window._capvrLastProcessGoal = now;
+        }
+
         console.log(`🏆 GOAL! ${scoringTeam} team scored into ${goalTeam} goal!`);
         
         // Play goal sound for all players
@@ -4000,31 +4023,29 @@
         
         if (botElement && botElement.components['zerog-bot']) {
           const botComponent = botElement.components['zerog-bot'];
+          const st = data.botState;
           
-          // Only update bot position on clients (not on host)
-          if (!isHost && botComponent.body) {
-            // CRITICAL FIX: Ensure bot physics body exists before updating
-            if (!botComponent.body.world) {
-              console.warn(`⚠️ Bot ${botId} physics body not in world, skipping update`);
-              return;
+          // Clients: visual sync only (CapVR bots use capvr-bot-form on host; no Cannon body on client).
+          if (!isHost) {
+            botElement.object3D.position.set(st.x, st.y, st.z);
+            if (st.rx !== undefined && st.ry !== undefined && st.rz !== undefined) {
+              botElement.object3D.rotation.set(st.rx, st.ry, st.rz);
             }
-            
-            // Update bot physics body position and velocity
-            botComponent.body.position.set(data.botState.x, data.botState.y, data.botState.z);
-            botComponent.body.velocity.set(data.botState.vx, data.botState.vy, data.botState.vz);
-            
-            // Update visual position
-            botElement.object3D.position.set(data.botState.x, data.botState.y, data.botState.z);
-            
-            // CRITICAL FIX: Update visual rotation if included
-            if (data.botState.rx !== undefined && data.botState.ry !== undefined && data.botState.rz !== undefined) {
-              botElement.object3D.rotation.set(data.botState.rx, data.botState.ry, data.botState.rz);
+            const bodyEl = document.getElementById(`${botId}-body`);
+            if (bodyEl?.object3D) {
+              bodyEl.object3D.position.set(st.x, st.y, st.z);
+              if (st.rx !== undefined && st.ry !== undefined && st.rz !== undefined) {
+                bodyEl.object3D.rotation.set(st.rx, st.ry, st.rz);
+              }
+            }
+            if (botComponent.body?.world) {
+              botComponent.body.position.set(st.x, st.y, st.z);
+              botComponent.body.velocity.set(st.vx || 0, st.vy || 0, st.vz || 0);
             }
           }
-        } else if (!botElement) {
+        } else if (!botElement && !window._capvrWarnedMissingBot) {
+          window._capvrWarnedMissingBot = true;
           console.warn(`⚠️ Bot element not found: #zerog-${botId}`);
-        } else if (!botElement.components['zerog-bot']) {
-          console.warn(`⚠️ Bot component not found on element: #zerog-${botId}`);
         }
         
         // Host forwards bot states to other clients
@@ -4073,8 +4094,9 @@
         // CRITICAL FIX: Apply ball updates from other players
         const ballNumber = data.ballState.playerId;
         
-        // CRITICAL FIX: Handle capture ball with dynamic ownership
+        // CapVR CTF: no soccer capture-ball sync (ball is hidden; flags use ctf-flag-state).
         if (ballNumber === 'capture') {
+          if (isCapVrCtfMode()) return;
           const captureBall = document.querySelector('#capture-ball');
           if (captureBall && captureBall.components['zerog-ball']) {
             const ballComponent = captureBall.components['zerog-ball'];
@@ -4084,15 +4106,9 @@
               return;
             }
             
-            // CRITICAL FIX: Ensure ball body exists before updating
-            if (ballComponent.body && !ballComponent.body.world) {
-              console.warn('⚠️ Capture ball body not in physics world, skipping update');
-              return;
-            }
-            
             // Apply network update to capture ball from any player
             captureBall.object3D.position.set(data.ballState.x, data.ballState.y, data.ballState.z);
-            if (ballComponent.body) {
+            if (ballComponent.body?.world) {
               ballComponent.body.position.set(data.ballState.x, data.ballState.y, data.ballState.z);
               ballComponent.body.velocity.set(data.ballState.vx, data.ballState.vy, data.ballState.vz);
             }
@@ -10513,6 +10529,8 @@ function setGameplayHUD(isPlaying) {
         },
         
         checkGoalScore: function(evt) {
+          // CapVR CTF: flag scoring only (volume tick in capvr-ctf-rules.js).
+          if (window.CapVRFlags) return;
           
           // Only score in capture mode
           if (gameMode !== 'capture') {
@@ -13373,8 +13391,8 @@ function setGameplayHUD(isPlaying) {
               });
             }
             
-            // CRITICAL FIX: Dynamic capture ball ownership for multiplayer
-            if (gameMode === 'capture') {
+            // Legacy soccer capture-ball sync (CapVR CTF uses ctf-flag-state instead).
+            if (gameMode === 'capture' && !isCapVrCtfMode()) {
               const captureBall = document.querySelector('#capture-ball');
               if (captureBall && captureBall.components['zerog-ball']) {
                 const ballComponent = captureBall.components['zerog-ball'];
@@ -13406,32 +13424,22 @@ function setGameplayHUD(isPlaying) {
               }
             }
             
-            // CRITICAL: Host syncs bot positions to all clients
+            // Host syncs bot positions to clients (entity pose — CapVR bots may not have client Cannon bodies).
             if (isHost) {
-              const redBot = document.querySelector('#zerog-bot-red');
-              const blueBot = document.querySelector('#zerog-bot-blue');
-              
-              if (redBot && redBot.components['zerog-bot'] && redBot.components['zerog-bot'].body) {
-                const botBody = redBot.components['zerog-bot'].body;
-                const botRotation = redBot.object3D.rotation;
+              ['bot-red', 'bot-blue'].forEach((botId) => {
+                const botEl = document.querySelector(`#zerog-${botId}`);
+                if (!botEl?.object3D) return;
+                const botComp = botEl.components['zerog-bot'];
+                const p = botEl.object3D.position;
+                const r = botEl.object3D.rotation;
+                const v = botComp?.body?.velocity;
                 sendBotState({
-                  botId: 'bot-red',
-                  x: botBody.position.x, y: botBody.position.y, z: botBody.position.z,
-                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z,
-                  rx: botRotation.x, ry: botRotation.y, rz: botRotation.z
+                  botId,
+                  x: p.x, y: p.y, z: p.z,
+                  vx: v ? v.x : 0, vy: v ? v.y : 0, vz: v ? v.z : 0,
+                  rx: r.x, ry: r.y, rz: r.z
                 });
-              }
-              
-              if (blueBot && blueBot.components['zerog-bot'] && blueBot.components['zerog-bot'].body) {
-                const botBody = blueBot.components['zerog-bot'].body;
-                const botRotation = blueBot.object3D.rotation;
-                sendBotState({
-                  botId: 'bot-blue',
-                  x: botBody.position.x, y: botBody.position.y, z: botBody.position.z,
-                  vx: botBody.velocity.x, vy: botBody.velocity.y, vz: botBody.velocity.z,
-                  rx: botRotation.x, ry: botRotation.y, rz: botRotation.z
-                });
-              }
+              });
             }
           }
           
@@ -20116,6 +20124,9 @@ function setGameplayHUD(isPlaying) {
         },
 
         updateLocalBody: function(dt) {
+          if (this.el?.dataset?.capvrDead === 'true') return;
+          const combatAlive = document.querySelector('[capvr-combat]')?.components?.['capvr-combat']?.alive;
+          if (combatAlive === false) return;
           // Get references if not set (use EXACT selectors from reference)
           if (!this.camera) {
             this.camera = document.querySelector('#camera');
@@ -20219,6 +20230,7 @@ function setGameplayHUD(isPlaying) {
         },
 
         updateRemoteBody: function(dt) {
+          if (this.el?.dataset?.capvrDead === 'true') return;
           dt = Math.min(dt || 0.016, 0.05);
 
           let headX; let headY; let headZ; let yaw;
@@ -23346,6 +23358,8 @@ function setGameplayHUD(isPlaying) {
       function handleGoalHit(data) {
         // HOST ONLY: Process goal hit from client
         if (!isHost) return;
+        // CapVR CTF uses flag volume scoring — ignore legacy soccer goal-hit.
+        if (window.CapVRFlags) return;
         
         // CRITICAL FIX: Find the ACTIVE game manager (not just any game manager)
         let gameManager = null;
@@ -23710,11 +23724,11 @@ function setGameplayHUD(isPlaying) {
       
     </script>
     <!-- CapVR CTF / sticky layer — keeps BoltVR UI, Mixamo bots, arenas, PeerJS -->
-    <script src="js/capvr-ctf-rules.js?v=drop30"></script>
-    <script src="js/capvr-combat.js?v=mporient2"></script>
+    <script src="js/capvr-ctf-rules.js?v=scorefix1"></script>
+    <script src="js/capvr-combat.js?v=pvpfix1"></script>
     <script src="js/capvr-boot.js?v=noleg1"></script>
     <script src="js/capvr-bot-form.js?v=botslot3"></script>
-    <script src="js/capvr-mp.js?v=nophantom1"></script>
+    <script src="js/capvr-mp.js?v=pvpfix1"></script>
     <script src="js/capvr-arena-fixtures.js?v=fixtures1"></script>
   </body>
 </html> 

@@ -709,6 +709,9 @@
         detail: { team: carrierTeam, flagTeam: enemy }
       }));
       hudMsg(`${carrierTeam.toUpperCase()} SCORES!`, 3000);
+      // Force leave/re-enter so standing in the ring cannot chain scores.
+      _inOwnGoal[carrierTeam] = false;
+      _scoreRetry[carrierTeam] = false;
       // Flash own goal ring
       try {
         const goalEl = document.getElementById(carrierTeam === 'red' ? 'red-goal' : 'blue-goal');
@@ -849,17 +852,21 @@
       if (hit) {
         const entering = !_inOwnGoal[carrierTeam];
         _inOwnGoal[carrierTeam] = true;
+        const mpClient = G().isMultiplayer?.() && !G().isHost?.();
         // Enter once, or keep retrying if enter failed while own flag WAS home (pos desync).
-        if (entering || _scoreRetry[carrierTeam]) {
+        // MP clients only propose on rising edge — host is authoritative (no per-frame spam).
+        if (entering || (_scoreRetry[carrierTeam] && !mpClient)) {
           const ok = this.tryScore(carrierId, carrierTeam, evidence);
           if (ok) {
             _scoreRetry[carrierTeam] = false;
           } else if (!state[carrierTeam].home) {
             // Consumed this entry while flag away — must leave & re-enter after it returns
             _scoreRetry[carrierTeam] = false;
-          } else {
+          } else if (!mpClient) {
             // Own flag home but score failed — retry next frames until leave
             _scoreRetry[carrierTeam] = true;
+          } else {
+            _scoreRetry[carrierTeam] = false;
           }
         }
       } else {

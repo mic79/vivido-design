@@ -8,6 +8,7 @@
   const THREE = (window.AFRAME && window.AFRAME.THREE) || window.THREE;
   let _applyingFlagNet = false;
   let _playerHp = Object.create(null);
+  let _lastClientScoreReq = 0;
 
   function G() { return window.CapVRGame || {}; }
   function isMp() { return !!G().isMultiplayer?.(); }
@@ -175,6 +176,9 @@
     const origScore = F.tryScore.bind(F);
     F.tryScore = function (carrierId, atTeamBase, evidencePos) {
       if (isMp() && !isHost()) {
+        const now = performance.now();
+        if (now - _lastClientScoreReq < 900) return false;
+        _lastClientScoreReq = now;
         send({
           type: 'ctf-flag-request',
           action: 'score',
@@ -446,17 +450,10 @@
         origHS.call(this, data);
 
         if (id === localId() || id === 'player' || id === 'rig') {
-          if (wasLocalAlive && !this.alive) {
-            // Death FX / stun handled in combat.applyHealthSync; still net-drop flag
-            notifyDeathFlagDrop(localId());
-            document.dispatchEvent(new CustomEvent('combatant-died', {
-              detail: { id: localId() }
-            }));
-          }
+          _playerHp[localId()] = this.localHp;
           if (!wasLocalAlive && this.alive && data.currentHealth > 0) {
             this._lastDamageAt = 0;
           }
-          _playerHp[localId()] = this.localHp;
           return;
         }
 
@@ -495,7 +492,6 @@
         const wasAlive = this.alive;
         origHurt.call(this, n, detail);
         _playerHp[localId()] = this.localHp;
-        if (wasAlive && !this.alive) notifyDeathFlagDrop(localId());
       };
     }
 
@@ -849,17 +845,15 @@
       if (pid === localId()) continue;
       if (G().isPlayerConnected && !G().isPlayerConnected(pid)) continue;
       const parent = document.getElementById(`remote-player-${i}`);
-      const el = document.getElementById(`remote-target-${i}`) || parent;
-      if (!el?.object3D || !parent) continue;
+      if (!parent) continue;
       const pVis = parent.getAttribute('visible');
       if (pVis === false || pVis === 'false') continue;
-      // Skip if not connected — opaque hidden remotes
-      const mat = el.getAttribute('material');
-      if (mat && (mat.opacity === 0 || mat.opacity === '0')) continue;
+      const bodyEl = document.getElementById(`remote-body-${i}`);
+      const el = bodyEl || document.getElementById(`remote-target-${i}`) || parent;
+      if (!el?.object3D) continue;
       const center = new THREE.Vector3();
       el.object3D.getWorldPosition(center);
-      // Sphere radius ~0.45 (head/body proxy)
-      const radius = 0.55;
+      const radius = bodyEl ? 0.68 : 0.55;
       const to = center.clone().sub(origin);
       const t = to.dot(dir);
       if (t < 0.2 || t > bestDist) continue;
@@ -904,28 +898,11 @@
           endX: remoteHit.point.x, endY: remoteHit.point.y, endZ: remoteHit.point.z,
           color: '#00ffff'
         });
-        send({
-          type: 'damage-dealt',
-          targetId: remoteHit.playerId,
-          damage: C?.LASER_DAMAGE || 16,
-          attackerId: localId(),
-          point: {
-            x: remoteHit.point.x, y: remoteHit.point.y, z: remoteHit.point.z
-          },
-          from: { x: this._ori.x, y: this._ori.y, z: this._ori.z }
-        });
-        // Listen-server host must apply locally (sendCombatMsg does not echo to self)
+        const shot = { point: remoteHit.point, from: this._ori.clone() };
         if (isHost()) {
-          C?.applyRemoteDamage?.({
-            targetId: remoteHit.playerId,
-            damage: C.LASER_DAMAGE || 16,
-            attackerId: localId(),
-            force: true,
-            point: {
-              x: remoteHit.point.x, y: remoteHit.point.y, z: remoteHit.point.z
-            },
-            from: { x: this._ori.x, y: this._ori.y, z: this._ori.z }
-          });
+          C?.applyPlayerDamageAuthority?.(remoteHit.playerId, C.LASER_DAMAGE || 16, shot);
+        } else {
+          C?.proposePlayerDamage?.(remoteHit.playerId, C.LASER_DAMAGE || 16, shot);
         }
         return;
       }
@@ -1058,6 +1035,20 @@
     }
   }
 
+  function initPlayerHpNet(playerId) {
+    if (!isHost() || !playerId || !String(playerId).startsWith('player_')) return;
+    const max = window.CapVRCombat?.MAX_HP || 100;
+    ensurePlayerHp(playerId);
+    _playerHp[playerId] = max;
+    send({
+      type: 'health-sync',
+      entityId: playerId,
+      currentHealth: max,
+      maxHealth: max,
+      isDead: false
+    });
+  }
+
   window.CapVRMp = {
     isMp,
     isHost,
@@ -1067,6 +1058,7 @@
     onCombatMessage,
     raycastRemotePlayers,
     ensurePlayerHp,
+    initPlayerHpNet,
     notifyDeathFlagDrop,
     applyStickyAttach,
     sendFlagStateToJoiner() {

@@ -50,6 +50,124 @@
     return window.CapVRGame?.myPlayerId || 'player_0';
   }
 
+  function playerSlotIndex(playerId) {
+    if (!playerId) return null;
+    const m = String(playerId).match(/player_(\d+)/);
+    return m ? m[1] : null;
+  }
+
+  /** MP: client → host damage proposal (ragdoll-shooter path; syncDamageDealt is host-only). */
+  function proposePlayerDamage(targetId, damage, shot) {
+    const G = window.CapVRGame;
+    if (!G?.sendCombatMsg || !G.isMultiplayer?.()) return;
+    if (G.isHost?.()) return;
+    const payload = {
+      type: 'damage-dealt',
+      targetId,
+      damage: damage || LASER_DAMAGE,
+      attackerId: localId()
+    };
+    if (shot?.point) {
+      payload.point = shot.point.clone
+        ? { x: shot.point.x, y: shot.point.y, z: shot.point.z }
+        : { x: shot.point.x, y: shot.point.y, z: shot.point.z };
+    }
+    if (shot?.from) {
+      payload.from = shot.from.clone
+        ? { x: shot.from.x, y: shot.from.y, z: shot.from.z }
+        : { x: shot.from.x, y: shot.from.y, z: shot.from.z };
+    }
+    G.sendCombatMsg(payload);
+  }
+
+  /** Host applies authoritative PvP damage (listen-server / dedicated host). */
+  function applyPlayerDamageAuthority(targetId, damage, shot) {
+    window.CapVRCombat?.applyRemoteDamage?.({
+      targetId,
+      damage: damage || LASER_DAMAGE,
+      attackerId: localId(),
+      force: true,
+      point: shot?.point
+        ? (shot.point.clone
+          ? { x: shot.point.x, y: shot.point.y, z: shot.point.z }
+          : shot.point)
+        : null,
+      from: shot?.from
+        ? (shot.from.clone
+          ? { x: shot.from.x, y: shot.from.y, z: shot.from.z }
+          : shot.from)
+        : null
+    });
+  }
+
+  function _shotDirFromPayload(shot) {
+    if (!shot?.from || !shot?.point) return null;
+    const from = shot.from.clone
+      ? shot.from.clone()
+      : new THREE.Vector3(shot.from.x, shot.from.y, shot.from.z);
+    const pt = shot.point.clone
+      ? shot.point.clone()
+      : new THREE.Vector3(shot.point.x, shot.point.y, shot.point.z);
+    const dir = pt.sub(from);
+    if (dir.lengthSq() < 1e-6) return null;
+    return dir.normalize();
+  }
+
+  function applyHumanDeathTumble(bodyEl, shot) {
+    if (!bodyEl?.object3D) return;
+    bodyEl.dataset.capvrDead = 'true';
+    bodyEl._capvrDeathUntil = performance.now() + RESPAWN_MS;
+    const dir = _shotDirFromPayload(shot);
+    if (dir) {
+      bodyEl._capvrDeathVel = { rx: dir.z * 2.8, rz: -dir.x * 2.8, ry: dir.y * 0.4 };
+    } else {
+      bodyEl._capvrDeathVel = { rx: 1.2, rz: 0.6, ry: 0 };
+    }
+  }
+
+  function clearHumanDeathTumble(bodyEl) {
+    if (!bodyEl) return;
+    delete bodyEl.dataset.capvrDead;
+    delete bodyEl._capvrDeathUntil;
+    delete bodyEl._capvrDeathVel;
+    if (bodyEl.object3D) {
+      bodyEl.object3D.rotation.x = 0;
+      bodyEl.object3D.rotation.z = 0;
+    }
+  }
+
+  function applyRemoteHumanDeathFx(playerId, shot) {
+    const idx = playerSlotIndex(playerId);
+    if (idx == null) return;
+    const bodyEl = document.getElementById(`remote-body-${idx}`);
+    const targetEl = document.getElementById(`remote-target-${idx}`);
+    targetEl?.components?.['impact-effect']?.playEffect?.();
+    if (bodyEl) {
+      applyHumanDeathTumble(bodyEl, shot);
+      bodyEl.setAttribute('visible', true);
+    }
+    if (shot?.point) playImpactSfx(shot.point);
+  }
+
+  function applyRemoteHumanRespawnFx(playerId) {
+    const idx = playerSlotIndex(playerId);
+    if (idx == null) return;
+    const bodyEl = document.getElementById(`remote-body-${idx}`);
+    clearHumanDeathTumble(bodyEl);
+    if (bodyEl) bodyEl.setAttribute('visible', true);
+  }
+
+  function tickHumanDeathTumbles(dtSec) {
+    document.querySelectorAll('[data-capvr-dead="true"]').forEach((el) => {
+      if (!el.object3D || !el._capvrDeathVel) return;
+      if (el._capvrDeathUntil && performance.now() > el._capvrDeathUntil) return;
+      const s = dtSec || 0.016;
+      el.object3D.rotation.x += el._capvrDeathVel.rx * s;
+      el.object3D.rotation.z += el._capvrDeathVel.rz * s;
+      el.object3D.rotation.y += (el._capvrDeathVel.ry || 0) * s;
+    });
+  }
+
   function purgeDuplicateCombatBodies() {
     ['bot-red-body-combat', 'bot-blue-body-combat', 'bot-green-body-combat', 'ik-local-body', 'grab-dummy']
       .forEach((id) => document.getElementById(id)?.remove());
@@ -1372,20 +1490,16 @@
           this._spawnFlash(this._rayOri, remoteHit.point, true);
         }
         syncWeaponFired(this._rayOri, remoteHit.point, '#00ffff');
-        syncDamageDealt(remoteHit.playerId, LASER_DAMAGE, localId());
-        if (window.CapVRGame?.isHost?.()) {
-          window.CapVRCombat?.applyRemoteDamage?.({
-            targetId: remoteHit.playerId,
-            damage: LASER_DAMAGE,
-            attackerId: localId(),
-            force: true,
-            point: {
-              x: remoteHit.point.x, y: remoteHit.point.y, z: remoteHit.point.z
-            },
-            from: {
-              x: this._rayOri.x, y: this._rayOri.y, z: this._rayOri.z
-            }
-          });
+        const shot = {
+          point: remoteHit.point,
+          from: this._rayOri.clone()
+        };
+        if (window.CapVRGame?.isMultiplayer?.()) {
+          if (window.CapVRGame.isHost?.()) {
+            applyPlayerDamageAuthority(remoteHit.playerId, LASER_DAMAGE, shot);
+          } else {
+            proposePlayerDamage(remoteHit.playerId, LASER_DAMAGE, shot);
+          }
         }
         playImpactSfx(remoteHit.point);
         return;
@@ -1528,6 +1642,7 @@
 
     tick: function (t, dt) {
       updateHitSparks((dt || 16) / 1000); // XR-safe spark lifecycle (must run even when dead)
+      tickHumanDeathTumbles((dt || 16) / 1000);
       syncBotBodies();
       hideLocalHead();
       this._tickBotRespawns();
@@ -1829,43 +1944,48 @@
         this.localHp = 0;
         this.alive = false;
         this._respawnAt = performance.now() + RESPAWN_MS;
-        const id = localId();
-        // Drop CTF flag first (clears palm grab + carrier) before other release logic
-        try { window.CapVRFlags?.dropFromOwner?.(id); } catch (e0) { /* */ }
-        document.dispatchEvent(new CustomEvent('combatant-died', { detail: { id } }));
-        document.dispatchEvent(new CustomEvent('entity-died', {
-          detail: { entityId: id, entityType: 'player' }
-        }));
-        const zp = document.querySelector('[zerog-player]')?.components?.['zerog-player'];
-        if (zp) {
-          try {
-            if (zp.leftHand) zp.releaseFromSurface?.(zp.leftHand);
-            if (zp.rightHand) zp.releaseFromSurface?.(zp.rightHand);
-          } catch (e) { /* */ }
-          // releaseFromSurface does not clear grabbedSurface — that was re-attaching the flag
-          if (zp.grabbedSurface) {
-            zp.grabbedSurface.left = null;
-            zp.grabbedSurface.right = null;
-          }
-          if (zp.grabInfo) {
-            zp.grabInfo.left = null;
-            zp.grabInfo.right = null;
-          }
-          if (zp.isGrabbing) {
-            zp.isGrabbing.left = false;
-            zp.isGrabbing.right = false;
-          }
+        this._applyLocalDeathEffects(src, { stickyHud: !!src.sticky });
+      }
+    },
+
+    /** Shared local death: stun, flag drop, ragdoll tumble, events (MP health-sync + local _hurt). */
+    _applyLocalDeathEffects: function (shot, opts) {
+      opts = opts || {};
+      const id = localId();
+      try { window.CapVRFlags?.dropFromOwner?.(id); } catch (e0) { /* */ }
+      document.dispatchEvent(new CustomEvent('combatant-died', { detail: { id } }));
+      document.dispatchEvent(new CustomEvent('entity-died', {
+        detail: { entityId: id, entityType: 'player' }
+      }));
+      const zp = document.querySelector('[zerog-player]')?.components?.['zerog-player'];
+      if (zp) {
+        try {
+          if (zp.leftHand) zp.releaseFromSurface?.(zp.leftHand);
+          if (zp.rightHand) zp.releaseFromSurface?.(zp.rightHand);
+        } catch (e) { /* */ }
+        if (zp.grabbedSurface) {
+          zp.grabbedSurface.left = null;
+          zp.grabbedSurface.right = null;
         }
-        // Stun like BattleVR deathcam window
-        if (zp) {
-          zp.isStunned = true;
-          zp.stunEndTime = Date.now() + RESPAWN_MS;
+        if (zp.grabInfo) {
+          zp.grabInfo.left = null;
+          zp.grabInfo.right = null;
         }
-        const msg = document.querySelector('#hud-message');
-        if (msg) {
-          msg.setAttribute('visible', true);
-          msg.setAttribute('text', 'value', 'Destroyed — kill shot linger…');
+        if (zp.isGrabbing) {
+          zp.isGrabbing.left = false;
+          zp.isGrabbing.right = false;
         }
+        zp.isStunned = true;
+        zp.stunEndTime = Date.now() + RESPAWN_MS;
+      }
+      const localBody = document.getElementById('local-body');
+      applyHumanDeathTumble(localBody, shot);
+      const msg = document.querySelector('#hud-message');
+      if (msg) {
+        msg.setAttribute('visible', true);
+        msg.setAttribute('text', 'value', opts.stickyHud
+          ? 'Destroyed — sticky blast'
+          : 'Destroyed — kill shot linger…');
       }
     },
 
@@ -1886,6 +2006,7 @@
       clearKillingShots(player);
       clearKillingShots(document.querySelector('a-scene'));
       this._lastIncoming = null;
+      clearHumanDeathTumble(document.getElementById('local-body'));
       if (player) {
         player.setAttribute('position', { x: spawn.x, y: spawn.y, z: spawn.z });
         if (player.body?.position) player.body.position.set(spawn.x, spawn.y, spawn.z);
@@ -1949,18 +2070,14 @@
         updateLocalHud(this.alive ? this.localHp : 0, this.maxHp);
         if (wasAlive && !this.alive) {
           this._respawnAt = performance.now() + RESPAWN_MS;
-          const zp = document.querySelector('[zerog-player]')?.components?.['zerog-player'];
-          if (zp) {
-            zp.isStunned = true;
-            zp.stunEndTime = Date.now() + RESPAWN_MS;
-          }
-          const msg = document.querySelector('#hud-message');
-          if (msg) {
-            msg.setAttribute('visible', true);
-            msg.setAttribute('text', 'value', data.sticky
-              ? 'Destroyed — sticky blast'
-              : 'Destroyed — kill shot linger…');
-          }
+          const shot = {
+            from: data.from || this._lastIncoming?.from || null,
+            to: data.to || data.point || null,
+            point: data.point || data.to || null,
+            sticky: !!data.sticky,
+            fromTeam: data.attackerId
+          };
+          this._applyLocalDeathEffects(shot, { stickyHud: !!data.sticky });
         }
         return;
       }
@@ -1972,7 +2089,20 @@
         return;
       }
       if (String(id).startsWith('player_')) {
+        const wasDead = window.CapVRCombat?._remoteDead?.[id];
         updateRemoteBar(id, data.currentHealth, data.maxHealth || MAX_HP, data.isDead);
+        if (data.isDead && !wasDead) {
+          window.CapVRCombat._remoteDead = window.CapVRCombat._remoteDead || {};
+          window.CapVRCombat._remoteDead[id] = true;
+          applyRemoteHumanDeathFx(id, {
+            from: data.from,
+            point: data.point || data.to,
+            to: data.to || data.point
+          });
+        } else if (!data.isDead && (data.currentHealth || 0) > 0 && wasDead) {
+          window.CapVRCombat._remoteDead[id] = false;
+          applyRemoteHumanRespawnFx(id);
+        }
       }
     }
   });
@@ -1992,9 +2122,14 @@
 
   window.CapVRCombat = {
     botState,
+    _remoteDead: {},
     MAX_HP,
     LASER_DAMAGE,
     STICKY_ATTACH_DAMAGE,
+    proposePlayerDamage,
+    applyPlayerDamageAuthority,
+    applyRemoteHumanDeathFx,
+    applyRemoteHumanRespawnFx,
     applyCharacterVisibility,
     isBotAlive(owner) { return !!botState[owner]?.alive; },
     creditShotHit() { window.CapVRCombat._lastShotAt = performance.now(); },
