@@ -269,6 +269,11 @@
     F?.dropFromOwner?.(ownerId);
   }
 
+  function plainVec3(v) {
+    if (!v || v.x == null) return null;
+    return { x: v.x, y: v.y, z: v.z };
+  }
+
   function patchCombatAuthority() {
     const C = window.CapVRCombat;
     if (!C || C._capvrMpPatched) return;
@@ -278,14 +283,21 @@
     C.damageBot = function (owner, amount, opts) {
       if (isMp() && !isHost()) {
         // Client proposes; host applies. Still allow local hit spark via caller.
+        const pt = opts?.point;
+        const from = opts?.from || (pt && opts?.dir
+          ? {
+              x: pt.x - (opts.dir.x || 0) * 0.5,
+              y: pt.y - (opts.dir.y || 0) * 0.5,
+              z: pt.z - (opts.dir.z || 0) * 0.5
+            }
+          : pt) || null;
         send({
           type: 'damage-dealt',
           targetId: owner,
           damage: amount,
-          attackerId: localId(),
-          point: opts?.point ? {
-            x: opts.point.x, y: opts.point.y, z: opts.point.z
-          } : null,
+          attackerId: opts?.attackerId || localId(),
+          point: plainVec3(pt),
+          from: plainVec3(from),
           regionId: opts?.regionId || null,
           dir: opts?.dir ? {
             x: opts.dir.x, y: opts.dir.y, z: opts.dir.z
@@ -316,12 +328,6 @@
 
       const tid = data.targetId;
       const dmg = data.damage || C.LASER_DAMAGE || 16;
-
-      // Laser HP requires a shot origin — blocks phantom damage-dealt
-      if (!data.sticky && !data.from) {
-        console.warn('[CapVRMp] ignored laser damage without from', tid);
-        return;
-      }
 
       // Ignore damage to unconnected remotes (ghost slots)
       if (String(tid).startsWith('player_')
@@ -365,13 +371,35 @@
         if (d > maxR) return;
       }
 
-      const shotFrom = data.from || (data.sticky ? data.point : null);
+      const shotFrom = data.from || (data.sticky ? data.point : null)
+        || (data.point ? data.point : null);
       const shotTo = data.to || data.point || null;
+      const attacker = data.attackerId || null;
+
+      // Laser HP requires a shot origin — accept hit point as last-resort from
+      if (!data.sticky && !shotFrom) {
+        console.warn('[CapVRMp] ignored laser damage without from', tid);
+        return;
+      }
+
+      const friendlyHeal = !!(C.shouldFriendlyHeal
+        ? C.shouldFriendlyHeal(attacker, tid, data)
+        : (attacker && C.areCombatTeammates?.(attacker, tid) && !data.sticky));
 
       if (tid === localId() || tid === 'player' || tid === 'rig') {
         const c = document.querySelector('[capvr-combat]')?.components?.['capvr-combat'];
+        if (friendlyHeal) {
+          const heal = C.healFromDamage?.(dmg) ?? Math.floor(dmg / 2);
+          c?._heal?.(heal, {
+            fromTeam: attacker,
+            from: shotFrom,
+            to: shotTo,
+            point: data.point || shotTo
+          });
+          return;
+        }
         c?._hurt?.(dmg, {
-          fromTeam: data.attackerId,
+          fromTeam: attacker,
           from: shotFrom,
           to: shotTo,
           point: data.point || shotTo,
@@ -389,6 +417,8 @@
           bodyEl,
           point,
           regionId: data.regionId,
+          attackerId: attacker,
+          sticky: !!data.sticky,
           dir: data.dir
             ? new THREE.Vector3(data.dir.x, data.dir.y, data.dir.z)
             : new THREE.Vector3(0, -1, 0)
@@ -397,36 +427,72 @@
       }
 
       if (String(tid).startsWith('player_')) {
+        const maxHp = C.MAX_HP || 100;
         let hp = ensurePlayerHp(tid);
+        const fromP = plainVec3(shotFrom);
+        const toP = plainVec3(shotTo) || plainVec3(data.point);
+        const pointP = plainVec3(data.point) || toP;
+        if (friendlyHeal) {
+          const heal = C.healFromDamage?.(dmg) ?? Math.floor(dmg / 2);
+          hp = Math.min(maxHp, hp + heal);
+          _playerHp[tid] = hp;
+          const hs = {
+            type: 'health-sync',
+            entityId: tid,
+            currentHealth: hp,
+            maxHealth: maxHp,
+            isDead: false,
+            heal: true,
+            point: pointP,
+            from: fromP,
+            to: toP,
+            attackerId: attacker
+          };
+          send(hs);
+          // sendCombatMsg does not echo to host — apply bar/HP locally
+          C.applyRemoteHealthSync?.(hs);
+          if (samePlayerId(tid, localId())) {
+            const c = document.querySelector('[capvr-combat]')?.components?.['capvr-combat'];
+            c?._heal?.(heal, {
+              fromTeam: attacker,
+              from: shotFrom,
+              to: shotTo,
+              point: data.point || shotTo
+            });
+          }
+          return;
+        }
         hp = Math.max(0, hp - dmg);
         _playerHp[tid] = hp;
         const dead = hp <= 0;
-        send({
+        const hs = {
           type: 'health-sync',
           entityId: tid,
           currentHealth: hp,
-          maxHealth: C.MAX_HP || 100,
+          maxHealth: maxHp,
           isDead: dead,
-          point: data.point || shotTo || null,
-          from: shotFrom || null,
-          to: shotTo || null,
+          point: pointP,
+          from: fromP,
+          to: toP,
           sticky: !!data.sticky,
-          attackerId: data.attackerId || null
-        });
+          attackerId: attacker
+        };
+        send(hs);
+        C.applyRemoteHealthSync?.(hs);
         // Also show the beam on peers immediately
-        if (shotFrom && shotTo && !data.sticky) {
+        if (fromP && toP && !data.sticky) {
           send({
             type: 'weapon-fired',
-            playerId: data.attackerId || 'bot',
-            startX: shotFrom.x, startY: shotFrom.y, startZ: shotFrom.z,
-            endX: shotTo.x, endY: shotTo.y, endZ: shotTo.z,
+            playerId: attacker || 'bot',
+            startX: fromP.x, startY: fromP.y, startZ: fromP.z,
+            endX: toP.x, endY: toP.y, endZ: toP.z,
             color: '#ff6655'
           });
         }
-        if (tid === localId()) {
+        if (samePlayerId(tid, localId())) {
           const c = document.querySelector('[capvr-combat]')?.components?.['capvr-combat'];
           c?._hurt?.(dmg, {
-            fromTeam: data.attackerId,
+            fromTeam: attacker,
             from: shotFrom,
             to: shotTo,
             point: data.point || shotTo,
@@ -519,10 +585,8 @@
     }
   }
 
-  // —— Sticky bomb net ——
+  // —— Sticky bomb net (stun boom — no HP damage) ——
   const _stickyBoomKeys = new Set();
-  const STICKY_ATTACH_DMG = () => window.CapVRCombat?.STICKY_ATTACH_DAMAGE || 48;
-  const STICKY_SPLASH_DMG = () => window.CapVRCombat?.STICKY_SPLASH_DAMAGE || 16;
 
   function resolveStickyTargetEl(data) {
     if (!data) return null;
@@ -616,6 +680,7 @@
     const key = `${detail.ballEl?.id || detail.ballId || 'ball'}:${detail.fuseStart || 0}`;
     if (_stickyBoomKeys.has(key)) return;
     _stickyBoomKeys.add(key);
+    const C = window.CapVRCombat;
     send({
       type: 'sticky-detonate',
       ballId: detail.ballEl?.id || detail.ballId || null,
@@ -625,78 +690,24 @@
       fuseStart: detail.fuseStart || 0,
       netKey: key,
       position: { x: pos.x, y: pos.y, z: pos.z },
+      victims: detail._stunnedVictims || null,
+      durationMs: C?.STICKY_STUN_MS || 5000,
+      radius: C?.STICKY_STUN_RADIUS || 2.4,
       fromId: localId()
     });
   }
 
+  /** Legacy name — sticky boom no longer deals HP; host/client propose path is VFX + stun only. */
   function proposeStickyDamage(detail) {
     const pos = detail?.position;
     if (!pos) return;
-    const center = { x: pos.x, y: pos.y, z: pos.z };
-    const attach = STICKY_ATTACH_DMG();
-    const splash = STICKY_SPLASH_DMG();
-    const attackerId = detail.attackerId || localId();
-    const tid = detail.targetId || '';
-    const pid = playerIdFromStickyTarget(tid, detail.targetPlayerId);
-
-    if (pid) {
-      send({
-        type: 'damage-dealt',
-        targetId: pid,
-        damage: attach,
-        attackerId,
-        sticky: true,
-        force: true,
-        point: center,
-        from: center
-      });
-    } else if (String(tid).startsWith('zerog-') || String(tid).startsWith('bot-')) {
-      const botOwner = String(tid).replace(/^zerog-/, '');
-      send({
-        type: 'damage-dealt',
-        targetId: botOwner,
-        damage: attach,
-        attackerId,
-        sticky: true,
-        force: true,
-        point: center
-      });
-    }
-
-    // Splash proposes (host validates range loosely by applying)
-    for (let i = 0; i < 4; i++) {
-      const p = `player_${i}`;
-      if (pid && samePlayerId(p, pid)) continue;
-      send({
-        type: 'damage-dealt',
-        targetId: p,
-        damage: splash,
-        attackerId,
-        sticky: true,
-        stickySplash: true,
-        point: center
-      });
-    }
-    ['bot-red', 'bot-blue', 'bot-green'].forEach((owner) => {
-      if (tid === `zerog-${owner}` || tid === owner) return;
-      send({
-        type: 'damage-dealt',
-        targetId: owner,
-        damage: splash,
-        attackerId,
-        sticky: true,
-        stickySplash: true,
-        point: center
-      });
-    });
-
     send({
       type: 'sticky-detonate',
       ballId: detail.ballEl?.id || detail.ballId || null,
-      targetId: tid,
-      targetPlayerId: pid,
-      attackerId,
-      position: center,
+      targetId: detail.targetId || null,
+      targetPlayerId: playerIdFromStickyTarget(detail.targetId, detail.targetPlayerId),
+      attackerId: detail.attackerId || localId(),
+      position: { x: pos.x, y: pos.y, z: pos.z },
       fuseStart: detail.fuseStart || 0,
       visualOnly: true,
       fromId: localId()
@@ -705,74 +716,45 @@
 
   const _stickyDmgBallAt = Object.create(null);
 
+  function applyStickyStunFromNet(data) {
+    const C = window.CapVRCombat;
+    if (!C || !data?.position) return [];
+    if (Array.isArray(data.victims) && data.victims.length) {
+      const ms = data.durationMs || C.STICKY_STUN_MS || 5000;
+      const stunned = [];
+      data.victims.forEach((id) => {
+        if (C.applyStunToOwner?.(id, ms)) stunned.push(id);
+      });
+      return stunned;
+    }
+    return C.applyStickyStunBlast?.(data) || [];
+  }
+
   function applyStickyDamageHost(data) {
+    // Name kept for call sites — applies sticky STUN (no HP).
     const C = window.CapVRCombat;
     if (!C || !data?.position) return;
     const ballId = data.ballId || 'ball';
     const now = performance.now();
-    // Host fuse + client failsafe can race — one boom per ball per 2s
     if (_stickyDmgBallAt[ballId] && now - _stickyDmgBallAt[ballId] < 2000) return;
     const key = data.netKey || `${ballId}:${data.fuseStart || 0}:dmg`;
     if (_stickyBoomKeys.has(key)) return;
     _stickyBoomKeys.add(key);
     _stickyDmgBallAt[ballId] = now;
-    const center = data.position;
-    const attach = STICKY_ATTACH_DMG();
-    const splash = STICKY_SPLASH_DMG();
-    const attackerId = data.attackerId || data.fromId || 'sticky';
-    const pid = data.targetPlayerId || playerIdFromStickyTarget(data.targetId);
-    const tid = data.targetId || '';
-
-    if (pid) {
-      C.applyRemoteDamage?.({
-        targetId: pid,
-        damage: attach,
-        attackerId,
-        sticky: true,
-        force: true,
-        point: center,
-        from: center
-      });
-    } else if (String(tid).startsWith('zerog-') || String(tid).startsWith('bot-')) {
-      const botOwner = String(tid).replace(/^zerog-/, '');
-      C.applyRemoteDamage?.({
-        targetId: botOwner,
-        damage: attach,
-        attackerId,
-        sticky: true,
-        force: true,
-        point: center,
-        from: center
-      });
-    }
-
-    for (let i = 0; i < 4; i++) {
-      const p = `player_${i}`;
-      if (pid && samePlayerId(p, pid)) continue;
-      if (G().isPlayerConnected && !G().isPlayerConnected(p) && !samePlayerId(p, localId())) continue;
-      C.applyRemoteDamage?.({
-        targetId: p,
-        damage: splash,
-        attackerId,
-        sticky: true,
-        stickySplash: true,
-        force: true,
-        point: center,
-        from: center
-      });
-    }
-    ['bot-red', 'bot-blue', 'bot-green'].forEach((owner) => {
-      if (tid === `zerog-${owner}` || tid === owner) return;
-      C.applyRemoteDamage?.({
-        targetId: owner,
-        damage: splash,
-        attackerId,
-        sticky: true,
-        stickySplash: true,
-        force: true,
-        point: center,
-        from: center
-      });
+    const victims = applyStickyStunFromNet(data);
+    send({
+      type: 'sticky-detonate',
+      ballId: data.ballId,
+      targetId: data.targetId,
+      targetPlayerId: data.targetPlayerId || playerIdFromStickyTarget(data.targetId),
+      attackerId: data.attackerId || data.fromId || localId(),
+      fuseStart: data.fuseStart,
+      netKey: data.netKey || key,
+      position: data.position,
+      victims,
+      durationMs: C.STICKY_STUN_MS || 5000,
+      radius: C.STICKY_STUN_RADIUS || 2.4,
+      fromId: localId()
     });
   }
 
@@ -784,21 +766,14 @@
     clearStickyOnBall(data.ballId);
     if (!already || data.visualOnly) playStickyVfx(data);
 
-    // Client failsafe / peer boom: host applies damage once
+    // Client failsafe / peer boom: host applies stun once and fans out
     if (isHost() && data.fromId && data.fromId !== localId()) {
       applyStickyDamageHost(data);
-      // Fan-out authoritative VFX/clear to everyone else
-      send({
-        type: 'sticky-detonate',
-        ballId: data.ballId,
-        targetId: data.targetId,
-        targetPlayerId: data.targetPlayerId,
-        attackerId: data.attackerId,
-        fuseStart: data.fuseStart,
-        netKey: key,
-        position: data.position,
-        fromId: localId()
-      });
+      return;
+    }
+    // Non-host peers: apply host-authoritative stun (SFX + local isStunned)
+    if (!isHost() && !data.visualOnly) {
+      applyStickyStunFromNet(data);
     }
   }
 
@@ -919,8 +894,11 @@
           const botId = detail?.el?.dataset?.botId;
           if (!botId) return;
           const owner = botId.replace('zerog-', '');
-          // Visual shred only; HP/kill is host-authoritative via damageBot → damage-dealt
-          if (detail.point) {
+          const C = window.CapVRCombat;
+          const attacker = C?.resolveHitAttackerId?.(detail) || localId();
+          // Teammate laser → no shatter; host applies heal via damage-dealt
+          const friendly = C?.areCombatTeammates?.(attacker, owner);
+          if (!friendly && detail.point) {
             const grab = detail.el?.components?.['grabbable-ragdoll'];
             try {
               grab?.shatterFromShot?.(
@@ -933,11 +911,12 @@
               );
             } catch (e) { /* */ }
           }
-          window.CapVRCombat?.damageBot?.(owner, detail.damage || 16, {
+          C?.damageBot?.(owner, detail.damage || 16, {
             bodyEl: detail.el,
             point: detail.point,
             dir: detail.dir,
-            regionId: detail.regionId
+            regionId: detail.regionId,
+            attackerId: attacker
           });
           return;
         }
@@ -994,9 +973,12 @@
       window.CapVRCombat?.applyRemoteDamage?.({
         targetId: d.playerId,
         damage: d.damage || 16,
-        attackerId: d.fromTeam || 'bot',
+        // Prefer bot owner id; fall back to team color ('red'/'blue') for team checks
+        attackerId: d.attackerId || d.fromTeam || 'bot',
+        force: true,
         point: d.point,
-        from: d.from
+        from: d.from,
+        to: d.to || d.point
       });
     });
   }

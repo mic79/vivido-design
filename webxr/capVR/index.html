@@ -34,8 +34,8 @@
     <script src="js/capvr-box3d-ext.js?v=handsurf4"></script>
     <script src="js/capvr-physics.js?v=handsurf4"></script>
     <script src="js/zerog-legs.js"></script>
-    <script src="js/grabbable-ragdoll.js?v=matpool1"></script>
-    <script src="js/body-foundation.js?v=matpool1"></script>
+    <script src="js/grabbable-ragdoll.js?v=deathrag1"></script>
+    <script src="js/body-foundation.js?v=deathrag1"></script>
     <script>
       // Early CapVR hand-id bridge (before scene entities init mixamo-body).
       (function () {
@@ -1982,11 +1982,8 @@
                 if (isHost && window.CapVRCombat?.applyRemoteDamage) {
                   window.CapVRCombat.applyRemoteDamage(data);
                 }
-                if (isHost) {
-                  connections.forEach((otherConn) => {
-                    if (otherConn !== conn && otherConn.open) otherConn.send(data);
-                  });
-                }
+                // Do NOT rebroadcast raw damage-dealt — host already sends health-sync.
+                // Rebroadcasting caused peers to see hit FX without reliable HP authority.
                 break;
               case 'health-sync':
                 if (window.CapVRMp?.onCombatMessage) {
@@ -21599,6 +21596,8 @@ function setGameplayHUD(isPlaying) {
 
         // Update remote pose data (called by network sync)
         updateRemotePoseData: function(poseData) {
+          // Keep last live pose while dead — tumble owns the mesh until respawn
+          if (this.el?.dataset?.capvrDead === 'true') return;
           if (!this._slotActive) this.setSlotActive(true);
           this.remotePoseData = poseData;
         }
@@ -22669,6 +22668,28 @@ function setGameplayHUD(isPlaying) {
                 visible="false">
       </a-entity>
 
+      <!-- Preloaded player-death corpses (Box3D collapse ragdoll — same as bots). -->
+      <a-entity id="player-death-ragdoll-local"
+                grabbable-ragdoll="x: 0; y: -80; z: 0; modelPath: character.glb; showCollisionWireframe: false; allowPalmGrab: false; paused: true"
+                visible="false">
+      </a-entity>
+      <a-entity id="player-death-ragdoll-0"
+                grabbable-ragdoll="x: 0; y: -80; z: 0; modelPath: character.glb; showCollisionWireframe: false; allowPalmGrab: false; paused: true"
+                visible="false">
+      </a-entity>
+      <a-entity id="player-death-ragdoll-1"
+                grabbable-ragdoll="x: 0; y: -80; z: 0; modelPath: character.glb; showCollisionWireframe: false; allowPalmGrab: false; paused: true"
+                visible="false">
+      </a-entity>
+      <a-entity id="player-death-ragdoll-2"
+                grabbable-ragdoll="x: 0; y: -80; z: 0; modelPath: character.glb; showCollisionWireframe: false; allowPalmGrab: false; paused: true"
+                visible="false">
+      </a-entity>
+      <a-entity id="player-death-ragdoll-3"
+                grabbable-ragdoll="x: 0; y: -80; z: 0; modelPath: character.glb; showCollisionWireframe: false; allowPalmGrab: false; paused: true"
+                visible="false">
+      </a-entity>
+
       <!-- Bot bodies: ONE mesh = grabbable-ragdoll (ZeroGLegs loco + hit react + limb shatter).
            Upright yaw from zerog-bot; thruster velocity → ZeroGLegs. No invisible proxy. -->
       <a-entity id="bot-red-body"
@@ -23724,11 +23745,11 @@ function setGameplayHUD(isPlaying) {
       
     </script>
     <!-- CapVR CTF / sticky layer — keeps BoltVR UI, Mixamo bots, arenas, PeerJS -->
-    <script src="js/capvr-ctf-rules.js?v=scorefix1"></script>
-    <script src="js/capvr-combat.js?v=pvpfix1"></script>
+    <script src="js/capvr-ctf-rules.js?v=botatk1"></script>
+    <script src="js/capvr-combat.js?v=botatk1"></script>
     <script src="js/capvr-boot.js?v=noleg1"></script>
     <script src="js/capvr-bot-form.js?v=botslot3"></script>
-    <script src="js/capvr-mp.js?v=pvpfix1"></script>
+    <script src="js/capvr-mp.js?v=botatk1"></script>
     <script src="js/capvr-arena-fixtures.js?v=fixtures1"></script>
   </body>
 </html> 

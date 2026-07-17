@@ -721,6 +721,34 @@
             this.previousHeadPosInitialized = false;
             delete this.el.sceneEl._bodyLocomotionState;
           });
+          // CapVR has no leg-ik-world recenter path — bind XR origin reset ourselves.
+          if (!this.data.isMirror) {
+            const bindCapVrRecenter = () => {
+              if (!this._isCapVRLocalBody?.()) return;
+              const renderer = this.el.sceneEl?.renderer;
+              if (!renderer?.xr?.getReferenceSpace) return;
+              const tryBind = () => {
+                if (!this.el.sceneEl?.is?.('vr-mode')) return;
+                const refSpace = renderer.xr.getReferenceSpace();
+                if (!refSpace) {
+                  setTimeout(tryBind, 80);
+                  return;
+                }
+                if (this._capvrBoundRefSpace === refSpace) return;
+                if (this._capvrBoundRefSpace && this._capvrRefResetHandler) {
+                  this._capvrBoundRefSpace.removeEventListener('reset', this._capvrRefResetHandler);
+                }
+                this._capvrRefResetHandler = () => {
+                  this.el.sceneEl.emit('vr-recenter', { reason: 'reference-space-reset' });
+                };
+                refSpace.addEventListener('reset', this._capvrRefResetHandler);
+                this._capvrBoundRefSpace = refSpace;
+              };
+              this.el.sceneEl.addEventListener('enter-vr', () => setTimeout(tryBind, 100));
+              if (this.el.sceneEl.is('vr-mode')) setTimeout(tryBind, 100);
+            };
+            bindCapVrRecenter();
+          }
           this.el.sceneEl.addEventListener('vr-height-calibrated', (evt) => {
             this._standingHipsLocalY = null;
             this.previousHeadPosInitialized = false;
@@ -1642,6 +1670,22 @@
           return false;
         },
 
+        /** CapVR #player/#rig + zerog-player (not body-rigged floor demos). */
+        _isCapVRLocalBody: function () {
+          if (this.data.isMirror || !this._isLocalRigChild()) return false;
+          const player = document.getElementById('player');
+          const rig = document.getElementById('rig');
+          return !!(player && rig && player.contains(rig) && player.components?.['zerog-player']);
+        },
+
+        /**
+         * BoltVR-style: hips track headset Y every frame.
+         * Floor + standingEyeLocalY cannot follow a seated HMD (camera ends in chest).
+         */
+        _shouldUseHeadRelativeBody: function () {
+          return this._isCapVRLocalBody() && !!this.el.sceneEl?.is?.('vr-mode');
+        },
+
         _getPhysicalGroundY: function(headWorldX, headWorldZ) {
           const legIk = this.el.sceneEl.components['leg-ik-world'];
           if (this._isLocalRigChild() && legIk?.physics) {
@@ -1680,6 +1724,28 @@
           camLocal.add(this._getManualBodyOffsetLocal());
           camLocal.y = 0;
           return camLocal;
+        },
+
+        /**
+         * BoltVR local-body placement, in #rig local space:
+         * desiredHipsY = headY - 0.65; bodyY = desiredHipsY - modelHipsLocalY.
+         */
+        _anchorBodyHeadRelative: function () {
+          if (!this.camera) return;
+          const cam = this.camera.object3D.position;
+          const manual = this._getManualBodyOffsetLocal();
+          const scale = this.el.sceneEl.legIkWorld?.modelVerticalScale ?? 1;
+          const modelHips = (this.modelHipsLocalY != null ? this.modelHipsLocalY : 1.0) * scale;
+          const hipsBelowEye = 0.65;
+          // Same hips-back offset as grounded path (character forward is -Z).
+          const back = this._hipsBackLocalTmp || (this._hipsBackLocalTmp = new THREE.Vector3());
+          back.set(0, 0, 0.15).applyQuaternion(this._getYawQuat());
+          this.el.object3D.position.set(
+            cam.x + manual.x + back.x,
+            cam.y - hipsBelowEye - modelHips,
+            cam.z + manual.z + back.z
+          );
+          this.el.object3D.quaternion.copy(this._getYawQuat());
         },
 
         _getCameraFootWorld: function() {
@@ -2286,6 +2352,8 @@
         },
 
         _getVRHeadDrop: function() {
+          // CapVR VR: entity Y tracks headset — no standing-eye crouch drop.
+          if (this._shouldUseHeadRelativeBody()) return 0;
           if (!this.camera || !this.el.sceneEl.is('vr-mode')) return 0;
           const legIkWorld = this.el.sceneEl.legIkWorld;
           if (!legIkWorld) return 0;
@@ -2299,8 +2367,15 @@
         // Shift avatar mesh vs tracked headset. standingEyeLocalY sets standing drop; body tune fine-tunes feet.
         _applyVRVerticalDrop: function() {
           if (!this.model) return;
-          const drop = this._getVRHeadDrop();
           const base = this._modelBaseY ?? 0.05;
+          if (this._shouldUseHeadRelativeBody()) {
+            // BoltVR: bind-height mesh; entity placement owns sit/stand.
+            this.model.position.y = base;
+            this._vrHeadDrop = 0;
+            this._soleGroundOffset = 0;
+            return;
+          }
+          const drop = this._getVRHeadDrop();
           const adjust = this.el.sceneEl.legIkWorld?.playerHeightAdjustM || 0;
           const scale = this.el.sceneEl.legIkWorld?.modelVerticalScale ?? 1;
           const ankleToSole = (this.ankleToSoleM || this.el.sceneEl.legIkWorld?.ankleToSoleM || 0.08) * scale;
@@ -2312,6 +2387,10 @@
 
         _updateSoleGroundOffset: function(dt) {
           if (this.data.isMirror || !this.model) return;
+          if (this._shouldUseHeadRelativeBody()) {
+            this._soleGroundOffset = 0;
+            return;
+          }
 
           const legIk = this.el.sceneEl.components['leg-ik-world'];
           const grabbing = this._grabAnchorActiveLeft || this._grabAnchorActiveRight;
@@ -2434,6 +2513,8 @@
         // Close the vertical gap between HMD and animated neck each frame.
         _syncTorsoToHead: function(headWorldPos) {
           if (!this.bones.hips || !this.bones.neck) return;
+          // Head-relative CapVR already places hips under the HMD — no crouch compress.
+          if (this._shouldUseHeadRelativeBody()) return;
           const crouch = this.el.sceneEl.legIkWorld?.crouchAmount || 0;
           if (crouch < 0.05) return;
 
@@ -3486,12 +3567,17 @@
           } else {
             if (poseFrozen) {
               this._applyFrozenPoseSnapshot(dotState.frozenPoseSnapshot);
+            } else if (this.el?.dataset?.capvrDead === 'true'
+                || document.querySelector('[capvr-combat]')?.components?.['capvr-combat']?.alive === false) {
+              // Dead: leave mesh for CapVR death tumble (combat tickHumanDeathTumbles)
             } else {
               this.updateLocalBody(dt);
               this.updateFingerPoses(dt);
             }
             this._updateBodyDotEffect(dt);
-            if (!poseFrozen) {
+            if (!poseFrozen
+                && this.el?.dataset?.capvrDead !== 'true'
+                && document.querySelector('[capvr-combat]')?.components?.['capvr-combat']?.alive !== false) {
               this._publishPoseSnapshot();
             }
           }
@@ -5720,6 +5806,11 @@
         },
 
         updateLocalBody: function(dt) {
+          // Death tumble owns pose — do not re-anchor to headset (wipes ragdoll).
+          if (this.el?.dataset?.capvrDead === 'true') return;
+          const combatAlive = document.querySelector('[capvr-combat]')?.components?.['capvr-combat']?.alive;
+          if (combatAlive === false) return;
+
           const track = this._trackingTmp || (this._trackingTmp = {
             headPos: new THREE.Vector3(),
             headQuat: new THREE.Quaternion(),
@@ -5759,20 +5850,27 @@
             this._updateZeroGLegModeBlend(dt);
           }
 
-          const footRoot = this._getLegIKFootRoot(headWorldPos);
-          this._anchorBodyAtFeet(footRoot);
+          const headRelative = this._shouldUseHeadRelativeBody();
+          let footRoot = null;
+          if (headRelative) {
+            this._anchorBodyHeadRelative();
+          } else {
+            footRoot = this._getLegIKFootRoot(headWorldPos);
+            this._anchorBodyAtFeet(footRoot);
+          }
 
           this._handHapticDt = dt;
           this._updateGrabPullLocomotion(dt);
 
           const legIkWorld = this.el.sceneEl.components['leg-ik-world'];
           const mantleAmt = legIkWorld ? (legIkWorld.mantleCrouchAmount || 0) : 0;
-          const mantleActive = legIkWorld && (legIkWorld._ledgeMantleActive || mantleAmt > 0.01);
+          const mantleActive = !headRelative && legIkWorld
+            && (legIkWorld._ledgeMantleActive || mantleAmt > 0.01);
 
           const legBlend = this._zeroGLegModeBlend;
           const zeroG = this._isZeroGMode();
           const suppressWalkAnim = zeroG && legBlend > 0.85;
-          if (this.useAnimatedLocomotion && !suppressWalkAnim) {
+          if (this.useAnimatedLocomotion && !suppressWalkAnim && !headRelative) {
             if (mantleActive) {
               if (this.bones.hips && this._standingHipsLocalY !== undefined) {
                 this._animatedHipsLocalY = this._standingHipsLocalY;
@@ -5791,8 +5889,12 @@
           }
 
           this._applyPreLegIKPosture(headWorldPos);
-          this._applyLegIKTerrain(dt, footRoot);
-          if (legBlend < 0.12) this._applyPostLegIKGrounding(headWorldPos, dt);
+          if (!headRelative) {
+            this._applyLegIKTerrain(dt, footRoot);
+            if (legBlend < 0.12) this._applyPostLegIKGrounding(headWorldPos, dt);
+          } else {
+            this._applyVRVerticalDrop();
+          }
           this._updateLegDebug();
 
           this.updateBones(headWorldPos, headWorldQuat, leftHandWorldPos, rightHandWorldPos, leftHandWorldQuat, rightHandWorldQuat, dt);

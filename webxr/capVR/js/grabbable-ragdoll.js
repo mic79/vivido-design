@@ -1615,6 +1615,63 @@ AFRAME.registerComponent('grabbable-ragdoll', {
     return true;
   },
 
+  /**
+   * CapVR player death: full Box3D collapse ragdoll at the current mesh pose.
+   * Call after placing this entity at the live avatar's world transform.
+   */
+  collapseForDeath: function (shotDir, carryVelocity) {
+    if (!this.modelLoaded || !this.b3 || !this.world) return false;
+    const R = window.Box3DRagdoll;
+    const RT = window.Box3DRagdollRetarget;
+    if (!R || !RT) return false;
+
+    this.data.paused = false;
+    this.el.setAttribute('visible', true);
+    if (this.model) this.model.visible = true;
+
+    this._disposeShatter?.();
+    if (this.human && R.destroyHuman) {
+      R.destroyHuman(this.b3, this.human);
+    }
+    this.human = null;
+    this.retargetState = null;
+    this.ragdollActive = false;
+    this._queryCollidersOnly = false;
+    this._freeRagdollMode = true;
+
+    // Bake current world pose as the ragdoll spawn base (not the offstage static pose).
+    this.el.object3D.getWorldPosition(this._tmpV);
+    this._entityBasePos.copy(this._tmpV);
+    const eul = new THREE.Euler().setFromQuaternion(this.el.object3D.quaternion, 'YXZ');
+    this._entityBaseRotY = eul.y;
+
+    this._prepareEntityForRagdollSpawn();
+    if (!this._spawnRagdoll({ collapse: true })) return false;
+
+    const dir = shotDir && shotDir.lengthSq && shotDir.lengthSq() > 1e-6
+      ? shotDir.clone().normalize()
+      : new THREE.Vector3(0, -0.15, 1).normalize();
+    const nrm = dir.clone().negate();
+    this._applyRagdollShotImpulses(dir, nrm, 1.55, null, 3, true);
+    if (carryVelocity) this._applyCarryVelocityToRagdoll(carryVelocity);
+    if (R.wakeAllHumanBodies) R.wakeAllHumanBodies(this.b3, this.human);
+    if (RT.apply && this.retargetState) {
+      RT.apply(this, this.b3, this.human, this.retargetState);
+    }
+    return true;
+  },
+
+  /** Park a player-death corpse offstage until the next kill. */
+  parkDeathCorpse: function () {
+    if (this.modelLoaded) {
+      try { this.resetRagdoll(); } catch (e) { /* */ }
+    }
+    this.data.paused = true;
+    this.el.setAttribute('visible', false);
+    this.el.object3D.position.set(0, -80, 0);
+    this._entityBasePos.set(0, -80, 0);
+  },
+
   // Tear the ragdoll down and return the character to its idle rest pose at spawn.
   resetRagdoll: function () {
     if (!this.modelLoaded || !this.model) return;

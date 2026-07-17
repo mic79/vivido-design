@@ -11,8 +11,13 @@
   const MAX_RANGE = 120;
   const MAX_HP = 100;
   const LASER_DAMAGE = 16;       // ~6 lasers to kill (BattleVR-ish durability)
-  const STICKY_ATTACH_DAMAGE = 48; // ≈ 3 laser hits on attach target
+  const STICKY_ATTACH_DAMAGE = 48; // legacy (sticky blast now stuns — kept for MP compat)
   const STICKY_SPLASH_DAMAGE = 16;
+  /** Sticky boom stun sphere radius (metres). Attach target + same-team allies inside this. */
+  const STICKY_STUN_RADIUS = 2.4;
+  /** Sticky boom stun duration (ms) — matches stun-reboot.wav length. */
+  const STICKY_STUN_MS = 5000;
+  const STICKY_STUN_IMMUNITY_MS = 10000; // after stun ends
   const RESPAWN_MS = 5000;
   const HIT_CREDIT_MS = 250;
   const FIRE_COOLDOWN_MS = 280; // BattleVR hand-weapon ≈ 0.3s (no overheat exists there)
@@ -50,6 +55,80 @@
     return window.CapVRGame?.myPlayerId || 'player_0';
   }
 
+  /** Resolve red/blue for humans + bots. */
+  function resolveCombatTeam(id) {
+    if (!id) return null;
+    const sid = String(id);
+    // Bot lasers pass team color as attackerId ('red'/'blue')
+    if (sid === 'red' || sid === 'blue') return sid;
+    if (sid === 'player' || sid === 'rig') return resolveCombatTeam(localId());
+    const fromMap = window.CapVRGame?.playerTeams?.get?.(sid);
+    if (fromMap === 'red' || fromMap === 'blue') return fromMap;
+    const botEntry = BOT_MAP.find((b) => b.owner === sid || b.bot === sid || b.bot === `zerog-${sid}`);
+    if (botEntry) return botEntry.team;
+    if (sid.startsWith('bot-') || sid.startsWith('zerog-bot-')) {
+      const owner = sid.replace(/^zerog-/, '');
+      const el = document.getElementById(`zerog-${owner}`) || document.getElementById(sid);
+      const t = el?.components?.['zerog-bot']?.data?.team;
+      if (t === 'red' || t === 'blue') return t;
+      const entry2 = BOT_MAP.find((b) => b.owner === owner);
+      if (entry2) return entry2.team;
+    }
+    return null;
+  }
+
+  function areCombatTeammates(a, b) {
+    if (!a || !b) return false;
+    if (String(a) === String(b)) return false;
+    const ta = resolveCombatTeam(a);
+    const tb = resolveCombatTeam(b);
+    // Both must have a known team — never treat "unknown" as friendly
+    return !!(ta && tb && ta === tb);
+  }
+
+  /** True only when we know this is same-team laser heal (not sticky / not ambiguous). */
+  function shouldFriendlyHeal(attackerId, targetId, opts) {
+    if (opts?.sticky || opts?.forceDamage) return false;
+    if (!attackerId || !targetId) return false;
+    // Placeholders are not real attackers — do not heal
+    if (attackerId === 'bot' || attackerId === 'sticky') return false;
+    // Humans: only heal when BOTH have an explicit team in the lobby map.
+    // Missing map entries must never look "friendly" (that immortalized teammates).
+    const a = String(attackerId);
+    const t = String(targetId);
+    const map = window.CapVRGame?.playerTeams;
+    if (map && (a.startsWith('player_') || t.startsWith('player_'))) {
+      const ta = map.get?.(a);
+      const tb = map.get?.(t);
+      if (a.startsWith('player_') && ta !== 'red' && ta !== 'blue') return false;
+      if (t.startsWith('player_') && tb !== 'red' && tb !== 'blue') return false;
+    }
+    return areCombatTeammates(attackerId, targetId);
+  }
+
+  /** Half damage, floored (laser 16 → heal 8). */
+  function healFromDamage(damage) {
+    const d = typeof damage === 'number' ? damage : LASER_DAMAGE;
+    return Math.max(0, Math.floor(d / 2));
+  }
+
+  /** Who dealt this hit? Bot AI must pass attackerId — never default to local human. */
+  function resolveHitAttackerId(detail) {
+    const d = detail || {};
+    if (d.attackerId) {
+      // If caller also sent fromTeam and it disagrees with attackerId's team,
+      // trust fromTeam (guards against mislabeled bot owners).
+      if (d.fromTeam === 'red' || d.fromTeam === 'blue') {
+        const ta = resolveCombatTeam(d.attackerId);
+        if (ta && ta !== d.fromTeam) return d.fromTeam;
+      }
+      return d.attackerId;
+    }
+    if (d.fromTeam === 'red' || d.fromTeam === 'blue') return d.fromTeam;
+    if (d.shooterId) return d.shooterId;
+    return localId();
+  }
+
   function playerSlotIndex(playerId) {
     if (!playerId) return null;
     const m = String(playerId).match(/player_(\d+)/);
@@ -76,6 +155,9 @@
       payload.from = shot.from.clone
         ? { x: shot.from.x, y: shot.from.y, z: shot.from.z }
         : { x: shot.from.x, y: shot.from.y, z: shot.from.z };
+    } else if (payload.point) {
+      // Host requires a shot origin — use hit point if aim origin missing
+      payload.from = { x: payload.point.x, y: payload.point.y, z: payload.point.z };
     }
     G.sendCombatMsg(payload);
   }
@@ -113,26 +195,169 @@
     return dir.normalize();
   }
 
+  function deathCorpseIdForAvatar(bodyEl) {
+    if (!bodyEl?.id) return null;
+    if (bodyEl.id === 'local-body') return 'player-death-ragdoll-local';
+    const m = String(bodyEl.id).match(/^remote-body-(\d+)$/);
+    if (m) return `player-death-ragdoll-${m[1]}`;
+    return null;
+  }
+
+  function getDeathCarryVelocity(bodyEl, shot) {
+    const lin = new THREE.Vector3();
+    const dir = _shotDirFromPayload(shot);
+    if (dir) lin.addScaledVector(dir, 3.4);
+    if (bodyEl?.id === 'local-body') {
+      const zp = document.querySelector('[zerog-player]')?.components?.['zerog-player'];
+      if (zp?.velocity) {
+        lin.x += zp.velocity.x || 0;
+        lin.y += zp.velocity.y || 0;
+        lin.z += zp.velocity.z || 0;
+      }
+    }
+    const avatar = bodyEl?.components?.['mixamo-body-avatar'] || bodyEl?.components?.['mixamo-body'];
+    if (avatar?.headVelocity) {
+      lin.x += avatar.headVelocity.x || 0;
+      lin.y += avatar.headVelocity.y || 0;
+      lin.z += avatar.headVelocity.z || 0;
+    }
+    if (lin.lengthSq() < 0.2 && dir) lin.copy(dir).multiplyScalar(2.5);
+    if (lin.length() > 9) lin.setLength(9);
+    return lin;
+  }
+
+  function activatePlayerDeathRagdoll(bodyEl, shot) {
+    const corpseId = deathCorpseIdForAvatar(bodyEl);
+    if (!corpseId || !bodyEl?.object3D) return false;
+    const corpse = document.getElementById(corpseId);
+    const grab = corpse?.components?.['grabbable-ragdoll'];
+    if (!grab) return false;
+    if (!grab.modelLoaded) {
+      // Model still loading — retry once; spin fallback runs until then
+      if (!bodyEl._capvrDeathRagdollRetry) {
+        bodyEl._capvrDeathRagdollRetry = true;
+        setTimeout(() => {
+          delete bodyEl._capvrDeathRagdollRetry;
+          if (bodyEl.dataset?.capvrDead === 'true') {
+            if (activatePlayerDeathRagdoll(bodyEl, shot)) {
+              delete bodyEl._capvrDeathVel;
+              delete bodyEl._capvrDeathLin;
+            }
+          }
+        }, 280);
+      }
+      return false;
+    }
+
+    const wp = new THREE.Vector3();
+    const wq = new THREE.Quaternion();
+    bodyEl.object3D.updateWorldMatrix(true, true);
+    bodyEl.object3D.getWorldPosition(wp);
+    bodyEl.object3D.getWorldQuaternion(wq);
+    // Corpse is scene-root — set world pose as local
+    corpse.object3D.position.copy(wp);
+    corpse.object3D.quaternion.copy(wq);
+    corpse.object3D.updateMatrixWorld(true);
+
+    const dir = _shotDirFromPayload(shot);
+    const carry = getDeathCarryVelocity(bodyEl, shot);
+    const ok = grab.collapseForDeath(dir, carry);
+    if (!ok) return false;
+
+    // Team tint must match live avatar. Bot form mutates shared pooled mats in place
+    // (color+emissive); tinting only albedo left blue emissive → corpse looked blue.
+    // Apply BOTH via material pool (clone-by-key) so we don't repaint live bots.
+    try {
+      let ownerId = null;
+      if (bodyEl.id === 'local-body') ownerId = localId();
+      else {
+        const idx = bodyEl.id.replace('remote-body-', '');
+        ownerId = `player_${idx}`;
+      }
+      const team = resolveCombatTeam(ownerId)
+        || window.CapVRGame?.playerTeams?.get?.(ownerId)
+        || 'red';
+      const isBlue = team === 'blue';
+      const albedo = isBlue ? '#3388ff' : '#ff3355';
+      const emHex = isBlue ? 0x2a7fff : 0xff2a3a;
+      if (grab.model && window.CapVRMaterials?.applyAvatarTint) {
+        window.CapVRMaterials.applyAvatarTint(grab.model, {
+          color: albedo,
+          emissive: emHex,
+          emissiveIntensity: 0.4
+        });
+      } else if (grab.model) {
+        grab.model.traverse((n) => {
+          if (!n.isMesh || !n.material) return;
+          const mats = Array.isArray(n.material) ? n.material : [n.material];
+          const next = mats.map((m) => {
+            if (!m) return m;
+            const c = m.clone();
+            c.userData = Object.assign({}, m.userData, { capvrNoShare: true });
+            if (c.color) c.color.set(albedo);
+            if (c.emissive) {
+              c.emissive.setHex(emHex);
+              c.emissiveIntensity = 0.4;
+            }
+            c.needsUpdate = true;
+            return c;
+          });
+          n.material = Array.isArray(n.material) ? next : next[0];
+        });
+      }
+    } catch (e) { /* */ }
+
+    bodyEl._capvrDeathCorpseId = corpseId;
+    bodyEl.object3D.visible = false;
+    return true;
+  }
+
+  function deactivatePlayerDeathRagdoll(bodyEl) {
+    const corpseId = bodyEl?._capvrDeathCorpseId || deathCorpseIdForAvatar(bodyEl);
+    delete bodyEl?._capvrDeathCorpseId;
+    if (bodyEl?.object3D) bodyEl.object3D.visible = true;
+    const corpse = corpseId && document.getElementById(corpseId);
+    const grab = corpse?.components?.['grabbable-ragdoll'];
+    if (grab?.parkDeathCorpse) grab.parkDeathCorpse();
+    else if (corpse) {
+      corpse.setAttribute('visible', false);
+      corpse.object3D.position.set(0, -80, 0);
+    }
+  }
+
   function applyHumanDeathTumble(bodyEl, shot) {
     if (!bodyEl?.object3D) return;
     bodyEl.dataset.capvrDead = 'true';
     bodyEl._capvrDeathUntil = performance.now() + RESPAWN_MS;
+
+    // Prefer real Box3D ragdoll (same system as bots). Spin tumble is fallback only.
+    if (activatePlayerDeathRagdoll(bodyEl, shot)) {
+      delete bodyEl._capvrDeathVel;
+      delete bodyEl._capvrDeathLin;
+      return;
+    }
+
     const dir = _shotDirFromPayload(shot);
     if (dir) {
       bodyEl._capvrDeathVel = { rx: dir.z * 2.8, rz: -dir.x * 2.8, ry: dir.y * 0.4 };
     } else {
       bodyEl._capvrDeathVel = { rx: 1.2, rz: 0.6, ry: 0 };
     }
+    const lin = getDeathCarryVelocity(bodyEl, shot);
+    bodyEl._capvrDeathLin = { x: lin.x, y: lin.y, z: lin.z };
   }
 
   function clearHumanDeathTumble(bodyEl) {
     if (!bodyEl) return;
+    deactivatePlayerDeathRagdoll(bodyEl);
     delete bodyEl.dataset.capvrDead;
     delete bodyEl._capvrDeathUntil;
     delete bodyEl._capvrDeathVel;
+    delete bodyEl._capvrDeathLin;
     if (bodyEl.object3D) {
       bodyEl.object3D.rotation.x = 0;
       bodyEl.object3D.rotation.z = 0;
+      bodyEl.object3D.visible = true;
     }
   }
 
@@ -158,13 +383,34 @@
   }
 
   function tickHumanDeathTumbles(dtSec) {
+    const s = Math.min(0.05, dtSec || 0.016);
+    const damp = Math.pow(0.94, s * 60);
+    const world = new THREE.Vector3();
     document.querySelectorAll('[data-capvr-dead="true"]').forEach((el) => {
-      if (!el.object3D || !el._capvrDeathVel) return;
+      if (!el.object3D) return;
       if (el._capvrDeathUntil && performance.now() > el._capvrDeathUntil) return;
-      const s = dtSec || 0.016;
-      el.object3D.rotation.x += el._capvrDeathVel.rx * s;
-      el.object3D.rotation.z += el._capvrDeathVel.rz * s;
-      el.object3D.rotation.y += (el._capvrDeathVel.ry || 0) * s;
+
+      if (el._capvrDeathVel) {
+        el.object3D.rotation.x += el._capvrDeathVel.rx * s;
+        el.object3D.rotation.z += el._capvrDeathVel.rz * s;
+        el.object3D.rotation.y += (el._capvrDeathVel.ry || 0) * s;
+      }
+
+      const lin = el._capvrDeathLin;
+      if (lin && (lin.x || lin.y || lin.z)) {
+        el.object3D.getWorldPosition(world);
+        world.x += lin.x * s;
+        world.y += lin.y * s;
+        world.z += lin.z * s;
+        lin.x *= damp;
+        lin.y *= damp;
+        lin.z *= damp;
+        if (el.object3D.parent) {
+          el.object3D.parent.updateWorldMatrix(true, false);
+          el.object3D.parent.worldToLocal(world);
+        }
+        el.object3D.position.copy(world);
+      }
     });
   }
 
@@ -210,8 +456,7 @@
   }
 
   function playLaserFireSfx() {
-    synthTone(880, 0.05, 0.05, 'square');
-    synthTone(440, 0.07, 0.03, 'sawtooth');
+    // Disabled — oscillator beeps on every arena shot (bots + peers) were too noisy.
   }
 
   /** Spaceshooter-style: random metal-hit-1/2/3 at the impact point. */
@@ -378,38 +623,107 @@
         el.components.sound.stopSound?.();
         el.components.sound.playSound();
       } catch (e) { /* */ }
-    } else {
-      synthTone(220, 0.12, 0.07, 'triangle');
     }
+    // No synth fallback — electronic hit beeps were playing for every laser impact.
     spawnHitSparks(pos);
   }
 
   /* ── laser visuals + deathcam linger (BattleVR killingShot) ── */
+
+  /** True when a world point is near the local headset (inbound beam tip). */
+  function _nearLocalCamera(p, distM) {
+    const cam = document.getElementById('camera');
+    if (!cam?.object3D || !p) return false;
+    const c = new THREE.Vector3();
+    cam.object3D.getWorldPosition(c);
+    const x = p.x != null ? p.x : p.X;
+    const y = p.y != null ? p.y : p.Y;
+    const z = p.z != null ? p.z : p.Z;
+    return c.distanceToSquared(new THREE.Vector3(x, y, z)) < (distM != null ? distM : 1.4) ** 2;
+  }
+
+  /**
+   * Pull beam end back so it stops short of the camera.
+   * A hairline ending at/inside the headset is invisible when looking at the shooter
+   * (you're staring down the barrel) — only the impact flash reads.
+   */
+  function _pullLaserEndFromCamera(from, to, keepAwayM) {
+    const cam = document.getElementById('camera');
+    if (!cam?.object3D || !from || !to) return to;
+    const c = new THREE.Vector3();
+    cam.object3D.getWorldPosition(c);
+    const fx = from.x != null ? from.x : from.X;
+    const fy = from.y != null ? from.y : from.Y;
+    const fz = from.z != null ? from.z : from.Z;
+    const origin = new THREE.Vector3(fx, fy, fz);
+    const end = new THREE.Vector3(
+      to.x != null ? to.x : to.X,
+      to.y != null ? to.y : to.Y,
+      to.z != null ? to.z : to.Z
+    );
+    const away = keepAwayM != null ? keepAwayM : 0.7;
+    if (end.distanceTo(c) >= away) return end;
+    const toCam = c.clone().sub(origin);
+    const d = toCam.length();
+    if (d < 0.15) return end;
+    toCam.multiplyScalar(1 / d);
+    const stop = Math.max(0.25, d - away);
+    return origin.clone().addScaledVector(toCam, stop);
+  }
+
+  function _orientLaserCylinder(el, fx, fy, fz, tx, ty, tz) {
+    if (!el) return;
+    const apply = () => {
+      if (!el.object3D) return;
+      const dir = new THREE.Vector3(tx - fx, ty - fy, tz - fz);
+      if (dir.lengthSq() < 1e-8) return;
+      dir.normalize();
+      el.object3D.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    };
+    if (el.object3D) apply();
+    else el.addEventListener('loaded', apply, { once: true });
+  }
+
   function spawnLaserVisuals(from, to, opts) {
     opts = opts || {};
     if (window.__capvrFxOff === true) return null;
     const scene = document.querySelector('a-scene');
     if (!scene || !from || !to) return null;
     const color = opts.color || '#00ffff';
+
+    // Inbound hits end at/near headset — thicken, linger longer, stop short of camera.
+    const inbound = !!(opts.inbound || (!opts.linger && opts.hit && _nearLocalCamera(to, 1.35)));
+    let end = to;
+    if (inbound || opts.pullFromCamera) {
+      end = _pullLaserEndFromCamera(from, to, opts.keepAway != null ? opts.keepAway : 0.7);
+    }
+
     const fx = from.x != null ? from.x : from.X;
     const fy = from.y != null ? from.y : from.Y;
     const fz = from.z != null ? from.z : from.Z;
-    const tx = to.x != null ? to.x : to.X;
-    const ty = to.y != null ? to.y : to.Y;
-    const tz = to.z != null ? to.z : to.Z;
+    const tx = end.x != null ? end.x : end.X;
+    const ty = end.y != null ? end.y : end.Y;
+    const tz = end.z != null ? end.z : end.Z;
+    const useThick = !!(opts.linger || opts.thick || inbound);
+    const radius = opts.radius != null
+      ? opts.radius
+      : (opts.linger ? 0.04 : (inbound ? 0.028 : 0.018));
+    const dur = opts.dur != null
+      ? opts.dur
+      : (opts.linger ? null : (inbound ? 320 : 80));
 
     // Line is reliable in A-Frame (cylinder quat often resets before object3D mounts).
     const beam = document.createElement('a-entity');
     beam.setAttribute(
       'line',
-      `start: ${fx} ${fy} ${fz}; end: ${tx} ${ty} ${tz}; color: ${color}; opacity: ${opts.linger ? 1 : 0.85}`
+      `start: ${fx} ${fy} ${fz}; end: ${tx} ${ty} ${tz}; color: ${color}; opacity: ${opts.linger || inbound ? 1 : 0.85}`
     );
 
     // Impact orb only on real hits — never float a blob in empty air on a miss.
     let impact = null;
     if (opts.linger || opts.hit) {
       impact = document.createElement('a-sphere');
-      impact.setAttribute('radius', opts.linger ? 0.22 : 0.14);
+      impact.setAttribute('radius', opts.linger ? 0.22 : (inbound ? 0.11 : 0.14));
       impact.setAttribute('position', `${tx} ${ty} ${tz}`);
       impact.setAttribute('material', {
         color, emissive: color, emissiveIntensity: opts.linger ? 4 : 2.4, shader: 'flat'
@@ -417,53 +731,58 @@
     }
 
     let origin = null;
-    if (opts.linger) {
-      origin = document.createElement('a-sphere');
-      origin.setAttribute('radius', 0.28);
-      origin.setAttribute('position', `${fx} ${fy} ${fz}`);
-      origin.setAttribute('material', {
-        color: '#ffffff', emissive: color, emissiveIntensity: 5, shader: 'flat'
-      });
-      // Extra thick cylinder for visibility when looking around (after object3D ready)
-      const thick = document.createElement('a-entity');
+    let thick = null;
+    let hint = null;
+    if (opts.linger || useThick) {
+      if (opts.linger) {
+        origin = document.createElement('a-sphere');
+        origin.setAttribute('radius', 0.28);
+        origin.setAttribute('position', `${fx} ${fy} ${fz}`);
+        origin.setAttribute('material', {
+          color: '#ffffff', emissive: color, emissiveIntensity: 5, shader: 'flat'
+        });
+        hint = document.createElement('a-entity');
+        hint.setAttribute('position', `${fx} ${fy + 0.45} ${fz}`);
+        hint.setAttribute('text', {
+          value: 'KILL SHOT',
+          align: 'center',
+          width: 6,
+          color: '#ff5555',
+          opacity: 1
+        });
+        scene.appendChild(hint);
+        scene.appendChild(origin);
+      }
+      // Thick cylinder — needed for inbound (thin a-line is invisible head-on).
+      thick = document.createElement('a-entity');
       const mid = new THREE.Vector3((fx + tx) / 2, (fy + ty) / 2, (fz + tz) / 2);
       const len = Math.max(0.15, Math.hypot(tx - fx, ty - fy, tz - fz));
-      thick.setAttribute('geometry', { primitive: 'cylinder', radius: 0.04, height: len });
+      thick.setAttribute('geometry', { primitive: 'cylinder', radius, height: len });
       thick.setAttribute('material', {
-        color, emissive: color, emissiveIntensity: 3,
-        shader: 'flat', transparent: true, opacity: 0.95
+        color, emissive: color, emissiveIntensity: opts.linger ? 3 : 2.2,
+        shader: 'flat', transparent: true, opacity: opts.linger ? 0.95 : 0.88
       });
       thick.setAttribute('position', `${mid.x} ${mid.y} ${mid.z}`);
       scene.appendChild(thick);
-      thick.addEventListener('loaded', () => {
-        const dir = new THREE.Vector3(tx - fx, ty - fy, tz - fz).normalize();
-        thick.object3D.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-      });
-      // HUD hint so player knows to look for the tracer
-      const hint = document.createElement('a-entity');
-      hint.setAttribute('position', `${fx} ${fy + 0.45} ${fz}`);
-      hint.setAttribute('text', {
-        value: 'KILL SHOT',
-        align: 'center',
-        width: 6,
-        color: '#ff5555',
-        opacity: 1
-      });
-      scene.appendChild(hint);
-      scene.appendChild(origin);
-      const visuals = { beam, impact, origin, thick, hint };
-      scene.appendChild(beam);
-      if (impact) scene.appendChild(impact);
-      return visuals;
+      _orientLaserCylinder(thick, fx, fy, fz, tx, ty, tz);
+      if (opts.linger) {
+        const visuals = { beam, impact, origin, thick, hint };
+        scene.appendChild(beam);
+        if (impact) scene.appendChild(impact);
+        return visuals;
+      }
     }
 
     scene.appendChild(beam);
     if (impact) scene.appendChild(impact);
-    const visuals = { beam, impact };
-    setTimeout(() => {
-      try { beam.remove(); } catch (e) { /* */ }
-      try { impact?.remove(); } catch (e) { /* */ }
-    }, opts.dur || 80);
+    const visuals = { beam, impact, thick };
+    if (dur != null) {
+      setTimeout(() => {
+        try { beam.remove(); } catch (e) { /* */ }
+        try { impact?.remove(); } catch (e) { /* */ }
+        try { thick?.remove(); } catch (e) { /* */ }
+      }, dur);
+    }
     return visuals;
   }
 
@@ -762,14 +1081,29 @@
     const cam = document.getElementById('camera');
     const head = new THREE.Vector3();
     if (cam?.object3D) cam.object3D.getWorldPosition(head);
-    let to = shot.to || shot.point || head;
-    to = to.clone ? to.clone() : new THREE.Vector3(to.x, to.y, to.z);
-    if (willKill && cam?.object3D) cam.object3D.getWorldPosition(to);
+    // Prefer chest / shot point — do NOT snap non-kill tracers to the headset
+    // (that made inbound beams end inside the camera → invisible head-on).
+    let to = shot.to || shot.point;
+    if (!to) {
+      to = head.clone();
+      to.y -= 0.5;
+    } else {
+      to = to.clone ? to.clone() : new THREE.Vector3(to.x, to.y, to.z);
+    }
+    if (willKill && cam?.object3D) {
+      // Death linger still anchors near the victim, but pullFromCamera keeps tip visible.
+      cam.object3D.getWorldPosition(to);
+      to.y -= 0.35;
+    }
     if (!hasLineOfSight(from, to, 0.2)) to = clipRayToCover(from, to);
     const visuals = spawnLaserVisuals(from, to, {
       linger: !!willKill,
+      inbound: true,
+      thick: true,
+      pullFromCamera: true,
+      dur: willKill ? null : 380,
       color: willKill ? '#ff2244' : '#ff6655',
-      thick: willKill ? 0.04 : 0.02,
+      radius: willKill ? 0.04 : 0.03,
       hit: true
     });
     if (willKill) {
@@ -978,6 +1312,11 @@
     opts = opts || {};
     const st = botState[owner];
     if (!st?.alive) return false;
+    // Friendly laser → heal half (sticky blasts still damage; they never stick to teammates).
+    // Never invent an attacker (localId default falsely treated enemy shots as friendly).
+    if (shouldFriendlyHeal(opts.attackerId, owner, opts)) {
+      return healBot(owner, healFromDamage(amount), opts);
+    }
     // DIAGNOSTIC: skip the entire bot hit-response (damage, hit-react/shatter,
     // part removal, sfx, death/respawn) to isolate its cost. Re-enable: __capvrBotHit(true).
     if (window.__capvrBotHitOff === true) return false;
@@ -1024,6 +1363,20 @@
       killBot(owner, opts);
       return true;
     }
+    return false;
+  }
+
+  function healBot(owner, amount, opts) {
+    opts = opts || {};
+    const st = botState[owner];
+    if (!st?.alive) return false;
+    const heal = Math.max(0, Math.floor(amount || 0));
+    if (heal <= 0) return false;
+    const before = st.hp;
+    st.hp = Math.min(st.maxHp || MAX_HP, st.hp + heal);
+    updateWorldBar(owner, st.hp, st.maxHp, false);
+    if (st.hp !== before) syncHealthNet(owner, st.hp, st.maxHp, false);
+    if (opts.point) playImpactSfx(opts.point);
     return false;
   }
 
@@ -1264,10 +1617,28 @@
   }
 
   /**
-   * Local player exposed at head (camera) + chest below headset.
+   * Local player exposed at head (camera) + chest (local-body / below headset).
    * IMPORTANT: #player origin is already near headset height in zero-g — do NOT
    * add +1m to it (that aimed into the ceiling and made bots never shoot humans).
    */
+  function localPlayerChestPos(out) {
+    const o = out || new THREE.Vector3();
+    const body = document.getElementById('local-body');
+    if (body?.object3D) {
+      // Mixamo root ≈ hips; chest is ~0.45m above hips (hips sit ~0.65 below eyes).
+      body.object3D.getWorldPosition(o);
+      o.y += 0.45;
+      return o;
+    }
+    const cam = document.getElementById('camera');
+    if (cam?.object3D) {
+      cam.object3D.getWorldPosition(o);
+      o.y -= 0.55;
+      return o;
+    }
+    return null;
+  }
+
   function hasLosToLocalPlayer(fromPos, slack) {
     if (!fromPos) return false;
     const from = fromPos.clone ? fromPos.clone() : new THREE.Vector3(fromPos.x, fromPos.y, fromPos.z);
@@ -1277,11 +1648,13 @@
     const cam = document.getElementById('camera');
     if (!cam?.object3D) return false;
     cam.object3D.getWorldPosition(head);
-    torso.copy(head);
-    torso.y -= 0.4;
+    if (!localPlayerChestPos(torso)) {
+      torso.copy(head);
+      torso.y -= 0.55;
+    }
     // Head is what you see — if head is blocked you're in cover
     if (!hasCombatLos(from, head, s)) return false;
-    // Chest slightly below headset (not player.y+1 — that was above the skull)
+    // Chest / torso (body aim point)
     if (!hasCombatLos(from, torso, s)) return false;
     return true;
   }
@@ -1425,6 +1798,209 @@
     return clipping;
   }
 
+  function getCombatantWorldPos(ownerId, out) {
+    const dest = out || new THREE.Vector3();
+    if (!ownerId) return null;
+    const sid = String(ownerId);
+    if (sid === localId() || sid === 'player' || sid === 'rig') {
+      const p = document.getElementById('player') || document.getElementById('rig');
+      if (!p?.object3D) return null;
+      p.object3D.getWorldPosition(dest);
+      return dest;
+    }
+    if (sid.startsWith('player_')) {
+      const idx = sid.replace(/^player_?/, '');
+      const el = document.getElementById(`remote-target-${idx}`)
+        || document.getElementById(`remote-player-${idx}`)
+        || document.getElementById(`remote-body-${idx}`);
+      if (!el?.object3D) return null;
+      el.object3D.getWorldPosition(dest);
+      return dest;
+    }
+    const botOwner = sid.replace(/^zerog-/, '');
+    const botEl = document.getElementById(`zerog-${botOwner}`) || document.getElementById(botOwner);
+    if (botEl?.body?.position) {
+      dest.set(botEl.body.position.x, botEl.body.position.y, botEl.body.position.z);
+      return dest;
+    }
+    if (botEl?.object3D) {
+      botEl.object3D.getWorldPosition(dest);
+      return dest;
+    }
+    return null;
+  }
+
+  /** Spatial stun-reboot.wav at victim center for the stun duration (~5s clip). */
+  function playStunRebootAt(pos, durationMs) {
+    if (!pos || window.__capvrFxOff === true) return;
+    const scene = document.querySelector('a-scene');
+    if (!scene) return;
+    const dur = durationMs || STICKY_STUN_MS;
+    try {
+      const el = document.createElement('a-entity');
+      el.classList.add('capvr-stun-sfx');
+      el.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
+      el.setAttribute('sound', {
+        src: 'url(audio/stun-reboot.wav)',
+        autoplay: true,
+        loop: false,
+        volume: 1.0,
+        positional: true,
+        distanceModel: 'inverse',
+        refDistance: 1.5,
+        maxDistance: 28,
+        rolloffFactor: 1.2,
+        poolSize: 1
+      });
+      scene.appendChild(el);
+      const start = () => {
+        try {
+          el.components?.sound?.playSound?.();
+        } catch (e) { /* */ }
+      };
+      if (el.components?.sound) start();
+      else el.addEventListener('sound-loaded', start, { once: true });
+      setTimeout(() => {
+        try {
+          el.components?.sound?.stopSound?.();
+          el.remove();
+        } catch (e2) {
+          try { el.remove(); } catch (e3) { /* */ }
+        }
+      }, dur + 250);
+    } catch (e) { /* */ }
+  }
+
+  function applyStunToLocalPlayer(durationMs) {
+    const player = document.querySelector('[zerog-player]');
+    const zp = player?.components?.['zerog-player'];
+    if (!zp) return false;
+    const now = Date.now();
+    if (zp.stunImmunityEndTime && now < zp.stunImmunityEndTime) return false;
+    const ms = durationMs || STICKY_STUN_MS;
+    zp.velocity?.set?.(0, 0, 0);
+    zp.isStunned = true;
+    zp.stunEndTime = now + ms;
+    zp.stunImmunityEndTime = now + ms + STICKY_STUN_IMMUNITY_MS;
+    window.CapVRFlags?.dropFromOwner?.(localId());
+    const pos = getCombatantWorldPos(localId());
+    if (pos) playStunRebootAt(pos, ms);
+    document.dispatchEvent(new CustomEvent('capvr-player-stunned', {
+      detail: { ownerId: localId(), durationMs: ms }
+    }));
+    return true;
+  }
+
+  function applyStunToBot(owner, durationMs) {
+    const botOwner = String(owner || '').replace(/^zerog-/, '');
+    if (!botOwner || !botState[botOwner]?.alive) return false;
+    const botEl = document.getElementById(`zerog-${botOwner}`);
+    const bc = botEl?.components?.['zerog-bot'];
+    if (!bc) return false;
+    const now = Date.now();
+    if (bc.stunImmunityEndTime && now < bc.stunImmunityEndTime) return false;
+    const ms = durationMs || STICKY_STUN_MS;
+    if (bc.velocity) bc.velocity.set(0, 0, 0);
+    if (botEl.body?.velocity) botEl.body.velocity.set(0, 0, 0);
+    bc.isStunned = true;
+    bc.stunEndTime = now + ms;
+    bc.stunImmunityEndTime = now + ms + STICKY_STUN_IMMUNITY_MS;
+    window.CapVRFlags?.dropFromOwner?.(botOwner);
+    const pos = getCombatantWorldPos(botOwner);
+    if (pos) playStunRebootAt(pos, ms);
+    document.dispatchEvent(new CustomEvent('capvr-bot-stunned', {
+      detail: { ownerId: botOwner, durationMs: ms }
+    }));
+    return true;
+  }
+
+  /** Stun a combatant by id (player_N / bot-red / local). Plays spatial reboot SFX. */
+  function applyStunToOwner(ownerId, durationMs) {
+    if (!ownerId) return false;
+    const sid = String(ownerId);
+    const ms = durationMs || STICKY_STUN_MS;
+    if (sid === localId() || sid === 'player' || sid === 'rig') {
+      return applyStunToLocalPlayer(ms);
+    }
+    if (sid.startsWith('bot-') || sid.startsWith('zerog-bot-')) {
+      return applyStunToBot(sid.replace(/^zerog-/, ''), ms);
+    }
+    if (sid.startsWith('player_')) {
+      // Remote human: local client only stuns if it's us; peers play SFX at their avatar
+      if (sid === localId()) return applyStunToLocalPlayer(ms);
+      const pos = getCombatantWorldPos(sid);
+      if (pos) playStunRebootAt(pos, ms);
+      document.dispatchEvent(new CustomEvent('capvr-remote-stunned', {
+        detail: { ownerId: sid, durationMs: ms }
+      }));
+      return true;
+    }
+    return false;
+  }
+
+  function resolveStickyPrimaryOwner(detail) {
+    if (detail?.targetPlayerId) return detail.targetPlayerId;
+    const tid = detail?.targetId || '';
+    if (tid === 'player' || tid === 'rig') return localId();
+    if (String(tid).startsWith('remote-target-')) {
+      return `player_${String(tid).replace('remote-target-', '')}`;
+    }
+    if (String(tid).startsWith('zerog-')) return String(tid).replace('zerog-', '');
+    if (String(tid).startsWith('bot-')) return tid;
+    return null;
+  }
+
+  /**
+   * Sticky boom: stun attach target + same-team allies inside STICKY_STUN_RADIUS (2.4m).
+   * No HP damage. Returns list of stunned owner ids.
+   */
+  function applyStickyStunBlast(detail) {
+    const pos = detail?.position;
+    if (!pos) return [];
+    const center = pos.clone
+      ? pos.clone()
+      : new THREE.Vector3(pos.x, pos.y, pos.z);
+    const primary = resolveStickyPrimaryOwner(detail);
+    if (!primary) return [];
+    const team = resolveCombatTeam(primary);
+    const ms = detail.durationMs || STICKY_STUN_MS;
+    const radius = detail.radius != null ? detail.radius : STICKY_STUN_RADIUS;
+    const victims = new Set();
+    victims.add(primary);
+
+    if (team) {
+      // Local human
+      if (resolveCombatTeam(localId()) === team) {
+        const lp = getCombatantWorldPos(localId());
+        if (lp && (primary === localId() || lp.distanceTo(center) <= radius)) {
+          victims.add(localId());
+        }
+      }
+      // Remote humans
+      for (let i = 0; i < 4; i++) {
+        const pid = `player_${i}`;
+        if (resolveCombatTeam(pid) !== team) continue;
+        const rp = getCombatantWorldPos(pid);
+        if (!rp) continue;
+        if (pid === primary || rp.distanceTo(center) <= radius) victims.add(pid);
+      }
+      // Bots
+      BOT_MAP.forEach(({ owner }) => {
+        if (resolveCombatTeam(owner) !== team) return;
+        if (!botState[owner]?.alive) return;
+        const bp = getCombatantWorldPos(owner);
+        if (!bp) return;
+        if (owner === primary || bp.distanceTo(center) <= radius) victims.add(owner);
+      });
+    }
+
+    const stunned = [];
+    victims.forEach((id) => {
+      if (applyStunToOwner(id, ms)) stunned.push(id);
+    });
+    return stunned;
+  }
+
   function applyStickyShatters(bodyEl, center, count) {
     const grab = bodyEl?.components?.['grabbable-ragdoll'];
     if (!grab?.shatterFromShot || !center) return;
@@ -1454,6 +2030,8 @@
     proto._fireShot = function (fromVrHand) {
       const combat = document.querySelector('[capvr-combat]')?.components?.['capvr-combat'];
       if (combat && !combat.alive) return;
+      const zp = document.querySelector('[zerog-player]')?.components?.['zerog-player'];
+      if (zp?.isStunned && Date.now() < (zp.stunEndTime || 0)) return;
       if (combat && performance.now() < (combat._nextFireAt || 0)) return;
 
       if (fromVrHand) {
@@ -1678,117 +2256,41 @@
     },
 
     _onStickyBlast: function (detail) {
+      // Sticky boom: stun only (no HP / shatter). Sphere = STICKY_STUN_RADIUS (2.4m).
+      const stunned = applyStickyStunBlast(detail);
+      if (detail) detail._stunnedVictims = stunned;
       const pos = detail?.position;
-      if (!pos) return;
-      const targetId = detail.targetId || '';
-      const targetPlayerId = detail.targetPlayerId || null;
-      const THREE_V = THREE.Vector3;
-      const center = pos.clone ? pos.clone() : new THREE_V(pos.x, pos.y, pos.z);
-      const attackerId = detail.attackerId || 'sticky';
-
-      // Primary: attached target gets ≈3 laser hits + 3 shatter pulses
-      if (targetId === 'player' || targetId === 'rig'
-          || (targetPlayerId && targetPlayerId === localId())) {
-        applyStickyShatters(document.getElementById('local-body'), center, 3);
-        this._hurt(STICKY_ATTACH_DAMAGE, { sticky: true, point: center });
-        playImpactSfx(center);
-        syncDamageDealt(localId(), STICKY_ATTACH_DAMAGE, attackerId);
-      } else if (targetPlayerId && targetPlayerId !== localId()) {
-        // Stuck to a remote human — host authoritative HP
-        window.CapVRCombat?.applyRemoteDamage?.({
-          targetId: targetPlayerId,
-          damage: STICKY_ATTACH_DAMAGE,
-          attackerId,
-          sticky: true,
-          force: true,
-          point: { x: center.x, y: center.y, z: center.z },
-          from: { x: center.x, y: center.y, z: center.z }
-        });
-        playImpactSfx(center);
-      } else if (String(targetId).startsWith('remote-target-')) {
-        const idx = targetId.replace('remote-target-', '');
-        const pid = `player_${idx}`;
-        window.CapVRCombat?.applyRemoteDamage?.({
-          targetId: pid,
-          damage: STICKY_ATTACH_DAMAGE,
-          attackerId,
-          sticky: true,
-          force: true,
-          point: { x: center.x, y: center.y, z: center.z }
-        });
-        playImpactSfx(center);
-      } else if (String(targetId).startsWith('zerog-bot') || String(targetId).startsWith('zerog-')) {
-        const owner = targetId.replace('zerog-', '');
-        const bodyEl = document.getElementById(`${owner}-body`)
-          || document.getElementById(`${owner}-ragdoll`);
-        applyStickyShatters(bodyEl, center, 3);
-        damageBot(owner, STICKY_ATTACH_DAMAGE, {
-          bodyEl, point: center, dir: new THREE.Vector3(0, -1, 0)
-        });
-        syncDamageDealt(owner, STICKY_ATTACH_DAMAGE, attackerId);
-      }
-
-      // Splash — local player
-      const player = document.querySelector('#player');
-      const primaryIsLocal = targetId === 'player' || targetId === 'rig'
-        || (targetPlayerId && targetPlayerId === localId());
-      if (player && !primaryIsLocal) {
-        const p = new THREE.Vector3();
-        player.object3D.getWorldPosition(p);
-        if (p.distanceTo(center) < 2.4) {
-          this._hurt(STICKY_SPLASH_DAMAGE, { sticky: true, point: center });
+      if (pos) {
+        const center = pos.clone
+          ? pos.clone()
+          : new THREE.Vector3(pos.x, pos.y, pos.z);
+        // Brief boom cue (non-synth). Stun reboot SFX already plays per victim.
+        const boom = document.querySelector('#bounce-sound');
+        if (boom?.components?.sound) {
+          try {
+            boom.setAttribute('position', `${center.x} ${center.y} ${center.z}`);
+            boom.components.sound.stopSound?.();
+            boom.components.sound.playSound();
+          } catch (e) { /* */ }
         }
       }
-      // Splash — remote humans
-      for (let i = 0; i < 4; i++) {
-        const pid = `player_${i}`;
-        if (pid === localId()) continue;
-        if (targetPlayerId === pid) continue;
-        if (targetId === `remote-target-${i}`) continue;
-        const el = document.getElementById(`remote-target-${i}`);
-        if (!el?.object3D) continue;
-        const rp = new THREE.Vector3();
-        el.object3D.getWorldPosition(rp);
-        if (rp.distanceTo(center) < 2.6) {
-          window.CapVRCombat?.applyRemoteDamage?.({
-            targetId: pid,
-            damage: STICKY_SPLASH_DAMAGE,
-            attackerId,
-            sticky: true,
-            stickySplash: true,
-            force: true,
-            point: { x: center.x, y: center.y, z: center.z }
-          });
-        }
-      }
-      BOT_MAP.forEach(({ bot, owner, ragdoll, body }) => {
-        if (!botState[owner]?.alive) return;
-        if (targetId === bot) return;
-        const botEl = document.getElementById(bot);
-        if (!botEl) return;
-        const bp = botEl.body?.position || botEl.object3D.position;
-        if (Math.hypot(bp.x - center.x, bp.y - center.y, bp.z - center.z) < 2.6) {
-          const bodyEl = document.getElementById(body) || document.getElementById(ragdoll);
-          applyStickyShatters(bodyEl, center, 1);
-          damageBot(owner, STICKY_SPLASH_DAMAGE, { bodyEl, point: center });
-        }
-      });
-
-      // Boom flash
-      const boom = document.querySelector('#bounce-sound');
-      if (boom?.components?.sound) {
-        try {
-          boom.setAttribute('position', `${center.x} ${center.y} ${center.z}`);
-          boom.components.sound.stopSound?.();
-          boom.components.sound.playSound();
-        } catch (e) { /* */ }
-      } else {
-        synthTone(90, 0.25, 0.1, 'sawtooth');
+      if (stunned.length) {
+        document.dispatchEvent(new CustomEvent('capvr-sticky-stun', {
+          detail: {
+            victims: stunned,
+            position: detail.position,
+            durationMs: STICKY_STUN_MS,
+            radius: STICKY_STUN_RADIUS,
+            primary: resolveStickyPrimaryOwner(detail)
+          }
+        }));
       }
     },
 
     fire: function () {
       if (!this.alive || !this._aim()) return;
+      const zp = document.querySelector('[zerog-player]')?.components?.['zerog-player'];
+      if (zp?.isStunned && Date.now() < (zp.stunEndTime || 0)) return;
       if (performance.now() < this._nextFireAt) return;
       // Hand / arm clipping statics → refuse fire entirely (no beam through walls).
       if (refuseFireIfArmClipping('right', { ok: true, origin: this._ori })) return;
@@ -1892,12 +2394,16 @@
       // that shove was the leftover response the earlier kill-switch missed.
       if (window.__capvrBotHitOff === true) return;
       const dmg = detail.damage || LASER_DAMAGE;
+      const attacker = resolveHitAttackerId(detail);
+      const friendly = areCombatTeammates(attacker, owner);
       damageBot(owner, dmg, {
         bodyEl: el,
         point: detail.point,
         dir: detail.dir || this._dir,
-        regionId: detail.regionId
+        regionId: detail.regionId,
+        attackerId: attacker
       });
+      if (friendly) return;
       const botEl = document.getElementById(botId);
       const bc = botEl?.components?.['zerog-bot'];
       const knockDir = detail.dir || this._dir;
@@ -1910,9 +2416,15 @@
 
     _hurt: function (n, detail) {
       if (!this.alive) return;
+      const src = detail || this._lastIncoming || {};
+      // Friendly laser → heal half instead of damage (sticky never applies here as teammate stick).
+      const attackerKey = src.fromTeam || src.attackerId;
+      if (!src.sticky && shouldFriendlyHeal(attackerKey, localId(), src)) {
+        this._heal(healFromDamage(n || LASER_DAMAGE), src);
+        return;
+      }
       const amount = n || LASER_DAMAGE;
       const willKill = this.localHp - amount <= 0;
-      const src = detail || this._lastIncoming || {};
       // Refuse phantom laser HP (no origin). Sticky/explosion may use blast center as from.
       if (!src.sticky && !src.from) {
         console.warn('[CapVR] ignored hurt without shot origin');
@@ -1946,6 +2458,28 @@
         this._respawnAt = performance.now() + RESPAWN_MS;
         this._applyLocalDeathEffects(src, { stickyHud: !!src.sticky });
       }
+    },
+
+    /** Teammate laser heal — half damage, never above max HP. */
+    _heal: function (n, detail) {
+      if (!this.alive) return;
+      const amount = Math.max(0, Math.floor(n || 0));
+      if (amount <= 0) return;
+      const before = this.localHp;
+      this.localHp = Math.min(this.maxHp, this.localHp + amount);
+      updateLocalHud(this.localHp, this.maxHp);
+      if (this.localHp === before) return;
+      syncHealthNet(localId(), this.localHp, this.maxHp, false, {
+        from: detail?.from,
+        to: detail?.to || detail?.point,
+        point: detail?.point,
+        heal: true,
+        attackerId: detail?.fromTeam || detail?.attackerId
+      });
+      playImpactSfx(detail?.point);
+      document.dispatchEvent(new CustomEvent('entity-damaged', {
+        detail: { entityId: localId(), newHealth: this.localHp, team: null, heal: true }
+      }));
     },
 
     /** Shared local death: stun, flag drop, ragdoll tumble, events (MP health-sync + local _hurt). */
@@ -2039,12 +2573,13 @@
       if (!data?.entityId) return;
       const id = data.entityId;
       if (id === localId() || id === 'player' || id === 'rig') {
-        // Avoid silent / phantom death: HP drops must carry a shot origin (or sticky)
         const prevHp = this.localHp;
         const nextHp = data.currentHealth;
         const wasAlive = this.alive;
         const willDie = !!data.isDead || nextHp <= 0;
-        if (wasAlive && (nextHp < prevHp || willDie)) {
+        // Always apply authoritative HP. Missing `from` only skips inbound FX —
+        // never reject the damage (that made teammates immortal under MP).
+        if (wasAlive && (nextHp < prevHp || willDie) && !data.heal) {
           const shot = {
             from: data.from || null,
             to: data.to || data.point || null,
@@ -2052,16 +2587,13 @@
             sticky: !!data.sticky,
             fromTeam: data.attackerId
           };
-          if (!shot.from && !shot.sticky) {
-            if (willDie && this._lastIncoming?.from) {
-              showInboundShotFx(this, this._lastIncoming, true);
-            } else {
-              console.warn('[CapVR] rejected health-sync HP drop without shot origin');
-              return;
-            }
-          } else {
+          if (!shot.from && !shot.sticky && willDie && this._lastIncoming?.from) {
+            showInboundShotFx(this, this._lastIncoming, true);
+          } else if (shot.from || shot.sticky) {
             showInboundShotFx(this, shot, willDie && !shot.sticky);
             if (shot.from) this._lastIncoming = shot;
+          } else if (willDie) {
+            console.warn('[CapVR] health-sync death without shot origin (HP still applied)');
           }
         }
         this.localHp = nextHp;
@@ -2126,6 +2658,12 @@
     MAX_HP,
     LASER_DAMAGE,
     STICKY_ATTACH_DAMAGE,
+    STICKY_SPLASH_DAMAGE,
+    STICKY_STUN_RADIUS,
+    STICKY_STUN_MS,
+    applyStickyStunBlast,
+    applyStunToOwner,
+    playStunRebootAt,
     proposePlayerDamage,
     applyPlayerDamageAuthority,
     applyRemoteHumanDeathFx,
@@ -2136,6 +2674,7 @@
     hasLineOfSight,
     hasCombatLos,
     hasLosToLocalPlayer,
+    localPlayerChestPos,
     castEnvRay,
     clipRayToCover,
     /** True if local weapon hand/arm is through static geometry (muzzle inside or shoulder→hand blocked). */
@@ -2143,6 +2682,12 @@
     placeBot,
     killBot,
     damageBot,
+    healBot,
+    areCombatTeammates,
+    resolveCombatTeam,
+    shouldFriendlyHeal,
+    healFromDamage,
+    resolveHitAttackerId,
     syncDamageDealt,
     syncWeaponFired,
     syncHealthNet,
@@ -2150,9 +2695,19 @@
     spawnLaserVisuals,
     applyRemoteWeaponFired(data) {
       if (!data) return;
+      // Don't redraw our own muzzle flash (already shown locally).
+      if (data.playerId && data.playerId === localId()) return;
       const from = new THREE.Vector3(data.startX, data.startY, data.startZ);
       const to = new THREE.Vector3(data.endX, data.endY, data.endZ);
-      spawnLaserVisuals(from, to, { color: data.color || '#00ffff', hit: true });
+      const hitMe = _nearLocalCamera(to, 1.5);
+      spawnLaserVisuals(from, to, {
+        color: data.color || '#00ffff',
+        hit: true,
+        inbound: hitMe,
+        thick: hitMe,
+        pullFromCamera: hitMe,
+        dur: hitMe ? 380 : 120
+      });
     },
     applyRemoteHealthSync(data) {
       const c = document.querySelector('[capvr-combat]')?.components?.['capvr-combat'];
@@ -2166,8 +2721,9 @@
       if (!data?.targetId) return;
       if (window.CapVRGame?.isMultiplayer?.() && window.CapVRGame?.isHost?.() === false) return;
       if (data.attackerId && data.attackerId === localId() && !data.force) return;
+      const shotFrom = data.from || (data.sticky ? data.point : null) || data.point || null;
       // Laser damage must carry a shot origin (stops phantom MP/ball leftovers)
-      if (!data.sticky && !data.from) {
+      if (!data.sticky && !shotFrom) {
         console.warn('[CapVR] ignored damage-dealt without from', data.targetId);
         return;
       }
@@ -2175,7 +2731,7 @@
         const c = document.querySelector('[capvr-combat]')?.components?.['capvr-combat'];
         c?._hurt?.(data.damage || LASER_DAMAGE, {
           fromTeam: data.attackerId,
-          from: data.from,
+          from: shotFrom,
           to: data.to || data.point,
           point: data.point,
           sticky: !!data.sticky,
@@ -2190,7 +2746,9 @@
           bodyEl,
           point: data.point
             ? new THREE.Vector3(data.point.x, data.point.y, data.point.z)
-            : null
+            : null,
+          attackerId: data.attackerId || null,
+          sticky: !!data.sticky
         });
       }
     }

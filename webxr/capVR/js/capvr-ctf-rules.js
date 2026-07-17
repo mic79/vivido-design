@@ -1402,6 +1402,9 @@
 
     const FIRE_COOLDOWN = 700;
     const FIRE_RANGE = 24;
+    /** Default combat aim: chest on local-body (hips+0.45), not headset. */
+    const AIM_CHEST_DROP_M = 0.55;
+    const AIM_CHEST_ABOVE_HIPS_M = 0.45;
     // Target + line-of-sight scanning is expensive (full-arena raycasts per candidate).
     // Running it every frame per bot was the CapVR-only bot-aim perf sink. Re-scan a few
     // times a second and cheaply track the cached target's position in between.
@@ -1418,9 +1421,12 @@
     const _losB = new THREE.Vector3();
 
     function botOwnerFromEl(el) {
-      if (el?.id === 'zerog-bot-red') return 'bot-red';
-      if (el?.id === 'zerog-bot-green') return 'bot-green';
-      return 'bot-blue';
+      // Accept A-Frame entity OR component (`this` / fireAt's bot arg).
+      const node = el?.object3D || el?.isEntity ? el : (el?.el || el);
+      if (node?.id === 'zerog-bot-red') return 'bot-red';
+      if (node?.id === 'zerog-bot-green') return 'bot-green';
+      if (node?.id === 'zerog-bot-blue') return 'bot-blue';
+      return null;
     }
 
     function isBotAlive(owner) {
@@ -1459,20 +1465,43 @@
     }
 
     function getPlayerAimPos(out) {
-      // #player origin ≈ headset in zero-g — aim at camera (chest = camera - 0.25).
-      // Old player.y+1.05 put the aim point in the ceiling so bots never acquired you.
+      // Prefer local Mixamo body chest — camera/headset aim looked like headshots and
+      // made inbound lasers end inside the view (invisible when looking at shooter).
+      if (typeof window.CapVRCombat?.localPlayerChestPos === 'function') {
+        if (window.CapVRCombat.localPlayerChestPos(out)) return out;
+      }
+      const body = document.getElementById('local-body');
+      if (body?.object3D) {
+        body.object3D.getWorldPosition(out);
+        out.y += AIM_CHEST_ABOVE_HIPS_M;
+        return out;
+      }
       const cam = document.getElementById('camera');
       if (cam?.object3D) {
         cam.object3D.getWorldPosition(out);
-        out.y -= 0.25;
+        out.y -= AIM_CHEST_DROP_M;
         return out;
       }
       const player = document.getElementById('player') || document.getElementById('rig');
       if (player?.object3D) {
         player.object3D.getWorldPosition(out);
+        out.y -= AIM_CHEST_DROP_M * 0.5;
         return out;
       }
       return null;
+    }
+
+    /** Remote head-target sphere → chest. Bot capsule origin is already chest-high. */
+    function aimPosAtChest(worldPos, out) {
+      if (out) out.copy(worldPos);
+      else out = worldPos.clone();
+      out.y -= AIM_CHEST_DROP_M;
+      return out;
+    }
+
+    function aimPosForBotBody(bodyPos, out) {
+      out.set(bodyPos.x, bodyPos.y, bodyPos.z);
+      return out;
     }
 
     function ownerCarriesEnemyFlag(ownerId, myTeam) {
@@ -1658,6 +1687,7 @@
         if (pVis === false || pVis === 'false') continue;
         const pos = new THREE.Vector3();
         el.object3D.getWorldPosition(pos);
+        aimPosAtChest(pos, pos);
         if (!inPlayVolume(pos)) continue;
         const d = _aimFrom.distanceTo(pos);
         if (d <= FIRE_RANGE && hasCombatLos(_aimFrom, pos)) {
@@ -1679,7 +1709,7 @@
         if (!isBotAlive(owner)) return;
         const p = el.body?.position || el.object3D.position;
         if (!inPlayVolume(p)) return;
-        const pos = new THREE.Vector3(p.x, (p.y || 0) + 1.0, p.z);
+        const pos = aimPosForBotBody(p, new THREE.Vector3());
         const d = _aimFrom.distanceTo(pos);
         if (d <= FIRE_RANGE && hasCombatLos(_aimFrom, pos)) {
           const carrier = ownerCarriesEnemyFlag(owner, myTeam);
@@ -1714,7 +1744,7 @@
         const el = document.getElementById('zerog-' + threat.owner);
         const p = el?.body?.position || el?.object3D?.position;
         if (!p) return false;
-        threat.pos.set(p.x, (p.y || 0) + 1.0, p.z);
+        aimPosForBotBody(p, threat.pos);
       } else if (threat.type === 'human') {
         const idx = String(threat.playerId).replace('player_', '');
         const parent = document.getElementById('remote-player-' + idx);
@@ -1722,6 +1752,7 @@
         const pVis = parent?.getAttribute?.('visible');
         if (!el?.object3D || pVis === false || pVis === 'false') return false;
         el.object3D.getWorldPosition(threat.pos);
+        aimPosAtChest(threat.pos, threat.pos);
       } else {
         return false;
       }
@@ -1839,6 +1870,7 @@
         return;
       }
       if (target.bodyEl) {
+        const shooterOwner = botOwnerFromEl(bot) || botOwnerFromEl(bot?.el);
         // Single shatter path via damageBot (collapse only at HP 0)
         document.dispatchEvent(new CustomEvent('capvr-limb-hit', {
           detail: {
@@ -1847,7 +1879,10 @@
             force: true,
             point: _aimTo.clone(),
             dir: _aimDir.clone(),
-            damage: dmg
+            damage: dmg,
+            // Prefer concrete bot owner; fromTeam is the fallback for team checks
+            attackerId: shooterOwner || myTeam,
+            fromTeam: myTeam
           }
         }));
       }
