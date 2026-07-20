@@ -40,7 +40,7 @@ AFRAME.registerComponent('tonemap-only', {
     const resolution = renderer.getDrawingBufferSize(new THREE.Vector2());
     const rt = new THREE.WebGLRenderTarget(resolution.width, resolution.height, {
       type: THREE.HalfFloatType,
-      samples: 4,
+      samples: 0, // MSAA was expensive on Quest with little visual gain
     });
 
     this.composer = new EffectComposer(renderer, rt);

@@ -9,8 +9,8 @@ import AFRAME from 'aframe';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
-import { GlossyReflector } from './GlossyReflector.js?v=28';
-import './tonemapOnly.js?v=29';
+import { GlossyReflector } from './GlossyReflector.js?v=47';
+import './tonemapOnly.js?v=37';
 
 const ROOM_GLB = new URL('../white_room.glb', import.meta.url).href;
 const LUMEN_TABLE_GLB = new URL('../assets/lumen_hologram_table.glb', import.meta.url).href;
@@ -124,9 +124,9 @@ AFRAME.registerComponent('white-room', {
     for (const p of floorMirrorProxies) scene.add(p);
     GlossyReflector.setBakeProxies(floorMirrorProxies, wallCeilingMeshes);
 
-    // Floor only: planar reflector (the look that was working)
+    // Floor reflector — full wall height curve; tables forced to max blur via height stamp
     const floor = new GlossyReflector(new THREE.PlaneGeometry(ROOM_W - 0.04, ROOM_D - 0.04), {
-      resolution: 512,
+      resolution: 768,
       color: 0xd5e8ea,
       mirrorStrength: 0.48,
       mixBlur: 1.0,
@@ -135,7 +135,8 @@ AFRAME.registerComponent('white-room', {
       maxDist: ROOM_H,
       heightSharp: 0.32,
       heightSoft: 0.75,
-      blurKernels: [2.0, 4.0, 7.0, 11.0],
+      nearBlur: 0,
+      blurKernels: [5.0, 11.0, 20.0, 34.0],
       clipBias: 0.003,
     });
     floor.rotation.x = -Math.PI / 2;
@@ -161,22 +162,23 @@ AFRAME.registerComponent('white-room', {
       scene.add(panel);
     }
 
-    // Tables: geosynth (center) + lumen hologram (far end wall)
-    await Promise.all([
-      placePropTable(gltfLoader, renderer, scene, GEOSYNTH_TABLE_GLB, {
-        x: 0,
-        z: 0,
-        yaw: 0,
-        fixMaterials: fixGeosynthTableMaterials,
-      }),
-      placePropTable(gltfLoader, renderer, scene, LUMEN_TABLE_GLB, {
-        x: 0,
-        // 90° CCW from spawn view + flush against far wall (+Z)
-        yaw: Math.PI + Math.PI / 2,
-        alignWall: '+z',
-        fixMaterials: fixLumenTableMaterials,
-      }),
-    ]);
+    const tables = (
+      await Promise.all([
+        placePropTable(gltfLoader, renderer, scene, GEOSYNTH_TABLE_GLB, {
+          x: 0,
+          z: 0,
+          yaw: 0,
+          fixMaterials: fixGeosynthTableMaterials,
+        }),
+        placePropTable(gltfLoader, renderer, scene, LUMEN_TABLE_GLB, {
+          x: 0,
+          yaw: Math.PI + Math.PI / 2,
+          alignWall: '+z',
+          fixMaterials: fixLumenTableMaterials,
+        }),
+      ])
+    ).filter(Boolean);
+    GlossyReflector.setSoftMeshes(tables);
   },
 });
 
@@ -223,8 +225,10 @@ async function placePropTable(loader, renderer, scene, url, opts) {
     }
     root.position.set(px, -box.min.y + 0.012, pz);
     scene.add(root);
+    return root;
   } catch (err) {
     console.warn('[white-room] table failed to load', url, err);
+    return null;
   }
 }
 

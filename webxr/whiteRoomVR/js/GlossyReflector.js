@@ -1,7 +1,6 @@
 /**
- * Planar glossy reflector — same behavior on floor, walls, and ceiling.
- * Blur follows distance from THIS surface (floor used world-Y; that only
- * matched a floor, so walls looked different).
+ * Planar glossy floor reflector — distance-from-plane blur.
+ * Kept simple: one capture path (no soft-mesh composite — that broke reflections).
  */
 import {
   Color,
@@ -11,7 +10,6 @@ import {
   LinearFilter,
   Matrix4,
   Mesh,
-  NearestFilter,
   OrthographicCamera,
   PerspectiveCamera,
   Plane,
@@ -95,6 +93,8 @@ uniform float fresnelPower;
 uniform float baseLift;
 uniform float heightSharp;
 uniform float heightSoft;
+uniform float nearBlur;
+uniform vec2 reflRes;
 uniform float debugHeight;
 varying vec4 vReflectUv;
 varying vec3 vViewDir;
@@ -113,7 +113,30 @@ void main() {
   vec3 sharp = texture2D(tDiffuse, uv).rgb;
   vec3 soft = texture2D(tDiffuseBlur, uv).rgb;
 
-  float blurAmt = smoothstep(heightSharp, heightSoft, h);
+  // Extra wide sample when fully soft (tables stamped at h≈1) — kills stair-steps
+  float tableSoft = smoothstep(0.75, 0.95, h);
+  if (tableSoft > 0.01) {
+    vec2 px = vec2(2.0 + 6.0 * tableSoft) / reflRes;
+    vec3 wide = (
+      soft
+      + texture2D(tDiffuseBlur, clamp(uv + vec2(px.x, 0.0), 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv - vec2(px.x, 0.0), 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv + vec2(0.0, px.y), 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv - vec2(0.0, px.y), 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv + px, 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv - px, 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv + vec2(px.x, -px.y), 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv + vec2(-px.x, px.y), 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv + vec2(px.x * 2.0, 0.0), 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv - vec2(px.x * 2.0, 0.0), 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv + vec2(0.0, px.y * 2.0), 0.001, 0.999)).rgb
+      + texture2D(tDiffuseBlur, clamp(uv - vec2(0.0, px.y * 2.0), 0.001, 0.999)).rgb
+    ) * (1.0 / 13.0);
+    soft = mix(soft, wide, tableSoft);
+  }
+
+  float blurAmt = mix(nearBlur, 1.0, smoothstep(heightSharp, heightSoft, h));
+  blurAmt = max(blurAmt, tableSoft); // tables always fully soft
   blurAmt = clamp(blurAmt * mixBlur, 0.0, 1.0);
   vec3 refl = mix(sharp, soft, blurAmt);
 
@@ -144,9 +167,7 @@ function makeBlurMaterial() {
 
 export class GlossyReflector extends Mesh {
   static instances = [];
-  /** Shown only while capturing a mirror pass */
   static bakeProxies = [];
-  /** Hidden while capturing (e.g. env-glossy walls replaced by matte proxies) */
   static hideWhileCapturing = [];
   static _updateDepth = 0;
 
@@ -154,6 +175,13 @@ export class GlossyReflector extends Mesh {
     GlossyReflector.bakeProxies = meshes.filter(Boolean);
     GlossyReflector.hideWhileCapturing = hideWhileCapturing.filter(Boolean);
     for (const m of GlossyReflector.bakeProxies) m.visible = false;
+  }
+
+  /** Props stamped as max blur in the height map (tables) — color pass still renders them normally. */
+  static softMeshes = [];
+
+  static setSoftMeshes(meshes = []) {
+    GlossyReflector.softMeshes = meshes.filter(Boolean);
   }
 
   constructor(geometry, options = {}) {
@@ -174,7 +202,6 @@ export class GlossyReflector extends Mesh {
     const q = new Vector4();
     const textureMatrix = new Matrix4();
     const virtualCamera = new PerspectiveCamera();
-    // HUD / fps live on layer 1 — mirror camera only sees the room (layer 0)
     virtualCamera.layers.set(0);
 
     const rtColor = {
@@ -192,8 +219,8 @@ export class GlossyReflector extends Mesh {
     fboSharp.depthTexture.type = UnsignedShortType;
 
     const fboHeight = new WebGLRenderTarget(resolution, resolution, {
-      minFilter: NearestFilter,
-      magFilter: NearestFilter,
+      minFilter: LinearFilter,
+      magFilter: LinearFilter,
       type: HalfFloatType,
     });
     const fboBlurA = new WebGLRenderTarget(resolution, resolution, rtColor);
@@ -207,6 +234,16 @@ export class GlossyReflector extends Mesh {
       },
       vertexShader: distVertex,
       fragmentShader: distFragment,
+    });
+
+    // Forces full blur in the height map (used only for softMeshes / tables)
+    const maxBlurMaterial = new ShaderMaterial({
+      vertexShader: distVertex,
+      fragmentShader: /* glsl */ `
+        void main() { gl_FragColor = vec4(1.0); }
+      `,
+      depthTest: false,
+      depthWrite: false,
     });
 
     const blurScene = new Scene();
@@ -227,6 +264,8 @@ export class GlossyReflector extends Mesh {
         baseLift: { value: options.baseLift ?? 0.5 },
         heightSharp: { value: options.heightSharp ?? 0.32 },
         heightSoft: { value: options.heightSoft ?? 0.75 },
+        nearBlur: { value: options.nearBlur ?? 0.0 },
+        reflRes: { value: new Vector2(resolution, resolution) },
         debugHeight: { value: 0 },
       },
       vertexShader: surfaceVertex,
@@ -358,6 +397,10 @@ export class GlossyReflector extends Mesh {
       distMaterial.uniforms.planeNormal.value.copy(normal);
       distMaterial.uniforms.maxDist.value = maxDist;
 
+      const softList = GlossyReflector.softMeshes;
+      const softVis = softList.map((m) => m.visible);
+      for (const m of softList) m.visible = false;
+
       const prevTarget = renderer.getRenderTarget();
       const prevXr = renderer.xr.enabled;
       const prevShadow = renderer.shadowMap.autoUpdate;
@@ -369,12 +412,36 @@ export class GlossyReflector extends Mesh {
 
       const prevBg = scene.background;
       scene.background = null;
+
+      // Height: walls/room only (real distance blur)
       scene.overrideMaterial = distMaterial;
       renderer.setRenderTarget(fboHeight);
       renderer.state.buffers.depth.setMask(true);
       renderer.setClearColor(0x000000, 1);
       renderer.clear();
       renderer.render(scene, virtualCamera);
+
+      // Height: stamp tables as max blur (h=1). depthTest off + clearDepth so walls can't block.
+      if (softList.length) {
+        const childVis = scene.children.map((c) => c.visible);
+        for (const c of scene.children) c.visible = false;
+        for (const m of softList) {
+          m.visible = true;
+          m.traverse((o) => {
+            o.visible = true;
+          });
+        }
+        scene.overrideMaterial = maxBlurMaterial;
+        renderer.autoClear = false;
+        renderer.clearDepth();
+        renderer.render(scene, virtualCamera);
+        renderer.autoClear = true;
+        for (let i = 0; i < scene.children.length; i++) {
+          scene.children[i].visible = childVis[i];
+        }
+      }
+      for (let i = 0; i < softList.length; i++) softList[i].visible = softVis[i];
+
       scene.background = prevBg;
       scene.overrideMaterial = prevOverride;
 
@@ -413,6 +480,7 @@ export class GlossyReflector extends Mesh {
       fboBlurB.dispose();
       material.dispose();
       distMaterial.dispose();
+      maxBlurMaterial.dispose();
       blurQuad.material.dispose();
       blurQuad.geometry.dispose();
     };
