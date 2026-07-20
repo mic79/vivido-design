@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>White Room VR</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0a1012; overflow: hidden; font-family: system-ui, sans-serif; }
+      #hud {
+        position: fixed; left: 16px; bottom: 16px; z-index: 2;
+        color: #c9e8ea; font-size: 13px; line-height: 1.45;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+        pointer-events: none; max-width: 22rem;
+      }
+      #hud strong { color: #fff; }
+      #fps-desktop {
+        position: fixed; top: 12px; right: 16px; z-index: 2;
+        color: #e8ffff; font-size: 15px; font-variant-numeric: tabular-nums;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.65);
+        pointer-events: none;
+      }
+    </style>
+    <!-- Same stack as spaceshooter.html -->
+    <script type="importmap">
+      {
+        "imports": {
+          "aframe": "https://aframe.io/releases/1.7.1/aframe.module.min.js",
+          "three": "https://cdn.jsdelivr.net/npm/super-three@0.173.5/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/super-three@0.173.5/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module">
+      import AFRAME from 'aframe';
+      window.AFRAME = AFRAME;
+      window.THREE = AFRAME.THREE;
+      globalThis.AFRAME = AFRAME;
+      globalThis.THREE = AFRAME.THREE;
+    </script>
+    <script
+      src="https://raw.githack.com/aframevr/aframe/v1.7.1/examples/showcase/post-processing/bloom.js"
+      type="module"
+    ></script>
+    <script type="module" src="./js/white-room.js?v=20"></script>
+  </head>
+  <body>
+    <div id="hud">
+      <strong>White Room VR</strong> — A-Frame + spaceshooter bloom<br />
+      Desktop: drag look, WASD · VR: left stick move, right stick snap turn
+    </div>
+    <div id="fps-desktop">-- FPS</div>
+
+    <a-scene
+      white-room
+      thumbstick-move
+      bloom="threshold: 0.98; strength: 0.3; radius: 0.15"
+      renderer="antialias: true; colorManagement: true; shadowMapEnabled: false"
+      webxr="requiredFeatures: local-floor"
+      background="color: #d8ecee"
+      vr-mode-ui="enterVRButton: #enterVR"
+    >
+      <a-entity id="rig" position="0 0 -5.6" rotation="0 180 0">
+        <a-entity
+          id="head"
+          camera
+          look-controls="pointerLockEnabled: true"
+          wasd-controls="acceleration: 20"
+          position="0 1.48 0"
+        >
+          <!-- Head-locked FPS so it's readable in the headset -->
+          <a-entity
+            fps-display
+            position="-0.22 0.14 -0.55"
+            scale="0.45 0.45 0.45"
+          ></a-entity>
+        </a-entity>
+      </a-entity>
+    </a-scene>
+
+    <button
+      id="enterVR"
+      style="
+        position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+        z-index: 9999; border: 0; border-radius: 999px; padding: 14px 28px;
+        background: #e8f6f7; color: #0a1012; font-weight: 650; cursor: pointer;
+        box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+      "
+    >
+      Enter VR
+    </button>
+  </body>
+</html>
