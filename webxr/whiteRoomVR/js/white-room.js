@@ -8,9 +8,16 @@
 import AFRAME from 'aframe';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { GlossyReflector } from './GlossyReflector.js?v=20';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+import { GlossyReflector } from './GlossyReflector.js?v=28';
+import './tonemapOnly.js?v=29';
 
 const ROOM_GLB = new URL('../white_room.glb', import.meta.url).href;
+const LUMEN_TABLE_GLB = new URL('../assets/lumen_hologram_table.glb', import.meta.url).href;
+const GEOSYNTH_TABLE_GLB = new URL('../assets/geosynth_table.glb', import.meta.url).href;
+/** Same super-three build as the import map — required for KHR_texture_basisu */
+const BASIS_TRANSCODER =
+  'https://cdn.jsdelivr.net/npm/super-three@0.173.5/examples/jsm/libs/basis/';
 const ROOM_W = 7;
 const ROOM_H = 3.6;
 const ROOM_D = 14;
@@ -36,6 +43,8 @@ function makeWallCeilingMaterial(src, renderer) {
   });
 }
 
+const BLOOM_ON = 'threshold: 0.98; strength: 0.225; radius: 0.11';
+
 AFRAME.registerComponent('white-room', {
   init() {
     const sceneEl = this.el.sceneEl;
@@ -48,7 +57,10 @@ AFRAME.registerComponent('white-room', {
     const scene = sceneEl.object3D;
     const renderer = sceneEl.renderer;
 
-    const gltf = await new GLTFLoader().loadAsync(ROOM_GLB);
+    const ktx2Loader = new KTX2Loader().setTranscoderPath(BASIS_TRANSCODER).detectSupport(renderer);
+    const gltfLoader = new GLTFLoader().setKTX2Loader(ktx2Loader);
+
+    const gltf = await gltfLoader.loadAsync(ROOM_GLB);
 
     const root = gltf.scene;
     root.updateMatrixWorld(true);
@@ -148,9 +160,152 @@ AFRAME.registerComponent('white-room', {
       panel.position.set(0, ROOM_H - 0.05, -yBlender);
       scene.add(panel);
     }
+
+    // Tables: geosynth (center) + lumen hologram (far end wall)
+    await Promise.all([
+      placePropTable(gltfLoader, renderer, scene, GEOSYNTH_TABLE_GLB, {
+        x: 0,
+        z: 0,
+        yaw: 0,
+        fixMaterials: fixGeosynthTableMaterials,
+      }),
+      placePropTable(gltfLoader, renderer, scene, LUMEN_TABLE_GLB, {
+        x: 0,
+        // 90° CCW from spawn view + flush against far wall (+Z)
+        yaw: Math.PI + Math.PI / 2,
+        alignWall: '+z',
+        fixMaterials: fixLumenTableMaterials,
+      }),
+    ]);
   },
 });
 
+/** Load a GLB, tune materials, sit on floor at (x,z) with yaw. */
+async function placePropTable(loader, renderer, scene, url, opts) {
+  const {
+    x = 0,
+    z = 0,
+    yaw = 0,
+    alignWall = null,
+    wallInset = 0.08,
+    fixMaterials,
+  } = opts;
+  try {
+    const gltf = await loader.loadAsync(url);
+    const root = gltf.scene;
+    fixMaterials?.(root);
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = false;
+      o.receiveShadow = false;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (!m) continue;
+        tuneMap(renderer, m.map);
+        tuneMap(renderer, m.emissiveMap);
+        // Keep additive hologram emissive out of tonemap so bloom picks it up
+        if ('toneMapped' in m && m.blending !== THREE.AdditiveBlending) {
+          m.toneMapped = true;
+        }
+      }
+    });
+    root.rotation.y = yaw;
+    root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(root);
+    let px = x - (box.min.x + box.max.x) * 0.5;
+    let pz;
+    if (alignWall === '+z') {
+      pz = HD - wallInset - box.max.z;
+    } else if (alignWall === '-z') {
+      pz = -HD + wallInset - box.min.z;
+    } else {
+      pz = z - (box.min.z + box.max.z) * 0.5;
+    }
+    root.position.set(px, -box.min.y + 0.012, pz);
+    scene.add(root);
+  } catch (err) {
+    console.warn('[white-room] table failed to load', url, err);
+  }
+}
+
+/**
+ * Lumen table meshes share one Sketchfab atlas: opaque body + soft hologram alpha.
+ * Body keeps BLEND+depthWrite so UI overlays stay translucent; glass/shaft blend
+ * without writing depth (alphaTest was wrong — it made the laser plane a solid slab).
+ */
+function fixLumenTableMaterials(root) {
+  const roleOf = (mesh) => {
+    const matName = (mesh.material?.name || '').toLowerCase();
+    if (matName.includes('shaft')) return 'shaft';
+    if (matName.includes('glass')) return 'glass';
+    if (matName.includes('body')) return 'body';
+    let n = mesh;
+    for (let i = 0; i < 8 && n; i++) {
+      const name = (n.name || '').toLowerCase();
+      if (name.includes('glass')) return 'glass';
+      if (name.includes('shaft')) return 'shaft';
+      if (name.includes('table') || name.includes('holi')) return 'body';
+      n = n.parent;
+    }
+    return 'body';
+  };
+
+  root.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    const role = roleOf(o);
+    const mat = o.material.clone();
+    o.material = mat;
+    mat.side = THREE.DoubleSide;
+
+    // Soft atlas alpha — never alphaTest (that turns hologram planes into solid slabs)
+    mat.alphaTest = 0;
+    mat.opacity = 1;
+
+    if (role === 'body') {
+      // Mostly opaque; holographic UI windows live in the same atlas alpha
+      mat.transparent = true;
+      mat.depthWrite = true;
+      mat.depthTest = true;
+      mat.blending = THREE.NormalBlending;
+      o.renderOrder = 0;
+    } else {
+      // Glass cover + shaft laser: soft atlas alpha (NormalBlending — Additive ignores alpha)
+      mat.transparent = true;
+      mat.depthWrite = false;
+      mat.depthTest = true;
+      mat.blending = THREE.NormalBlending;
+      mat.toneMapped = true;
+      // Sketchfab emissiveStrength ~3 + bloom washed the plane to a solid neon slab
+      if ('emissiveIntensity' in mat) {
+        mat.emissiveIntensity = Math.min(mat.emissiveIntensity || 1, 0.85);
+      }
+      o.renderOrder = role === 'glass' ? 2 : 3;
+    }
+    mat.needsUpdate = true;
+  });
+}
+
+/** Geosynth already has OPAQUE body + BLEND hologram — reinforce depthWrite. */
+function fixGeosynthTableMaterials(root) {
+  root.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    const mat = o.material.clone();
+    o.material = mat;
+    const name = (mat.name || o.name || '').toLowerCase();
+    if (name.includes('hologram') || mat.transparent) {
+      mat.transparent = true;
+      mat.depthWrite = false;
+      mat.depthTest = true;
+      o.renderOrder = 2;
+    } else {
+      mat.transparent = false;
+      mat.depthWrite = true;
+      mat.alphaTest = 0.01;
+      o.renderOrder = 0;
+    }
+    mat.needsUpdate = true;
+  });
+}
 /** Real frame rate from A-Frame tick deltas — visible in VR (parented to camera). */
 AFRAME.registerComponent('fps-display', {
   init() {
@@ -159,8 +314,9 @@ AFRAME.registerComponent('fps-display', {
     this._fps = 0;
     this.el.setAttribute('text', {
       value: '-- FPS',
-      align: 'left',
-      width: 0.8,
+      align: 'center',
+      anchor: 'center',
+      width: 1.4,
       color: '#e8ffff',
       opacity: 0.95,
       font: 'roboto',
@@ -197,6 +353,73 @@ AFRAME.registerComponent('fps-display', {
     this.el.setAttribute('text', 'value', label);
     const desk = document.getElementById('fps-desktop');
     if (desk) desk.textContent = label;
+  },
+});
+
+/** Right Quest A / desktop B — toggle bloom.
+ *  OFF removes UnrealBloom (real FPS win) but keeps OutputPass tonemap so floor color matches.
+ */
+AFRAME.registerComponent('bloom-toggle', {
+  init() {
+    this._aLatched = false;
+    this._bLatched = false;
+    this._bloomOn = this.el.hasAttribute('bloom');
+
+    this._onKeyDown = (e) => {
+      if (e.code !== 'KeyB' || this.el.is('vr-mode')) return;
+      if (this._bLatched) return;
+      this._bLatched = true;
+      this.toggleBloom();
+    };
+    this._onKeyUp = (e) => {
+      if (e.code === 'KeyB') this._bLatched = false;
+    };
+    window.addEventListener('keydown', this._onKeyDown);
+    window.addEventListener('keyup', this._onKeyUp);
+  },
+
+  remove() {
+    window.removeEventListener('keydown', this._onKeyDown);
+    window.removeEventListener('keyup', this._onKeyUp);
+  },
+
+  toggleBloom() {
+    const sceneEl = this.el;
+    if (this._bloomOn) {
+      // Drop expensive UnrealBloom; keep tonemap-only for color match
+      sceneEl.removeAttribute('bloom');
+      sceneEl.setAttribute('tonemap-only', 'enabled: true');
+      this._bloomOn = false;
+    } else {
+      sceneEl.setAttribute('tonemap-only', 'enabled: false');
+      sceneEl.setAttribute('bloom', BLOOM_ON);
+      this._bloomOn = true;
+    }
+  },
+
+  tick() {
+    const sceneEl = this.el;
+    if (!sceneEl.is('vr-mode')) {
+      this._aLatched = false;
+      return;
+    }
+
+    const session = sceneEl.renderer?.xr?.getSession?.();
+    if (!session) return;
+
+    let aDown = false;
+    for (const src of session.inputSources) {
+      if (src.handedness !== 'right' || !src.gamepad?.buttons?.[4]) continue;
+      aDown = src.gamepad.buttons[4].pressed;
+      break;
+    }
+
+    if (aDown && !this._aLatched) {
+      this._aLatched = true;
+      this.toggleBloom();
+    } else if (!aDown) {
+      this._aLatched = false;
+    }
   },
 });
 

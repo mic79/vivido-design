@@ -14,10 +14,10 @@
       }
       #hud strong { color: #fff; }
       #fps-desktop {
-        position: fixed; top: 12px; right: 16px; z-index: 2;
+        position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 2;
         color: #e8ffff; font-size: 15px; font-variant-numeric: tabular-nums;
         text-shadow: 0 1px 2px rgba(0,0,0,0.65);
-        pointer-events: none;
+        pointer-events: none; text-align: center; white-space: nowrap;
       }
     </style>
     <!-- Same stack as spaceshooter.html -->
@@ -41,19 +41,21 @@
       src="https://raw.githack.com/aframevr/aframe/v1.7.1/examples/showcase/post-processing/bloom.js"
       type="module"
     ></script>
-    <script type="module" src="./js/white-room.js?v=20"></script>
+    <script type="module" src="./js/white-room.js?v=36"></script>
   </head>
   <body>
     <div id="hud">
       <strong>White Room VR</strong> — A-Frame + spaceshooter bloom<br />
-      Desktop: drag look, WASD · VR: left stick move, right stick snap turn
+      Desktop: drag look, WASD · B = bloom · VR: left stick move · A = bloom
     </div>
     <div id="fps-desktop">-- FPS</div>
 
     <a-scene
       white-room
       thumbstick-move
-      bloom="threshold: 0.98; strength: 0.3; radius: 0.15"
+      bloom-toggle
+      tonemap-only="enabled: false"
+      bloom="threshold: 0.98; strength: 0.225; radius: 0.11"
       renderer="antialias: true; colorManagement: true; shadowMapEnabled: false"
       webxr="requiredFeatures: local-floor"
       background="color: #d8ecee"
@@ -67,11 +69,11 @@
           wasd-controls="acceleration: 20"
           position="0 1.48 0"
         >
-          <!-- Head-locked FPS so it's readable in the headset -->
+          <!-- Head-locked FPS — centered for VR readability -->
           <a-entity
             fps-display
-            position="-0.22 0.14 -0.55"
-            scale="0.45 0.45 0.45"
+            position="0 0.12 -0.55"
+            scale="0.55 0.55 0.55"
           ></a-entity>
         </a-entity>
       </a-entity>

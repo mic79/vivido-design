@@ -242,6 +242,14 @@ export class GlossyReflector extends Mesh {
       material.uniforms.debugHeight.value = on ? 1 : 0;
     };
 
+    this.setBaseLift = (v) => {
+      material.uniforms.baseLift.value = v;
+    };
+
+    this.setTintHex = (hex) => {
+      material.uniforms.tint.value.setHex(hex);
+    };
+
     const scope = this;
 
     function setupVirtualCamera(camera) {
