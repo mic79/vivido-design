@@ -4,7 +4,7 @@
 // Incrementing CACHE_VERSION will kick off the install event and force
 // previously cached resources to be updated from the network.
 /** @type {string} */
-const CACHE_VERSION = '1784869979|2285017';
+const CACHE_VERSION = '1784882060|2447402';
 /** @type {string} */
 const CACHE_PREFIX = 'Sci-fi Starter K-sw-cache-';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
