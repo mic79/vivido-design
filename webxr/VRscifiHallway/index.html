@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>VR SciFi Hallway</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0b0d; color: #e8e8ea; font: 13px/1.4 ui-sans-serif, system-ui, sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #hud {
+      position: fixed; left: 12px; top: 12px; z-index: 2;
+      background: rgba(0,0,0,.72); padding: 10px 12px; border-radius: 8px; max-width: 500px;
+    }
+    #hud label { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+    #hud select, #hud input[type=range] { max-width: 150px; }
+    button { margin-top: 8px; margin-right: 6px; cursor: pointer; }
+    #vr-slot { position: fixed; right: 12px; bottom: 12px; z-index: 3; }
+    #vr-slot button { margin: 0; }
+    #fpsHud {
+      position: fixed; right: 12px; top: 12px; z-index: 3;
+      background: rgba(0,0,0,.72); color: #9dffb0; font: 600 14px/1.2 ui-monospace, Consolas, monospace;
+      padding: 8px 12px; border-radius: 8px; min-width: 72px; text-align: center;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="fpsHud">-- FPS</div>
+  <div id="vr-slot"></div>
+  <div id="hud">
+    <div><strong>MainMap.glb</strong> + EPIC HQ lightmaps (original materials kept)</div>
+    <div id="status">Loading…</div>
+    <label>Intensity <input id="intensity" type="range" min="0.4" max="2.5" step="0.05" value="1.35" /> <span id="intensityVal">1.35</span></label>
+    <label>Contrast <input id="contrast" type="range" min="0.9" max="1.8" step="0.05" value="1.05" /> <span id="contrastVal">1.05</span></label>
+    <label>White point <input id="whitePoint" type="range" min="0.5" max="3" step="0.05" value="1.55" /> <span id="whitePointVal">1.55</span></label>
+    <label>Env (metal) <input id="envInt" type="range" min="0" max="2" step="0.05" value="1.25" /> <span id="envIntVal">1.25</span></label>
+    <label>Flip mode
+      <select id="flipMode">
+        <option value="1" selected>No mesh V-flip (Three.js)</option>
+        <option value="0">Epic / PlayCanvas flips</option>
+        <option value="2">Extra V-flip</option>
+      </select>
+    </label>
+    <label>Force UV
+      <select id="forceUv">
+        <option value="" selected>From GLB</option>
+        <option value="0">TEXCOORD_0</option>
+        <option value="1">TEXCOORD_1</option>
+      </select>
+    </label>
+    <label>Debug
+      <select id="debugMode">
+        <option value="0" selected>Shaded</option>
+        <option value="1">Show LM UVs</option>
+        <option value="2">Raw atlas sample</option>
+      </select>
+    </label>
+    <label><input id="noLm" type="checkbox" /> Disable lightmaps</label>
+    <div style="margin-top:8px;opacity:.85;font-size:12px">VR: L-stick move · R-stick X snap-turn · R-stick Y up/down</div>
+    <div>
+      <button id="viewA" type="button">Cam A</button>
+      <button id="viewB" type="button">Cam B</button>
+      <button id="viewC" type="button">Cam C benches</button>
+      <button id="viewD" type="button">Cam D door</button>
+      <button id="viewE" type="button">Cam E office</button>
+    </div>
+  </div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { VRButton } from 'three/addons/webxr/VRButton.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+    import {
+      applyEpicLightmaps,
+      sanitizeGltfJson,
+      balanceRealtimeLights,
+    } from './epicLightmaps.js';
+
+    // Standing spawn for immersive-vr (Cam C hallway — WARNING wall / benches)
+    const VR_SPAWN = { x: 4.1, y: 0, z: -9.0, lookX: 1.85, lookZ: -10.2 };
+
+    const status = document.getElementById('status');
+    const intensityEl = document.getElementById('intensity');
+    const intensityVal = document.getElementById('intensityVal');
+    const contrastEl = document.getElementById('contrast');
+    const contrastVal = document.getElementById('contrastVal');
+    const whitePointEl = document.getElementById('whitePoint');
+    const whitePointVal = document.getElementById('whitePointVal');
+    const envIntEl = document.getElementById('envInt');
+    const envIntVal = document.getElementById('envIntVal');
+    const flipModeEl = document.getElementById('flipMode');
+    const forceUvEl = document.getElementById('forceUv');
+    const debugModeEl = document.getElementById('debugMode');
+    const noLmEl = document.getElementById('noLm');
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+    document.getElementById('vr-slot').appendChild(VRButton.createButton(renderer));
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a0c);
+
+    // Same studio env the original GLB chrome/pipes expect — do NOT replace with a custom bake
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environmentIntensity = Number(envIntEl.value);
+
+    const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 500);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    window.__CAMERA__ = camera;
+    window.__CONTROLS__ = controls;
+
+    // XR player rig — camera reparented here while presenting
+    const vrRig = new THREE.Group();
+    vrRig.name = 'VRRig';
+    scene.add(vrRig);
+
+    const clock = new THREE.Clock();
+    const tmpFwd = new THREE.Vector3();
+    const tmpRight = new THREE.Vector3();
+    const tmpP0 = new THREE.Vector3();
+    const tmpP1 = new THREE.Vector3();
+    let turnLatched = false;
+    // Soft play area — tightened once the GLB loads
+    let vrBounds = { minX: -5, maxX: 20, minZ: -25, maxZ: 10, minY: -0.2, maxY: 4.5 };
+
+    function placeVrRig() {
+      vrRig.position.set(VR_SPAWN.x, VR_SPAWN.y, VR_SPAWN.z);
+      const dx = VR_SPAWN.lookX - VR_SPAWN.x;
+      const dz = VR_SPAWN.lookZ - VR_SPAWN.z;
+      // Three.js default forward is -Z
+      vrRig.rotation.set(0, Math.atan2(-dx, -dz), 0);
+    }
+
+    function pickStick(axes) {
+      if (!axes) return [0, 0];
+      const a01 = Math.hypot(axes[0] || 0, axes[1] || 0);
+      const a23 = Math.hypot(axes[2] || 0, axes[3] || 0);
+      // Quest: thumbstick is usually axes 2/3; fall back to 0/1
+      return a23 >= a01 ? [axes[2] || 0, axes[3] || 0] : [axes[0] || 0, axes[1] || 0];
+    }
+
+    function rotateRigYaw(delta) {
+      // Pivot yaw around headset so turn feels natural
+      camera.getWorldPosition(tmpP0);
+      vrRig.rotation.y += delta;
+      vrRig.updateMatrixWorld(true);
+      camera.getWorldPosition(tmpP1);
+      vrRig.position.x += tmpP0.x - tmpP1.x;
+      vrRig.position.z += tmpP0.z - tmpP1.z;
+    }
+
+    function updateVrLocomotion(dt) {
+      if (!renderer.xr.isPresenting) return;
+      const session = renderer.xr.getSession();
+      if (!session) return;
+
+      let lx = 0;
+      let ly = 0;
+      let rx = 0;
+      let ry = 0;
+      for (const src of session.inputSources) {
+        if (!src.gamepad || !src.handedness) continue;
+        const [sx, sy] = pickStick(src.gamepad.axes);
+        if (src.handedness === 'left') {
+          lx = sx;
+          ly = sy;
+        } else if (src.handedness === 'right') {
+          rx = sx;
+          ry = sy;
+        }
+      }
+
+      const dead = 0.18;
+      const speed = 2.8;
+      const vSpeed = 2.2;
+      if (Math.abs(lx) > dead || Math.abs(ly) > dead) {
+        camera.getWorldDirection(tmpFwd);
+        tmpFwd.y = 0;
+        if (tmpFwd.lengthSq() > 1e-6) tmpFwd.normalize();
+        tmpRight.set(-tmpFwd.z, 0, tmpFwd.x);
+        // Quest stick Y: forward is typically negative on OpenXR
+        const k = speed * dt;
+        vrRig.position.addScaledVector(tmpFwd, -ly * k);
+        vrRig.position.addScaledVector(tmpRight, lx * k);
+        vrRig.position.x = THREE.MathUtils.clamp(vrRig.position.x, vrBounds.minX, vrBounds.maxX);
+        vrRig.position.z = THREE.MathUtils.clamp(vrRig.position.z, vrBounds.minZ, vrBounds.maxZ);
+      }
+
+      // Right stick Y: fly up / down (stick up = ascend)
+      if (Math.abs(ry) > dead) {
+        vrRig.position.y += -ry * vSpeed * dt;
+        vrRig.position.y = THREE.MathUtils.clamp(vrRig.position.y, vrBounds.minY, vrBounds.maxY);
+      }
+
+      // Right stick X: 45° snap turn
+      if (Math.abs(rx) > 0.7 && !turnLatched) {
+        turnLatched = true;
+        rotateRigYaw((rx > 0 ? -1 : 1) * THREE.MathUtils.degToRad(45));
+      } else if (Math.abs(rx) < 0.35) {
+        turnLatched = false;
+      }
+    }
+
+    renderer.xr.addEventListener('sessionstart', () => {
+      controls.enabled = false;
+      turnLatched = false;
+      placeVrRig();
+      camera.position.set(0, 0, 0);
+      camera.rotation.set(0, 0, 0);
+      vrRig.add(camera);
+      document.getElementById('hud').style.visibility = 'hidden';
+      fpsMesh.visible = true;
+      paintFpsHud(displayFps);
+    });
+
+    renderer.xr.addEventListener('sessionend', () => {
+      fpsMesh.visible = false;
+      scene.attach(camera);
+      controls.enabled = true;
+      document.getElementById('hud').style.visibility = '';
+      window.__setView?.('C');
+    });
+
+    // Desktop FPS (DOM) + in-headset FPS panel (camera-locked canvas)
+    const fpsHudEl = document.getElementById('fpsHud');
+    let fpsFrames = 0;
+    let fpsLastMs = performance.now();
+    let displayFps = 0;
+
+    const fpsCanvas = document.createElement('canvas');
+    fpsCanvas.width = 256;
+    fpsCanvas.height = 72;
+    const fpsCtx = fpsCanvas.getContext('2d');
+    const fpsTex = new THREE.CanvasTexture(fpsCanvas);
+    fpsTex.colorSpace = THREE.SRGBColorSpace;
+    fpsTex.minFilter = THREE.LinearFilter;
+    fpsTex.magFilter = THREE.LinearFilter;
+    const fpsMat = new THREE.MeshBasicMaterial({
+      map: fpsTex,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const fpsMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.09), fpsMat);
+    // Upper-left of view, ~0.55m in front of headset
+    fpsMesh.position.set(-0.22, 0.2, -0.55);
+    fpsMesh.renderOrder = 1000;
+    fpsMesh.frustumCulled = false;
+    fpsMesh.visible = false;
+    camera.add(fpsMesh);
+
+    function paintFpsHud(fps) {
+      const label = `${fps || '--'} FPS`;
+      fpsHudEl.textContent = label;
+      fpsCtx.clearRect(0, 0, fpsCanvas.width, fpsCanvas.height);
+      fpsCtx.fillStyle = 'rgba(0,0,0,0.72)';
+      fpsCtx.fillRect(0, 0, fpsCanvas.width, fpsCanvas.height);
+      fpsCtx.fillStyle = fps >= 72 ? '#9dffb0' : fps >= 45 ? '#ffe08a' : '#ff8a8a';
+      fpsCtx.font = '700 40px monospace';
+      fpsCtx.textAlign = 'center';
+      fpsCtx.textBaseline = 'middle';
+      fpsCtx.fillText(label, fpsCanvas.width / 2, fpsCanvas.height / 2 + 2);
+      fpsTex.needsUpdate = true;
+    }
+    paintFpsHud(0);
+
+    function tickFps() {
+      fpsFrames += 1;
+      const now = performance.now();
+      const elapsed = now - fpsLastMs;
+      if (elapsed < 400) return;
+      displayFps = Math.round((fpsFrames * 1000) / elapsed);
+      fpsFrames = 0;
+      fpsLastMs = now;
+      paintFpsHud(displayFps);
+    }
+
+    // Light screen-space AO only — baked LM owns the look
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const gtaoPass = new GTAOPass(scene, camera, innerWidth, innerHeight);
+    gtaoPass.output = GTAOPass.OUTPUT.Default;
+    gtaoPass.blendIntensity = 0.45;
+    gtaoPass.updateGtaoMaterial({
+      radius: 0.45,
+      distanceExponent: 1.5,
+      thickness: 1.0,
+      scale: 1.2,
+      samples: 16,
+      distanceFallOff: 0.8,
+    });
+    composer.addPass(gtaoPass);
+    composer.addPass(new OutputPass());
+
+    let root = null;
+    let glbBuffer = null;
+
+    async function fetchSanitizedGlb(url) {
+      const ab = await (await fetch(url)).arrayBuffer();
+      const buf = new Uint8Array(ab);
+      const dv = new DataView(ab);
+      const jsonLen = dv.getUint32(12, true);
+      const json = sanitizeGltfJson(JSON.parse(new TextDecoder().decode(buf.slice(20, 20 + jsonLen))));
+      let jsonStr = JSON.stringify(json);
+      while (jsonStr.length % 4) jsonStr += ' ';
+      const jsonBuf = new TextEncoder().encode(jsonStr);
+      let binOff = 20 + jsonLen;
+      if (binOff % 4) binOff += 4 - (binOff % 4);
+      const binLen = dv.getUint32(binOff, true);
+      const binData = buf.slice(binOff + 8, binOff + 8 + binLen);
+      const out = new Uint8Array(12 + 8 + jsonBuf.length + 8 + binData.length);
+      const odv = new DataView(out.buffer);
+      out[0] = 0x67; out[1] = 0x6c; out[2] = 0x54; out[3] = 0x46;
+      odv.setUint32(4, 2, true);
+      odv.setUint32(8, out.byteLength, true);
+      odv.setUint32(12, jsonBuf.length, true);
+      odv.setUint32(16, 0x4e4f534a, true);
+      out.set(jsonBuf, 20);
+      const b0 = 20 + jsonBuf.length;
+      odv.setUint32(b0, binData.length, true);
+      odv.setUint32(b0 + 4, 0x004e4942, true);
+      out.set(binData, b0 + 8);
+      return out.buffer;
+    }
+
+    function frameCamera() {
+      const box = new THREE.Box3().setFromObject(root);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      controls.target.copy(center);
+      camera.position.copy(center).add(new THREE.Vector3(size.x * 0.12, size.y * 0.18, size.z * 0.42));
+      controls.update();
+    }
+
+    async function load() {
+      window.__SCENE_READY__ = false;
+      status.textContent = 'Loading…';
+      if (root) {
+        scene.remove(root);
+        root = null;
+      }
+      if (!glbBuffer) glbBuffer = await fetchSanitizedGlb('MainMap.glb');
+      const gltf = await new GLTFLoader().parseAsync(glbBuffer.slice(0), '');
+
+      scene.environmentIntensity = Number(envIntEl.value);
+
+      if (!noLmEl.checked) {
+        const force = forceUvEl.value === '' ? null : Number(forceUvEl.value);
+        const { applied, uvStats, fallbacks, metalCount, dielectricCount } = await applyEpicLightmaps(gltf, {
+          intensity: Number(intensityEl.value),
+          contrast: Number(contrastEl.value),
+          whitePoint: Number(whitePointEl.value),
+          directionality: 0.75,
+          flipMode: Number(flipModeEl.value),
+          debugMode: Number(debugModeEl.value),
+          forceTexCoord: force,
+          envMapIntensity: Number(envIntEl.value),
+        });
+        balanceRealtimeLights(gltf.scene, { scale: 0 });
+        status.textContent =
+          `OK — ${applied} lit · D${dielectricCount}/M${metalCount} · ${fallbacks} fb · UV ${JSON.stringify(uvStats)} · C${contrastEl.value} W${whitePointEl.value}`;
+        window.__APPLIED__ = applied;
+      } else {
+        status.textContent = 'Lightmaps OFF (original materials)';
+        window.__APPLIED__ = 0;
+      }
+
+      root = gltf.scene;
+      window.__ROOT__ = root;
+      scene.add(root);
+      frameCamera();
+      {
+        const box = new THREE.Box3().setFromObject(root);
+        const size = box.getSize(new THREE.Vector3());
+        const extent = Math.max(size.x, size.z);
+        const radius = Math.min(0.7, Math.max(0.3, extent * 0.03));
+        gtaoPass.updateGtaoMaterial({ radius, scale: 1.2 });
+        // Keep locomotion inside the hallway footprint (margin from bounds)
+        const pad = 0.6;
+        vrBounds = {
+          minX: box.min.x + pad,
+          maxX: box.max.x - pad,
+          minZ: box.min.z + pad,
+          maxZ: box.max.z - pad,
+          minY: Math.min(box.min.y, 0) - 0.2,
+          maxY: Math.min(box.max.y - 0.4, 5.5),
+        };
+      }
+      window.__SCENE_READY__ = true;
+      window.__setView = (name) => {
+        const box = new THREE.Box3().setFromObject(root);
+        const c = box.getCenter(new THREE.Vector3());
+        const meshBox = (re) => {
+          let found = null;
+          root.traverse((o) => {
+            if (found || !o.isMesh) return;
+            if (re.test(o.name) || re.test(o.parent?.name || '')) found = o;
+          });
+          return found ? new THREE.Box3().setFromObject(found) : null;
+        };
+        if (name === 'A') {
+          camera.position.set(c.x + 0.4, c.y + 0.35, c.z + 3.5);
+          controls.target.set(c.x, c.y + 0.1, c.z - 1.5);
+        } else if (name === 'B') {
+          camera.position.set(c.x + 2.8, c.y + 0.5, c.z + 0.2);
+          controls.target.set(c.x - 0.5, c.y + 0.2, c.z);
+        } else if (name === 'C') {
+          // Match original close-up: WARNING wall, chrome Bin_01, red bench, plant
+          camera.position.set(4.1, 2.0, -9.0);
+          controls.target.set(1.85, 1.95, -10.2);
+        } else if (name === 'E') {
+          // Inside B4 Security (kitbash office) — verifies interior LM brightness
+          camera.position.set(8.95, 2.55, -7.2);
+          controls.target.set(9.15, 2.35, -10.35);
+        } else {
+          let best = null;
+          let bestVol = 0;
+          root.traverse((o) => {
+            if (!o.isMesh) return;
+            const label = (o.name || '') + ' ' + (o.parent?.name || '');
+            if (!/Door_01/i.test(label)) return;
+            const b = new THREE.Box3().setFromObject(o);
+            const s = b.getSize(new THREE.Vector3());
+            const vol = s.x * s.y * s.z;
+            if (vol > bestVol) {
+              bestVol = vol;
+              best = b;
+            }
+          });
+          if (best) {
+            const dc = best.getCenter(new THREE.Vector3());
+            const ds = best.getSize(new THREE.Vector3());
+            const dist = Math.max(ds.y * 1.1, 2.0);
+            camera.position.set(dc.x, dc.y, dc.z + dist);
+            controls.target.copy(dc);
+          } else {
+            camera.position.copy(c).add(new THREE.Vector3(0, 0.25, 2));
+            controls.target.copy(c);
+          }
+        }
+        controls.update();
+        composer.render();
+      };
+    }
+
+    const bindVal = (el, span, digits = 2) => {
+      el.addEventListener('input', () => {
+        span.textContent = Number(el.value).toFixed(digits);
+      });
+    };
+    bindVal(intensityEl, intensityVal);
+    bindVal(contrastEl, contrastVal);
+    bindVal(whitePointEl, whitePointVal);
+    bindVal(envIntEl, envIntVal);
+    envIntEl.addEventListener('input', () => {
+      scene.environmentIntensity = Number(envIntEl.value);
+    });
+
+    let t = null;
+    const reload = () => {
+      clearTimeout(t);
+      t = setTimeout(() => load().catch((e) => {
+        status.textContent = 'Failed: ' + e.message;
+        console.error(e);
+      }), 80);
+    };
+    for (const el of [intensityEl, contrastEl, whitePointEl, envIntEl, flipModeEl, forceUvEl, debugModeEl, noLmEl]) {
+      el.addEventListener('change', reload);
+    }
+
+    document.getElementById('viewA').onclick = () => window.__setView?.('A');
+    document.getElementById('viewB').onclick = () => window.__setView?.('B');
+    document.getElementById('viewC').onclick = () => window.__setView?.('C');
+    document.getElementById('viewD').onclick = () => window.__setView?.('D');
+    document.getElementById('viewE').onclick = () => window.__setView?.('E');
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+      composer.setSize(innerWidth, innerHeight);
+      gtaoPass.setSize(innerWidth, innerHeight);
+    });
+
+    // setAnimationLoop required for WebXR; skip EffectComposer while presenting
+    renderer.setAnimationLoop(() => {
+      const dt = Math.min(clock.getDelta(), 0.05);
+      tickFps();
+      if (renderer.xr.isPresenting) {
+        updateVrLocomotion(dt);
+        renderer.render(scene, camera);
+        return;
+      }
+      controls.update();
+      composer.render();
+    });
+
+    load().catch((e) => {
+      status.textContent = 'Failed: ' + e.message;
+      console.error(e);
+    });
+  </script>
+</body>
+</html>
