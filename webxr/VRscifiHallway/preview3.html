@@ -115,8 +115,13 @@
     const debugModeEl = document.getElementById('debugMode');
     const noLmEl = document.getElementById('noLm');
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // Desktop: allow HiDPI. XR uses its own framebuffer (not this pixel ratio).
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.xr.addEventListener('sessionstart', () => {
+      // Avoid accidental supersampling cost in WebXR; compositor owns resolution.
+      renderer.xr.setFramebufferScaleFactor(1);
+    });
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;

@@ -10,6 +10,7 @@
  *  - Dielectrics: MeshBasic × HQ LM (same Epic albedo*LM semantics as v1)
  *  - Metallic floors/tiles/walls keep MR (scratches/text); LED/monitors keep emissive UVs
  *  - Fan animations + Master_Emissive_Panner UV scroll
+ *  - Perf: share materials across LM instances; LM scale/bias via mesh.onBeforeRender (same look)
  */
 import * as THREE from 'three';
 
@@ -143,6 +144,15 @@ function cloneLightmapTexture(texture, texCoord) {
   return lmTex;
 }
 
+/** One shared lightMap Texture per (atlas, UV channel) — avoid hundreds of clones. */
+function sharedLightmapTexture(texture, texCoord, cache) {
+  const key = `${texture.uuid}|${texCoord}`;
+  if (cache.has(key)) return cache.get(key);
+  const lmTex = cloneLightmapTexture(texture, texCoord);
+  cache.set(key, lmTex);
+  return lmTex;
+}
+
 function decodeEpicLmGlsl(mode) {
   // Epic HQ color is an albedo multiplier (final ≈ albedo * LM).
   // Three MeshStandard does irradiance * BRDF_Lambert(albedo) = irradiance * albedo / PI,
@@ -184,12 +194,12 @@ function decodeEpicLmGlsl(mode) {
 	}`;
 }
 
-function injectHqUniforms(shader, params, uScaleBias, uAdd, uScale) {
-  const { intensity, directionality, contrast, flipMode, debugMode, whitePoint } = params;
-  shader.uniforms.lm_coordinateScaleBias = { value: uScaleBias };
-  shader.uniforms.lm_lightmapAdd = { value: uAdd };
-  shader.uniforms.lm_lightmapScale = { value: uScale };
-  shader.uniforms.epicIntensity = { value: intensity };
+function injectHqUniforms(shader, params, epicU) {
+  const { directionality, contrast, flipMode, debugMode, whitePoint } = params;
+  shader.uniforms.lm_coordinateScaleBias = { value: epicU.scaleBias };
+  shader.uniforms.lm_lightmapAdd = { value: epicU.add };
+  shader.uniforms.lm_lightmapScale = { value: epicU.scale };
+  shader.uniforms.epicIntensity = epicU.intensity; // { value: number }, mutated per draw
   shader.uniforms.epicDirectionality = { value: directionality };
   shader.uniforms.epicContrast = { value: contrast };
   shader.uniforms.epicWhitePoint = { value: whitePoint ?? 1.8 };
@@ -213,16 +223,38 @@ ${HQ_DECODE}`,
 }
 
 function attachLightmap(mat, params) {
-  const { texture, texCoord, lightmapAdd, lightmapScale, coordinateScaleBias } = params;
-  mat.lightMap = cloneLightmapTexture(texture, texCoord);
+  const { texture, texCoord, lmTexCache } = params;
+  mat.lightMap = sharedLightmapTexture(texture, texCoord, lmTexCache);
   mat.lightMapIntensity = 1;
   mat.defines = { ...(mat.defines || {}), EPIC_HQ_LM: '' };
   if (texCoord >= 1) mat.defines.USE_UV1 = '';
 
-  const uScaleBias = new THREE.Vector4().fromArray(coordinateScaleBias);
-  const uAdd = new THREE.Vector4().fromArray(lightmapAdd);
-  const uScale = new THREE.Vector4().fromArray(lightmapScale);
-  return { uScaleBias, uAdd, uScale };
+  // Mutable vectors — mesh.onBeforeRender copies per-instance LM params into these
+  const epicU = {
+    scaleBias: new THREE.Vector4(),
+    add: new THREE.Vector4(),
+    scale: new THREE.Vector4(),
+    intensity: { value: params.intensity ?? 1 },
+  };
+  mat.userData.epicLmUniforms = epicU;
+  return epicU;
+}
+
+/** Push this mesh's Epic LM scale/bias into the (shared) material uniforms before draw. */
+function bindEpicLmOnBeforeRender(mesh) {
+  const prev = mesh.onBeforeRender;
+  mesh.onBeforeRender = function epicLmBeforeRender(renderer, scene, camera, geometry, material, group) {
+    if (typeof prev === 'function') {
+      prev.call(this, renderer, scene, camera, geometry, material, group);
+    }
+    const data = this.userData.epicLm;
+    const u = material?.userData?.epicLmUniforms;
+    if (!data || !u) return;
+    u.scaleBias.copy(data.scaleBias);
+    u.add.copy(data.add);
+    u.scale.copy(data.scale);
+    u.intensity.value = data.intensity;
+  };
 }
 
 /** Opaque dielectrics: albedo × baked LM (no IBL wash). */
@@ -255,10 +287,10 @@ function makeBasicLitMaterial(src, params) {
     mat.color.setRGB(0.02, 0.02, 0.02);
   }
 
-  const { uScaleBias, uAdd, uScale } = attachLightmap(mat, params);
+  const epicU = attachLightmap(mat, params);
 
   mat.onBeforeCompile = (shader) => {
-    injectHqUniforms(shader, params, uScaleBias, uAdd, uScale);
+    injectHqUniforms(shader, params, epicU);
     shader.uniforms.epicEmissiveMap = { value: emissiveMap };
     shader.uniforms.epicEmissive = { value: emissive };
     shader.uniforms.epicEmissiveIntensity = { value: emissiveIntensity };
@@ -378,10 +410,10 @@ function makeStandardLitMaterial(src, params, isMetal, opts = {}) {
   }
   boostMaterialMaps(mat, params.maxAnisotropy);
 
-  const { uScaleBias, uAdd, uScale } = attachLightmap(mat, params);
+  const epicU = attachLightmap(mat, params);
 
   mat.onBeforeCompile = (shader) => {
-    injectHqUniforms(shader, params, uScaleBias, uAdd, uScale);
+    injectHqUniforms(shader, params, epicU);
     if (isMetal) {
       // Specular IBL only + HQ irradiance (no diffuse IBL stacking)
       const replaced = shader.fragmentShader.replace(
@@ -537,6 +569,7 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
   }
 
   const baseTexCache = new Map();
+  const lmTexCache = new Map();
   async function getBaseLightmapTexture(textureIndex) {
     if (baseTexCache.has(textureIndex)) return baseTexCache.get(textureIndex);
     const tex = await parser.getDependency('texture', textureIndex);
@@ -550,6 +583,7 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
   let applied = 0;
   let metalCount = 0;
   let dielectricCount = 0;
+  let uniqueMats = 0;
   const uvStats = { 0: 0, 1: 0, 2: 0, 3: 0, missing: 0 };
   const fallbackNames = [];
 
@@ -583,13 +617,30 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
       }
       uvStats[localTexCoord] = (uvStats[localTexCoord] || 0) + 1;
 
+      const sn0 = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material)?.name || '';
+      const isFloorishMesh = /floor|placeholder_floor|worldgrid/i.test(sn0);
+      const lmPeak = Math.max(
+        lm.lightmapScale?.[0] ?? 1,
+        lm.lightmapScale?.[1] ?? 1,
+        lm.lightmapScale?.[2] ?? 1,
+      );
+      const floorDamp = isFloorishMesh ? (lmPeak > 1.8 ? 0.72 : lmPeak > 1.2 ? 0.82 : 0.9) : 1.0;
+      const meshIntensity = intensity * floorDamp;
+
+      // Per-instance Epic LM params (shared materials read these in onBeforeRender)
+      mesh.userData.epicLm = {
+        scaleBias: new THREE.Vector4().fromArray(lm.coordinateScaleBias),
+        add: new THREE.Vector4().fromArray(lm.lightmapAdd),
+        scale: new THREE.Vector4().fromArray(lm.lightmapScale),
+        intensity: meshIntensity,
+      };
+      bindEpicLmOnBeforeRender(mesh);
+
       const params = {
         texture: baseTex,
         texCoord: localTexCoord,
-        lightmapAdd: lm.lightmapAdd,
-        lightmapScale: lm.lightmapScale,
-        coordinateScaleBias: lm.coordinateScaleBias,
-        intensity,
+        lmTexCache,
+        intensity: meshIntensity,
         directionality,
         contrast,
         whitePoint,
@@ -603,29 +654,15 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
       const srcMats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       const outMats = srcMats.map((src) => {
         const kind = classifyMaterial(src);
-        // Mild damp only on hot floor LMs — never touch chrome/bin/pipe albedos
-        const sn = src.name || '';
-        const isFloorish = /floor|placeholder_floor|worldgrid/i.test(sn);
-        const lmPeak = Math.max(
-          lm.lightmapScale?.[0] ?? 1,
-          lm.lightmapScale?.[1] ?? 1,
-          lm.lightmapScale?.[2] ?? 1,
-        );
-        // Floors only — PI-correct Standard path already fixes underlit interiors
-        const floorDamp = isFloorish ? (lmPeak > 1.8 ? 0.72 : lmPeak > 1.2 ? 0.82 : 0.9) : 1.0;
-        const localParams =
-          floorDamp === 1 ? params : { ...params, intensity: params.intensity * floorDamp };
+        // Share one material per source+kind+channel — NOT per lightmap instance.
+        // Instance LM scale/bias/intensity are applied in mesh.onBeforeRender.
         const key = [
           src.uuid,
           kind,
           lm.texture.index,
           localTexCoord,
-          lm.coordinateScaleBias.join(','),
-          lm.lightmapScale.join(','),
-          lm.lightmapAdd.join(','),
           flipMode,
           debugMode,
-          localParams.intensity,
           directionality,
           contrast,
           whitePoint,
@@ -636,7 +673,8 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
         if (matCache.has(key)) return matCache.get(key);
         if (kind === 'metal') metalCount++;
         else dielectricCount++;
-        const patched = makeLitMaterial(src, localParams);
+        uniqueMats++;
+        const patched = makeLitMaterial(src, params);
         matCache.set(key, patched);
         return patched;
       });
@@ -658,8 +696,19 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
     fallbackNames.push(obj.name || '(unnamed)');
   });
 
-  console.log('EPIC lightmap UV', uvStats, 'dielectric', dielectricCount, 'metal', metalCount, 'fallbacks', fallbacks);
-  return { applied, uvStats, fallbacks, fallbackNames, metalCount, dielectricCount };
+  console.log(
+    'EPIC lightmap UV',
+    uvStats,
+    'dielectric',
+    dielectricCount,
+    'metal',
+    metalCount,
+    'uniqueMats',
+    uniqueMats,
+    'fallbacks',
+    fallbacks,
+  );
+  return { applied, uvStats, fallbacks, fallbackNames, metalCount, dielectricCount, uniqueMats };
 }
 
 export function sanitizeGltfJson(json) {
