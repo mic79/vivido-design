@@ -87,7 +87,8 @@
 
     const MODEL_URL = './MainMap_quest.glb';
     const VR_SPAWN = { x: 4.1, y: 0, z: -9.0, lookX: 1.85, lookZ: -10.2 };
-    const METAL_RE = /simple_chrome|simple_copper|chrome|copper|door_|pipe_inst|fusebox|cable_0|^bin_01$/i;
+    const METAL_RE =
+      /simple_chrome|simple_copper|chrome|copper|door_|pipe_inst|fusebox|cable_0|^bin_01$|floor_|tile_|fond_wall|divider_|bench_|worldgrid|server_|robot_|dyson|kitbash|office_01/i;
 
     const status = document.getElementById('status');
     const exposureEl = document.getElementById('exposure');
@@ -132,6 +133,8 @@
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.06;
+    window.__CAMERA__ = camera;
+    window.__CONTROLS__ = controls;
 
     const vrRig = new THREE.Group();
     scene.add(vrRig);
@@ -451,18 +454,23 @@
       const stats = tuneMaterials(root, renderer.capabilities.getMaxAnisotropy());
       animMixer = playGltfAnimations(gltf, root);
 
-      // Hallway-captured IBL — better chrome reflections than generic room
-      try {
-        const prevBg = scene.background;
-        scene.background = new THREE.Color(0x1a1a1e);
-        const captured = pmrem.fromScene(scene, 0.04);
-        if (roomEnv && roomEnv !== captured.texture) roomEnv.dispose?.();
-        roomEnv = captured.texture;
-        scene.environment = roomEnv;
-        scene.background = prevBg;
-      } catch (e) {
-        console.warn('scene IBL capture failed', e);
-      }
+      // RoomEnvironment IBL — bright enough for floor/door brushed-metal specular.
+      // (Dark scene-capture IBL was killing floor reflections.)
+      scene.environment = roomEnv;
+      scene.environmentIntensity = 1.4;
+      root.traverse((obj) => {
+        if (!obj.isMesh && !obj.isSkinnedMesh) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (!m?.isMeshStandardMaterial && !m?.isMeshPhysicalMaterial) continue;
+          const n = (m.name || '').toLowerCase();
+          if (/floor_|tile_|door_|bin_01|simple_chrome|simple_copper|pipe_/.test(n)) {
+            m.envMapIntensity = 1.75;
+          } else if (m.userData?.questMetal) {
+            m.envMapIntensity = 1.4;
+          }
+        }
+      });
 
       const box = new THREE.Box3().setFromObject(root);
       const pad = 0.6;
