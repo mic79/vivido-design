@@ -45,7 +45,7 @@
   <div id="fpsHud">-- FPS</div>
   <div id="vr-slot"></div>
   <div id="hud">
-    <div><strong>preview4</strong> — offline Epic HQ → vertex colors · unlit · Draco/KTX2</div>
+    <div><strong>preview4</strong> — baked LM + unlit dielectrics · PBR metals/IBL · HQ KTX2</div>
     <div style="opacity:.85;font-size:12px;margin-top:4px">
       <a href="preview.html">preview</a> ·
       <a href="preview2.html">preview2</a> ·
@@ -79,6 +79,7 @@
     import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
     import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
     import { VRButton } from 'three/addons/webxr/VRButton.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
     import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
     import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
     import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -86,6 +87,7 @@
 
     const MODEL_URL = './MainMap_quest.glb';
     const VR_SPAWN = { x: 4.1, y: 0, z: -9.0, lookX: 1.85, lookZ: -10.2 };
+    const METAL_RE = /simple_chrome|simple_copper|chrome|copper|door_|pipe_inst|fusebox|cable_0|^bin_01$/i;
 
     const status = document.getElementById('status');
     const exposureEl = document.getElementById('exposure');
@@ -119,7 +121,12 @@
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x050706);
-    scene.environment = null;
+
+    // Shared IBL for the small set of metal materials only (cheap vs full-scene Standard)
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    let roomEnv = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = roomEnv;
+    scene.environmentIntensity = 1.05;
 
     const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 200);
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -295,30 +302,125 @@
       });
     }
 
+    /**
+     * Metals stay MeshStandard (MR + normals + IBL). Vertex colors are NOT multiplied
+     * into chrome albedo (that kills the look). Optional soft irradiance fill from bake.
+     */
+    function patchMetalBakedIrradiance(mat) {
+      mat.onBeforeCompile = (shader) => {
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            '#include <color_fragment>',
+            /* glsl */ `
+#ifdef USE_COLOR
+	vec3 bakedIrradiance = vColor.rgb;
+#else
+	vec3 bakedIrradiance = vec3( 0.0 );
+#endif
+`,
+          )
+          .replace(
+            '#include <lights_fragment_maps>',
+            /* glsl */ `
+#include <lights_fragment_maps>
+#if defined( RE_IndirectDiffuse )
+	// Soft fill from offline LM (specular look still owned by IBL)
+	irradiance += bakedIrradiance * PI;
+#endif
+`,
+          );
+      };
+      mat.customProgramCacheKey = () => 'questMetalBakeV2';
+    }
+
+    function isMetalMaterial(m) {
+      if (!m) return false;
+      if (m.userData?.questMetal === true) return true;
+      if (m.userData?.questMetal === false) return false;
+      return METAL_RE.test(m.name || '');
+    }
+
     function tuneMaterials(root, maxAniso) {
       let meshes = 0;
       let lit = 0;
+      let metals = 0;
+      let dielectrics = 0;
+      const aniso = Math.min(8, maxAniso);
+
       root.traverse((obj) => {
         if (!obj.isMesh && !obj.isSkinnedMesh) return;
         meshes++;
         obj.frustumCulled = true;
         const hasColor = !!obj.geometry?.attributes?.color;
         if (hasColor) lit++;
+
         const list = Array.isArray(obj.material) ? obj.material : [obj.material];
-        for (const m of list) {
-          if (!m || m.userData.__questTuned) continue;
+        const out = list.map((m) => {
+          if (!m) return m;
+          if (m.userData.__questTuned) return m;
           m.userData.__questTuned = true;
-          m.vertexColors = hasColor;
-          m.envMap = null;
-          if ('envMapIntensity' in m) m.envMapIntensity = 0;
           m.toneMapped = true;
-          if (m.map) m.map.anisotropy = Math.min(4, maxAniso);
+
+          if (m.map) m.map.anisotropy = aniso;
+          if (m.normalMap) m.normalMap.anisotropy = aniso;
+          if (m.metalnessMap) m.metalnessMap.anisotropy = Math.min(4, aniso);
+          if (m.roughnessMap) m.roughnessMap.anisotropy = Math.min(4, aniso);
           if (m.emissiveMap) {
-            m.emissiveMap.anisotropy = Math.min(4, maxAniso);
+            m.emissiveMap.anisotropy = aniso;
             m.emissiveMap.colorSpace = THREE.SRGBColorSpace;
           }
+
+          const metal =
+            isMetalMaterial(m) && (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial);
+
+          if (metal) {
+            metals++;
+            m.envMapIntensity = 1.2;
+            if (hasColor) {
+              m.vertexColors = true;
+              patchMetalBakedIrradiance(m);
+            } else {
+              m.vertexColors = false;
+            }
+            m.needsUpdate = true;
+            return m;
+          }
+
+          dielectrics++;
+          if (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial) {
+            const basic = new THREE.MeshBasicMaterial({
+              map: m.map,
+              color: m.color,
+              transparent: m.transparent,
+              opacity: m.opacity,
+              alphaTest: m.alphaTest,
+              side: m.side,
+              alphaMap: m.alphaMap,
+              emissive: m.emissive?.clone?.() || new THREE.Color(0),
+              emissiveMap: m.emissiveMap,
+              emissiveIntensity: m.emissiveIntensity ?? 1,
+              vertexColors: hasColor,
+              toneMapped: true,
+              name: (m.name || 'mat') + '_questBasic',
+            });
+            basic.userData.__questTuned = true;
+            basic.userData.questMetal = false;
+            if (basic.map) basic.map.anisotropy = aniso;
+            if (basic.emissiveMap) {
+              basic.emissiveMap.anisotropy = aniso;
+              basic.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+            }
+            return basic;
+          }
+
+          m.vertexColors = hasColor;
+          if ('envMapIntensity' in m) m.envMapIntensity = 0;
           m.needsUpdate = true;
-        }
+          return m;
+        });
+
+        obj.material = Array.isArray(obj.material) ? out : out[0];
+
         const g = obj.geometry;
         const mat0 = Array.isArray(obj.material) ? obj.material[0] : obj.material;
         if (g && mat0?.isMeshBasicMaterial) {
@@ -326,7 +428,7 @@
           if (g.attributes.tangent) g.deleteAttribute('tangent');
         }
       });
-      return { meshes, lit };
+      return { meshes, lit, metals, dielectrics };
     }
 
     let root = null;
@@ -346,8 +448,21 @@
       window.__ROOT__ = root;
       scene.add(root);
 
-      const { meshes, lit } = tuneMaterials(root, renderer.capabilities.getMaxAnisotropy());
+      const stats = tuneMaterials(root, renderer.capabilities.getMaxAnisotropy());
       animMixer = playGltfAnimations(gltf, root);
+
+      // Hallway-captured IBL — better chrome reflections than generic room
+      try {
+        const prevBg = scene.background;
+        scene.background = new THREE.Color(0x1a1a1e);
+        const captured = pmrem.fromScene(scene, 0.04);
+        if (roomEnv && roomEnv !== captured.texture) roomEnv.dispose?.();
+        roomEnv = captured.texture;
+        scene.environment = roomEnv;
+        scene.background = prevBg;
+      } catch (e) {
+        console.warn('scene IBL capture failed', e);
+      }
 
       const box = new THREE.Box3().setFromObject(root);
       const pad = 0.6;
@@ -358,7 +473,8 @@
         maxY: Math.min(box.max.y - 0.4, 5.5),
       };
 
-      status.textContent = `OK — ${meshes} meshes · ${lit} lit · ${loadMs}ms · vertex colors · unlit`;
+      status.textContent =
+        `OK — ${stats.meshes} meshes · ${stats.lit} lit · M${stats.metals}/D${stats.dielectrics} · ${loadMs}ms · metals+IBL`;
       window.__SCENE_READY__ = true;
 
       window.__setView = (name) => {
