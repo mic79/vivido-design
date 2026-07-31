@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>SciFi Hallway — preview4 (Quest bake)</title>
+  <style>
+    :root {
+      --ink: #e6ebe8;
+      --muted: #9aa8a0;
+      --panel: rgba(8, 12, 10, 0.78);
+      --accent: #7dffb3;
+      --line: rgba(125, 255, 179, 0.22);
+    }
+    html, body { margin: 0; height: 100%; background: #050706; color: var(--ink); font: 13px/1.45 "Segoe UI", ui-sans-serif, system-ui, sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    #hud {
+      position: fixed; left: 12px; top: 12px; z-index: 2;
+      background: var(--panel); backdrop-filter: blur(10px);
+      border: 1px solid var(--line); padding: 12px 14px; border-radius: 10px; max-width: 440px;
+    }
+    #hud strong { color: var(--accent); font-weight: 650; letter-spacing: 0.02em; }
+    #hud a { color: #9ecbff; text-decoration: none; }
+    #hud a:hover { text-decoration: underline; }
+    #hud label { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+    #hud input[type=range] { width: 140px; }
+    button {
+      margin-top: 8px; margin-right: 6px; cursor: pointer;
+      background: rgba(125, 255, 179, 0.12); color: var(--ink);
+      border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
+    }
+    button:hover { background: rgba(125, 255, 179, 0.22); }
+    #vr-slot { position: fixed; right: 12px; bottom: 12px; z-index: 3; }
+    #vr-slot button { margin: 0; }
+    #fpsHud {
+      position: fixed; right: 12px; top: 12px; z-index: 3;
+      background: var(--panel); color: var(--accent); font: 600 14px/1.2 ui-monospace, Consolas, monospace;
+      padding: 8px 12px; border-radius: 8px; min-width: 72px; text-align: center;
+      border: 1px solid var(--line); pointer-events: none;
+    }
+    #status { margin-top: 6px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div id="fpsHud">-- FPS</div>
+  <div id="vr-slot"></div>
+  <div id="hud">
+    <div><strong>preview4</strong> — offline Epic HQ → vertex colors · unlit · Draco/KTX2</div>
+    <div style="opacity:.85;font-size:12px;margin-top:4px">
+      <a href="preview.html">preview</a> ·
+      <a href="preview2.html">preview2</a> ·
+      <a href="preview3.html">preview3</a>
+      · Quest path (no runtime LM decode)
+    </div>
+    <div id="status">Loading…</div>
+    <label>Exposure <input id="exposure" type="range" min="0.5" max="2.2" step="0.05" value="1.15" /> <span id="exposureVal">1.15</span></label>
+    <label><input id="bloom" type="checkbox" checked /> Desktop bloom (emissives)</label>
+    <div style="margin-top:8px;opacity:.85;font-size:12px">VR: L-stick move · R-stick X snap-turn · R-stick Y up/down</div>
+    <div>
+      <button id="viewA" type="button">Cam A</button>
+      <button id="viewB" type="button">Cam B</button>
+      <button id="viewC" type="button">Cam C benches</button>
+      <button id="viewD" type="button">Cam D door</button>
+      <button id="viewE" type="button">Cam E office</button>
+    </div>
+  </div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+    import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+    import { VRButton } from 'three/addons/webxr/VRButton.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+    const MODEL_URL = './MainMap_quest.glb';
+    const VR_SPAWN = { x: 4.1, y: 0, z: -9.0, lookX: 1.85, lookZ: -10.2 };
+
+    const status = document.getElementById('status');
+    const exposureEl = document.getElementById('exposure');
+    const exposureVal = document.getElementById('exposureVal');
+    const bloomEl = document.getElementById('bloom');
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+      alpha: false,
+      stencil: false,
+    });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = Number(exposureEl.value);
+    renderer.xr.enabled = true;
+    renderer.xr.setFramebufferScaleFactor(1);
+    document.body.appendChild(renderer.domElement);
+    document.getElementById('vr-slot').appendChild(VRButton.createButton(renderer));
+
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+    const ktx2Loader = new KTX2Loader()
+      .setTranscoderPath('https://unpkg.com/three@0.170.0/examples/jsm/libs/basis/')
+      .detectSupport(renderer);
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.setDRACOLoader(dracoLoader);
+    gltfLoader.setKTX2Loader(ktx2Loader);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050706);
+    scene.environment = null;
+
+    const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 200);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+
+    const vrRig = new THREE.Group();
+    scene.add(vrRig);
+
+    const clock = new THREE.Clock();
+    const tmpFwd = new THREE.Vector3();
+    const tmpRight = new THREE.Vector3();
+    const tmpP0 = new THREE.Vector3();
+    const tmpP1 = new THREE.Vector3();
+    let turnLatched = false;
+    let vrBounds = { minX: -5, maxX: 20, minZ: -25, maxZ: 10, minY: -0.2, maxY: 4.5 };
+
+    function placeVrRig() {
+      vrRig.position.set(VR_SPAWN.x, VR_SPAWN.y, VR_SPAWN.z);
+      const dx = VR_SPAWN.lookX - VR_SPAWN.x;
+      const dz = VR_SPAWN.lookZ - VR_SPAWN.z;
+      vrRig.rotation.set(0, Math.atan2(-dx, -dz), 0);
+    }
+
+    function pickStick(axes) {
+      if (!axes) return [0, 0];
+      const a01 = Math.hypot(axes[0] || 0, axes[1] || 0);
+      const a23 = Math.hypot(axes[2] || 0, axes[3] || 0);
+      return a23 >= a01 ? [axes[2] || 0, axes[3] || 0] : [axes[0] || 0, axes[1] || 0];
+    }
+
+    function rotateRigYaw(delta) {
+      camera.getWorldPosition(tmpP0);
+      vrRig.rotation.y += delta;
+      vrRig.updateMatrixWorld(true);
+      camera.getWorldPosition(tmpP1);
+      vrRig.position.x += tmpP0.x - tmpP1.x;
+      vrRig.position.z += tmpP0.z - tmpP1.z;
+    }
+
+    function updateVrLocomotion(dt) {
+      if (!renderer.xr.isPresenting) return;
+      const session = renderer.xr.getSession();
+      if (!session) return;
+      let lx = 0, ly = 0, rx = 0, ry = 0;
+      for (const src of session.inputSources) {
+        if (!src.gamepad || !src.handedness) continue;
+        const [sx, sy] = pickStick(src.gamepad.axes);
+        if (src.handedness === 'left') { lx = sx; ly = sy; }
+        else if (src.handedness === 'right') { rx = sx; ry = sy; }
+      }
+      const dead = 0.18;
+      if (Math.abs(lx) > dead || Math.abs(ly) > dead) {
+        camera.getWorldDirection(tmpFwd);
+        tmpFwd.y = 0;
+        if (tmpFwd.lengthSq() > 1e-6) tmpFwd.normalize();
+        tmpRight.set(-tmpFwd.z, 0, tmpFwd.x);
+        const k = 2.8 * dt;
+        vrRig.position.addScaledVector(tmpFwd, -ly * k);
+        vrRig.position.addScaledVector(tmpRight, lx * k);
+        vrRig.position.x = THREE.MathUtils.clamp(vrRig.position.x, vrBounds.minX, vrBounds.maxX);
+        vrRig.position.z = THREE.MathUtils.clamp(vrRig.position.z, vrBounds.minZ, vrBounds.maxZ);
+      }
+      if (Math.abs(ry) > dead) {
+        vrRig.position.y += -ry * 2.2 * dt;
+        vrRig.position.y = THREE.MathUtils.clamp(vrRig.position.y, vrBounds.minY, vrBounds.maxY);
+      }
+      if (Math.abs(rx) > 0.7 && !turnLatched) {
+        turnLatched = true;
+        rotateRigYaw((rx > 0 ? -1 : 1) * THREE.MathUtils.degToRad(45));
+      } else if (Math.abs(rx) < 0.35) {
+        turnLatched = false;
+      }
+    }
+
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.45, 0.88);
+    composer.addPass(bloomPass);
+    composer.addPass(new OutputPass());
+
+    const fpsHudEl = document.getElementById('fpsHud');
+    let fpsFrames = 0;
+    let fpsLastMs = performance.now();
+    let displayFps = 0;
+    const fpsCanvas = document.createElement('canvas');
+    fpsCanvas.width = 256;
+    fpsCanvas.height = 72;
+    const fpsCtx = fpsCanvas.getContext('2d');
+    const fpsTex = new THREE.CanvasTexture(fpsCanvas);
+    fpsTex.colorSpace = THREE.SRGBColorSpace;
+    fpsTex.minFilter = THREE.LinearFilter;
+    const fpsMat = new THREE.MeshBasicMaterial({
+      map: fpsTex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    });
+    const fpsMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.09), fpsMat);
+    fpsMesh.position.set(-0.22, 0.2, -0.55);
+    fpsMesh.renderOrder = 1000;
+    fpsMesh.frustumCulled = false;
+    fpsMesh.visible = false;
+    camera.add(fpsMesh);
+
+    function paintFpsHud(fps) {
+      const label = `${fps || '--'} FPS`;
+      fpsHudEl.textContent = label;
+      fpsCtx.clearRect(0, 0, fpsCanvas.width, fpsCanvas.height);
+      fpsCtx.fillStyle = 'rgba(0,0,0,0.72)';
+      fpsCtx.fillRect(0, 0, fpsCanvas.width, fpsCanvas.height);
+      fpsCtx.fillStyle = fps >= 72 ? '#9dffb0' : fps >= 45 ? '#ffe08a' : '#ff8a8a';
+      fpsCtx.font = '700 40px monospace';
+      fpsCtx.textAlign = 'center';
+      fpsCtx.textBaseline = 'middle';
+      fpsCtx.fillText(label, fpsCanvas.width / 2, fpsCanvas.height / 2 + 2);
+      fpsTex.needsUpdate = true;
+    }
+    paintFpsHud(0);
+
+    function tickFps() {
+      fpsFrames += 1;
+      const now = performance.now();
+      if (now - fpsLastMs < 400) return;
+      displayFps = Math.round((fpsFrames * 1000) / (now - fpsLastMs));
+      fpsFrames = 0;
+      fpsLastMs = now;
+      paintFpsHud(displayFps);
+    }
+
+    renderer.xr.addEventListener('sessionstart', () => {
+      controls.enabled = false;
+      turnLatched = false;
+      placeVrRig();
+      camera.position.set(0, 0, 0);
+      camera.rotation.set(0, 0, 0);
+      vrRig.add(camera);
+      document.getElementById('hud').style.visibility = 'hidden';
+      fpsMesh.visible = true;
+      renderer.setPixelRatio(1);
+    });
+    renderer.xr.addEventListener('sessionend', () => {
+      fpsMesh.visible = false;
+      scene.attach(camera);
+      controls.enabled = true;
+      document.getElementById('hud').style.visibility = '';
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+      window.__setView?.('C');
+    });
+
+    function playGltfAnimations(gltf, root) {
+      if (!gltf?.animations?.length || !root) return null;
+      const mixer = new THREE.AnimationMixer(root);
+      let n = 0;
+      for (const clip of gltf.animations) {
+        if (/camera/i.test(clip.name || '')) continue;
+        mixer.clipAction(clip).play();
+        n++;
+      }
+      return n ? mixer : null;
+    }
+
+    function updateEmissivePanners(root, dt, speed = 0.14) {
+      if (!root || !dt) return;
+      root.traverse((obj) => {
+        if (!obj.isMesh && !obj.isSkinnedMesh) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (!m || !/Master_Emissive_Panner/i.test(m.name || '')) continue;
+          const map = m.emissiveMap;
+          if (!map) continue;
+          map.wrapS = THREE.RepeatWrapping;
+          map.wrapT = THREE.RepeatWrapping;
+          map.offset.x = (map.offset.x + dt * speed) % 1;
+        }
+      });
+    }
+
+    function tuneMaterials(root, maxAniso) {
+      let meshes = 0;
+      let lit = 0;
+      root.traverse((obj) => {
+        if (!obj.isMesh && !obj.isSkinnedMesh) return;
+        meshes++;
+        obj.frustumCulled = true;
+        const hasColor = !!obj.geometry?.attributes?.color;
+        if (hasColor) lit++;
+        const list = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of list) {
+          if (!m || m.userData.__questTuned) continue;
+          m.userData.__questTuned = true;
+          m.vertexColors = hasColor;
+          m.envMap = null;
+          if ('envMapIntensity' in m) m.envMapIntensity = 0;
+          m.toneMapped = true;
+          if (m.map) m.map.anisotropy = Math.min(4, maxAniso);
+          if (m.emissiveMap) {
+            m.emissiveMap.anisotropy = Math.min(4, maxAniso);
+            m.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+          }
+          m.needsUpdate = true;
+        }
+        const g = obj.geometry;
+        const mat0 = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+        if (g && mat0?.isMeshBasicMaterial) {
+          if (g.attributes.normal) g.deleteAttribute('normal');
+          if (g.attributes.tangent) g.deleteAttribute('tangent');
+        }
+      });
+      return { meshes, lit };
+    }
+
+    let root = null;
+    let animMixer = null;
+
+    async function load() {
+      window.__SCENE_READY__ = false;
+      status.textContent = 'Loading MainMap_quest.glb…';
+      if (animMixer) { animMixer.stopAllAction(); animMixer = null; }
+      if (root) { scene.remove(root); root = null; }
+
+      const t0 = performance.now();
+      const gltf = await gltfLoader.loadAsync(MODEL_URL);
+      const loadMs = Math.round(performance.now() - t0);
+
+      root = gltf.scene;
+      window.__ROOT__ = root;
+      scene.add(root);
+
+      const { meshes, lit } = tuneMaterials(root, renderer.capabilities.getMaxAnisotropy());
+      animMixer = playGltfAnimations(gltf, root);
+
+      const box = new THREE.Box3().setFromObject(root);
+      const pad = 0.6;
+      vrBounds = {
+        minX: box.min.x + pad, maxX: box.max.x - pad,
+        minZ: box.min.z + pad, maxZ: box.max.z - pad,
+        minY: Math.min(box.min.y, 0) - 0.2,
+        maxY: Math.min(box.max.y - 0.4, 5.5),
+      };
+
+      status.textContent = `OK — ${meshes} meshes · ${lit} lit · ${loadMs}ms · vertex colors · unlit`;
+      window.__SCENE_READY__ = true;
+
+      window.__setView = (name) => {
+        const c = box.getCenter(new THREE.Vector3());
+        if (name === 'A') {
+          camera.position.set(c.x + 0.4, c.y + 0.35, c.z + 3.5);
+          controls.target.set(c.x, c.y + 0.1, c.z - 1.5);
+        } else if (name === 'B') {
+          camera.position.set(c.x + 2.8, c.y + 0.5, c.z + 0.2);
+          controls.target.set(c.x - 0.5, c.y + 0.2, c.z);
+        } else if (name === 'C') {
+          camera.position.set(4.1, 2.0, -9.0);
+          controls.target.set(1.85, 1.95, -10.2);
+        } else if (name === 'E') {
+          camera.position.set(8.95, 2.55, -7.2);
+          controls.target.set(9.15, 2.35, -10.35);
+        } else {
+          let best = null, bestVol = 0;
+          root.traverse((o) => {
+            if (!o.isMesh) return;
+            const label = (o.name || '') + ' ' + (o.parent?.name || '');
+            if (!/Door_01/i.test(label)) return;
+            const b = new THREE.Box3().setFromObject(o);
+            const s = b.getSize(new THREE.Vector3());
+            const vol = s.x * s.y * s.z;
+            if (vol > bestVol) { bestVol = vol; best = b; }
+          });
+          if (best) {
+            const dc = best.getCenter(new THREE.Vector3());
+            const ds = best.getSize(new THREE.Vector3());
+            camera.position.set(dc.x, dc.y, dc.z + Math.max(ds.y * 1.1, 2.0));
+            controls.target.copy(dc);
+          } else {
+            camera.position.copy(c).add(new THREE.Vector3(0, 0.25, 2));
+            controls.target.copy(c);
+          }
+        }
+        controls.update();
+      };
+      window.__setView('C');
+    }
+
+    exposureEl.addEventListener('input', () => {
+      const v = Number(exposureEl.value);
+      exposureVal.textContent = v.toFixed(2);
+      renderer.toneMappingExposure = v;
+    });
+    bloomEl.addEventListener('change', () => { bloomPass.enabled = bloomEl.checked; });
+
+    document.getElementById('viewA').onclick = () => window.__setView?.('A');
+    document.getElementById('viewB').onclick = () => window.__setView?.('B');
+    document.getElementById('viewC').onclick = () => window.__setView?.('C');
+    document.getElementById('viewD').onclick = () => window.__setView?.('D');
+    document.getElementById('viewE').onclick = () => window.__setView?.('E');
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+      composer.setSize(innerWidth, innerHeight);
+      bloomPass.setSize(innerWidth, innerHeight);
+    });
+
+    renderer.setAnimationLoop(() => {
+      const dt = Math.min(clock.getDelta(), 0.05);
+      tickFps();
+      if (animMixer) animMixer.update(dt);
+      if (root) updateEmissivePanners(root, dt);
+      if (renderer.xr.isPresenting) {
+        updateVrLocomotion(dt);
+        renderer.render(scene, camera);
+        return;
+      }
+      controls.update();
+      if (bloomEl.checked) composer.render();
+      else renderer.render(scene, camera);
+    });
+
+    load().catch((e) => {
+      status.textContent = 'Failed: ' + e.message + ' — run: npm run build:preview4';
+      console.error(e);
+    });
+  </script>
+</body>
+</html>
