@@ -213,8 +213,20 @@ ${HQ_DECODE}`,
 }
 
 function attachLightmap(mat, params) {
-  const { texture, texCoord, lightmapAdd, lightmapScale, coordinateScaleBias } = params;
-  mat.lightMap = cloneLightmapTexture(texture, texCoord);
+  const { texture, texCoord, lightmapAdd, lightmapScale, coordinateScaleBias, lmTexCache } = params;
+  // Share one Texture object per atlas+UV channel (safe). Do NOT share Materials.
+  let lmTex;
+  if (lmTexCache) {
+    const key = `${texture.uuid}|${texCoord}`;
+    lmTex = lmTexCache.get(key);
+    if (!lmTex) {
+      lmTex = cloneLightmapTexture(texture, texCoord);
+      lmTexCache.set(key, lmTex);
+    }
+  } else {
+    lmTex = cloneLightmapTexture(texture, texCoord);
+  }
+  mat.lightMap = lmTex;
   mat.lightMapIntensity = 1;
   mat.defines = { ...(mat.defines || {}), EPIC_HQ_LM: '' };
   if (texCoord >= 1) mat.defines.USE_UV1 = '';
@@ -305,7 +317,8 @@ uniform int epicHasEmissiveMap;`,
   };
 
   mat.customProgramCacheKey = () =>
-    `epic2BasicFix1|ch${texCoord}|f${params.flipMode}|d${params.debugMode}|i${params.intensity}|c${params.contrast}|w${params.whitePoint}`;
+    // Only keys that change compiled GLSL — intensity/contrast/etc. are uniforms
+    `epic2Basic|ch${texCoord}|em${emissiveMap ? 1 : 0}`;
   mat.needsUpdate = true;
   return mat;
 }
@@ -424,7 +437,8 @@ function makeStandardLitMaterial(src, params, isMetal, opts = {}) {
   };
 
   mat.customProgramCacheKey = () =>
-    `epic2Std|${isMetal ? 'm' : 'd'}|ke${keepEnv ? 1 : 0}|ch${texCoord}|f${params.flipMode}|i${params.intensity}|c${params.contrast}|w${params.whitePoint}|e${mat.envMapIntensity}`;
+    // Only keys that change compiled GLSL — LM scale/intensity are uniforms
+    `epic2Std|${isMetal ? 'm' : 'd'}|ke${keepEnv ? 1 : 0}|ch${texCoord}`;
   mat.needsUpdate = true;
   return mat;
 }
@@ -537,6 +551,7 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
   }
 
   const baseTexCache = new Map();
+  const lmTexCache = new Map();
   async function getBaseLightmapTexture(textureIndex) {
     if (baseTexCache.has(textureIndex)) return baseTexCache.get(textureIndex);
     const tex = await parser.getDependency('texture', textureIndex);
@@ -589,6 +604,7 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
         lightmapAdd: lm.lightmapAdd,
         lightmapScale: lm.lightmapScale,
         coordinateScaleBias: lm.coordinateScaleBias,
+        lmTexCache,
         intensity,
         directionality,
         contrast,
