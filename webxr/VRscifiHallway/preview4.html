@@ -466,6 +466,9 @@
           const n = (m.name || '').toLowerCase();
           if (/floor_|tile_|door_|bin_01|simple_chrome|simple_copper|pipe_/.test(n)) {
             m.envMapIntensity = 1.75;
+          } else if (/simple_plastic|simple_pvc|simple_steel/.test(n)) {
+            // Solid-color props (pots, trim) — glossy, not mirror-chrome
+            m.envMapIntensity = 1.05;
           } else if (m.userData?.questMetal) {
             m.envMapIntensity = 1.4;
           }
