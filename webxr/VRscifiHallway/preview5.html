@@ -125,6 +125,11 @@
     /** Whole map, FULL quality, per-cell joined (573 prims / 3.3M tris).
      *  External-resource .gltf: every file <100MB so GitHub accepts the push. */
     const CELLS_URL = './map1/Map1.gltf';
+    /** Precomputed visibility (baked ID-buffer PVS). Hides only meshes proven
+     *  invisible from the player's cell — pixel-identical output, far fewer draws.
+     *  Disable with #nopvs. Missing/invalid pvs.json ⇒ fail-open (all visible). */
+    const PVS_URL = './map1/pvs.json';
+    const USE_PVS = !/(?:^|[?#&])nopvs(?:[=&]|$)/i.test(qs);
     const MAP1_UPPER_DECK_AABB = {
       minX: 5, maxX: 44,
       minY: 8.0, maxY: 18.5,
@@ -211,6 +216,7 @@
     controls.dampingFactor = 0.06;
     window.__CAMERA__ = camera;
     window.__CONTROLS__ = controls;
+    window.__THREE__ = THREE; // for the offline PVS bake / verify scripts
 
     const vrRig = new THREE.Group();
     scene.add(vrRig);
@@ -226,6 +232,74 @@
     const floorDown = new THREE.Vector3(0, -1, 0);
     /** @type {THREE.Mesh[]} */
     let colliderMeshes = [];
+
+    // --- Precomputed visibility (PVS) state ---
+    let pvsLoaded = null;   // parsed pvs.json with cells as Sets
+    let pvsActive = null;   // currently applied (null = off/all visible)
+    let pvsMeshes = [];     // meshes in traversal order (bake uses same order)
+    let pvsKey = '';
+    const _pvsPos = new THREE.Vector3();
+
+    async function loadPvs() {
+      if (!USE_PVS || !USE_CELLS) return;
+      try {
+        const data = await (await fetch(PVS_URL)).json();
+        pvsMeshes = [];
+        root.traverse((o) => { if (o.isMesh) pvsMeshes.push(o); });
+        if (data.meshCount !== pvsMeshes.length) {
+          console.warn(`PVS mesh count mismatch (${data.meshCount} vs ${pvsMeshes.length}) — disabled`);
+          pvsMeshes = [];
+          return;
+        }
+        for (const k of Object.keys(data.cells)) data.cells[k] = new Set(data.cells[k]);
+        pvsLoaded = data;
+        pvsActive = data;
+        updatePvs(true);
+        console.log(`PVS active: ${Object.keys(data.cells).length} cells / ${data.meshCount} meshes`);
+      } catch (e) {
+        console.warn('pvs.json missing/invalid — rendering everything', e);
+      }
+    }
+
+    function pvsAllVisible() {
+      for (const m of pvsMeshes) m.visible = true;
+      pvsKey = '';
+      window.__PVS__ = { on: false, visible: pvsMeshes.length, total: pvsMeshes.length };
+    }
+
+    function updatePvs(force = false) {
+      if (!pvsActive) return;
+      // Camera world position covers both desktop eye and XR head (rig + HMD).
+      camera.getWorldPosition(_pvsPos);
+      const [ox, oy, oz] = pvsActive.origin;
+      const key =
+        Math.floor((_pvsPos.x - ox) / pvsActive.cellSize) + '_'
+        + Math.floor((_pvsPos.z - oz) / pvsActive.cellSize) + '_'
+        + Math.floor((_pvsPos.y - oy) / pvsActive.yBand);
+      if (!force && key === pvsKey) return;
+      pvsKey = key;
+      const set = pvsActive.cells[key];
+      let n = 0;
+      if (!set) {
+        // Outside baked walkable space — fail open, never show holes.
+        for (const m of pvsMeshes) m.visible = true;
+        n = pvsMeshes.length;
+      } else {
+        for (let i = 0; i < pvsMeshes.length; i++) {
+          const v = set.has(i);
+          pvsMeshes[i].visible = v;
+          if (v) n++;
+        }
+      }
+      window.__PVS__ = { on: !!set, key, visible: n, total: pvsMeshes.length };
+    }
+    /** Verify/A-B hook: __PVS_ENABLE__(false) shows everything. */
+    window.__PVS_ENABLE__ = (on) => {
+      pvsActive = on ? pvsLoaded : null;
+      if (on) updatePvs(true);
+      else pvsAllVisible();
+    };
+    window.__PVS_UPDATE__ = () => updatePvs(true);
 
     // --- Chunk streaming state ---
     let chunkManifest = null;
@@ -1385,7 +1459,9 @@
       }
 
       rebuildColliders();
+      if (USE_CELLS) await loadPvs();
       window.__setView('C');
+      updatePvs(true);
       renderer.render(scene, camera);
       const draws = renderer.info.render.calls;
       const tris = renderer.info.render.triangles;
@@ -1454,10 +1530,12 @@
       tickChunkStreaming(false);
       if (renderer.xr.isPresenting) {
         updateVrLocomotion(dt);
+        updatePvs();
         renderer.render(scene, camera);
         tickFps();
         return;
       }
+      updatePvs();
       updateDesktopLocomotion(dt);
       controls.update();
       if (bloomEl.checked) composer.render();
