@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "source": "Map1_quest.glb",
+  "file": "playable.glb",
+  "aabb": {
+    "minX": 5,
+    "maxX": 52,
+    "minY": 5.5,
+    "maxY": 18.5,
+    "minZ": -78,
+    "maxZ": -34
+  },
+  "spawn": {
+    "x": 20,
+    "y": 9.6,
+    "z": -50,
+    "lookX": 20,
+    "lookZ": -58
+  },
+  "statsPreJoin": {
+    "nodes": 386,
+    "tris": 1050595
+  }
+}

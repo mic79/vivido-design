@@ -1,0 +1,1480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>SciFi Hallway — preview5 (Map1 Quest bake)</title>
+  <style>
+    :root {
+      --ink: #e6ebe8;
+      --muted: #9aa8a0;
+      --panel: rgba(8, 12, 10, 0.78);
+      --accent: #7dffb3;
+      --line: rgba(125, 255, 179, 0.22);
+    }
+    html, body { margin: 0; height: 100%; background: #050706; color: var(--ink); font: 13px/1.45 "Segoe UI", ui-sans-serif, system-ui, sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    #hud {
+      position: fixed; left: 12px; top: 12px; z-index: 2;
+      background: var(--panel); backdrop-filter: blur(10px);
+      border: 1px solid var(--line); padding: 12px 14px; border-radius: 10px; max-width: 440px;
+    }
+    #hud strong { color: var(--accent); font-weight: 650; letter-spacing: 0.02em; }
+    #hud a { color: #9ecbff; text-decoration: none; }
+    #hud a:hover { text-decoration: underline; }
+    #hud label { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+    #hud input[type=range] { width: 140px; }
+    button {
+      margin-top: 8px; margin-right: 6px; cursor: pointer;
+      background: rgba(125, 255, 179, 0.12); color: var(--ink);
+      border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
+    }
+    button:hover { background: rgba(125, 255, 179, 0.22); }
+    #vr-slot { position: fixed; right: 12px; bottom: 12px; z-index: 3; }
+    #vr-slot button { margin: 0; }
+    #fpsHud {
+      position: fixed; right: 12px; top: 12px; z-index: 3;
+      background: var(--panel); color: var(--accent); font: 600 14px/1.2 ui-monospace, Consolas, monospace;
+      padding: 8px 12px; border-radius: 8px; min-width: 72px; text-align: center;
+      border: 1px solid var(--line); pointer-events: none;
+    }
+    #status { margin-top: 6px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div id="fpsHud">-- FPS</div>
+  <div id="vr-slot"></div>
+  <div id="hud">
+    <div><strong>preview5</strong> — <span id="modeLabel">…</span> · baked LM + PBR metals/IBL</div>
+    <div style="opacity:.85;font-size:12px;margin-top:4px">
+      <a href="preview.html">preview</a> ·
+      <a href="preview2.html">preview2</a> ·
+      <a href="preview3.html">preview3</a> ·
+      <a href="preview4.html">preview4</a>
+      · Default: full quality, all resident · <code>#playable</code> wing · <code>#islands</code>/<code>#stream</code> legacy · <code>#full</code>/<code>#clip</code> local-only
+    </div>
+    <div id="status">Loading…</div>
+    <label>Exposure <input id="exposure" type="range" min="0.5" max="2.2" step="0.05" value="1.15" /> <span id="exposureVal">1.15</span></label>
+    <label><input id="bloom" type="checkbox" /> Desktop bloom (emissives)</label>
+    <div style="margin-top:8px;opacity:.85;font-size:12px">VR: L-stick move · R-stick X snap-turn · R-stick Y up/down · Desktop: WASD + QE</div>
+    <div>
+      <button id="viewA" type="button">Cam A</button>
+      <button id="viewB" type="button">Cam B</button>
+      <button id="viewC" type="button">Cam C center</button>
+      <button id="viewD" type="button">Cam D long</button>
+      <button id="viewE" type="button">Cam E detail</button>
+    </div>
+  </div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/",
+      "three-mesh-bvh": "https://unpkg.com/three-mesh-bvh@0.8.3/build/index.module.js"
+    }
+  }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+    import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+    import { VRButton } from 'three/addons/webxr/VRButton.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+    import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+    // BVH-accelerated raycasts (collisions / locomotion later) — same pattern as other WebXR apps
+    THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+    THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+    THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+    /**
+     * Default: single self-contained playable.glb (closed control wing — review-verified path).
+     * #islands = full-height Map1 streaming (experimental; must pass review-islands.mjs).
+     * #stream = old floor-sliced chunks. #clip = full Map1 + runtime AABB prune.
+     */
+    const USE_PREVIEW4_MODEL = false;
+    const qs = location.hash + location.search;
+    const MAP1_CLIP_FALLBACK = /(?:^|[?#&])clip(?:[=&]|$)/i.test(qs);
+    const USE_PLAYABLE = /(?:^|[?#&])playable(?:[=&]|$)/i.test(qs)
+      && !USE_PREVIEW4_MODEL && !MAP1_CLIP_FALLBACK;
+    const USE_FULL_MAP = /(?:^|[?#&])full(?:[=&]|$)/i.test(qs)
+      && !USE_PREVIEW4_MODEL && !MAP1_CLIP_FALLBACK && !USE_PLAYABLE;
+    const USE_ISLAND_STREAM = /(?:^|[?#&])islands(?:[=&]|$)/i.test(qs)
+      && !USE_PREVIEW4_MODEL && !MAP1_CLIP_FALLBACK && !USE_PLAYABLE && !USE_FULL_MAP;
+    const USE_FLOOR_STREAM = /(?:^|[?#&])stream(?:[=&]|$)/i.test(qs)
+      && !USE_PREVIEW4_MODEL && !MAP1_CLIP_FALLBACK && !USE_PLAYABLE
+      && !USE_FULL_MAP && !USE_ISLAND_STREAM;
+    // DEFAULT: single file, FULL-QUALITY geometry (no simplification), draw calls
+    // joined PER SPATIAL CELL so frustum culling trims each view. Everything
+    // resident ⇒ holes impossible. #full = simplified single-file variant.
+    const USE_CELLS = !USE_PREVIEW4_MODEL && !MAP1_CLIP_FALLBACK
+      && !USE_PLAYABLE && !USE_FULL_MAP && !USE_ISLAND_STREAM && !USE_FLOOR_STREAM;
+    const USE_CHUNK_STREAMING = USE_ISLAND_STREAM || USE_FLOOR_STREAM;
+    const CHUNKS_URL = USE_FLOOR_STREAM ? './chunks/' : './islands/';
+    const PLAYABLE_URL = './playable.glb';
+    const PLAYABLE_META_URL = './playable.json';
+    /** Whole map, offline-simplified + draw-joined (LOCAL ONLY — >100MB, not deployed). */
+    const FULL_MAP_URL = './Map1_full.glb';
+    /** Whole map, FULL quality, per-cell joined (573 prims / 3.3M tris).
+     *  External-resource .gltf: every file <100MB so GitHub accepts the push. */
+    const CELLS_URL = './map1/Map1.gltf';
+    const MAP1_UPPER_DECK_AABB = {
+      minX: 5, maxX: 44,
+      minY: 8.0, maxY: 18.5,
+      minZ: -78, maxZ: -34,
+    };
+    let playableMeta = null;
+    const MODEL_URL = USE_PREVIEW4_MODEL
+      ? './MainMap_quest.glb'
+      : (USE_CELLS
+        ? CELLS_URL
+        : (USE_FULL_MAP
+          ? FULL_MAP_URL
+          : (USE_PLAYABLE ? PLAYABLE_URL : './Map1_quest.glb')));
+    document.getElementById('modeLabel').textContent = USE_PREVIEW4_MODEL
+      ? 'A/B: MainMap (preview4 model)'
+      : (USE_CELLS
+        ? 'Map1 FULL QUALITY (per-cell culling)'
+        : (USE_FULL_MAP
+          ? 'Map1 simplified single-file (#full)'
+          : (USE_ISLAND_STREAM
+            ? 'Map1 island streaming (#islands)'
+            : (USE_FLOOR_STREAM
+              ? 'Map1 floor chunks (#stream)'
+              : (USE_PLAYABLE ? 'Playable wing (#playable)' : 'Map1 #clip upper deck')))));
+    /** Spatial cells (m). Balance draw-call merge vs hallway frustum culls. */
+    const MERGE_CELL_BASIC = 8;
+    const MERGE_CELL_PBR = 12;
+    // Placeholder — overwritten from scene bounds / playable.json after load
+    const VR_SPAWN = { x: 20, y: 9.6, z: -50, lookX: 20, lookZ: -58 };
+    const keysDown = new Set();
+    addEventListener('keydown', (e) => { keysDown.add(e.code); });
+    addEventListener('keyup', (e) => { keysDown.delete(e.code); });
+    /** Match preview4 metal names when A/B-ing MainMap; broader for Map1 MI_*. */
+    const METAL_RE = USE_PREVIEW4_MODEL
+      ? /simple_chrome|simple_copper|chrome|copper|door_|pipe_inst|fusebox|cable_0|^bin_01$|floor_|tile_|fond_wall|divider_|bench_|worldgrid|server_|robot_|dyson|kitbash|office_01/i
+      : /metal|chrome|copper|pipe|door|floor|tile|wall|trim|bench|cable|bin_|desk|shelf|vent|panel|hall_|shiny|steel|plastic|pvc|mi_/i;
+    /** Cached once after load — avoid full scene walk every frame for UV panners. */
+    let emissivePannerMaps = [];
+
+    const status = document.getElementById('status');
+    const exposureEl = document.getElementById('exposure');
+    const exposureVal = document.getElementById('exposureVal');
+    const bloomEl = document.getElementById('bloom');
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true, // same as preview4
+      powerPreference: 'high-performance',
+      alpha: false,
+      stencil: false,
+    });
+    // Match preview4: MSAA + pixelRatio cap 1.5 (preview5 had 1.25 — looked softer)
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = Number(exposureEl.value);
+    renderer.xr.enabled = true;
+    renderer.xr.setFramebufferScaleFactor(1); // match preview4 (was 0.85)
+    renderer.info.autoReset = true;
+    document.body.appendChild(renderer.domElement);
+    document.getElementById('vr-slot').appendChild(VRButton.createButton(renderer));
+
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+    const ktx2Loader = new KTX2Loader()
+      .setTranscoderPath('https://unpkg.com/three@0.170.0/examples/jsm/libs/basis/')
+      .detectSupport(renderer);
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.setDRACOLoader(dracoLoader);
+    gltfLoader.setKTX2Loader(ktx2Loader);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050706);
+
+    // Shared IBL for the small set of metal materials only (cheap vs full-scene Standard)
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    let roomEnv = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = roomEnv;
+    scene.environmentIntensity = 1.05;
+
+    const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 200); // match preview4
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    window.__CAMERA__ = camera;
+    window.__CONTROLS__ = controls;
+
+    const vrRig = new THREE.Group();
+    scene.add(vrRig);
+
+    const clock = new THREE.Clock();
+    const tmpFwd = new THREE.Vector3();
+    const tmpRight = new THREE.Vector3();
+    const tmpP0 = new THREE.Vector3();
+    const tmpP1 = new THREE.Vector3();
+    let turnLatched = false;
+    let vrBounds = { minX: -5, maxX: 90, minZ: -111, maxZ: -28, minY: -2.5, maxY: 18.5 };
+    const floorRay = new THREE.Raycaster();
+    const floorDown = new THREE.Vector3(0, -1, 0);
+    /** @type {THREE.Mesh[]} */
+    let colliderMeshes = [];
+
+    // --- Chunk streaming state ---
+    let chunkManifest = null;
+    /** @type {Map<string, any>} */
+    const cellById = new Map();
+    /** @type {Map<string, THREE.Group>} */
+    const loadedChunks = new Map();
+    /** @type {Map<string, Promise<void>>} */
+    const loadingChunks = new Map();
+    let currentCellId = null;
+    let stickyCellId = null;
+    let chunkRoot = null;
+    let lastChunkTickMs = 0;
+    let chunkSyncBusy = false;
+    const CHUNK_TICK_MS = 100;
+    const CELL_HYSTERESIS = 2.0;
+    const MAX_CONCURRENT_CHUNK_LOADS = 2;
+    /** Hard cap — stacking wing+mid+ground was 10M tris / 35 FPS in VR. */
+    const MAX_RESIDENT_CHUNKS = 2;
+    /** Prefetch neighbor when this close to its AABB. */
+    const PREFETCH_RADIUS_M = USE_ISLAND_STREAM ? 18 : 12;
+    const _camDir = new THREE.Vector3();
+    const _chunkCenter = new THREE.Vector3();
+    const _camPos = new THREE.Vector3();
+    const _toChunk = new THREE.Vector3();
+
+    function placeVrRig() {
+      vrRig.position.set(VR_SPAWN.x, VR_SPAWN.y, VR_SPAWN.z);
+      const dx = VR_SPAWN.lookX - VR_SPAWN.x;
+      const dz = VR_SPAWN.lookZ - VR_SPAWN.z;
+      vrRig.rotation.set(0, Math.atan2(-dx, -dz), 0);
+    }
+
+    function pickStick(axes) {
+      if (!axes) return [0, 0];
+      const a01 = Math.hypot(axes[0] || 0, axes[1] || 0);
+      const a23 = Math.hypot(axes[2] || 0, axes[3] || 0);
+      return a23 >= a01 ? [axes[2] || 0, axes[3] || 0] : [axes[0] || 0, axes[1] || 0];
+    }
+
+    function rotateRigYaw(delta) {
+      camera.getWorldPosition(tmpP0);
+      vrRig.rotation.y += delta;
+      vrRig.updateMatrixWorld(true);
+      camera.getWorldPosition(tmpP1);
+      vrRig.position.x += tmpP0.x - tmpP1.x;
+      vrRig.position.z += tmpP0.z - tmpP1.z;
+    }
+
+    function rebuildColliders() {
+      colliderMeshes = [];
+      const roots = USE_CHUNK_STREAMING
+        ? [...loadedChunks.values()]
+        : [root, mergedRoot].filter(Boolean);
+      for (const r of roots) {
+        r.traverse((o) => {
+          if (!o.isMesh || !o.geometry) return;
+          if (!o.geometry.boundsTree) {
+            try { o.geometry.computeBoundsTree(); } catch { /* ignore */ }
+          }
+          colliderMeshes.push(o);
+        });
+      }
+    }
+
+    function distToAabb(p, aabb) {
+      const cx = THREE.MathUtils.clamp(p.x, aabb.minX, aabb.maxX);
+      const cy = THREE.MathUtils.clamp(p.y, aabb.minY, aabb.maxY);
+      const cz = THREE.MathUtils.clamp(p.z, aabb.minZ, aabb.maxZ);
+      return Math.hypot(p.x - cx, p.y - cy, p.z - cz);
+    }
+
+    function looksTowardCell(cell) {
+      camera.getWorldPosition(_camPos);
+      camera.getWorldDirection(_camDir);
+      _chunkCenter.set(
+        (cell.aabb.minX + cell.aabb.maxX) * 0.5,
+        (cell.aabb.minY + cell.aabb.maxY) * 0.5,
+        (cell.aabb.minZ + cell.aabb.maxZ) * 0.5,
+      );
+      _toChunk.subVectors(_chunkCenter, _camPos);
+      if (_toChunk.lengthSq() < 1) return true;
+      _toChunk.normalize();
+      return _toChunk.dot(_camDir) > 0.35;
+    }
+
+    /**
+     * At most MAX_RESIDENT_CHUNKS. Always current + best neighbor.
+     * Full-height islands: prefer LOOK direction over mere proximity — side rooms
+     * used to win distance ties and leave the doorway you face black.
+     */
+    function residentChunkIds(cellId) {
+      const cell = cellById.get(cellId);
+      if (!cell) return new Set([cellId]);
+      const p = playerWorldPos();
+      camera.getWorldDirection(_camDir);
+      const fullHeight = USE_ISLAND_STREAM || (cell.floor || '') === 'full';
+      const lookPrefetch = fullHeight ? 45 : PREFETCH_RADIUS_M;
+
+      const candidates = [];
+      for (const nid of cell.neighbors || []) {
+        const n = cellById.get(nid);
+        if (!n) continue;
+        const d = distToAabb(p, n.aabb);
+        const toward = looksTowardCell(n);
+        let score = -1;
+        if (fullHeight) {
+          if (toward && d <= lookPrefetch) {
+            // Facing this island through a doorway / hatch / corridor
+            score = 5000 - d;
+          } else if (d <= 6) {
+            // Standing on a shared face — keep seam filled even if looking elsewhere
+            score = 2500 - d;
+          } else if (d <= PREFETCH_RADIUS_M) {
+            score = 1000 - d;
+          }
+        } else {
+          const sameFloor = (n.floor || '') === (cell.floor || '');
+          if (sameFloor && (d <= PREFETCH_RADIUS_M || toward)) {
+            score = 1000 - d + (toward ? 50 : 0);
+          } else if (!sameFloor) {
+            const down = n.aabb.maxY <= cell.aabb.minY + 0.3;
+            const up = n.aabb.minY >= cell.aabb.maxY - 0.3;
+            if (down && (_camDir.y < -0.35 || p.y <= cell.aabb.minY + 1.5)) score = 500 - d;
+            if (up && (_camDir.y > 0.35 || p.y >= cell.aabb.maxY - 1.5)) score = 500 - d;
+          }
+        }
+        if (score >= 0) candidates.push({ id: nid, score, d });
+      }
+      if (!fullHeight) {
+        for (const nid of [cell.above, cell.below]) {
+          if (!nid || !cellById.has(nid) || candidates.some((c) => c.id === nid)) continue;
+          const n = cellById.get(nid);
+          const d = distToAabb(p, n.aabb);
+          const down = nid === cell.below;
+          if (down && (_camDir.y < -0.35 || p.y <= cell.aabb.minY + 1.5)) {
+            candidates.push({ id: nid, score: 500 - d, d });
+          }
+          if (!down && (_camDir.y > 0.35 || p.y >= cell.aabb.maxY - 1.5)) {
+            candidates.push({ id: nid, score: 500 - d, d });
+          }
+        }
+      }
+
+      candidates.sort((a, b) => b.score - a.score);
+      const out = new Set([cellId]);
+      for (const c of candidates) {
+        if (out.size >= MAX_RESIDENT_CHUNKS) break;
+        out.add(c.id);
+      }
+      return out;
+    }
+
+    function snapFloorY(x, y, z, maxDrop = 4) {
+      if (!colliderMeshes.length) return y;
+      floorRay.far = maxDrop + 0.5;
+      floorRay.set(new THREE.Vector3(x, y + 1.8, z), floorDown);
+      const hits = floorRay.intersectObjects(colliderMeshes, false);
+      for (const h of hits) {
+        if (h.face && h.face.normal.y < 0.35) continue;
+        return h.point.y;
+      }
+      return y;
+    }
+
+    function playerWorldPos(out = new THREE.Vector3()) {
+      if (renderer.xr.isPresenting) {
+        out.copy(vrRig.position);
+        return out;
+      }
+      out.copy(controls.target);
+      return out;
+    }
+
+    function containsAabb(aabb, x, y, z, pad = 0) {
+      // pad>0 (hysteresis): inclusive expansion.
+      // pad==0: half-open X/Z so shared island faces belong to exactly one cell
+      // (matches build-islands.mjs). Y stays inclusive.
+      if (pad > 0) {
+        return x >= aabb.minX - pad && x <= aabb.maxX + pad
+          && y >= aabb.minY - pad && y <= aabb.maxY + pad
+          && z >= aabb.minZ - pad && z <= aabb.maxZ + pad;
+      }
+      return x >= aabb.minX && x < aabb.maxX
+        && y >= aabb.minY && y <= aabb.maxY
+        && z >= aabb.minZ && z < aabb.maxZ;
+    }
+
+    function cellAtPosition(x, y, z) {
+      if (stickyCellId) {
+        const sticky = cellById.get(stickyCellId);
+        if (sticky && containsAabb(sticky.aabb, x, y, z, CELL_HYSTERESIS)) return stickyCellId;
+      }
+      for (const cell of cellById.values()) {
+        if (containsAabb(cell.aabb, x, y, z, 0)) return cell.id;
+      }
+      // Nearest cell center. Full-height islands: match on XZ only.
+      const fullHeight = USE_ISLAND_STREAM;
+      let best = null;
+      let bestD = Infinity;
+      for (const pass of [0, 1]) {
+        best = null;
+        bestD = Infinity;
+        for (const cell of cellById.values()) {
+          const cx = (cell.aabb.minX + cell.aabb.maxX) * 0.5;
+          const cy = (cell.aabb.minY + cell.aabb.maxY) * 0.5;
+          const cz = (cell.aabb.minZ + cell.aabb.maxZ) * 0.5;
+          if (!fullHeight && pass === 0 && Math.abs(cy - y) > 4.5) continue;
+          const d = fullHeight
+            ? (x - cx) ** 2 + (z - cz) ** 2
+            : (x - cx) ** 2 + (y - cy) ** 2 * 0.25 + (z - cz) ** 2;
+          if (d < bestD) { bestD = d; best = cell.id; }
+        }
+        if (best) return best;
+        if (fullHeight) break;
+      }
+      return best;
+    }
+
+    function disposeObject3D(obj) {
+      obj.traverse((o) => {
+        if (o.geometry) {
+          o.geometry.disposeBoundsTree?.();
+          o.geometry.dispose();
+        }
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (!m) continue;
+          // Do not dispose shared textures aggressively across chunks — each chunk owns its GLB
+          for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap']) {
+            if (m[key]) m[key].dispose?.();
+          }
+          m.dispose?.();
+        }
+      });
+    }
+
+    function applyQuestMaterials(rootObj) {
+      const stats = tuneMaterials(rootObj, renderer.capabilities.getMaxAnisotropy());
+      scene.environment = roomEnv;
+      scene.environmentIntensity = 1.4;
+      rootObj.traverse((obj) => {
+        if (!obj.isMesh && !obj.isSkinnedMesh) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (!m?.isMeshStandardMaterial && !m?.isMeshPhysicalMaterial) continue;
+          const n = (m.name || '').toLowerCase();
+          if (/floor_|tile_|door_|bin_01|simple_chrome|simple_copper|pipe_/.test(n)
+              || /floor|tile|door|pipe|trim|metal|shiny|chrome|copper|panel/.test(n)) {
+            m.envMapIntensity = 1.75;
+          } else if (/simple_plastic|simple_pvc|simple_steel/.test(n)
+              || /plastic|pvc|steel|simple_/.test(n)) {
+            m.envMapIntensity = 1.05;
+          } else if (m.userData?.questMetal) {
+            m.envMapIntensity = 1.4;
+          }
+        }
+      });
+      return stats;
+    }
+
+    async function loadChunk(cellId) {
+      if (loadedChunks.has(cellId) || loadingChunks.has(cellId)) return;
+      const cell = cellById.get(cellId);
+      if (!cell) return;
+      const p = (async () => {
+        const url = CHUNKS_URL + cell.file;
+        const gltf = await gltfLoader.loadAsync(url);
+        const group = gltf.scene;
+        group.name = `chunk_${cellId}`;
+        applyQuestMaterials(group);
+        for (const map of collectEmissivePanners(group)) {
+          if (!emissivePannerMaps.includes(map)) emissivePannerMaps.push(map);
+        }
+        group.visible = true;
+        chunkRoot.add(group);
+        loadedChunks.set(cellId, group);
+        rebuildColliders();
+        updateStreamingHud();
+      })();
+      loadingChunks.set(cellId, p);
+      try {
+        await p;
+      } finally {
+        loadingChunks.delete(cellId);
+      }
+    }
+
+    function unloadChunk(cellId) {
+      const group = loadedChunks.get(cellId);
+      if (!group) return;
+      chunkRoot.remove(group);
+      disposeObject3D(group);
+      loadedChunks.delete(cellId);
+      rebuildColliders();
+    }
+
+    async function syncChunks(desired) {
+      // LOAD BEFORE UNLOAD — unloading first caused full-frame black holes while
+      // 50–80MB neighbors decoded (the exact failure in user screenshots).
+      const missing = [...desired].filter((id) => !loadedChunks.has(id) && !loadingChunks.has(id));
+      missing.sort((a, b) => {
+        if (a === stickyCellId) return -1;
+        if (b === stickyCellId) return 1;
+        return 0;
+      });
+      const queue = missing.slice();
+      const workers = [];
+      for (let i = 0; i < MAX_CONCURRENT_CHUNK_LOADS; i++) {
+        workers.push((async () => {
+          while (queue.length) {
+            const id = queue.shift();
+            if (!id || !desired.has(id)) continue;
+            await loadChunk(id);
+          }
+        })());
+      }
+      await Promise.all(workers);
+      for (const id of [...loadedChunks.keys()]) {
+        if (!desired.has(id)) unloadChunk(id);
+      }
+      updateStreamingHud();
+    }
+
+    function updateStreamingHud() {
+      if (!USE_CHUNK_STREAMING) return;
+      const loaded = [...loadedChunks.keys()];
+      const draws = renderer.info.render.calls;
+      const tris = renderer.info.render.triangles;
+      const kind = USE_ISLAND_STREAM ? 'islands' : 'chunks';
+      status.textContent =
+        `OK — Map1 ${kind} · cell ${stickyCellId || '…'}` +
+        ` · loaded [${loaded.join(',') || '…'}]` +
+        ` · ${draws} draws / ${(tris / 1000) | 0}k tri` +
+        (loadingChunks.size ? ` · loading ${loadingChunks.size}` : '');
+      window.__CHUNKS__ = {
+        current: stickyCellId,
+        loaded,
+        loading: [...loadingChunks.keys()],
+        mode: kind,
+      };
+    }
+
+    function tickChunkStreaming(force = false) {
+      if (!USE_CHUNK_STREAMING || !chunkManifest || chunkSyncBusy) return;
+      const now = performance.now();
+      if (!force && now - lastChunkTickMs < CHUNK_TICK_MS) return;
+      lastChunkTickMs = now;
+      const p = playerWorldPos();
+      const cellId = cellAtPosition(p.x, p.y, p.z);
+      if (!cellId) return;
+      stickyCellId = cellId;
+      currentCellId = cellId;
+      const desired = residentChunkIds(cellId);
+      chunkSyncBusy = true;
+      window.__CHUNK_BUSY__ = true;
+      syncChunks(desired).finally(() => {
+        chunkSyncBusy = false;
+        window.__CHUNK_BUSY__ = false;
+        updateStreamingHud();
+      });
+    }
+
+    function updateVrLocomotion(dt) {
+      if (!renderer.xr.isPresenting) return;
+      const session = renderer.xr.getSession();
+      if (!session) return;
+      let lx = 0, ly = 0, rx = 0, ry = 0;
+      for (const src of session.inputSources) {
+        if (!src.gamepad || !src.handedness) continue;
+        const [sx, sy] = pickStick(src.gamepad.axes);
+        if (src.handedness === 'left') { lx = sx; ly = sy; }
+        else if (src.handedness === 'right') { rx = sx; ry = sy; }
+      }
+      const dead = 0.18;
+      if (Math.abs(lx) > dead || Math.abs(ly) > dead) {
+        camera.getWorldDirection(tmpFwd);
+        tmpFwd.y = 0;
+        if (tmpFwd.lengthSq() > 1e-6) tmpFwd.normalize();
+        tmpRight.set(-tmpFwd.z, 0, tmpFwd.x);
+        const k = 2.8 * dt;
+        vrRig.position.addScaledVector(tmpFwd, -ly * k);
+        vrRig.position.addScaledVector(tmpRight, lx * k);
+        vrRig.position.x = THREE.MathUtils.clamp(vrRig.position.x, vrBounds.minX, vrBounds.maxX);
+        vrRig.position.z = THREE.MathUtils.clamp(vrRig.position.z, vrBounds.minZ, vrBounds.maxZ);
+        const fy = snapFloorY(vrRig.position.x, vrRig.position.y, vrRig.position.z, 5);
+        if (Number.isFinite(fy)) vrRig.position.y = fy;
+      }
+      if (Math.abs(ry) > dead) {
+        vrRig.position.y += -ry * 2.2 * dt;
+        vrRig.position.y = THREE.MathUtils.clamp(vrRig.position.y, vrBounds.minY, vrBounds.maxY);
+      }
+      if (Math.abs(rx) > 0.7 && !turnLatched) {
+        turnLatched = true;
+        rotateRigYaw((rx > 0 ? -1 : 1) * THREE.MathUtils.degToRad(45));
+      } else if (Math.abs(rx) < 0.35) {
+        turnLatched = false;
+      }
+    }
+
+    function updateDesktopLocomotion(dt) {
+      if (renderer.xr.isPresenting) return;
+      if (!keysDown.size) return;
+      const speed = (keysDown.has('ShiftLeft') || keysDown.has('ShiftRight') ? 6 : 3) * dt;
+      camera.getWorldDirection(tmpFwd);
+      tmpFwd.y = 0;
+      if (tmpFwd.lengthSq() > 1e-6) tmpFwd.normalize();
+      tmpRight.set(-tmpFwd.z, 0, tmpFwd.x);
+      const move = new THREE.Vector3();
+      if (keysDown.has('KeyW') || keysDown.has('ArrowUp')) move.addScaledVector(tmpFwd, speed);
+      if (keysDown.has('KeyS') || keysDown.has('ArrowDown')) move.addScaledVector(tmpFwd, -speed);
+      if (keysDown.has('KeyA') || keysDown.has('ArrowLeft')) move.addScaledVector(tmpRight, -speed);
+      if (keysDown.has('KeyD') || keysDown.has('ArrowRight')) move.addScaledVector(tmpRight, speed);
+      if (keysDown.has('KeyQ')) move.y -= speed;
+      if (keysDown.has('KeyE')) move.y += speed;
+      if (move.lengthSq() < 1e-8) return;
+      camera.position.add(move);
+      controls.target.add(move);
+      if (!keysDown.has('KeyQ') && !keysDown.has('KeyE')) {
+        const fy = snapFloorY(controls.target.x, controls.target.y, controls.target.z, 5);
+        const dy = fy - controls.target.y;
+        if (Math.abs(dy) < 3) {
+          controls.target.y = fy;
+          camera.position.y += dy;
+        }
+      }
+      controls.update();
+    }
+
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.45, 0.88);
+    bloomPass.enabled = bloomEl.checked; // match preview4 (on by default)
+    composer.addPass(bloomPass);
+    composer.addPass(new OutputPass());
+
+    const fpsHudEl = document.getElementById('fpsHud');
+    let fpsFrames = 0;
+    let fpsLastMs = performance.now();
+    let displayFps = 0;
+    const fpsCanvas = document.createElement('canvas');
+    fpsCanvas.width = 256;
+    fpsCanvas.height = 72;
+    const fpsCtx = fpsCanvas.getContext('2d');
+    const fpsTex = new THREE.CanvasTexture(fpsCanvas);
+    fpsTex.colorSpace = THREE.SRGBColorSpace;
+    fpsTex.minFilter = THREE.LinearFilter;
+    const fpsMat = new THREE.MeshBasicMaterial({
+      map: fpsTex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+    });
+    const fpsMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.09), fpsMat);
+    fpsMesh.position.set(-0.22, 0.2, -0.55);
+    fpsMesh.renderOrder = 1000;
+    fpsMesh.frustumCulled = false;
+    fpsMesh.visible = false;
+    camera.add(fpsMesh);
+
+    function paintFpsHud(fps) {
+      const eyes = renderer.xr.isPresenting ? 2 : 1;
+      const draws = Math.round(renderer.info.render.calls / eyes);
+      const tris = Math.round(renderer.info.render.triangles / eyes);
+      const label = `${fps || '--'} FPS`;
+      const detail = draws ? `${draws} draw` : '';
+      fpsHudEl.textContent = detail ? `${label}\n${detail}` : label;
+      fpsHudEl.style.whiteSpace = 'pre-line';
+      fpsCtx.clearRect(0, 0, fpsCanvas.width, fpsCanvas.height);
+      fpsCtx.fillStyle = 'rgba(0,0,0,0.72)';
+      fpsCtx.fillRect(0, 0, fpsCanvas.width, fpsCanvas.height);
+      fpsCtx.fillStyle = fps >= 72 ? '#9dffb0' : fps >= 45 ? '#ffe08a' : '#ff8a8a';
+      fpsCtx.font = '700 32px monospace';
+      fpsCtx.textAlign = 'center';
+      fpsCtx.textBaseline = 'middle';
+      fpsCtx.fillText(label, fpsCanvas.width / 2, fpsCanvas.height / 2 - 10);
+      fpsCtx.font = '600 18px monospace';
+      fpsCtx.fillStyle = '#c8d0cc';
+      fpsCtx.fillText(draws ? `${draws} draws · ${(tris / 1000) | 0}k tri` : '', fpsCanvas.width / 2, fpsCanvas.height / 2 + 18);
+      fpsTex.needsUpdate = true;
+    }
+    paintFpsHud(0);
+
+    function tickFps() {
+      fpsFrames += 1;
+      const now = performance.now();
+      if (now - fpsLastMs < 400) return;
+      displayFps = Math.round((fpsFrames * 1000) / (now - fpsLastMs));
+      fpsFrames = 0;
+      fpsLastMs = now;
+      paintFpsHud(displayFps);
+    }
+
+    renderer.xr.addEventListener('sessionstart', () => {
+      controls.enabled = false;
+      turnLatched = false;
+      placeVrRig();
+      camera.position.set(0, 0, 0);
+      camera.rotation.set(0, 0, 0);
+      vrRig.add(camera);
+      document.getElementById('hud').style.visibility = 'hidden';
+      fpsMesh.visible = true;
+      renderer.setPixelRatio(1);
+      // keep far=200 like preview4 (do not shrink to 140)
+      camera.updateProjectionMatrix();
+    });
+    renderer.xr.addEventListener('sessionend', () => {
+      fpsMesh.visible = false;
+      scene.attach(camera);
+      controls.enabled = true;
+      document.getElementById('hud').style.visibility = '';
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+      camera.far = 200;
+      camera.updateProjectionMatrix();
+      window.__setView?.('C');
+    });
+
+    function playGltfAnimations(gltf, root) {
+      if (!gltf?.animations?.length || !root) return null;
+      const mixer = new THREE.AnimationMixer(root);
+      let n = 0;
+      for (const clip of gltf.animations) {
+        if (/camera/i.test(clip.name || '')) continue;
+        mixer.clipAction(clip).play();
+        n++;
+      }
+      return n ? mixer : null;
+    }
+
+    function collectEmissivePanners(root) {
+      const maps = [];
+      const seen = new Set();
+      root.traverse((obj) => {
+        if (!obj.isMesh && !obj.isSkinnedMesh) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (!m || !/Master_Emissive_Panner/i.test(m.name || '')) continue;
+          const map = m.emissiveMap;
+          if (!map || seen.has(map)) continue;
+          seen.add(map);
+          map.wrapS = THREE.RepeatWrapping;
+          map.wrapT = THREE.RepeatWrapping;
+          maps.push(map);
+        }
+      });
+      return maps;
+    }
+
+    function updateEmissivePanners(dt, speed = 0.14) {
+      if (!dt || !emissivePannerMaps.length) return;
+      for (const map of emissivePannerMaps) {
+        map.offset.x = (map.offset.x + dt * speed) % 1;
+      }
+    }
+
+    /**
+     * Proven preview4 path: MeshStandard + IBL for architectural metals.
+     * COLOR_0 is soft irradiance only — do NOT multiply into albedo (flattens chrome).
+     */
+    function patchMetalBakedIrradiance(mat) {
+      mat.onBeforeCompile = (shader) => {
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            '#include <color_fragment>',
+            /* glsl */ `
+#ifdef USE_COLOR
+	vec3 bakedIrradiance = vColor.rgb;
+#else
+	vec3 bakedIrradiance = vec3( 0.0 );
+#endif
+`,
+          )
+          .replace(
+            '#include <lights_fragment_maps>',
+            /* glsl */ `
+#include <lights_fragment_maps>
+#if defined( RE_IndirectDiffuse )
+	irradiance += bakedIrradiance * PI;
+#endif
+`,
+          );
+      };
+      mat.customProgramCacheKey = () => 'questMetalBakeV2';
+    }
+
+    function isMetalMaterial(m) {
+      if (!m) return false;
+      if (m.userData?.questMetal === true) return true;
+      if (m.userData?.questMetal === false) return false;
+      return METAL_RE.test(m.name || '');
+    }
+
+    function tuneMaterials(root, maxAniso) {
+      let meshes = 0;
+      let lit = 0;
+      let metals = 0;
+      let dielectrics = 0;
+      const aniso = Math.min(8, maxAniso);
+      // One replacement per source material uuid (shared across instances)
+      const remap = new Map();
+
+      root.traverse((obj) => {
+        if (!obj.isMesh && !obj.isSkinnedMesh) return;
+        meshes++;
+        obj.frustumCulled = true;
+        const hasColor = !!obj.geometry?.attributes?.color;
+        if (hasColor) lit++;
+
+        const list = Array.isArray(obj.material) ? obj.material : [obj.material];
+        const out = list.map((m) => {
+          if (!m) return m;
+          if (remap.has(m.uuid)) return remap.get(m.uuid);
+
+          let tuned = m;
+          m.toneMapped = true;
+          if (m.map) m.map.anisotropy = aniso;
+          if (m.normalMap) m.normalMap.anisotropy = aniso;
+          if (m.metalnessMap) m.metalnessMap.anisotropy = Math.min(4, aniso);
+          if (m.roughnessMap) m.roughnessMap.anisotropy = Math.min(4, aniso);
+          if (m.emissiveMap) {
+            m.emissiveMap.anisotropy = aniso;
+            m.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+          }
+
+          const metal =
+            isMetalMaterial(m) && (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial);
+
+          if (metal) {
+            metals++;
+            m.envMapIntensity = 1.2;
+            if (hasColor) {
+              m.vertexColors = true;
+              patchMetalBakedIrradiance(m);
+            } else {
+              m.vertexColors = false;
+            }
+            m.needsUpdate = true;
+            tuned = m;
+          } else {
+            dielectrics++;
+            if (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial) {
+              const basic = new THREE.MeshBasicMaterial({
+                map: m.map,
+                color: m.color,
+                transparent: m.transparent,
+                opacity: m.opacity,
+                alphaTest: m.alphaTest,
+                side: m.side,
+                alphaMap: m.alphaMap,
+                emissive: m.emissive?.clone?.() || new THREE.Color(0),
+                emissiveMap: m.emissiveMap,
+                emissiveIntensity: m.emissiveIntensity ?? 1,
+                vertexColors: hasColor,
+                toneMapped: true,
+                name: (m.name || 'mat') + '_questBasic',
+              });
+              basic.userData.questMetal = false;
+              if (basic.map) basic.map.anisotropy = aniso;
+              if (basic.emissiveMap) {
+                basic.emissiveMap.anisotropy = aniso;
+                basic.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+              }
+              tuned = basic;
+            } else {
+              m.vertexColors = hasColor;
+              if ('envMapIntensity' in m) m.envMapIntensity = 0;
+              m.needsUpdate = true;
+              tuned = m;
+            }
+          }
+
+          remap.set(m.uuid, tuned);
+          if (tuned !== m) remap.set(tuned.uuid, tuned);
+          return tuned;
+        });
+
+        obj.material = Array.isArray(obj.material) ? out : out[0];
+
+        const g = obj.geometry;
+        const mat0 = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+        if (g && mat0?.isMeshBasicMaterial) {
+          if (g.attributes.normal) g.deleteAttribute('normal');
+          if (g.attributes.tangent) g.deleteAttribute('tangent');
+        }
+      });
+      return { meshes, lit, metals, dielectrics, uniqueMats: remap.size };
+    }
+
+    function neededAttrs(mat) {
+      const need = new Set(['position']);
+      if (mat.vertexColors) need.add('color');
+      const usesUv = !!(mat.map || mat.emissiveMap || mat.aoMap || mat.alphaMap
+        || mat.metalnessMap || mat.roughnessMap || mat.normalMap || mat.bumpMap);
+      if (usesUv) need.add('uv');
+      if (mat.aoMap || mat.lightMap) need.add('uv2');
+      if (mat.isMeshStandardMaterial || mat.isMeshPhysicalMaterial) {
+        need.add('normal');
+        if (mat.normalMap) need.add('tangent');
+      }
+      return need;
+    }
+
+    function stripToNeeded(geometry, mat) {
+      const need = neededAttrs(mat);
+      for (const name of Object.keys(geometry.attributes)) {
+        if (!need.has(name)) geometry.deleteAttribute(name);
+      }
+      // Unlit only: pad missing COLOR so instances merge. Never pad metals (would fill IBL bake).
+      if (mat.isMeshBasicMaterial && mat.vertexColors && !geometry.attributes.color && geometry.attributes.position) {
+        const n = geometry.attributes.position.count;
+        const col = new Uint8Array(n * 3);
+        col.fill(255);
+        geometry.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
+      }
+    }
+
+    function attrSignature(geometry, mat) {
+      const need = neededAttrs(mat);
+      const names = Object.keys(geometry.attributes).filter((n) => need.has(n));
+      if (mat.isMeshBasicMaterial && mat.vertexColors && !geometry.attributes.color) {
+        names.push('color');
+      }
+      names.sort();
+      return names.map((n) => {
+        if (n === 'color' && !geometry.attributes.color) return 'color:3:1';
+        const a = geometry.attributes[n];
+        return `${n}:${a.itemSize}:${a.normalized ? 1 : 0}`;
+      }).join('|');
+    }
+
+    function ensureIndex(g) {
+      if (g.index || !g.attributes.position) return;
+      const n = g.attributes.position.count;
+      const idx = n > 65535 ? new Uint32Array(n) : new Uint16Array(n);
+      for (let i = 0; i < n; i++) idx[i] = i;
+      g.setIndex(new THREE.BufferAttribute(idx, 1));
+    }
+
+    /**
+     * Bake mesh into WORLD-space geometry for merging.
+     * Parent under `scene` (identity) — never re-parent under scaled glTF roots.
+     * Apply matrix BEFORE stripping attrs (interleaved glTF buffers break if stripped first).
+     */
+    function prepMergeGeometry(mesh, mat) {
+      const g = mesh.geometry.clone();
+      g.morphAttributes = {};
+      g.morphTargetsRelative = false;
+      // Index required so applyMatrix4 can flip winding when det < 0
+      ensureIndex(g);
+      g.applyMatrix4(mesh.matrixWorld);
+      stripToNeeded(g, mat);
+      ensureIndex(g);
+      return g;
+    }
+
+    let mergedRoot = null;
+
+    /**
+     * Bake had ~1 mesh per lightmap instance → thousands of draw calls.
+     * Merge opaque meshes that share a material within spatial cells.
+     * CRITICAL: never dispose geometries still referenced by surviving meshes
+     * (glTF often shares BufferGeometry across instances).
+     */
+    function mergeOpaqueByMaterial(root) {
+      root.updateMatrixWorld(true);
+      const buckets = new Map();
+      const keep = [];
+      const _c = new THREE.Vector3();
+
+      root.traverse((obj) => {
+        if (!obj.isMesh || obj.isSkinnedMesh) return;
+        if (Array.isArray(obj.material)) {
+          keep.push(obj);
+          return;
+        }
+        const mat = obj.material;
+        if (!mat || !obj.geometry?.attributes?.position) return;
+        if (mat.transparent || (mat.opacity != null && mat.opacity < 0.999) || (mat.alphaTest || 0) > 0) {
+          keep.push(obj);
+          return;
+        }
+        // Mirrored UE instances (~25%): world-bake merge breaks FrontSide winding → holes.
+        // Leave them unmerged; still batch the positive-scale majority.
+        if (obj.matrixWorld.determinant() < 0) {
+          keep.push(obj);
+          return;
+        }
+        const geo = obj.geometry;
+        if (!geo.boundingSphere) geo.computeBoundingSphere();
+        _c.copy(geo.boundingSphere.center).applyMatrix4(obj.matrixWorld);
+        const cell = mat.isMeshBasicMaterial ? MERGE_CELL_BASIC : MERGE_CELL_PBR;
+        const cx = Math.floor(_c.x / cell);
+        const cy = Math.floor(_c.y / cell);
+        const cz = Math.floor(_c.z / cell);
+        const sig = attrSignature(geo, mat);
+        const key = `${mat.uuid}|${cx}|${cy}|${cz}|${sig}`;
+        if (!buckets.has(key)) buckets.set(key, { mat, items: [], mirrored: false });
+        buckets.get(key).items.push(obj);
+      });
+
+      if (mergedRoot) {
+        scene.remove(mergedRoot);
+        mergedRoot.traverse((o) => { o.geometry?.dispose?.(); });
+        mergedRoot = null;
+      }
+
+      const mergedGroup = new THREE.Group();
+      mergedGroup.name = 'MergedOpaque';
+      let mergedMeshes = 0;
+      let sourceMeshes = 0;
+      let mergeFails = 0;
+      const toRemove = [];
+
+      for (const { mat, items } of buckets.values()) {
+        if (items.length === 1) {
+          keep.push(items[0]);
+          continue;
+        }
+
+        const geos = [];
+        for (const mesh of items) {
+          geos.push(prepMergeGeometry(mesh, mat));
+        }
+
+        let merged = null;
+        try {
+          merged = mergeGeometries(geos, false);
+        } catch (e) {
+          console.warn('mergeGeometries threw', mat.name, e);
+        }
+        for (const g of geos) g.dispose();
+
+        if (!merged || !merged.attributes.position || merged.attributes.position.count === 0) {
+          mergeFails++;
+          keep.push(...items);
+          continue;
+        }
+
+        merged.computeBoundingBox();
+        merged.computeBoundingSphere();
+
+        const mesh = new THREE.Mesh(merged, mat);
+        mesh.name = (mat.name || 'mat') + '_merged';
+        mesh.frustumCulled = true;
+        mesh.matrixAutoUpdate = false;
+        mesh.matrix.identity();
+        mesh.updateMatrixWorld(true);
+        mergedGroup.add(mesh);
+        mergedMeshes++;
+        sourceMeshes += items.length;
+        toRemove.push(...items);
+      }
+
+      const liveGeo = new Set();
+      for (const mesh of keep) {
+        if (mesh.geometry) liveGeo.add(mesh.geometry);
+      }
+
+      for (const mesh of toRemove) {
+        mesh.parent?.remove(mesh);
+      }
+      const disposed = new Set();
+      for (const mesh of toRemove) {
+        const g = mesh.geometry;
+        if (!g || liveGeo.has(g) || disposed.has(g)) continue;
+        disposed.add(g);
+        g.dispose();
+      }
+
+      for (const mesh of keep) {
+        if (mesh.material?.isMeshBasicMaterial && mesh.geometry) {
+          if (mesh.geometry.attributes.normal) mesh.geometry.deleteAttribute('normal');
+          if (mesh.geometry.attributes.tangent) mesh.geometry.deleteAttribute('tangent');
+        }
+      }
+
+      // World-space batches live on the scene — avoids double-applying glTF root transforms
+      scene.add(mergedGroup);
+      mergedRoot = mergedGroup;
+      mergedGroup.updateMatrixWorld(true);
+      pruneEmptyGroups(root);
+      return {
+        mergedMeshes,
+        sourceMeshes,
+        leftover: keep.length,
+        cells: buckets.size,
+        mergeFails,
+      };
+    }
+
+    function pruneEmptyGroups(root) {
+      const nodes = [];
+      root.traverse((o) => nodes.push(o));
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const o = nodes[i];
+        if (o === root || o.isMesh || o.isLight || o.isBone || o.isSkinnedMesh) continue;
+        if (o.children.length === 0 && (o.type === 'Group' || o.type === 'Object3D')) {
+          o.parent?.remove(o);
+        }
+      }
+    }
+
+    let root = null;
+    let animMixer = null;
+
+    /** Remove meshes that do not intersect keepBox; dispose orphaned geos. */
+    function pruneToAabb(rootObj, aabb) {
+      const keepBox = new THREE.Box3(
+        new THREE.Vector3(aabb.minX, aabb.minY, aabb.minZ),
+        new THREE.Vector3(aabb.maxX, aabb.maxY, aabb.maxZ),
+      );
+      rootObj.updateMatrixWorld(true);
+      const toRemove = [];
+      let kept = 0;
+      rootObj.traverse((o) => {
+        if (!o.isMesh) return;
+        const bb = new THREE.Box3().setFromObject(o);
+        if (!bb.intersectsBox(keepBox)) toRemove.push(o);
+        else kept++;
+      });
+      for (const mesh of toRemove) mesh.parent?.remove(mesh);
+      const liveGeo = new Set();
+      rootObj.traverse((o) => {
+        if (o.isMesh && o.geometry) liveGeo.add(o.geometry);
+      });
+      const disposed = new Set();
+      for (const mesh of toRemove) {
+        const g = mesh.geometry;
+        if (!g || liveGeo.has(g) || disposed.has(g)) continue;
+        disposed.add(g);
+        g.dispose();
+      }
+      pruneEmptyGroups(rootObj);
+      return { removed: toRemove.length, kept, disposed: disposed.size };
+    }
+
+    function setupMap1Cameras(floorY) {
+      const eyeY = floorY + 1.55;
+      const cx = (MAP1_UPPER_DECK_AABB.minX + MAP1_UPPER_DECK_AABB.maxX) * 0.5;
+      VR_SPAWN.x = 20;
+      VR_SPAWN.y = floorY;
+      VR_SPAWN.z = -50;
+      VR_SPAWN.lookX = 20;
+      VR_SPAWN.lookZ = -58;
+      window.__setView = (name) => {
+        const y = eyeY;
+        if (name === 'A') {
+          camera.position.set(12, y, -48);
+          controls.target.set(18, y - 0.3, -56);
+        } else if (name === 'B') {
+          camera.position.set(30, y, -52);
+          controls.target.set(22, y - 0.3, -58);
+        } else if (name === 'C') {
+          camera.position.set(20, y, -48);
+          controls.target.set(20, y - 0.35, -58);
+        } else if (name === 'E') {
+          camera.position.set(14, y, -54);
+          controls.target.set(12, y - 0.2, -58);
+        } else {
+          camera.position.set(cx, y + 0.4, -42);
+          controls.target.set(cx, y - 0.2, -60);
+        }
+        controls.update();
+      };
+    }
+
+    function detectUpperFloorY(roots) {
+      const hits = [];
+      const ray = new THREE.Raycaster();
+      ray.far = 20;
+      const downs = [
+        new THREE.Vector3(20, 16, -55),
+        new THREE.Vector3(15, 16, -50),
+        new THREE.Vector3(28, 16, -58),
+        new THREE.Vector3(12, 16, -52),
+      ];
+      const meshes = [];
+      for (const r of roots) r?.traverse((o) => { if (o.isMesh) meshes.push(o); });
+      for (const origin of downs) {
+        ray.set(origin, new THREE.Vector3(0, -1, 0));
+        for (const hit of ray.intersectObjects(meshes, false)) {
+          if (hit.point.y >= 8.5 && hit.point.y <= 12) hits.push(hit.point.y);
+        }
+      }
+      if (!hits.length) return 9.6;
+      hits.sort((a, b) => a - b);
+      return hits[(hits.length / 2) | 0];
+    }
+
+    async function loadChunkStreaming() {
+      status.textContent = 'Loading chunk manifest…';
+      const res = await fetch(CHUNKS_URL + 'manifest.json');
+      if (!res.ok) throw new Error(`manifest ${res.status}`);
+      chunkManifest = await res.json();
+      cellById.clear();
+      for (const cell of chunkManifest.cells) cellById.set(cell.id, cell);
+
+      chunkRoot = new THREE.Group();
+      chunkRoot.name = 'ChunkRoot';
+      scene.add(chunkRoot);
+      window.__ROOT__ = chunkRoot;
+
+      if (chunkManifest.spawn) Object.assign(VR_SPAWN, chunkManifest.spawn);
+      const spawnId = chunkManifest.spawnCell || [...cellById.keys()][0];
+      stickyCellId = spawnId;
+      currentCellId = spawnId;
+
+      // Place camera/rig to spawn FIRST so resident selection uses real look direction.
+      placeVrRig();
+      camera.position.set(VR_SPAWN.x, VR_SPAWN.y + 1.55, VR_SPAWN.z + 2.5);
+      controls.target.set(VR_SPAWN.lookX, VR_SPAWN.y + 1.4, VR_SPAWN.lookZ);
+      controls.update();
+
+      status.textContent = `Loading ${spawnId}…`;
+      const t0 = performance.now();
+      // Spawn island first (guaranteed), then neighbor pass with correct look.
+      await syncChunks(new Set([spawnId]));
+      const bootSet = residentChunkIds(spawnId);
+      await syncChunks(bootSet);
+      const loadMs = Math.round(performance.now() - t0);
+
+      // World play bounds from all cell AABBs
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const cell of cellById.values()) {
+        const a = cell.aabb;
+        minX = Math.min(minX, a.minX); maxX = Math.max(maxX, a.maxX);
+        minY = Math.min(minY, a.minY); maxY = Math.max(maxY, a.maxY);
+        minZ = Math.min(minZ, a.minZ); maxZ = Math.max(maxZ, a.maxZ);
+      }
+      vrBounds = {
+        minX: minX + 0.5, maxX: maxX - 0.5,
+        minZ: minZ + 0.5, maxZ: maxZ - 0.5,
+        minY: minY - 0.2, maxY: maxY - 0.3,
+      };
+      window.__BOUNDS__ = { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] };
+
+      const floorY = detectUpperFloorY([loadedChunks.get(spawnId)]);
+      if (chunkManifest.spawn?.y == null) VR_SPAWN.y = floorY;
+      setupMap1Cameras(floorY);
+      window.__setView('C');
+      rebuildColliders();
+      renderer.render(scene, camera);
+      updateStreamingHud();
+      const kind = USE_ISLAND_STREAM ? 'islands' : 'chunks';
+      status.textContent =
+        `OK — ${kind} ${spawnId} · ${loadMs}ms · max ${MAX_RESIDENT_CHUNKS} resident`;
+
+      window.__SCENE_READY__ = true;
+      window.__RENDERER__ = renderer;
+      window.__SCENE__ = scene;
+      window.__forceChunkTick = () => tickChunkStreaming(true);
+      window.__MERGE__ = {
+        skipped: true,
+        streaming: true,
+        islands: USE_ISLAND_STREAM,
+        spawnMs: loadMs,
+        model: CHUNKS_URL,
+        loaded: [...bootSet],
+      };
+    }
+
+    async function loadMonolithic() {
+      if (USE_PLAYABLE) {
+        try {
+          playableMeta = await (await fetch(PLAYABLE_META_URL)).json();
+        } catch (e) {
+          console.warn('playable.json missing', e);
+        }
+      }
+      status.textContent = `Loading ${MODEL_URL}…`;
+      const t0 = performance.now();
+      const gltf = await gltfLoader.loadAsync(MODEL_URL);
+      const loadMs = Math.round(performance.now() - t0);
+
+      root = gltf.scene;
+      window.__ROOT__ = root;
+      scene.add(root);
+
+      let region = null;
+      if (!USE_PREVIEW4_MODEL && MAP1_CLIP_FALLBACK) {
+        status.textContent = 'Clipping to upper control deck…';
+        await new Promise((r) => setTimeout(r, 0));
+        region = pruneToAabb(root, MAP1_UPPER_DECK_AABB);
+        console.log('Map1 upper deck prune', region, MAP1_UPPER_DECK_AABB);
+      }
+
+      const stats = applyQuestMaterials(root);
+      animMixer = USE_PREVIEW4_MODEL ? playGltfAnimations(gltf, root) : null;
+
+      const wantMerge = window.__FORCE_MERGE__
+        || /(?:^|[?#&])merge(?:[=&]|$)/i.test(location.hash + location.search);
+      let merge = { mergedMeshes: 0, sourceMeshes: 0, leftover: 0, cells: 0, mergeFails: 0, skipped: !wantMerge };
+      if (wantMerge) {
+        status.textContent = 'Merging draw calls…';
+        await new Promise((r) => setTimeout(r, 0));
+        merge = mergeOpaqueByMaterial(root);
+        merge.skipped = false;
+      }
+      emissivePannerMaps = [
+        ...collectEmissivePanners(root),
+        ...(mergedRoot ? collectEmissivePanners(mergedRoot) : []),
+      ];
+
+      const box = new THREE.Box3().setFromObject(root);
+      if (mergedRoot) box.expandByObject(mergedRoot);
+      window.__BOUNDS__ = {
+        min: box.min.toArray(), max: box.max.toArray(),
+        size: box.getSize(new THREE.Vector3()).toArray(),
+        center: box.getCenter(new THREE.Vector3()).toArray(),
+      };
+
+      if (USE_PLAYABLE && playableMeta?.aabb) {
+        const a = playableMeta.aabb;
+        const pad = 0.6;
+        vrBounds = {
+          minX: a.minX + pad, maxX: a.maxX - pad,
+          minZ: a.minZ + pad, maxZ: a.maxZ - pad,
+          minY: a.minY - 0.2, maxY: a.maxY - 0.4,
+        };
+        if (playableMeta.spawn) Object.assign(VR_SPAWN, playableMeta.spawn);
+      } else {
+        const pad = USE_PREVIEW4_MODEL ? 0.6 : 0.8;
+        vrBounds = {
+          minX: box.min.x + pad, maxX: box.max.x - pad,
+          minZ: box.min.z + pad, maxZ: box.max.z - pad,
+          minY: Math.min(box.min.y, 0) - 0.2,
+          maxY: USE_PREVIEW4_MODEL ? Math.min(box.max.y - 0.4, 5.5) : box.max.y - 0.5,
+        };
+      }
+
+      let floorY = 0;
+      if (USE_PREVIEW4_MODEL) {
+        VR_SPAWN.x = 4.1; VR_SPAWN.y = 0; VR_SPAWN.z = -9.0;
+        VR_SPAWN.lookX = 1.85; VR_SPAWN.lookZ = -10.2;
+        window.__setView = (name) => {
+          const c = box.getCenter(new THREE.Vector3());
+          if (name === 'A') {
+            camera.position.set(c.x + 0.4, c.y + 0.35, c.z + 3.5);
+            controls.target.set(c.x, c.y + 0.1, c.z - 1.5);
+          } else if (name === 'B') {
+            camera.position.set(c.x + 2.8, c.y + 0.5, c.z + 0.2);
+            controls.target.set(c.x - 0.5, c.y + 0.2, c.z);
+          } else if (name === 'C') {
+            camera.position.set(4.1, 2.0, -9.0);
+            controls.target.set(1.85, 1.95, -10.2);
+          } else if (name === 'E') {
+            camera.position.set(8.95, 2.55, -7.2);
+            controls.target.set(9.15, 2.35, -10.35);
+          } else {
+            camera.position.copy(c).add(new THREE.Vector3(0, 0.25, 2));
+            controls.target.copy(c);
+          }
+          controls.update();
+        };
+      } else {
+        floorY = detectUpperFloorY([root]);
+        if (playableMeta?.spawn?.y != null) VR_SPAWN.y = playableMeta.spawn.y;
+        else VR_SPAWN.y = floorY;
+        setupMap1Cameras(floorY);
+      }
+
+      rebuildColliders();
+      window.__setView('C');
+      renderer.render(scene, camera);
+      const draws = renderer.info.render.calls;
+      const tris = renderer.info.render.triangles;
+      const label = USE_PREVIEW4_MODEL
+        ? 'MainMap'
+        : (USE_CELLS
+          ? 'Map1 FULL QUALITY (cells)'
+          : (USE_FULL_MAP
+            ? 'Map1 simplified (#full)'
+            : (USE_PLAYABLE ? 'playable wing' : 'Map1 #clip')));
+      status.textContent =
+        `OK — ${label} · ${stats.meshes} meshes` +
+        (region ? ` (kept ${region.kept}, dropped ${region.removed})` : '') +
+        ` · ${draws} draws / ${(tris / 1000) | 0}k tri · ${loadMs}ms`;
+      window.__SCENE_READY__ = true;
+      window.__RENDERER__ = renderer;
+      window.__SCENE__ = scene;
+      window.__MERGE__ = { ...merge, draws, tris, floorY, model: MODEL_URL, region, playable: USE_PLAYABLE };
+    }
+
+    async function load() {
+      window.__SCENE_READY__ = false;
+      if (animMixer) { animMixer.stopAllAction(); animMixer = null; }
+      if (mergedRoot) {
+        scene.remove(mergedRoot);
+        mergedRoot.traverse((o) => { o.geometry?.dispose?.(); });
+        mergedRoot = null;
+      }
+      if (root) { scene.remove(root); root = null; }
+      if (chunkRoot) {
+        scene.remove(chunkRoot);
+        for (const id of [...loadedChunks.keys()]) unloadChunk(id);
+        chunkRoot = null;
+      }
+      emissivePannerMaps = [];
+
+      if (USE_CHUNK_STREAMING) await loadChunkStreaming();
+      else await loadMonolithic();
+    }
+
+    exposureEl.addEventListener('input', () => {
+      const v = Number(exposureEl.value);
+      exposureVal.textContent = v.toFixed(2);
+      renderer.toneMappingExposure = v;
+    });
+    bloomEl.addEventListener('change', () => { bloomPass.enabled = bloomEl.checked; });
+
+    document.getElementById('viewA').onclick = () => window.__setView?.('A');
+    document.getElementById('viewB').onclick = () => window.__setView?.('B');
+    document.getElementById('viewC').onclick = () => window.__setView?.('C');
+    document.getElementById('viewD').onclick = () => window.__setView?.('D');
+    document.getElementById('viewE').onclick = () => window.__setView?.('E');
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+      composer.setSize(innerWidth, innerHeight);
+      bloomPass.setSize(innerWidth, innerHeight);
+    });
+
+    renderer.setAnimationLoop(() => {
+      const dt = Math.min(clock.getDelta(), 0.05);
+      if (animMixer) animMixer.update(dt);
+      updateEmissivePanners(dt);
+      tickChunkStreaming(false);
+      if (renderer.xr.isPresenting) {
+        updateVrLocomotion(dt);
+        renderer.render(scene, camera);
+        tickFps();
+        return;
+      }
+      updateDesktopLocomotion(dt);
+      controls.update();
+      if (bloomEl.checked) composer.render();
+      else renderer.render(scene, camera);
+      tickFps();
+    });
+
+    load().catch((e) => {
+      status.textContent = USE_ISLAND_STREAM
+        ? 'Failed: ' + e.message + ' — run npm run build:islands in webxr-bake'
+        : (USE_PLAYABLE
+          ? 'Failed: ' + e.message + ' — run npm run build:playable in webxr-bake'
+          : (USE_FLOOR_STREAM
+            ? 'Failed: ' + e.message + ' — run npm run split:map1 in webxr-bake'
+            : 'Failed: ' + e.message + ' — run bake-quest on Map1 + optimize-preview5'));
+      console.error(e);
+    });
+  </script>
+</body>
+</html>
