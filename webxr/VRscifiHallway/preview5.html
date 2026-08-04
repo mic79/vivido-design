@@ -130,11 +130,23 @@
      *  Disable with #nopvs. Missing/invalid pvs.json ⇒ fail-open (all visible). */
     const PVS_URL = './map1/pvs.json';
     const USE_PVS = !/(?:^|[?#&])nopvs(?:[=&]|$)/i.test(qs);
-    /** BatchedMesh + WEBGL_multi_draw: ONE draw call per material (the Quest 3
-     *  bottleneck is draw-call count: measured 72 FPS @ ~140 draws, 35 @ 400).
-     *  GPU still frustum-culls per mesh; PVS hides occluded meshes per instance.
-     *  Disable with #nobatch (bake/verify tooling does — it needs raw meshes). */
-    const USE_BATCH = !/(?:^|[?#&])nobatch(?:[=&]|$)/i.test(qs);
+    /** BatchedMesh + WEBGL_multi_draw — OPT-IN experiment (#batch), NOT default.
+     *  On-device Quest 3 test 2026-08-03: draws fell (270→168) but FPS fell too
+     *  (47→32 spawn, 90→60 light corridor). BatchedMesh reads per-instance
+     *  matrices from a float texture in the vertex shader — expensive on the
+     *  mobile GPU — and the HUD "draws" count hides a per-instance fallback loop
+     *  when WEBGL_multi_draw is missing. Do not re-enable by default without
+     *  on-device frame timing proving a win. */
+    const USE_BATCH = /(?:^|[?#&])batch(?:[=&]|$)/i.test(qs)
+      && !/(?:^|[?#&])nobatch(?:[=&]|$)/i.test(qs);
+    /** On-device bottleneck diagnosis (2-minute headset test, NOT for play):
+     *  #diagrange — SAME draw calls, ~1% of triangles (drawRange cap).
+     *      FPS stays low  ⇒ CPU/draw-call bound.  FPS jumps ⇒ GPU bound.
+     *  #diagbasic — same draws + triangles, flat gray shading (no textures/IBL).
+     *      FPS jumps ⇒ fragment/material cost.  FPS stays ⇒ vertex bound.
+     *  Scene will look broken/gray in these modes — that is expected. */
+    const DIAG_RANGE = /(?:^|[?#&])diagrange(?:[=&]|$)/i.test(qs);
+    const DIAG_BASIC = /(?:^|[?#&])diagbasic(?:[=&]|$)/i.test(qs);
     const MAP1_UPPER_DECK_AABB = {
       minX: 5, maxX: 44,
       minY: 8.0, maxY: 18.5,
@@ -314,6 +326,23 @@
       }
       const md = renderer.extensions.has('WEBGL_multi_draw');
       console.log(`Batched ${batched}/${mapMeshes.length} meshes into ${batches} draws (multi_draw: ${md})`);
+    }
+
+    /** Bottleneck diagnosis modes — deliberately break visuals to isolate cost. */
+    function applyDiagMode() {
+      if (DIAG_RANGE) {
+        // Same draw calls, ~1% of vertices: caps every mesh's index range.
+        for (const m of mapMeshes) {
+          const g = m.geometry;
+          if (g?.index) g.setDrawRange(0, Math.min(999, g.index.count));
+        }
+        console.log('DIAG: drawRange mode — same draws, ~1% tris');
+      } else if (DIAG_BASIC) {
+        // Same draws + full geometry, flat shading: no textures, no IBL, no vertex colors.
+        const flat = new THREE.MeshBasicMaterial({ color: 0x8a8f94 });
+        for (const m of mapMeshes) m.material = flat;
+        console.log('DIAG: flat basic material mode — same draws/tris, cheap shading');
+      }
     }
 
     async function loadPvs() {
@@ -870,15 +899,8 @@
       camera.position.set(0, 0, 0);
       camera.rotation.set(0, 0, 0);
       vrRig.add(camera);
-      // Lock 72Hz: Quest browser defaults to 90Hz, wasting frame budget —
-      // a stable 13.9ms beats bouncing between 90 and reprojected 45.
-      try {
-        const session = renderer.xr.getSession();
-        const rates = session?.supportedFrameRates;
-        if (session?.updateTargetFrameRate && rates && Array.from(rates).includes(72)) {
-          session.updateTargetFrameRate(72).catch(() => {});
-        }
-      } catch { /* optional */ }
+      // NOTE: do NOT lock updateTargetFrameRate(72) — on-device it turned a
+      // 90 FPS corridor into 60. Leave the browser's default refresh rate.
       document.getElementById('hud').style.visibility = 'hidden';
       fpsMesh.visible = true;
       renderer.setPixelRatio(1);
@@ -1545,6 +1567,7 @@
         collectMapMeshes();
         buildBatches();
         await loadPvs();
+        applyDiagMode();
       }
       window.__setView('C');
       updatePvs(true);
@@ -1561,7 +1584,9 @@
       status.textContent =
         `OK — ${label} · ${stats.meshes} meshes` +
         (region ? ` (kept ${region.kept}, dropped ${region.removed})` : '') +
-        ` · ${draws} draws / ${(tris / 1000) | 0}k tri · ${loadMs}ms`;
+        ` · ${draws} draws / ${(tris / 1000) | 0}k tri · ${loadMs}ms` +
+        (DIAG_RANGE ? ' · DIAG drawRange (broken visuals expected)'
+          : DIAG_BASIC ? ' · DIAG flat basic (broken visuals expected)' : '');
       window.__SCENE_READY__ = true;
       window.__RENDERER__ = renderer;
       window.__SCENE__ = scene;
