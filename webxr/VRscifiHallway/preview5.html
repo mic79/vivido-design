@@ -130,6 +130,11 @@
      *  Disable with #nopvs. Missing/invalid pvs.json ⇒ fail-open (all visible). */
     const PVS_URL = './map1/pvs.json';
     const USE_PVS = !/(?:^|[?#&])nopvs(?:[=&]|$)/i.test(qs);
+    /** BatchedMesh + WEBGL_multi_draw: ONE draw call per material (the Quest 3
+     *  bottleneck is draw-call count: measured 72 FPS @ ~140 draws, 35 @ 400).
+     *  GPU still frustum-culls per mesh; PVS hides occluded meshes per instance.
+     *  Disable with #nobatch (bake/verify tooling does — it needs raw meshes). */
+    const USE_BATCH = !/(?:^|[?#&])nobatch(?:[=&]|$)/i.test(qs);
     const MAP1_UPPER_DECK_AABB = {
       minX: 5, maxX: 44,
       minY: 8.0, maxY: 18.5,
@@ -233,22 +238,90 @@
     /** @type {THREE.Mesh[]} */
     let colliderMeshes = [];
 
-    // --- Precomputed visibility (PVS) state ---
+    // --- Precomputed visibility (PVS) + draw batching state ---
     let pvsLoaded = null;   // parsed pvs.json with cells as Sets
     let pvsActive = null;   // currently applied (null = off/all visible)
-    let pvsMeshes = [];     // meshes in traversal order (bake uses same order)
+    let mapMeshes = [];     // map meshes in traversal order (bake uses same order)
+    let batchByMesh = null; // Map<meshIndex, { bm: BatchedMesh, gid: number }>
     let pvsKey = '';
     const _pvsPos = new THREE.Vector3();
+
+    function collectMapMeshes() {
+      mapMeshes = [];
+      root.traverse((o) => { if (o.isMesh) mapMeshes.push(o); });
+    }
+
+    /** Visibility router: batched meshes toggle per-instance; originals of
+     *  batched meshes stay hidden forever (they exist only for raycasts). */
+    function setMeshVis(i, v) {
+      const b = batchByMesh?.get(i);
+      if (b) b.bm.setVisibleAt(b.gid, v);
+      else mapMeshes[i].visible = v;
+    }
+
+    /** Collapse draw calls: one BatchedMesh per (material, attribute layout,
+     *  mirroring). Same geometry, same materials ⇒ identical pixels, ~one draw
+     *  per material. Mirrored meshes (negative-determinant matrix, 101 in Map1)
+     *  get their OWN batch whose object matrix is a mirror: three flips triangle
+     *  winding per OBJECT, not per instance, so mixing hands in one batch
+     *  renders mirrored geometry inside-out. */
+    function buildBatches() {
+      if (!USE_BATCH) return;
+      scene.updateMatrixWorld(true);
+      const MIRROR = new THREE.Matrix4().makeScale(-1, 1, 1); // self-inverse
+      const _tmp = new THREE.Matrix4();
+      const groups = new Map();
+      mapMeshes.forEach((m, i) => {
+        if (Array.isArray(m.material) || !m.geometry?.index) return;
+        const hand = m.matrixWorld.determinant() < 0 ? 'M' : 'P';
+        const sig = m.material.uuid + '|' + hand + '|' + Object.keys(m.geometry.attributes).sort().join(',');
+        if (!groups.has(sig)) groups.set(sig, []);
+        groups.get(sig).push(i);
+      });
+      batchByMesh = new Map();
+      let batches = 0;
+      let batched = 0;
+      for (const [sig, idxs] of groups) {
+        if (idxs.length < 2) continue;
+        const mirrored = sig.split('|')[1] === 'M';
+        let vtx = 0;
+        let idx = 0;
+        for (const i of idxs) {
+          vtx += mapMeshes[i].geometry.attributes.position.count;
+          idx += mapMeshes[i].geometry.index.count;
+        }
+        let bm;
+        try {
+          bm = new THREE.BatchedMesh(idxs.length, vtx, idx, mapMeshes[idxs[0]].material);
+        } catch (e) {
+          console.warn('BatchedMesh alloc failed — leaving group unbatched', e);
+          continue;
+        }
+        bm.perObjectFrustumCulled = true;
+        if (mirrored) bm.scale.set(-1, 1, 1); // negative det ⇒ renderer flips winding
+        for (const i of idxs) {
+          const geoId = bm.addGeometry(mapMeshes[i].geometry);
+          const gid = bm.addInstance(geoId); // r167+: geometry and instance are separate
+          // final = batchMatrix * instanceMatrix; mirrored: MIRROR * (MIRROR * M) = M
+          if (mirrored) bm.setMatrixAt(gid, _tmp.copy(MIRROR).multiply(mapMeshes[i].matrixWorld));
+          else bm.setMatrixAt(gid, mapMeshes[i].matrixWorld);
+          batchByMesh.set(i, { bm, gid });
+          mapMeshes[i].visible = false; // raycast-only from here on
+          batched++;
+        }
+        scene.add(bm);
+        batches++;
+      }
+      const md = renderer.extensions.has('WEBGL_multi_draw');
+      console.log(`Batched ${batched}/${mapMeshes.length} meshes into ${batches} draws (multi_draw: ${md})`);
+    }
 
     async function loadPvs() {
       if (!USE_PVS || !USE_CELLS) return;
       try {
         const data = await (await fetch(PVS_URL)).json();
-        pvsMeshes = [];
-        root.traverse((o) => { if (o.isMesh) pvsMeshes.push(o); });
-        if (data.meshCount !== pvsMeshes.length) {
-          console.warn(`PVS mesh count mismatch (${data.meshCount} vs ${pvsMeshes.length}) — disabled`);
-          pvsMeshes = [];
+        if (data.meshCount !== mapMeshes.length) {
+          console.warn(`PVS mesh count mismatch (${data.meshCount} vs ${mapMeshes.length}) — disabled`);
           return;
         }
         for (const k of Object.keys(data.cells)) data.cells[k] = new Set(data.cells[k]);
@@ -262,9 +335,9 @@
     }
 
     function pvsAllVisible() {
-      for (const m of pvsMeshes) m.visible = true;
+      for (let i = 0; i < mapMeshes.length; i++) setMeshVis(i, true);
       pvsKey = '';
-      window.__PVS__ = { on: false, visible: pvsMeshes.length, total: pvsMeshes.length };
+      window.__PVS__ = { on: false, visible: mapMeshes.length, total: mapMeshes.length };
     }
 
     function updatePvs(force = false) {
@@ -282,16 +355,16 @@
       let n = 0;
       if (!set) {
         // Outside baked walkable space — fail open, never show holes.
-        for (const m of pvsMeshes) m.visible = true;
-        n = pvsMeshes.length;
+        for (let i = 0; i < mapMeshes.length; i++) setMeshVis(i, true);
+        n = mapMeshes.length;
       } else {
-        for (let i = 0; i < pvsMeshes.length; i++) {
+        for (let i = 0; i < mapMeshes.length; i++) {
           const v = set.has(i);
-          pvsMeshes[i].visible = v;
+          setMeshVis(i, v);
           if (v) n++;
         }
       }
-      window.__PVS__ = { on: !!set, key, visible: n, total: pvsMeshes.length };
+      window.__PVS__ = { on: !!set, key, visible: n, total: mapMeshes.length };
     }
     /** Verify/A-B hook: __PVS_ENABLE__(false) shows everything. */
     window.__PVS_ENABLE__ = (on) => {
@@ -797,6 +870,15 @@
       camera.position.set(0, 0, 0);
       camera.rotation.set(0, 0, 0);
       vrRig.add(camera);
+      // Lock 72Hz: Quest browser defaults to 90Hz, wasting frame budget —
+      // a stable 13.9ms beats bouncing between 90 and reprojected 45.
+      try {
+        const session = renderer.xr.getSession();
+        const rates = session?.supportedFrameRates;
+        if (session?.updateTargetFrameRate && rates && Array.from(rates).includes(72)) {
+          session.updateTargetFrameRate(72).catch(() => {});
+        }
+      } catch { /* optional */ }
       document.getElementById('hud').style.visibility = 'hidden';
       fpsMesh.visible = true;
       renderer.setPixelRatio(1);
@@ -1459,7 +1541,11 @@
       }
 
       rebuildColliders();
-      if (USE_CELLS) await loadPvs();
+      if (USE_CELLS) {
+        collectMapMeshes();
+        buildBatches();
+        await loadPvs();
+      }
       window.__setView('C');
       updatePvs(true);
       renderer.render(scene, camera);
