@@ -147,6 +147,19 @@
      *  Scene will look broken/gray in these modes — that is expected. */
     const DIAG_RANGE = /(?:^|[?#&])diagrange(?:[=&]|$)/i.test(qs);
     const DIAG_BASIC = /(?:^|[?#&])diagbasic(?:[=&]|$)/i.test(qs);
+    /** Texture-array mega-material merge (#merge2): collapses opaque materials
+     *  into a few array-texture materials + merges geometry per cell — attacks
+     *  BOTH measured bottlenecks (draw-state CPU + per-draw cost). Opt-in until
+     *  pixel-verified AND on-device-verified. See arraymerge.js. */
+    const USE_MERGE2 = /(?:^|[?#&])merge2(?:[=&]|$)/i.test(qs);
+    /** Keep full MeshStandard+IBL on ALL metals (old expensive path). Default is
+     *  OFF: Quest diag 2026-08-04 proved fragment-bound (45→75 FPS with flat
+     *  shading at same tris). 185/189 mats are roughness=1 "metals" — they pay
+     *  PBR+env+normals for nearly no specular. Those become MeshBasic+vertex
+     *  colors; only shiny metals (roughness < 0.75) keep full PBR. */
+    const FORCE_FULL_PBR = /(?:^|[?#&])fullpbr(?:[=&]|$)/i.test(qs);
+    /** XR framebuffer scale. Default 0.8 (was 1.0). `#scale1` forces 1.0. */
+    const XR_FB_SCALE = /(?:^|[?#&])scale1(?:[=&]|$)/i.test(qs) ? 1 : 0.8;
     const MAP1_UPPER_DECK_AABB = {
       minX: 5, maxX: 44,
       minY: 8.0, maxY: 18.5,
@@ -204,7 +217,9 @@
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = Number(exposureEl.value);
     renderer.xr.enabled = true;
-    renderer.xr.setFramebufferScaleFactor(1); // match preview4 (was 0.85)
+    // Quest 3 diag: fragment-bound at spawn. Scale 0.8 cuts fill ~36% of pixels;
+    // `#scale1` restores native for A/B. (Was 1.0; 0.85 was an earlier default.)
+    renderer.xr.setFramebufferScaleFactor(XR_FB_SCALE);
     renderer.info.autoReset = true;
     document.body.appendChild(renderer.domElement);
     document.getElementById('vr-slot').appendChild(VRButton.createButton(renderer));
@@ -255,6 +270,7 @@
     let pvsActive = null;   // currently applied (null = off/all visible)
     let mapMeshes = [];     // map meshes in traversal order (bake uses same order)
     let batchByMesh = null; // Map<meshIndex, { bm: BatchedMesh, gid: number }>
+    let arrayMerge = null;  // result of buildArrayMerge (#merge2)
     let pvsKey = '';
     const _pvsPos = new THREE.Vector3();
 
@@ -264,8 +280,9 @@
     }
 
     /** Visibility router: batched meshes toggle per-instance; originals of
-     *  batched meshes stay hidden forever (they exist only for raycasts). */
+     *  batched/merged meshes stay hidden forever (they exist only for raycasts). */
     function setMeshVis(i, v) {
+      if (arrayMerge?.merged.has(i)) return; // blob visibility applied separately
       const b = batchByMesh?.get(i);
       if (b) b.bm.setVisibleAt(b.gid, v);
       else mapMeshes[i].visible = v;
@@ -365,6 +382,7 @@
 
     function pvsAllVisible() {
       for (let i = 0; i < mapMeshes.length; i++) setMeshVis(i, true);
+      arrayMerge?.applyBlobVis(null);
       pvsKey = '';
       window.__PVS__ = { on: false, visible: mapMeshes.length, total: mapMeshes.length };
     }
@@ -385,6 +403,7 @@
       if (!set) {
         // Outside baked walkable space — fail open, never show holes.
         for (let i = 0; i < mapMeshes.length; i++) setMeshVis(i, true);
+        arrayMerge?.applyBlobVis(null);
         n = mapMeshes.length;
       } else {
         for (let i = 0; i < mapMeshes.length; i++) {
@@ -392,6 +411,7 @@
           setMeshVis(i, v);
           if (v) n++;
         }
+        arrayMerge?.applyBlobVis(set);
       }
       window.__PVS__ = { on: !!set, key, visible: n, total: mapMeshes.length };
     }
@@ -993,12 +1013,65 @@
       return METAL_RE.test(m.name || '');
     }
 
+    function toQuestBasic(m, hasColor, aniso, { matteMetal = false } = {}) {
+      const basic = new THREE.MeshBasicMaterial({
+        map: m.map,
+        color: m.color,
+        transparent: m.transparent,
+        opacity: m.opacity,
+        alphaTest: m.alphaTest,
+        side: m.side,
+        alphaMap: m.alphaMap,
+        emissive: m.emissive?.clone?.() || new THREE.Color(0),
+        emissiveMap: m.emissiveMap,
+        emissiveIntensity: m.emissiveIntensity ?? 1,
+        vertexColors: hasColor,
+        toneMapped: true,
+        name: (m.name || 'mat') + (matteMetal ? '_questMatte' : '_questBasic'),
+      });
+      basic.userData.questMetal = false;
+      if (basic.map) basic.map.anisotropy = aniso;
+      if (basic.emissiveMap) {
+        basic.emissiveMap.anisotropy = aniso;
+        basic.emissiveMap.colorSpace = THREE.SRGBColorSpace;
+      }
+      // Matte metals previously used ADDITIVE baked irradiance + IBL fill.
+      // Default MeshBasic multiplies vColor and crushes floors to black once IBL
+      // is gone — replace with albedo * (ambient + bake), ambient ≈ removed IBL.
+      if (matteMetal && hasColor) {
+        // MeshBasic (r170): color_fragment multiplies vColor into diffuseColor, then
+        // indirectDiffuse = 1.0 * diffuseColor. Strip multiply; light as
+        // albedo * (ambient + bake) so removing IBL doesn't crush floors.
+        basic.onBeforeCompile = (shader) => {
+          shader.fragmentShader = shader.fragmentShader
+            .replace(
+              '#include <color_fragment>',
+              /* glsl */ `
+#ifdef USE_COLOR
+	vec3 bakedLight = vColor.rgb;
+#else
+	vec3 bakedLight = vec3( 0.0 );
+#endif
+`,
+            )
+            .replace(
+              'reflectedLight.indirectDiffuse += vec3( 1.0 );',
+              'reflectedLight.indirectDiffuse += vec3( 0.45 ) + bakedLight;',
+            );
+        };
+        basic.customProgramCacheKey = () => 'questMatteBakeV2';
+      }
+      return basic;
+    }
+
     function tuneMaterials(root, maxAniso) {
       let meshes = 0;
       let lit = 0;
       let metals = 0;
+      let matteBasic = 0;
       let dielectrics = 0;
-      const aniso = Math.min(8, maxAniso);
+      // Aniso 2 is enough for Quest panels; 8× was free fragment cost.
+      const aniso = Math.min(2, maxAniso);
       // One replacement per source material uuid (shared across instances)
       const remap = new Map();
 
@@ -1018,8 +1091,8 @@
           m.toneMapped = true;
           if (m.map) m.map.anisotropy = aniso;
           if (m.normalMap) m.normalMap.anisotropy = aniso;
-          if (m.metalnessMap) m.metalnessMap.anisotropy = Math.min(4, aniso);
-          if (m.roughnessMap) m.roughnessMap.anisotropy = Math.min(4, aniso);
+          if (m.metalnessMap) m.metalnessMap.anisotropy = Math.min(2, aniso);
+          if (m.roughnessMap) m.roughnessMap.anisotropy = Math.min(2, aniso);
           if (m.emissiveMap) {
             m.emissiveMap.anisotropy = aniso;
             m.emissiveMap.colorSpace = THREE.SRGBColorSpace;
@@ -1027,8 +1100,11 @@
 
           const metal =
             isMetalMaterial(m) && (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial);
+          // Roughness=1 metals: IBL specular is a flat ambient — MeshBasic + baked
+          // vertex colors is the same job at ~1/3 the fragment cost (diagbasic proof).
+          const matte = metal && !FORCE_FULL_PBR && (m.roughness ?? 1) >= 0.75;
 
-          if (metal) {
+          if (metal && !matte) {
             metals++;
             m.envMapIntensity = 1.2;
             if (hasColor) {
@@ -1039,37 +1115,16 @@
             }
             m.needsUpdate = true;
             tuned = m;
+          } else if (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial) {
+            if (matte) matteBasic++;
+            else dielectrics++;
+            tuned = toQuestBasic(m, hasColor, aniso, { matteMetal: matte });
           } else {
             dielectrics++;
-            if (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial) {
-              const basic = new THREE.MeshBasicMaterial({
-                map: m.map,
-                color: m.color,
-                transparent: m.transparent,
-                opacity: m.opacity,
-                alphaTest: m.alphaTest,
-                side: m.side,
-                alphaMap: m.alphaMap,
-                emissive: m.emissive?.clone?.() || new THREE.Color(0),
-                emissiveMap: m.emissiveMap,
-                emissiveIntensity: m.emissiveIntensity ?? 1,
-                vertexColors: hasColor,
-                toneMapped: true,
-                name: (m.name || 'mat') + '_questBasic',
-              });
-              basic.userData.questMetal = false;
-              if (basic.map) basic.map.anisotropy = aniso;
-              if (basic.emissiveMap) {
-                basic.emissiveMap.anisotropy = aniso;
-                basic.emissiveMap.colorSpace = THREE.SRGBColorSpace;
-              }
-              tuned = basic;
-            } else {
-              m.vertexColors = hasColor;
-              if ('envMapIntensity' in m) m.envMapIntensity = 0;
-              m.needsUpdate = true;
-              tuned = m;
-            }
+            m.vertexColors = hasColor;
+            if ('envMapIntensity' in m) m.envMapIntensity = 0;
+            m.needsUpdate = true;
+            tuned = m;
           }
 
           remap.set(m.uuid, tuned);
@@ -1086,7 +1141,12 @@
           if (g.attributes.tangent) g.deleteAttribute('tangent');
         }
       });
-      return { meshes, lit, metals, dielectrics, uniqueMats: remap.size };
+      console.log(
+        `Materials: ${metals} shiny-PBR · ${matteBasic} matte→Basic · ${dielectrics} dielectric`
+        + (FORCE_FULL_PBR ? ' (#fullpbr)' : '')
+        + ` · XR fbScale=${XR_FB_SCALE}`,
+      );
+      return { meshes, lit, metals, matteBasic, dielectrics, uniqueMats: remap.size };
     }
 
     function neededAttrs(mat) {
@@ -1565,7 +1625,19 @@
       rebuildColliders();
       if (USE_CELLS) {
         collectMapMeshes();
-        buildBatches();
+        if (USE_MERGE2) {
+          try {
+            const { buildArrayMerge } = await import('./arraymerge.js');
+            arrayMerge = buildArrayMerge({
+              THREE, scene, root, mapMeshes,
+              anisotropy: Math.min(8, renderer.capabilities.getMaxAnisotropy()),
+            });
+          } catch (e) {
+            console.warn('merge2 failed — rendering unmerged', e);
+          }
+        } else {
+          buildBatches();
+        }
         await loadPvs();
         applyDiagMode();
       }
