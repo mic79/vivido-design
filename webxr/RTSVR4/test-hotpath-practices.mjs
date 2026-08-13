@@ -135,4 +135,19 @@ assert.equal(simTaken, PATHFIND_SIM_PER_TICK, `sim slots=${simTaken}`);
 assert.equal(Pathfinding.canTakePathfindSlot(false), false);
 assert.equal(Pathfinding.canTakePathfindSlot(true), true);
 
+section('baked moon wiring (skirmish Lightmass path)');
+const moonSrc = fs.readFileSync(new URL('./js/moon-environment.js', import.meta.url), 'utf8');
+const bakedSrc = fs.readFileSync(new URL('./js/baked-moon.js', import.meta.url), 'utf8');
+const idxHtml = fs.readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+const bakedGlb = new URL('./assets/terrain/terrain-skirmish-ue-lm.glb', import.meta.url);
+assert.match(moonSrc, /tryLoadBakedSkirmishMoon/);
+assert.match(moonSrc, /applyBattleMoonToBakedGroup/);
+assert.match(bakedSrc, /livepbr/);
+assert.match(bakedSrc, /receiveShadow = false/);
+assert.match(bakedSrc, /rotation\.x = Math\.PI \/ 2/);
+assert.match(bakedSrc, /assets\/terrain\/terrain-skirmish-ue-lm\.glb/);
+assert.match(idxHtml, /three\/addons\//);
+assert.ok(fs.existsSync(bakedGlb), 'baked skirmish GLB missing');
+assert.ok(fs.statSync(bakedGlb).size > 800000, 'baked GLB too small (junk/template export)');
+
 console.log('\n✅ test-hotpath-practices passed');

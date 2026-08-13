@@ -8,6 +8,7 @@
  */
 
 import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M } from './config.js';
+import { tryLoadBakedSkirmishMoon } from './baked-moon.js';
 
 /** Central plate edge length (m) — follows live `MAP_SIZE` (standard 200 / Story 400). */
 function mapPlateM() {
@@ -1935,54 +1936,63 @@ async function attachMoonSurfaceTextureMapsAsync(THREE, sceneEl, material) {
 /**
  * @returns {Promise<void>} Resolves when diffuse + detail maps + horizon skirt are in place (or fallback diffuse only).
  */
+async function createBattleMoonMaterial(THREE, sceneEl) {
+  const loader = new THREE.TextureLoader();
+  loader.setCrossOrigin('anonymous');
+  const colorTexture = await loadFirstTextureFromUrls(loader, assetUrlCandidates(BATTLE_MOON.diff));
+  if (!colorTexture) return null;
+  configureMoonDiffuseTexture(colorTexture, THREE, sceneEl);
+  const material = new THREE.MeshStandardMaterial({
+    map: colorTexture,
+    bumpMap: colorTexture,
+    bumpScale: MOON_BUMP_SCALE,
+    color: 0xffffff,
+    roughness: 0.88,
+    metalness: 0,
+    flatShading: false,
+    fog: false,
+  });
+  installMoonTriplanarSampling(material);
+  tryRendererInitTexture(sceneEl && sceneEl.renderer, colorTexture);
+  await attachMoonSurfaceTextureMapsAsync(THREE, sceneEl, material);
+  return material;
+}
+
+/** Same dust/normals as live moon, on baked plate+skirts. No PCF receive (Quest fill). */
+async function applyBattleMoonToBakedGroup(THREE, sceneEl, root) {
+  const material = await createBattleMoonMaterial(THREE, sceneEl);
+  if (!material) return false;
+  root.traverse((obj) => {
+    if (!obj.isMesh) return;
+    obj.material = material;
+    obj.receiveShadow = false;
+    obj.castShadow = false;
+  });
+  return true;
+}
+
 function applyBattleMoon(THREE, sceneEl, mesh) {
   return new Promise((resolve) => {
     if (installMoonSlopeDebugMaterialIfActive(THREE, sceneEl, mesh)) {
       resolve();
       return;
     }
-    const loader = new THREE.TextureLoader();
-    loader.setCrossOrigin('anonymous');
-    const diffUrls = assetUrlCandidates(BATTLE_MOON.diff);
-
-    loadTextureChain(
-      loader,
-      diffUrls,
-      0,
-      (colorTexture) => {
-        const finish = async () => {
-          try {
-            configureMoonDiffuseTexture(colorTexture, THREE, sceneEl);
-            disposeMaterial(mesh.material);
-            const material = new THREE.MeshStandardMaterial({
-              map: colorTexture,
-              bumpMap: colorTexture,
-              bumpScale: MOON_BUMP_SCALE,
-              /** Full albedo range — gray multiply was crushing crater contrast (muddy look). */
-              color: 0xffffff,
-              roughness: 0.88,
-              metalness: 0,
-              flatShading: false,
-              fog: false,
-            });
-            installMoonTriplanarSampling(material);
-            mesh.material = material;
-            mesh.receiveShadow = true;
-            mesh.castShadow = false;
-            const r = sceneEl && sceneEl.renderer;
-            tryRendererInitTexture(r, colorTexture);
-            await attachMoonSurfaceTextureMapsAsync(THREE, sceneEl, material);
-            tryAttachHorizonSkirt(THREE, mesh, sceneEl);
-          } finally {
-            resolve();
-          }
-        };
-        void finish();
-      },
-      () => {
-        loadFallbackDiffuseChain(THREE, sceneEl, mesh, collectFallbackDiffuseUrls(), 0).then(resolve);
+    void (async () => {
+      try {
+        const material = await createBattleMoonMaterial(THREE, sceneEl);
+        if (!material) {
+          await loadFallbackDiffuseChain(THREE, sceneEl, mesh, collectFallbackDiffuseUrls(), 0);
+          return;
+        }
+        disposeMaterial(mesh.material);
+        mesh.material = material;
+        mesh.receiveShadow = true;
+        mesh.castShadow = false;
+        tryAttachHorizonSkirt(THREE, mesh, sceneEl);
+      } finally {
+        resolve();
       }
-    );
+    })();
   });
 }
 
@@ -2000,6 +2010,20 @@ export function toggleTerrainGrid() {
   return terrainGridVisible;
 }
 
+function disposeGroundVisual(groundEl, keepMat) {
+  const prev = groundEl.getObject3D('mesh');
+  if (!prev) return;
+  disposeHorizonSkirtUnder(prev);
+  prev.traverse((obj) => {
+    if (obj.geometry) obj.geometry.dispose();
+    const mats = obj.material == null ? [] : Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const mat of mats) {
+      if (mat && mat !== keepMat) disposeMaterial(mat);
+    }
+  });
+  groundEl.removeObject3D('mesh');
+}
+
 export async function applyMoonBattlefieldVisuals(sceneEl) {
   const THREE = window.THREE;
   if (!THREE || !sceneEl) return;
@@ -2008,6 +2032,21 @@ export async function applyMoonBattlefieldVisuals(sceneEl) {
   if (!groundEl || !groundEl.object3D) return;
 
   horizonSkirtAttached = false;
+
+  const baked = await tryLoadBakedSkirmishMoon();
+  if (baked) {
+    groundEl.setObject3D('mesh', baked);
+    await applyBattleMoonToBakedGroup(THREE, sceneEl, baked);
+    configureTerrainPresentation(sceneEl);
+    styleMoonGrid();
+    const gridMount = document.getElementById('gridHelper');
+    if (gridMount && gridMount.object3D) {
+      gridMount.object3D.traverse((o) => {
+        if (o.isLineSegments) terrainGridVisible = o.visible;
+      });
+    }
+    return;
+  }
 
   const terrainGeom = buildBattleTerrainGeometry(THREE);
   const mesh = new THREE.Mesh(
@@ -2044,14 +2083,20 @@ export async function rebuildMoonBattlefield(sceneEl) {
 
   const prev = groundEl.getObject3D('mesh');
   let keepMat = null;
-  if (prev) {
-    keepMat = prev.material || null;
-    disposeHorizonSkirtUnder(prev);
-    if (prev.geometry) prev.geometry.dispose();
-    groundEl.removeObject3D('mesh');
-  }
+  if (prev && prev.isMesh && prev.material) keepMat = prev.material;
+  if (prev) disposeGroundVisual(groundEl, keepMat);
 
   horizonSkirtAttached = false;
+
+  const baked = await tryLoadBakedSkirmishMoon();
+  if (baked) {
+    groundEl.setObject3D('mesh', baked);
+    await applyBattleMoonToBakedGroup(THREE, sceneEl, baked);
+    configureTerrainPresentation(sceneEl);
+    syncTerrainGridHelperSize();
+    return;
+  }
+
   const terrainGeom = buildBattleTerrainGeometry(THREE);
   const mesh = new THREE.Mesh(
     terrainGeom,
