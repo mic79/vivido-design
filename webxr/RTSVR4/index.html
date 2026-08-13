@@ -6,7 +6,7 @@
   <title>RTS VR IV — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.4.43">
+  <meta name="rts-version" content="0.4.45">
 
   <script type="importmap">
   {
@@ -59,7 +59,55 @@
         look-controls="enabled: false"
         position="0 0 0"
         rotation="-33 0 0"
-      ></a-entity>
+      >
+        <!-- Head-locked rematch wait (DOM #match-prepare-overlay is invisible in XR). -->
+        <a-entity id="vr-match-prepare" position="0 0 -1.15" visible="false">
+          <a-plane
+            class="no-raycast"
+            width="1.05"
+            height="0.50"
+            color="#08120c"
+            material="shader: flat; opacity: 0.94; transparent: true; depthTest: false"
+            position="0 0 -0.012"
+          ></a-plane>
+          <a-text
+            class="no-raycast"
+            id="vr-match-prepare-title"
+            value="Starting match"
+            position="0 0.14 0"
+            align="center"
+            width="1.35"
+            color="#7dff9a"
+          ></a-text>
+          <a-text
+            class="no-raycast"
+            id="vr-match-prepare-message"
+            value="Please wait…"
+            position="0 0.02 0"
+            align="center"
+            width="1.05"
+            color="#b8c4b8"
+          ></a-text>
+          <a-plane
+            class="no-raycast"
+            width="0.58"
+            height="0.016"
+            color="#1a2a1a"
+            material="shader: flat; depthTest: false"
+            position="0 -0.14 0"
+          ></a-plane>
+          <a-plane
+            class="no-raycast"
+            id="vr-match-prepare-fill"
+            width="0.58"
+            height="0.016"
+            color="#22cc66"
+            material="shader: flat; depthTest: false"
+            position="0 -0.14 0.002"
+            animation="property: object3D.scale.x; from: 0.18; to: 1; dir: alternate; loop: true; dur: 1100; easing: easeInOutQuad"
+          ></a-plane>
+        </a-entity>
+      </a-entity>
 
       <!-- Left hand: RTSVR4-style forward ray (child -90° X) + wrist-mounted menu + match HUD -->
       <!-- tracked-controls only: laser-controls draws a parent white laser + raycaster that fights our UI ray. -->

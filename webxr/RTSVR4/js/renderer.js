@@ -171,6 +171,8 @@ let _liveReady = false;
 let _liveCamKey = '';
 let _liveVisSig = '';
 let _fogOverlayWroteThisFrame = false;
+/** Last FNV of living casters; null = not sampled yet this match. */
+let _shadowCasterSig = null;
 
 // Projectile pool
 const activeProjectiles = [];
@@ -1816,6 +1818,7 @@ export function resetMatchViewState() {
   _pausedSelSig = '';
   _fogOverlayGridHash = null;
   _fogOverlayLastDrawMs = 0;
+  _shadowCasterSig = null;
   groundMesh = null;
   createFogPlane();
 }
@@ -1945,6 +1948,10 @@ function xrIsPresenting() {
 function setSceneRenderEnabled(on) {
   const sceneEl = sceneElRenderer();
   if (!sceneEl) return;
+  // WebXR framebuffer contents are undefined at the start of each frame.
+  // Skipping renderer.render() here presents black / flicker on Quest.
+  // Freeze the PCF shadow map instead when casters are still (see
+  // syncShadowMapFromCasters) — that is the GPU win XR can actually take.
   if (xrIsPresenting()) {
     sceneEl.__rtsSkipRender = false;
     return;
@@ -1969,6 +1976,48 @@ function syncShadowMapAutoUpdate(enabled) {
   if (!sm) return;
   sm.autoUpdate = enabled;
   if (!enabled) sm.needsUpdate = false;
+}
+
+function mixFnv(h, n) {
+  return Math.imul(h ^ (n | 0), 16777619);
+}
+
+function mixFnvStr(h, s) {
+  const str = String(s);
+  for (let i = 0; i < str.length; i++) h = mixFnv(h, str.charCodeAt(i));
+  return h;
+}
+
+/** Hash of shadow-casting gameplay (not camera). Idle army / game-over must not re-bake PCF. */
+function shadowCasterHash() {
+  let h = 2166136261;
+  State.units.forEach((u) => {
+    if (u.hp <= 0) return;
+    h = mixFnvStr(h, u.id);
+    h = mixFnv(h, u.x * 10);
+    h = mixFnv(h, u.z * 10);
+    h = mixFnv(h, (u.rot || 0) * 20);
+  });
+  State.buildings.forEach((b) => {
+    if (b.hp <= 0) return;
+    h = mixFnvStr(h, b.id);
+    h = mixFnv(h, b.hp);
+    h = mixFnv(h, (b.constructionProgress || 0) * 20);
+  });
+  State.resourceFields.forEach((f) => {
+    h = mixFnvStr(h, f.id);
+    h = mixFnv(h, f.remaining / 40);
+    if (f.depleted) h = mixFnv(h, 0xdefea7);
+  });
+  h = mixFnv(h, activeProjectiles.length);
+  return h | 0;
+}
+
+function syncShadowMapFromCasters() {
+  const sig = shadowCasterHash();
+  const moved = _shadowCasterSig === null || sig !== _shadowCasterSig;
+  _shadowCasterSig = sig;
+  syncShadowMapAutoUpdate(moved);
 }
 
 function refreshCameraFrustum() {
@@ -2000,7 +2049,6 @@ function unitInCameraFrustum(unit, y) {
 
 function hideTransientFx() {
   if (projectileMesh) projectileMesh.count = 0;
-  setFogOverlayVisible(false);
 }
 
 /** Only on-screen (frustum) state — off-screen motion must not keep presenting an empty view. */
@@ -2049,6 +2097,9 @@ function onScreenVisualSig() {
 export function updateRendering() {
   const paused = worldIsPaused();
   setSceneRenderEnabled(true);
+  // Call even on CPU-skip paths: XR still presents, and a frozen PCF map is
+  // the only shadow work we can drop without skipping the WebXR submit.
+  syncShadowMapFromCasters();
 
   if (paused) {
     _liveReady = false;
@@ -2078,7 +2129,6 @@ export function updateRendering() {
       return;
     }
   } else {
-    if (_pausedStaticUploaded) syncShadowMapAutoUpdate(true);
     _pausedStaticUploaded = false;
     _pausedCamKey = '';
     _pausedSelSig = '';
@@ -2128,7 +2178,6 @@ export function updateRendering() {
     _pausedStaticUploaded = true;
     _pausedCamKey = readPausedCamKey();
     _pausedSelSig = readPausedSelectionSig();
-    syncShadowMapAutoUpdate(false);
   } else {
     _liveReady = true;
   }

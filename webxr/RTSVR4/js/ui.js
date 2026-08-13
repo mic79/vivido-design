@@ -482,12 +482,82 @@ export function hideBootLoadingScreen() {
   }, 500);
 }
 
-/** Wait two frames so the browser can paint overlay / status before heavy sync work. */
+function setATextValue(el, value) {
+  if (!el || value == null) return;
+  const v = String(value);
+  el.setAttribute('value', v);
+  try {
+    const comp = el.getAttribute('text');
+    if (comp && typeof comp === 'object') {
+      el.setAttribute('text', { ...comp, value: v });
+    }
+  } catch (_) { /* ignore */ }
+}
+
+function xrPresentingSession() {
+  try {
+    const sceneEl = typeof document !== 'undefined' ? document.querySelector('a-scene') : null;
+    const xr = sceneEl && sceneEl.renderer && sceneEl.renderer.xr;
+    if (!xr || !xr.isPresenting || typeof xr.getSession !== 'function') return null;
+    return xr.getSession() || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function syncVrMatchPreparePanel(message, title) {
+  const root = document.getElementById('vr-match-prepare');
+  if (!root) return;
+  const on = !!State.gameSession.matchPreparing && Input.getIsVR();
+  root.setAttribute('visible', on ? 'true' : 'false');
+  if (!on) return;
+  if (title) setATextValue(document.getElementById('vr-match-prepare-title'), title);
+  if (message) setATextValue(document.getElementById('vr-match-prepare-message'), message);
+}
+
+/**
+ * Wait two frames so overlay / a-text can submit before heavy sync work.
+ * Window rAF is often silent while a WebXR session owns the frame clock (Quest
+ * rematch hung here until the user exited VR). Prefer XRSession rAF, with a
+ * short timeout so startGame can never deadlock.
+ */
 export function nextPaint() {
-  return new Promise(resolve => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(resolve);
-    });
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const failsafe = setTimeout(done, 64);
+
+    const hopTwice = (arm) => {
+      let n = 0;
+      const hop = () => {
+        n += 1;
+        if (n >= 2) {
+          clearTimeout(failsafe);
+          done();
+          return;
+        }
+        arm(hop);
+      };
+      arm(hop);
+    };
+
+    const session = xrPresentingSession();
+    if (session && typeof session.requestAnimationFrame === 'function') {
+      hopTwice((cb) => {
+        session.requestAnimationFrame(() => cb());
+      });
+      return;
+    }
+    if (typeof requestAnimationFrame === 'function') {
+      hopTwice((cb) => requestAnimationFrame(cb));
+      return;
+    }
+    clearTimeout(failsafe);
+    setTimeout(done, 0);
   });
 }
 
@@ -516,9 +586,10 @@ export function setMatchPreparing(on, message, title) {
   const menuStatus = document.getElementById('menu-status');
   if (menuStatus && on && message) menuStatus.textContent = message;
   const vrStatus = document.getElementById('menu-status-vr');
-  if (vrStatus && on && message) vrStatus.setAttribute('value', message);
+  if (vrStatus && on && message) setATextValue(vrStatus, message);
   if (menuEl) menuEl.classList.toggle('is-preparing', !!on);
   updateMenuVisibility();
+  syncVrMatchPreparePanel(message, title);
 }
 
 export function setMatchPreparingMessage(message) {
@@ -527,7 +598,8 @@ export function setMatchPreparingMessage(message) {
   const menuStatus = document.getElementById('menu-status');
   if (menuStatus && message) menuStatus.textContent = message;
   const vrStatus = document.getElementById('menu-status-vr');
-  if (vrStatus && message) vrStatus.setAttribute('value', message);
+  if (vrStatus && message) setATextValue(vrStatus, message);
+  syncVrMatchPreparePanel(message);
 }
 
 export function initUI() {
@@ -1856,12 +1928,16 @@ export function updateMenuVisibility() {
   let showVrGameMenu = false;
   if (vrGameMenu) {
     showVrGameMenu =
-      !State.gameSession.awaitingAppStart && State.gameSession.menuOpen && Input.getIsVR();
+      !State.gameSession.awaitingAppStart &&
+      State.gameSession.menuOpen &&
+      Input.getIsVR() &&
+      !State.gameSession.matchPreparing;
     vrGameMenu.setAttribute('visible', showVrGameMenu ? 'true' : 'false');
     syncVrMenuInteractive(showVrGameMenu);
   }
   /** Same predicate as `#vr-game-menu` visibility — used by `rts-vr-menu-btn` (attribute alone can lag XR). */
   globalThis.__rtsVrShowGameMenu = !!showVrGameMenu;
+  syncVrMatchPreparePanel();
   syncVrGameHudVisibility();
   refreshHandRaycasters();
 }

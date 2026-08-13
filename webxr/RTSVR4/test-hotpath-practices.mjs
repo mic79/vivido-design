@@ -4,6 +4,7 @@
  * Run: node RTSVR4/test-hotpath-practices.mjs
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import * as Config from './js/config.js';
 import * as State from './js/state.js';
 import * as Fog from './js/fog.js';
@@ -83,6 +84,28 @@ const ms = performance.now() - t0;
 const perCallUs = (ms * 1000) / N;
 console.log(`${N} lookups in ${ms.toFixed(1)}ms (${perCallUs.toFixed(3)} µs/call, hits=${hits})`);
 assert.ok(perCallUs < 2, `O(1) fog lookup too slow: ${perCallUs} µs`);
+
+section('nextPaint cannot hang on window rAF in XR');
+{
+  const uiSrc = fs.readFileSync(new URL('./js/ui.js', import.meta.url), 'utf8');
+  assert.match(uiSrc, /function xrPresentingSession/, 'nextPaint must detect the active XR session');
+  assert.match(uiSrc, /session\.requestAnimationFrame/, 'nextPaint must use XRSession rAF while presenting');
+  assert.match(uiSrc, /setTimeout\(done, 64\)/, 'nextPaint must fail-open if rAF is silent');
+  assert.match(uiSrc, /vr-match-prepare/, 'VR rematch must have a headset prepare panel');
+}
+
+section('game-over keeps world fog overlay');
+State.gameSession.gameStarted = true;
+State.gameSession.gameOver = true;
+assert.equal(
+  Fog.shouldDrawWorldFogOverlay(),
+  true,
+  'game-over must keep shroud (Quest GPU: do not reveal the whole PBR moon)'
+);
+State.gameSession.gameOver = false;
+assert.equal(Fog.shouldDrawWorldFogOverlay(), true, 'live match still draws overlay');
+State.gameSession.gameStarted = false;
+assert.equal(Fog.shouldDrawWorldFogOverlay(), false, 'menu has no overlay');
 
 section('bot APM accumulator');
 let budget = 0;

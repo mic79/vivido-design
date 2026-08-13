@@ -65,8 +65,12 @@ function localClientHasFullFogVision() {
 /** World fog tint plane: off in spy mode or when the local human already sees the whole map. */
 export function shouldDrawWorldFogOverlay() {
   const gs = State.gameSession;
-  if (!gs.gameStarted || gs.gameOver) return false;
+  if (!gs.gameStarted) return false;
   if (gs.debugFog) return false;
+  // Keep the last shroud after victory. Hiding it dumps the whole PBR moon
+  // (and PCF receivers) into the XR stereo pass — Quest stays at ~half-rate
+  // even with units frozen / sold.
+  if (gs.gameOver) return true;
   return !localClientHasFullFogVision();
 }
 
