@@ -6,7 +6,7 @@
   <title>RTS VR IV — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.4.53">
+  <meta name="rts-version" content="0.4.56">
 
   <script type="importmap">
   {
@@ -146,9 +146,9 @@
           </a-entity>
 
           <a-entity id="vr-game-menu" position="0 0 0" visible="false">
-            <a-plane class="no-raycast" width="0.72" height="0.72" color="#000810" material="opacity: 0.92; transparent: true" position="0 0 -0.006"></a-plane>
+            <a-plane class="no-raycast" width="0.72" height="0.82" color="#000810" material="opacity: 0.92; transparent: true" position="0 -0.04 -0.006"></a-plane>
             <a-text class="no-raycast" value="RTS VR IV" position="0 0.40 0" align="center" width="1.15" color="#00ff66"></a-text>
-            <a-text class="no-raycast" id="menu-status-vr" value="Right: laser + trigger · grip+trigger: follow" position="0 -0.40 0" align="center" width="0.72" color="#888888"></a-text>
+            <a-text class="no-raycast" id="menu-status-vr" value="Right: laser + trigger · grip+trigger: follow" position="0 -0.445 0" align="center" width="0.72" color="#888888"></a-text>
 
             <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: story" vr-button-hover="hoverColor: #2a7a5a" position="0 0.28 0"
                       geometry="primitive: plane; width: 0.52; height: 0.085"
@@ -191,13 +191,24 @@
                       material="color: #550000; transparent: true; opacity: 0.9; side: double">
               <a-text class="no-raycast" value="Join" position="0 0 0.01" align="center" width="1.1" color="#ffffff"></a-text>
             </a-entity>
-            <a-text class="no-raycast" value="X: close menu" position="0 -0.30 0" align="center" width="0.55" color="#666666"></a-text>
+            <a-entity
+              id="vr-btn-shadows"
+              class="clickable"
+              rts-vr-menu-btn="action: shadows"
+              vr-button-hover="hoverColor: #3a5a4a"
+              position="0 -0.275 0"
+              geometry="primitive: plane; width: 0.52; height: 0.07"
+              material="color: #143328; transparent: true; opacity: 0.95; side: double"
+            >
+              <a-text id="vr-btn-shadows-label" class="no-raycast" value="Shadows: ON" position="0 0 0.01" align="center" width="1.05" color="#d8ffe8"></a-text>
+            </a-entity>
+            <a-text class="no-raycast" value="X: close menu" position="0 -0.355 0" align="center" width="0.55" color="#666666"></a-text>
           </a-entity>
 
           <a-entity id="vr-game-hud" position="0 0 0" visible="false">
             <a-text class="no-raycast" id="vr-hud-top" position="0 0.30 0.02" align="center" width="0.78" color="#00ff66" value=""></a-text>
             <a-text class="no-raycast" id="vr-hud-spy" position="0 0.20 0.02" align="center" width="0.62" color="#eeaa88" value="" visible="false"></a-text>
-            <a-text class="no-raycast" id="vr-hud-help" position="0 0.11 0.02" align="center" width="0.52" color="#8899aa" value="Y map · Grip+map move · X menu"></a-text>
+            <a-text class="no-raycast" id="vr-hud-help" position="0 0.11 0.02" align="center" width="0.52" color="#8899aa" value="Y map · X menu · Shadows below"></a-text>
 
             <a-entity id="vr-minimap-root" position="0 -0.04 0.025" visible="false">
               <a-text class="no-raycast" value="Map" position="0 0.24 0" align="center" width="0.42" color="#668866"></a-text>
@@ -225,6 +236,17 @@
               <a-text id="vr-hud-sell-vehicle-label" class="no-raycast" value="Sell selected (WF)" position="0 0 0.012" align="center" width="0.75" color="#ddbb99"></a-text>
             </a-entity>
             <a-text class="no-raycast" id="vr-hud-status" position="0 -0.28 0.02" align="center" width="0.58" color="#ffff00" value=""></a-text>
+            <a-entity
+              id="vr-hud-shadows-btn"
+              class="clickable"
+              rts-vr-menu-btn="action: shadows"
+              vr-button-hover="hoverColor: #3a5a4a"
+              position="0 -0.365 0.02"
+              geometry="primitive: plane; width: 0.42; height: 0.052"
+              material="color: #143328; transparent: true; opacity: 0.95; side: double"
+            >
+              <a-text id="vr-hud-shadows-label" class="no-raycast" value="Shadows: ON" position="0 0 0.012" align="center" width="0.85" color="#d8ffe8"></a-text>
+            </a-entity>
 
             <!-- Match end: panel + column layout (updated from ui.js) -->
             <a-entity id="vr-hud-victory-root" position="0 0 0.055" visible="false">

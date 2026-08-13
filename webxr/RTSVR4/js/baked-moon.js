@@ -36,10 +36,11 @@ function gltfPositionVerts(json) {
 }
 
 export function bakedMoonAllowed() {
-  if (typeof location !== 'undefined') {
-    const q = `${location.search || ''}${location.hash || ''}`;
-    if (/(?:[?&#]livepbr=1\b)|(?:[?&#]livepbr(?:&|$))/.test(q)) return false;
-  }
+  if (typeof location === 'undefined') return false;
+  const q = `${location.search || ''}${location.hash || ''}`;
+  if (/(?:[?&#]livepbr=1\b)|(?:[?&#]livepbr(?:&|$))/.test(q)) return false;
+  // Opt-in only — default is procedural + cheap Lambert (same look/perf, random Story).
+  if (!/(?:[?&#]baked=1\b)|(?:[?&#]baked(?:&|$))/.test(q)) return false;
   return MAP_TERRAIN_STYLE !== 'hills';
 }
 

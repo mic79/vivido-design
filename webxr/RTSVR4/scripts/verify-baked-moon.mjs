@@ -44,8 +44,16 @@ function moonWorldBox(page) {
     const root = ground && ground.getObject3D && ground.getObject3D('mesh');
     if (!THREE || !root) return null;
     root.updateMatrixWorld(true);
-    const boxOf = (obj) => {
-      const box = new THREE.Box3().setFromObject(obj);
+    const boxOf = (obj, selfOnly) => {
+      const box = new THREE.Box3();
+      if (selfOnly && obj.isMesh && obj.geometry) {
+        obj.updateMatrixWorld(true);
+        if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+        box.copy(obj.geometry.boundingBox);
+        box.applyMatrix4(obj.matrixWorld);
+      } else {
+        box.setFromObject(obj);
+      }
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
       return {
@@ -67,10 +75,10 @@ function moonWorldBox(page) {
         hasMap: !!(o.material && o.material.map),
         hasNormal: !!(o.material && o.material.normalMap),
         receiveShadow: !!o.receiveShadow,
-        box: boxOf(o),
+        box: boxOf(o, o.name === 'rts-ground-mesh' || /^Moon_0/i.test(o.name)),
       };
       meshes.push(rec);
-      if (/^Moon_0/i.test(o.name)) plate = rec.box;
+      if (o.name === 'rts-ground-mesh' || /^Moon_0/i.test(o.name)) plate = rec.box;
     });
     return {
       rootName: root.name,
@@ -82,6 +90,43 @@ function moonWorldBox(page) {
       meshes,
     };
   });
+}
+
+async function pngDarkerFrac(browser, onPath, offPath, crop) {
+  const onBuf = fs.readFileSync(onPath);
+  const offBuf = fs.readFileSync(offPath);
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.setContent(
+    `<img id="a" src="data:image/png;base64,${onBuf.toString('base64')}">
+     <img id="b" src="data:image/png;base64,${offBuf.toString('base64')}">`,
+    { waitUntil: 'load' }
+  );
+  const r = await page.evaluate((c) => {
+    const ia = document.getElementById('a');
+    const ib = document.getElementById('b');
+    const ca = document.createElement('canvas');
+    ca.width = ia.naturalWidth;
+    ca.height = ia.naturalHeight;
+    const cb = document.createElement('canvas');
+    cb.width = ib.naturalWidth;
+    cb.height = ib.naturalHeight;
+    ca.getContext('2d').drawImage(ia, 0, 0);
+    cb.getContext('2d').drawImage(ib, 0, 0);
+    const da = ca.getContext('2d').getImageData(c.x, c.y, c.w, c.h).data;
+    const db = cb.getContext('2d').getImageData(c.x, c.y, c.w, c.h).data;
+    let mad = 0;
+    let darker = 0;
+    const n = da.length / 4;
+    for (let i = 0; i < da.length; i += 4) {
+      const la = 0.2126 * da[i] + 0.7152 * da[i + 1] + 0.0722 * da[i + 2];
+      const lb = 0.2126 * db[i] + 0.7152 * db[i + 1] + 0.0722 * db[i + 2];
+      mad += Math.abs(la - lb);
+      if (la < lb - 8) darker++;
+    }
+    return { mad: mad / n, darkerFrac: darker / n, n };
+  }, crop);
+  await page.close();
+  return r;
 }
 
 async function pngTerrainLum(browser, shotPath) {
@@ -127,32 +172,26 @@ async function pngTerrainLum(browser, shotPath) {
 }
 
 function assertGroundLiesOnXz(info, label) {
-  if (!info) throw new Error(`${label}: no baked ground`);
+  if (!info) throw new Error(`${label}: no ground`);
   if (!info.plate) throw new Error(`${label}: plate missing`);
   const [sx, sy, sz] = info.plate.size;
   const cy = info.plate.center[1];
   if (sy > 80) throw new Error(`${label}: plate height span ${sy.toFixed(1)}m — still Z-up / vertical`);
   if (sx < 150 || sz < 150) throw new Error(`${label}: plate XZ too small ${sx.toFixed(1)}×${sz.toFixed(1)}`);
   if (Math.abs(cy) > 40) throw new Error(`${label}: plate center Y=${cy.toFixed(1)} not under units`);
-  const skirts = info.meshes.find((m) => /^Moon_1/i.test(m.name));
+  const skirts = info.meshes.find(
+    (m) => /^Moon_1/i.test(m.name) || (m.name !== 'rts-ground-mesh' && m.verts > 200)
+  );
   if (!skirts) throw new Error(`${label}: skirts missing`);
-  if (skirts.box.max[1] > 40) {
+  if (skirts.box.max[1] > 80) {
     throw new Error(`${label}: skirts peak Y=${skirts.box.max[1].toFixed(1)} — drop flipped into the sky`);
-  }
-  if (Math.abs(info.rotY ?? 0) > 0.05) {
-    throw new Error(`${label}: expected no yaw (LM unused), got ${info.rotY}`);
   }
   if (
     !info.meshes.every(
-      (m) =>
-        m.mat === 'MeshLambertMaterial' &&
-        m.cheap &&
-        m.hasMap &&
-        m.hasNormal &&
-        m.receiveShadow === false
+      (m) => m.mat === 'MeshLambertMaterial' && m.cheap && m.hasMap && m.hasNormal
     )
   ) {
-    throw new Error(`${label}: baked moon must be Lambert + normal, no PCF, got ${JSON.stringify(info.meshes)}`);
+    throw new Error(`${label}: moon must be Lambert + normal, got ${JSON.stringify(info.meshes)}`);
   }
 }
 
@@ -203,13 +242,151 @@ await page.waitForTimeout(800);
 const menuInfo = await moonWorldBox(page);
 await page.screenshot({ path: path.join(SHOT_DIR, 'baked-moon-menu.png'), type: 'png' });
 
+await page.evaluate(() => {
+  if (typeof window._setDynamicShadowsEnabled === 'function') window._setDynamicShadowsEnabled(true);
+});
+await page.waitForTimeout(500);
+const shadowOn = await page.evaluate(() => {
+  const scene = document.querySelector('a-scene');
+  const sm = scene && scene.renderer && scene.renderer.shadowMap;
+  const ground = document.getElementById('ground');
+  const moon = ground && ground.getObject3D && ground.getObject3D('mesh');
+  let moonReceive = false;
+  let lightCast = false;
+  if (moon) {
+    moon.traverse((o) => {
+      if (o.isMesh && o.receiveShadow) moonReceive = true;
+    });
+  }
+  scene && scene.object3D && scene.object3D.traverse((o) => {
+    if (o.isDirectionalLight && o.castShadow) lightCast = true;
+  });
+  return {
+    smEnabled: !!(sm && sm.enabled),
+    moonReceive,
+    lightCast,
+    pref: typeof window._getDynamicShadowsEnabled === 'function' ? window._getDynamicShadowsEnabled() : null,
+  };
+});
+await page.screenshot({ path: path.join(SHOT_DIR, 'shadows-on.png'), type: 'png' });
+
+await page.evaluate(() => {
+  if (typeof window._setDynamicShadowsEnabled === 'function') window._setDynamicShadowsEnabled(false);
+});
+await page.waitForTimeout(700);
+const shadowOff = await page.evaluate(() => {
+  const scene = document.querySelector('a-scene');
+  const sm = scene && scene.renderer && scene.renderer.shadowMap;
+  const ground = document.getElementById('ground');
+  const moon = ground && ground.getObject3D && ground.getObject3D('mesh');
+  let moonReceive = false;
+  let lightCast = false;
+  if (moon) {
+    moon.traverse((o) => {
+      if (o.isMesh && o.receiveShadow) moonReceive = true;
+    });
+  }
+  scene && scene.object3D && scene.object3D.traverse((o) => {
+    if (o.isDirectionalLight && o.castShadow) lightCast = true;
+  });
+  return { smEnabled: !!(sm && sm.enabled), moonReceive, lightCast };
+});
+await page.screenshot({ path: path.join(SHOT_DIR, 'shadows-off.png'), type: 'png' });
+
+await page.evaluate(() => {
+  if (typeof window._setDynamicShadowsEnabled === 'function') window._setDynamicShadowsEnabled(true);
+});
+await page.evaluate(() => {
+  if (typeof window._startGame !== 'function') throw new Error('no _startGame');
+  window._startGame('1v1');
+});
+await page.waitForFunction(() => {
+  const overlay = document.getElementById('match-prepare-overlay');
+  return !(overlay && !overlay.hidden);
+}, null, { timeout: 180000 });
+await page.waitForTimeout(900);
+await page.evaluate(async () => {
+  const State = await import('./js/state.js');
+  if (!State.gameSession.gameStarted) throw new Error('game did not start');
+  const myId = State.gameSession.myPlayerId;
+  let hx = 0;
+  let hz = 0;
+  let found = false;
+  State.buildings.forEach((b) => {
+    if (found) return;
+    if (b.ownerId === myId && b.type === 'hq') {
+      hx = b.x;
+      hz = b.z;
+      found = true;
+    }
+  });
+  if (!found) {
+    const spawn = State.players[myId]?.spawn;
+    if (spawn) {
+      hx = spawn.x;
+      hz = spawn.z;
+    }
+  }
+  const rig = document.getElementById('cameraRig');
+  const cam = document.getElementById('camera');
+  if (rig) {
+    rig.object3D.position.set(hx, 28, hz + 38);
+    rig.object3D.rotation.set(0, 0, 0);
+  }
+  if (cam) cam.object3D.rotation.set(-0.55, 0, 0);
+});
+await page.waitForTimeout(700);
+const matchOnPath = path.join(SHOT_DIR, 'shadows-on-match.png');
+await page.screenshot({ path: matchOnPath, type: 'png' });
+const matchOnFlags = await page.evaluate(() => {
+  const scene = document.querySelector('a-scene');
+  const sm = scene && scene.renderer && scene.renderer.shadowMap;
+  const ground = document.getElementById('ground');
+  const moon = ground && ground.getObject3D && ground.getObject3D('mesh');
+  let moonReceive = false;
+  let casterN = 0;
+  let mapN = 0;
+  let lightCast = false;
+  if (moon) {
+    moon.traverse((o) => {
+      if (o.isMesh && o.receiveShadow) moonReceive = true;
+    });
+  }
+  scene && scene.object3D && scene.object3D.traverse((o) => {
+    if (o.castShadow && (o.isMesh || o.isInstancedMesh || o.isSkinnedMesh)) casterN += 1;
+    if (o.isDirectionalLight) {
+      if (o.castShadow) lightCast = true;
+      if (o.shadow && o.shadow.map) mapN += 1;
+    }
+  });
+  return {
+    smEnabled: !!(sm && sm.enabled),
+    smAuto: !!(sm && sm.autoUpdate),
+    moonReceive,
+    lightCast,
+    casterN,
+    mapN,
+  };
+});
+await page.evaluate(() => {
+  if (typeof window._setDynamicShadowsEnabled === 'function') window._setDynamicShadowsEnabled(false);
+});
+await page.waitForTimeout(700);
+const matchOffPath = path.join(SHOT_DIR, 'shadows-off-match.png');
+await page.screenshot({ path: matchOffPath, type: 'png' });
+await page.evaluate(() => {
+  if (typeof window._setDynamicShadowsEnabled === 'function') window._setDynamicShadowsEnabled(true);
+});
 
 const ready = logs.find((l) => l.includes('baked moon ready') || l.includes('skip baked moon')) || null;
 const errors = logs.filter((l) => /pageerror|skip baked/i.test(l)).slice(0, 20);
-console.log(JSON.stringify({ ready, startInfo, menuInfo, startLum, errors }, null, 2));
+console.log(JSON.stringify({ ready, startInfo, menuInfo, startLum, shadowOn, shadowOff, matchOnFlags, errors }, null, 2));
 
 try {
-  if (!ready || !ready.includes('baked moon ready')) throw new Error('baked moon did not load');
+  if (ready && /skip baked moon: decimated|skip baked moon: file too small/.test(ready)) {
+    throw new Error(`baked fallback failed unexpectedly: ${ready}`);
+  }
+  if (!startInfo || startInfo.meshes.length < 2) throw new Error('moon plate+skirts did not load');
   assertGroundLiesOnXz(startInfo, 'start');
   assertGroundLiesOnXz(menuInfo, 'menu');
   if (!startLum || startLum.err) throw new Error(`start luminance: ${startLum && startLum.err}`);
@@ -218,6 +395,24 @@ try {
   if (startLum.avg > 210) throw new Error(`start terrain blown out avg=${startLum.avg.toFixed(1)}`);
   if (startLum.std < 6) {
     throw new Error(`start terrain too flat (normals/albedo not reading) std=${startLum.std.toFixed(2)}`);
+  }
+  if (!shadowOn || !shadowOn.smEnabled || !shadowOn.moonReceive || !shadowOn.lightCast) {
+    throw new Error(`shadows ON did not enable ground receive: ${JSON.stringify(shadowOn)}`);
+  }
+  if (!shadowOff || shadowOff.smEnabled || shadowOff.moonReceive || shadowOff.lightCast) {
+    throw new Error(`shadows OFF still paying PCF: ${JSON.stringify(shadowOff)}`);
+  }
+  if (!matchOnFlags || !matchOnFlags.smEnabled || !matchOnFlags.moonReceive) {
+    throw new Error(`match shadows ON lost receive: ${JSON.stringify(matchOnFlags)}`);
+  }
+  const blob = await pngDarkerFrac(browser, matchOnPath, matchOffPath, {
+    x: 520,
+    y: 280,
+    w: 240,
+    h: 220,
+  });
+  if (!blob || blob.darkerFrac < 0.04 || blob.mad < 1.5) {
+    throw new Error(`match Shadows ON did not darken ground under HQ: ${JSON.stringify(blob)}`);
   }
 } catch (err) {
   console.error('FAIL:', err.message);

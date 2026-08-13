@@ -19,6 +19,12 @@ const BATTLE_MOON = {
   diff: 'assets/textures/moon_01_2k/moon_01_diff_2k.jpg',
 };
 
+function moonLivePbrRequested() {
+  if (typeof location === 'undefined') return false;
+  const q = `${location.search || ''}${location.hash || ''}`;
+  return /(?:[?&#]livepbr=1\b)|(?:[?&#]livepbr(?:&|$))/.test(q);
+}
+
 /**
  * Diffuse / data map repeats per 200 m side — **~3.35** keeps the playable patch sharp (not “zoomed”
  * like very low repeats). Skirts use the same value; anti-tile warp ramps in **outside** the MAP square.
@@ -1224,7 +1230,7 @@ function tryAttachHorizonSkirt(THREE, mesh, sceneEl) {
     const addPatch = (wx0, wx1, wz0, wz1, sx, sz) => {
       const geo = buildTerrainSkirtPatchGeometry(THREE, wx0, wx1, wz0, wz1, sx, sz);
       const m = new THREE.Mesh(geo, mat);
-      m.receiveShadow = true;
+      m.receiveShadow = !!mesh.receiveShadow;
       m.castShadow = false;
       m.frustumCulled = true;
       g.add(m);
@@ -1642,7 +1648,7 @@ function loadFallbackDiffuseChain(THREE, sceneEl, mesh, urls, index) {
       }
       disposeMaterial(mesh.material);
       mesh.material = new THREE.MeshLambertMaterial({ map, color: 0xffffff });
-      mesh.receiveShadow = true;
+      mesh.receiveShadow = false;
       mesh.castShadow = false;
       tryAttachHorizonSkirt(THREE, mesh, sceneEl);
       resolve();
@@ -1665,7 +1671,7 @@ function loadFallbackDiffuseChain(THREE, sceneEl, mesh, urls, index) {
         if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
         disposeMaterial(mesh.material);
         mesh.material = new THREE.MeshLambertMaterial({ map: tex, color: 0xffffff });
-        mesh.receiveShadow = true;
+        mesh.receiveShadow = false;
         mesh.castShadow = false;
         tryAttachHorizonSkirt(THREE, mesh, sceneEl);
         resolve();
@@ -1754,7 +1760,8 @@ function installMoonTriplanarSampling(material) {
   material.userData.moonTriplanarInstalled = true;
   material.userData.moonTriScale = moonTriplanarWorldToUv();
   // Bump key whenever the GLSL below changes (force recompile).
-  material.customProgramCacheKey = () => 'rts-moon-triplanar-v4';
+  material.customProgramCacheKey = () =>
+    'rts-moon-triplanar-v5|sh' + (material.userData.shadowRecv ? '1' : '0');
 
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uMoonTriScale = { value: material.userData.moonTriScale };
@@ -1914,20 +1921,22 @@ async function attachMoonSurfaceTextureMapsAsync(THREE, sceneEl, material) {
     tryRendererInitTexture(renderer, norTex);
   }
 
-  const roughTex = await loadFirstTextureFromUrls(loader, collectMoonRoughJpgUrls());
-  if (roughTex) {
-    configureMoonDataTexture(roughTex, THREE, sceneEl);
-    material.roughnessMap = roughTex;
-    material.roughness = 1;
-    material.needsUpdate = true;
-    tryRendererInitTexture(renderer, roughTex);
+  if (material.isMeshStandardMaterial) {
+    const roughTex = await loadFirstTextureFromUrls(loader, collectMoonRoughJpgUrls());
+    if (roughTex) {
+      configureMoonDataTexture(roughTex, THREE, sceneEl);
+      material.roughnessMap = roughTex;
+      material.roughness = 1;
+      material.needsUpdate = true;
+      tryRendererInitTexture(renderer, roughTex);
+    }
   }
 
   const aoTex = await loadFirstTextureFromUrls(loader, collectMoonAoJpgUrls());
   if (aoTex) {
     configureMoonDataTexture(aoTex, THREE, sceneEl);
     material.aoMap = aoTex;
-    material.aoMapIntensity = 1;
+    material.aoMapIntensity = material.isMeshStandardMaterial ? 1 : 0.5;
     material.needsUpdate = true;
     tryRendererInitTexture(renderer, aoTex);
   }
@@ -1942,16 +1951,29 @@ async function createBattleMoonMaterial(THREE, sceneEl) {
   const colorTexture = await loadFirstTextureFromUrls(loader, assetUrlCandidates(BATTLE_MOON.diff));
   if (!colorTexture) return null;
   configureMoonDiffuseTexture(colorTexture, THREE, sceneEl);
-  const material = new THREE.MeshStandardMaterial({
-    map: colorTexture,
-    bumpMap: colorTexture,
-    bumpScale: MOON_BUMP_SCALE,
-    color: 0xffffff,
-    roughness: 0.88,
-    metalness: 0,
-    flatShading: false,
-    fog: false,
-  });
+  const livePbr = moonLivePbrRequested();
+  const material = livePbr
+    ? new THREE.MeshStandardMaterial({
+        map: colorTexture,
+        bumpMap: colorTexture,
+        bumpScale: MOON_BUMP_SCALE,
+        color: 0xffffff,
+        roughness: 0.88,
+        metalness: 0,
+        flatShading: false,
+        fog: false,
+      })
+    : new THREE.MeshLambertMaterial({
+        map: colorTexture,
+        color: 0xffffff,
+        fog: false,
+      });
+  if (!livePbr) {
+    material.color.setRGB(1.55, 1.55, 1.55);
+    material.envMap = null;
+    if ('envMapIntensity' in material) material.envMapIntensity = 0;
+    material.userData.cheapMoonLook = true;
+  }
   installMoonTriplanarSampling(material);
   tryRendererInitTexture(sceneEl && sceneEl.renderer, colorTexture);
   await attachMoonSurfaceTextureMapsAsync(THREE, sceneEl, material);
@@ -1973,8 +1995,12 @@ function applyBattleMoon(THREE, sceneEl, mesh) {
         }
         disposeMaterial(mesh.material);
         mesh.material = material;
-        mesh.receiveShadow = true;
+        mesh.receiveShadow =
+          typeof window._getDynamicShadowsEnabled === 'function'
+            ? !!window._getDynamicShadowsEnabled()
+            : false;
         mesh.castShadow = false;
+        if (material.userData) material.userData.shadowRecv = !!mesh.receiveShadow;
         tryAttachHorizonSkirt(THREE, mesh, sceneEl);
       } finally {
         resolve();
@@ -2041,7 +2067,10 @@ export async function applyMoonBattlefieldVisuals(sceneEl) {
   );
   mesh.name = 'rts-ground-mesh';
   mesh.rotation.x = -Math.PI / 2;
-  mesh.receiveShadow = true;
+  mesh.receiveShadow =
+    typeof window._getDynamicShadowsEnabled === 'function'
+      ? !!window._getDynamicShadowsEnabled()
+      : false;
   mesh.castShadow = false;
   groundEl.setObject3D('mesh', mesh);
 
@@ -2089,7 +2118,10 @@ export async function rebuildMoonBattlefield(sceneEl) {
   );
   mesh.name = 'rts-ground-mesh';
   mesh.rotation.x = -Math.PI / 2;
-  mesh.receiveShadow = true;
+  mesh.receiveShadow =
+    typeof window._getDynamicShadowsEnabled === 'function'
+      ? !!window._getDynamicShadowsEnabled()
+      : false;
   mesh.castShadow = false;
   groundEl.setObject3D('mesh', mesh);
 

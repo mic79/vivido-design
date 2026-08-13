@@ -25,6 +25,7 @@
       else if (action === 'join' && window._joinGame) window._joinGame();
       else if (action === 'lobby_minus' && window._lobbyDelta) window._lobbyDelta(-1);
       else if (action === 'lobby_plus' && window._lobbyDelta) window._lobbyDelta(1);
+      else if (action === 'shadows' && window._toggleDynamicShadows) window._toggleDynamicShadows();
     },
     remove: function () {
       this.el.removeEventListener('click', this.onClick);

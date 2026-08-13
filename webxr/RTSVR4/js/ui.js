@@ -720,8 +720,8 @@ function getHudControlsHelpHtml() {
       <p style="margin:10px 0 0 0;opacity:0.85;font-size:11px;">Zoom in (pinch) for easier taps on single units; zoomed out is best for overview and orders.</p>`;
   }
   return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left: Select · Left on open ground: Deselect · Right: Move / attack / follow (engineers repair nearby friendly vehicles; right-click follow a vehicle to stay with it)<br>
-    HQ click: Build · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, 3D plane + minimap) · Esc: Menu<br>
-    <span style="opacity:0.85">VR: Laser + trigger on menu & map · grip+trigger on one hand for follow · X menu · Y map · B deselect · A select all · grips pan</span>`;
+    HQ click: Build · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, 3D plane + minimap) · Esc: Menu · Shadows: menu / HUD toggle (off = no PCF pass)<br>
+    <span style="opacity:0.85">VR: Laser + trigger on menu & map · grip+trigger on one hand for follow · X menu · Y map · B deselect · A select all · grips pan · Shadows on wrist menu and match HUD</span>`;
 }
 
 function updateFlatHudButtons() {
@@ -750,6 +750,9 @@ function wireFlatHudActions() {
   });
   document.getElementById('hud-sell-vehicle-btn')?.addEventListener('click', () => {
     window._requestSellSelectedVehicles?.();
+  });
+  document.getElementById('hud-shadows-toggle')?.addEventListener('click', () => {
+    window._toggleDynamicShadows?.();
   });
 }
 
@@ -796,6 +799,9 @@ function createHUD() {
       <button type="button" id="hud-help-toggle" style="
         font-size: 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid #666;
         background: rgba(22,28,34,0.95); color: #ddd;">Help</button>
+      <button type="button" id="hud-shadows-toggle" style="
+        font-size: 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid #3a6a50;
+        background: rgba(16,40,28,0.95); color: #d8ffe8;">Shadows: ON</button>
     </div>
     <div id="hud-help-panel" class="hud">
       <div id="hud-controls" style="
@@ -1015,6 +1021,7 @@ function createMenu() {
     </div>
     <button id="btn-host" style="${btnStyle('#008')}" onclick="window._hostGame()">🌐 Host Multiplayer</button>
     <button id="btn-join" style="${btnStyle('#800')}" onclick="window._joinGame()">🔗 Join Multiplayer</button>
+    <button type="button" id="btn-toggle-shadows" style="${btnStyle('#163')}" onclick="window._toggleDynamicShadows()">Shadows: ON</button>
     <p id="menu-status" style="color: #888; font-size: 12px; margin-top: 15px;">Select a game mode</p>
   `;
   uiMountRoot().appendChild(menuEl);
@@ -1031,6 +1038,47 @@ function createMenu() {
   window._lobbyDelta = d => Network.adjustLobby(d);
   Network.refreshLobbyDisplay();
   refreshStoryHistoryPanel();
+  syncDynamicShadowToggleUi();
+}
+
+function shadowToggleLabel(on) {
+  return on ? 'Shadows: ON' : 'Shadows: OFF';
+}
+
+export function syncDynamicShadowToggleUi() {
+  const on = typeof window._getDynamicShadowsEnabled === 'function'
+    ? !!window._getDynamicShadowsEnabled()
+    : true;
+  const label = shadowToggleLabel(on);
+  const color = on ? '#143328' : '#2a1818';
+  const textColor = on ? '#d8ffe8' : '#ffccbb';
+  const desk = document.getElementById('btn-toggle-shadows');
+  if (desk) {
+    desk.textContent = label;
+    desk.style.background = on ? '#163' : '#422';
+  }
+  const hud = document.getElementById('hud-shadows-toggle');
+  if (hud) {
+    hud.textContent = label;
+    hud.style.background = on ? 'rgba(16,40,28,0.95)' : 'rgba(48,20,16,0.95)';
+    hud.style.borderColor = on ? '#3a6a50' : '#6a3a30';
+    hud.style.color = textColor;
+  }
+  const vrMenuLabel = document.getElementById('vr-btn-shadows-label');
+  if (vrMenuLabel) {
+    vrMenuLabel.setAttribute('value', label);
+    vrMenuLabel.setAttribute('color', textColor);
+  }
+  const vrMenuBtn = document.getElementById('vr-btn-shadows');
+  if (vrMenuBtn) vrMenuBtn.setAttribute('material', `color: ${color}; transparent: true; opacity: 0.95; side: double`);
+  const vrHudLabel = document.getElementById('vr-hud-shadows-label');
+  if (vrHudLabel) {
+    vrHudLabel.setAttribute('value', label);
+    vrHudLabel.setAttribute('color', textColor);
+  }
+  const vrHudBtn = document.getElementById('vr-hud-shadows-btn');
+  if (vrHudBtn) vrHudBtn.setAttribute('material', `color: ${color}; transparent: true; opacity: 0.95; side: double`);
+  refreshHandRaycasters();
 }
 
 /** BoltVR-style: enable .clickable on menu hit targets and refresh hand raycasters. */
@@ -1086,6 +1134,11 @@ function syncVrGameHudVisibility() {
     const on = showHud && minimapVisible;
     plane.classList.toggle('clickable', on);
     plane.setAttribute('visible', on ? 'true' : 'false');
+  }
+  const hudShadows = document.getElementById('vr-hud-shadows-btn');
+  if (hudShadows) {
+    hudShadows.classList.toggle('clickable', !!showHud);
+    hudShadows.setAttribute('visible', showHud ? 'true' : 'false');
   }
 
   const confirmRoot = document.getElementById('vr-confirm-root');
@@ -1934,6 +1987,10 @@ export function updateMenuVisibility() {
       !State.gameSession.matchPreparing;
     vrGameMenu.setAttribute('visible', showVrGameMenu ? 'true' : 'false');
     syncVrMenuInteractive(showVrGameMenu);
+    const vrShadows = document.getElementById('vr-btn-shadows');
+    if (vrShadows) {
+      vrShadows.classList.toggle('clickable', !!showVrGameMenu);
+    }
   }
   /** Same predicate as `#vr-game-menu` visibility — used by `rts-vr-menu-btn` (attribute alone can lag XR). */
   globalThis.__rtsVrShowGameMenu = !!showVrGameMenu;

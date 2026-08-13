@@ -173,6 +173,22 @@ let _liveVisSig = '';
 let _fogOverlayWroteThisFrame = false;
 /** Last FNV of living casters; null = not sampled yet this match. */
 let _shadowCasterSig = null;
+/** Next present must run so toggle ON bakes / toggle OFF drops the last PCF frame. */
+let _shadowGpuDirty = false;
+const SHADOW_PREF_KEY = 'rtsvr4-dynamic-shadows';
+
+function readShadowPref() {
+  try {
+    const v = localStorage.getItem(SHADOW_PREF_KEY);
+    if (v === '0' || v === 'off' || v === 'false') return false;
+    if (v === '1' || v === 'on' || v === 'true') return true;
+  } catch (_) {
+    /* private mode */
+  }
+  return true;
+}
+
+let _dynamicShadowsOn = readShadowPref();
 
 // Projectile pool
 const activeProjectiles = [];
@@ -226,23 +242,86 @@ export function warmRendererPrograms(sceneEl) {
   }
 }
 
+export function getDynamicShadowsEnabled() {
+  return _dynamicShadowsOn;
+}
+
+export function setDynamicShadowsEnabled(on) {
+  _dynamicShadowsOn = !!on;
+  try {
+    localStorage.setItem(SHADOW_PREF_KEY, _dynamicShadowsOn ? '1' : '0');
+  } catch (_) {
+    /* ignore */
+  }
+  applyDynamicShadowGpuState();
+  if (typeof UI.syncDynamicShadowToggleUi === 'function') UI.syncDynamicShadowToggleUi();
+  return _dynamicShadowsOn;
+}
+
+export function toggleDynamicShadows() {
+  return setDynamicShadowsEnabled(!_dynamicShadowsOn);
+}
+
 /**
- * One directional shadow map onto the moon (cheap: moderate map size, single caster).
- * Call after scene lights and game meshes exist.
+ * Off = no shadow-map pass, no PCF, maps disposed, moon does not receive.
+ * On = 512 PCFSoft + moon/skirts receive so casters actually blob on the ground.
  */
+function applyDynamicShadowGpuState() {
+  const sceneEl = sceneElRenderer() || (typeof document !== 'undefined' ? document.querySelector('a-scene') : null);
+  const renderer = sceneEl && sceneEl.renderer;
+  const THREE = window.THREE;
+  if (!renderer || !THREE) return;
+  const on = _dynamicShadowsOn;
+  renderer.shadowMap.enabled = on;
+  _shadowGpuDirty = true;
+  if (on) {
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.autoUpdate = true;
+    renderer.shadowMap.needsUpdate = true;
+    _shadowCasterSig = null;
+  } else {
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = false;
+  }
+  const root = sceneEl.object3D;
+  if (root) {
+    root.traverse((obj) => {
+      if (!obj.isDirectionalLight) return;
+      obj.castShadow = on;
+      if (!on && obj.shadow && obj.shadow.map) {
+        obj.shadow.map.dispose();
+        obj.shadow.map = null;
+      }
+    });
+  }
+  const ground = typeof document !== 'undefined' ? document.getElementById('ground') : null;
+  const moon = ground && ground.getObject3D && ground.getObject3D('mesh');
+  if (moon) {
+    moon.traverse((obj) => {
+      if (!obj.isMesh && !obj.isSkinnedMesh) return;
+      obj.receiveShadow = on;
+      obj.castShadow = false;
+      const mats = obj.material == null ? [] : Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const mat of mats) {
+        if (!mat) continue;
+        mat.userData.shadowRecv = on;
+        mat.needsUpdate = true;
+      }
+    });
+  }
+}
+
 export function configureBattlefieldShadows(sceneEl) {
   const THREE = window.THREE;
   const renderer = sceneEl && sceneEl.renderer;
   if (!renderer || !THREE) return;
 
-  renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   // Ortho box must cover `MAP_UNIT_NAV_RADIUS` (~253 m) so rim / corner bases still cast onto ground.
   const ext = Math.ceil(MAP_UNIT_NAV_RADIUS * 1.12 + 24);
   sceneEl.object3D.traverse((obj) => {
     if (!obj.isDirectionalLight) return;
-    obj.castShadow = true;
     obj.shadow.mapSize.set(512, 512);
     obj.shadow.camera.near = 2;
     obj.shadow.camera.far = Math.max(420, ext * 2 + 40);
@@ -254,6 +333,7 @@ export function configureBattlefieldShadows(sceneEl) {
     obj.shadow.normalBias = 0.035;
     obj.shadow.camera.updateProjectionMatrix();
   });
+  applyDynamicShadowGpuState();
 }
 
 /** Box combat vehicles: plain box + one barrel cylinder along +Z (same footprint as other box units). */
@@ -1978,6 +2058,15 @@ function syncShadowMapAutoUpdate(enabled) {
   if (!enabled) sm.needsUpdate = false;
 }
 
+/** Skip-render must not eat the frame that actually bakes / drops the PCF map. */
+function shadowMapWantsGpuPass() {
+  if (_shadowGpuDirty) return true;
+  if (!_dynamicShadowsOn) return false;
+  const sceneEl = sceneElRenderer();
+  const sm = sceneEl && sceneEl.renderer && sceneEl.renderer.shadowMap;
+  return !!(sm && sm.enabled && (sm.autoUpdate || sm.needsUpdate));
+}
+
 function mixFnv(h, n) {
   return Math.imul(h ^ (n | 0), 16777619);
 }
@@ -2014,10 +2103,17 @@ function shadowCasterHash() {
 }
 
 function syncShadowMapFromCasters() {
-  const sig = shadowCasterHash();
-  const moved = _shadowCasterSig === null || sig !== _shadowCasterSig;
-  _shadowCasterSig = sig;
-  syncShadowMapAutoUpdate(moved);
+  if (!_dynamicShadowsOn) {
+    syncShadowMapAutoUpdate(false);
+    const sceneEl = sceneElRenderer();
+    const sm = sceneEl && sceneEl.renderer && sceneEl.renderer.shadowMap;
+    if (sm) sm.enabled = false;
+    return;
+  }
+  // Keep the PCF map live while ON. Freezing after the first hash was racing
+  // lobby/GLTF spawn and skip-render, so Shadows: ON presented an empty map.
+  syncShadowMapAutoUpdate(true);
+  _shadowCasterSig = shadowCasterHash();
 }
 
 function refreshCameraFrustum() {
@@ -2103,7 +2199,7 @@ export function updateRendering() {
 
   if (paused) {
     _liveReady = false;
-    if (_pausedStaticUploaded) {
+    if (_pausedStaticUploaded && !shadowMapWantsGpuPass()) {
       const camKey = readPausedCamKey();
       const selSig = readPausedSelectionSig();
       const camMoved = camKey !== _pausedCamKey;
@@ -2146,7 +2242,7 @@ export function updateRendering() {
       activeProjectiles.length === 0;
     _liveCamKey = camKey;
     if (vis != null) _liveVisSig = vis;
-    if (canSkip) {
+    if (canSkip && !shadowMapWantsGpuPass()) {
       setSceneRenderEnabled(false);
       return;
     }
@@ -2181,6 +2277,7 @@ export function updateRendering() {
   } else {
     _liveReady = true;
   }
+  _shadowGpuDirty = false;
 }
 
 /** Higher = should win a limited InstancedMesh slot (same-type overflow used to hide harvesters first). */

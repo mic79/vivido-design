@@ -104,6 +104,10 @@ function initializeGame(sceneEl) {
 
   Audio.initAudio();
   UI.initUI();
+  window._toggleDynamicShadows = () => Renderer.toggleDynamicShadows();
+  window._setDynamicShadowsEnabled = (on) => Renderer.setDynamicShadowsEnabled(on);
+  window._getDynamicShadowsEnabled = () => Renderer.getDynamicShadowsEnabled();
+  UI.syncDynamicShadowToggleUi();
   State.initPlayers([0], [1, 2, 3]);
   State.initResourceFields();
   Fog.initFog();
