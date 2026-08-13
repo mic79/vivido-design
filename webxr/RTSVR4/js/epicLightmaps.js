@@ -9,7 +9,11 @@
  *  - Alpha/foliage: original MASK material; glass RGB cleared so windows aren't a black veil
  */
 /** A-Frame's THREE when present (browser). `import * as THREE from 'three'` is a second copy and makes LM invisible. */
-const THREE = globalThis.window?.THREE;
+let THREE = globalThis.window?.THREE;
+function useTHREE() {
+  if (!THREE) THREE = globalThis.window?.THREE;
+  return THREE;
+}
 
 const LOG_BLACK_POINT = 0.01858136;
 const DEFAULT_DIRECTIONALITY = 0.6;
@@ -116,7 +120,7 @@ function cloneLightmapTexture(texture, texCoord) {
   return lmTex;
 }
 
-function decodeEpicLmGlsl(mode) {
+function decodeEpicLmGlsl(mode, skipToneMap = false) {
   // Epic HQ color is an albedo multiplier (final ≈ albedo * LM).
   // Three MeshStandard does irradiance * BRDF_Lambert(albedo) = irradiance * albedo / PI,
   // so Standard path must feed irradiance = LM * PI.
@@ -152,7 +156,7 @@ function decodeEpicLmGlsl(mode) {
 				epicIntensity, epicDirectionality
 			);
 		}
-		epicLm = epicToneMapLM( epicLm, epicContrast, epicWhitePoint );
+		${skipToneMap ? '' : 'epicLm = epicToneMapLM( epicLm, epicContrast, epicWhitePoint );'}
 		${assign}
 	}`;
 }
@@ -247,7 +251,7 @@ uniform int epicHasEmissiveMap;`,
 
     const replaced = shader.fragmentShader.replace(
       /vec4\s+lightMapTexel\s*=\s*texture2D\(\s*lightMap\s*,\s*vLightMapUv\s*\)\s*;\s*reflectedLight\.indirectDiffuse\s*\+=\s*lightMapTexel\.rgb\s*\*\s*lightMapIntensity\s*\*\s*RECIPROCAL_PI\s*;/,
-      `${decodeEpicLmGlsl('basic')}
+      `${decodeEpicLmGlsl('basic', !!params.skipToneMap)}
 		vec3 em = epicEmissive * epicEmissiveIntensity;
 		if ( epicHasEmissiveMap == 1 ) {
 			#if defined( USE_MAP )
@@ -277,7 +281,7 @@ uniform int epicHasEmissiveMap;`,
   };
 
   mat.customProgramCacheKey = () =>
-    `epicBasicKeep2|ch${texCoord}|f${params.flipMode}|d${params.debugMode}|i${params.intensity}|c${params.contrast}|w${params.whitePoint}`;
+    `epicBasicKeep2|ch${texCoord}|f${params.flipMode}|d${params.debugMode}|i${params.intensity}|c${params.contrast}|w${params.whitePoint}|t${params.skipToneMap ? 0 : 1}`;
   mat.needsUpdate = true;
   return mat;
 }
@@ -483,6 +487,10 @@ export function balanceRealtimeLights(root, opts = {}) {
 }
 
 export async function applyEpicLightmaps(gltf, opts = {}) {
+  if (!useTHREE()) {
+    console.warn('applyEpicLightmaps: no A-Frame THREE');
+    return { applied: 0 };
+  }
   const intensity = opts.intensity ?? 1.15;
   const directionality = opts.directionality ?? DEFAULT_DIRECTIONALITY;
   const contrast = opts.contrast ?? 1.35;
@@ -491,6 +499,7 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
   const debugMode = opts.debugMode ?? 0;
   const forceTexCoord = opts.forceTexCoord ?? null;
   const envMapIntensity = opts.envMapIntensity ?? 1.0;
+  const skipToneMap = !!opts.skipToneMap;
   const parser = gltf.parser;
   const json = parser.json;
   const lightmaps = json.extensions?.EPIC_lightmap_textures?.lightmaps;
@@ -559,6 +568,7 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
         flipMode,
         debugMode,
         envMapIntensity,
+        skipToneMap,
         meshLabel: `${mesh.name || ''} ${mesh.parent?.name || ''}`,
       };
 
@@ -592,6 +602,7 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
           contrast,
           whitePoint,
           envMapIntensity,
+          skipToneMap ? 'nt' : 'tm',
           needsAlphaPreserve(src) ? 'a' : 'o',
         ].join('|');
         if (matCache.has(key)) return matCache.get(key);

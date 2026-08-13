@@ -1958,19 +1958,6 @@ async function createBattleMoonMaterial(THREE, sceneEl) {
   return material;
 }
 
-/** Same dust/normals as live moon, on baked plate+skirts. No PCF receive (Quest fill). */
-async function applyBattleMoonToBakedGroup(THREE, sceneEl, root) {
-  const material = await createBattleMoonMaterial(THREE, sceneEl);
-  if (!material) return false;
-  root.traverse((obj) => {
-    if (!obj.isMesh) return;
-    obj.material = material;
-    obj.receiveShadow = false;
-    obj.castShadow = false;
-  });
-  return true;
-}
-
 function applyBattleMoon(THREE, sceneEl, mesh) {
   return new Promise((resolve) => {
     if (installMoonSlopeDebugMaterialIfActive(THREE, sceneEl, mesh)) {
@@ -2036,7 +2023,6 @@ export async function applyMoonBattlefieldVisuals(sceneEl) {
   const baked = await tryLoadBakedSkirmishMoon();
   if (baked) {
     groundEl.setObject3D('mesh', baked);
-    await applyBattleMoonToBakedGroup(THREE, sceneEl, baked);
     configureTerrainPresentation(sceneEl);
     styleMoonGrid();
     const gridMount = document.getElementById('gridHelper');
@@ -2091,7 +2077,6 @@ export async function rebuildMoonBattlefield(sceneEl) {
   const baked = await tryLoadBakedSkirmishMoon();
   if (baked) {
     groundEl.setObject3D('mesh', baked);
-    await applyBattleMoonToBakedGroup(THREE, sceneEl, baked);
     configureTerrainPresentation(sceneEl);
     syncTerrainGridHelperSize();
     return;

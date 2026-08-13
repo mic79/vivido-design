@@ -63,9 +63,10 @@ function moonWorldBox(page) {
         name: o.name,
         verts: o.geometry?.attributes?.position?.count || 0,
         mat: o.material?.type,
-        triplanar: !!(o.material && o.material.userData && o.material.userData.moonTriplanarInstalled),
+        cheap: !!(o.material && o.material.userData && o.material.userData.cheapMoonLook),
         hasMap: !!(o.material && o.material.map),
         hasNormal: !!(o.material && o.material.normalMap),
+        receiveShadow: !!o.receiveShadow,
         box: boxOf(o),
       };
       meshes.push(rec);
@@ -83,6 +84,48 @@ function moonWorldBox(page) {
   });
 }
 
+async function pngTerrainLum(browser, shotPath) {
+  const buf = fs.readFileSync(shotPath);
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.setContent(
+    `<img id="s" src="data:image/png;base64,${buf.toString('base64')}">`,
+    { waitUntil: 'load' }
+  );
+  const lum = await page.evaluate(() => {
+    const img = document.getElementById('s');
+    if (!img || !img.naturalWidth) return { err: 'no image' };
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    const x = 48;
+    const y = Math.floor(c.height * 0.38);
+    const pw = 240;
+    const ph = 220;
+    const id = ctx.getImageData(x, y, pw, ph).data;
+    let sum = 0;
+    let sum2 = 0;
+    let n = 0;
+    let min = 255;
+    let max = 0;
+    for (let i = 0; i < id.length; i += 4) {
+      const lum = 0.2126 * id[i] + 0.7152 * id[i + 1] + 0.0722 * id[i + 2];
+      if (lum < 3) continue;
+      sum += lum;
+      sum2 += lum * lum;
+      n++;
+      if (lum < min) min = lum;
+      if (lum > max) max = lum;
+    }
+    const avg = n ? sum / n : 0;
+    const std = n ? Math.sqrt(Math.max(0, sum2 / n - avg * avg)) : 0;
+    return { w: c.width, h: c.height, n, avg, std, min: n ? min : 0, max: n ? max : 0 };
+  });
+  await page.close();
+  return lum;
+}
+
 function assertGroundLiesOnXz(info, label) {
   if (!info) throw new Error(`${label}: no baked ground`);
   if (!info.plate) throw new Error(`${label}: plate missing`);
@@ -96,8 +139,20 @@ function assertGroundLiesOnXz(info, label) {
   if (skirts.box.max[1] > 40) {
     throw new Error(`${label}: skirts peak Y=${skirts.box.max[1].toFixed(1)} — drop flipped into the sky`);
   }
-  if (!info.meshes.every((m) => m.mat === 'MeshStandardMaterial' && m.triplanar && m.hasMap)) {
-    throw new Error(`${label}: baked moon must use live triplanar MeshStandard, got ${JSON.stringify(info.meshes)}`);
+  if (Math.abs(info.rotY ?? 0) > 0.05) {
+    throw new Error(`${label}: expected no yaw (LM unused), got ${info.rotY}`);
+  }
+  if (
+    !info.meshes.every(
+      (m) =>
+        m.mat === 'MeshLambertMaterial' &&
+        m.cheap &&
+        m.hasMap &&
+        m.hasNormal &&
+        m.receiveShadow === false
+    )
+  ) {
+    throw new Error(`${label}: baked moon must be Lambert + normal, no PCF, got ${JSON.stringify(info.meshes)}`);
   }
 }
 
@@ -117,7 +172,9 @@ await page.waitForFunction(() => window.__rtsReady === true, null, { timeout: 60
 await page.waitForTimeout(600);
 
 const startInfo = await moonWorldBox(page);
-await page.screenshot({ path: path.join(SHOT_DIR, 'baked-moon-start.png'), type: 'png' });
+const startShot = path.join(SHOT_DIR, 'baked-moon-start.png');
+await page.screenshot({ path: startShot, type: 'png' });
+const startLum = await pngTerrainLum(browser, startShot);
 
 const camSave = await page.evaluate(() => {
   const cam = document.getElementById('camera');
@@ -149,12 +206,19 @@ await page.screenshot({ path: path.join(SHOT_DIR, 'baked-moon-menu.png'), type: 
 
 const ready = logs.find((l) => l.includes('baked moon ready') || l.includes('skip baked moon')) || null;
 const errors = logs.filter((l) => /pageerror|skip baked/i.test(l)).slice(0, 20);
-console.log(JSON.stringify({ ready, startInfo, menuInfo, errors }, null, 2));
+console.log(JSON.stringify({ ready, startInfo, menuInfo, startLum, errors }, null, 2));
 
 try {
   if (!ready || !ready.includes('baked moon ready')) throw new Error('baked moon did not load');
   assertGroundLiesOnXz(startInfo, 'start');
   assertGroundLiesOnXz(menuInfo, 'menu');
+  if (!startLum || startLum.err) throw new Error(`start luminance: ${startLum && startLum.err}`);
+  if (startLum.n < 50) throw new Error(`start terrain sample empty ${JSON.stringify(startLum)}`);
+  if (startLum.avg < 28) throw new Error(`start terrain too dark (black/failed shader) avg=${startLum.avg.toFixed(1)}`);
+  if (startLum.avg > 210) throw new Error(`start terrain blown out avg=${startLum.avg.toFixed(1)}`);
+  if (startLum.std < 6) {
+    throw new Error(`start terrain too flat (normals/albedo not reading) std=${startLum.std.toFixed(2)}`);
+  }
 } catch (err) {
   console.error('FAIL:', err.message);
   await browser.close();

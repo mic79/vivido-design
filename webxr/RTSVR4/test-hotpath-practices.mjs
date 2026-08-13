@@ -141,10 +141,13 @@ const bakedSrc = fs.readFileSync(new URL('./js/baked-moon.js', import.meta.url),
 const idxHtml = fs.readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 const bakedGlb = new URL('./assets/terrain/terrain-skirmish-ue-lm.glb', import.meta.url);
 assert.match(moonSrc, /tryLoadBakedSkirmishMoon/);
-assert.match(moonSrc, /applyBattleMoonToBakedGroup/);
+assert.match(bakedSrc, /MeshLambertMaterial/);
+assert.match(bakedSrc, /cheapMoonLook/);
 assert.match(bakedSrc, /livepbr/);
 assert.match(bakedSrc, /receiveShadow = false/);
 assert.match(bakedSrc, /rotation\.x = Math\.PI \/ 2/);
+assert.match(bakedSrc, /rewriteAlbedoUvsFromWorldXz/);
+assert.doesNotMatch(bakedSrc, /applyEpicLightmaps/);
 assert.match(bakedSrc, /assets\/terrain\/terrain-skirmish-ue-lm\.glb/);
 assert.match(idxHtml, /three\/addons\//);
 assert.ok(fs.existsSync(bakedGlb), 'baked skirmish GLB missing');
