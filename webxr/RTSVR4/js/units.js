@@ -5,6 +5,8 @@
 
 import {
   UNIT_TYPES, FORMATION_SPACING, UNIT_SEPARATION_RADIUS, UNIT_SEPARATION_ACCEL,
+  UNIT_SEPARATION_CONTACT_STAGGER,
+  UNIT_CLEARANCE_MIN,
   clampWorldToPlayableDisk,
   PLAYER_COLORS,
   CAPTURE_DURATION_MIN_SEC, CAPTURE_DURATION_MAX_SEC,
@@ -15,6 +17,7 @@ import {
   VEHICLE_SELL_WAR_FACTORY_RANGE,
   GUARD_CHASE_LEASH_MULT,
   GUARD_CHASE_LEASH_PAD_M,
+  COMBAT_ACQUIRE_PER_FRAME,
 } from './config.js';
 import * as State from './state.js';
 import * as Pathfinding from './pathfinding.js';
@@ -23,7 +26,19 @@ import * as Audio from './audio.js';
 import * as Fog from './fog.js';
 import * as Effects from './effects.js';
 import * as Resources from './resources.js';
-import { unitGrid } from './spatial.js';
+import { unitGrid, buildingGrid } from './spatial.js';
+import { getSeparationCandidateKind, separationIdBucket, unitSkipsCrowdSeparation } from './separation-policy.js';
+
+export { getSeparationCandidateKind } from './separation-policy.js';
+
+function unitSkipsAllyClearance(unit) {
+  return unitSkipsCrowdSeparation(unit);
+}
+
+/** Round-robin cursor for idle/moving auto-acquire. */
+let acquireCursor = 0;
+/** Sim-tick counter for staggered idle-in-contact separation. */
+let sepFrameCounter = 0;
 
 /** Min ms between A* requests for the same unit (stuck / crowded movers). */
 const PATH_REQUERY_MS = 400;
@@ -384,23 +399,6 @@ function rebuildUnitSpatialIndex() {
   });
 }
 
-/** Ranged units holding still at max range — skip crowd pushes so they don’t creep into fire. */
-function unitSkipsCrowdSeparation(unit) {
-  // Harvesters must stay on the crystal / refinery while working — separation was sliding them away
-  // and `harvest()` still drained fields from a distance.
-  if (
-    unit.type === 'harvester' &&
-    (unit.state === 'harvesting' || unit.state === 'depositing')
-  ) {
-    return true;
-  }
-  return (
-    unit.state === 'attacking' &&
-    !unit.targetPos &&
-    (!unit.path || unit.path.length === 0)
-  );
-}
-
 export function updateMovement(dt) {
   const movers = [];
   State.units.forEach(unit => {
@@ -409,7 +407,6 @@ export function updateMovement(dt) {
       movers.push(unit);
     }
   });
-  // Player-ordered units path first so factory spawns respond on the first click.
   movers.sort((a, b) => {
     const ap = unitHasPlayerPathPriority(a) ? 0 : 1;
     const bp = unitHasPlayerPathPriority(b) ? 0 : 1;
@@ -419,22 +416,75 @@ export function updateMovement(dt) {
     moveAlongPath(unit, dt);
   }
 
-  // Rebuild after moves so separation queries current positions (enemy-only; allies don’t shove).
   rebuildUnitSpatialIndex();
+
+  sepFrameCounter++;
+  let sepMoved = false;
+  const stagger = Math.max(1, UNIT_SEPARATION_CONTACT_STAGGER | 0);
 
   State.units.forEach(unit => {
     if (unit.hp <= 0) return;
 
-    if (!unitSkipsCrowdSeparation(unit)) {
-      applySeparation(unit, dt);
+    // Cheap discovery: idle units without a contact flag occasionally probe for enemies
+    // so spawn stacks / post-fight piles still enter the contact set.
+    if (!unit._sepInContact && unit.state === 'idle') {
+      if ((separationIdBucket(unit.id) + sepFrameCounter) % stagger === 0) {
+        const foe = unitGrid.findNearest(unit.x, unit.z, UNIT_SEPARATION_RADIUS, e =>
+          e.hp > 0 && e.team !== unit.team && e.id !== unit.id
+        );
+        if (foe) unit._sepInContact = true;
+      }
     }
+
+    if (!getSeparationCandidateKind(unit, sepFrameCounter, stagger)) return;
+    if (applySeparation(unit, dt)) sepMoved = true;
   });
 
-  rebuildUnitSpatialIndex();
+  if (sepMoved) rebuildUnitSpatialIndex();
+
+  // Ally hard-clearance (movers only): break same-team stacks without full soft-body vs friends.
+  let allyMoved = false;
+  const clearR = UNIT_CLEARANCE_MIN;
+  const clearR2 = clearR * clearR;
+  for (const unit of movers) {
+    if (unit.hp <= 0 || unitSkipsAllyClearance(unit)) continue;
+    const nearby = unitGrid.queryRadiusFiltered(
+      unit.x,
+      unit.z,
+      clearR,
+      e => e.hp > 0 && e.team === unit.team && e.id !== unit.id
+    );
+    let ax = 0;
+    let az = 0;
+    for (let i = 0; i < nearby.length; i++) {
+      const other = nearby[i];
+      const dx = unit.x - other.x;
+      const dz = unit.z - other.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= clearR2 || d2 < 1e-8) {
+        if (d2 < 1e-8) {
+          ax += 0.15;
+          az += 0.11;
+        }
+        continue;
+      }
+      const d = Math.sqrt(d2);
+      const push = ((clearR - d) / clearR) * 0.55;
+      ax += (dx / d) * push;
+      az += (dz / d) * push;
+    }
+    if (Math.abs(ax) < 1e-8 && Math.abs(az) < 1e-8) continue;
+    const res = Pathfinding.resolveNavMotion(unit.x, unit.z, unit.x + ax, unit.z + az);
+    if ((res.x - unit.x) ** 2 + (res.z - unit.z) ** 2 > 1e-10) {
+      unit.x = res.x;
+      unit.z = res.z;
+      allyMoved = true;
+    }
+  }
+  if (allyMoved) rebuildUnitSpatialIndex();
 
   State.units.forEach(unit => {
     if (unit.hp <= 0) return;
-
     if (!Pathfinding.isPositionWalkable(unit.x, unit.z)) {
       const safe = Pathfinding.pushOutOfObstacle(unit.x, unit.z);
       unit.x = safe.x;
@@ -473,6 +523,7 @@ function moveAlongPath(unit, dt) {
         const reachable = Pathfinding.findNearestReachable(
           unit.x, unit.z, unit.targetPos.x, unit.targetPos.z,
           unitHasPlayerPathPriority(unit) ? 44 : 36,
+          unitHasPlayerPathPriority(unit),
         );
         if (reachable) {
           unit.targetPos = { x: reachable.x, z: reachable.z };
@@ -588,28 +639,39 @@ function moveAlongPath(unit, dt) {
   }
 }
 
+/**
+ * Soft enemy separation. Marks `_sepInContact` on both sides while overlapping.
+ * @returns {boolean} true if position changed
+ */
 function applySeparation(unit, dt) {
   const R = UNIT_SEPARATION_RADIUS;
   const r2 = R * R;
-  const nearby = unitGrid.queryRadius(unit.x, unit.z, R);
+  const nearby = unitGrid.queryRadiusFiltered(
+    unit.x,
+    unit.z,
+    R,
+    e => e.hp > 0 && e.team !== unit.team && e.id !== unit.id
+  );
+
   let ax = 0;
   let az = 0;
-  for (const other of nearby) {
-    if (other.id === unit.id || other.hp <= 0) continue;
-    // Allies: no mutual soft-body — pathing already fights terrain; separation was cancelling forward motion.
-    if (other.team === unit.team) continue;
+  let inContact = false;
+  for (let i = 0; i < nearby.length; i++) {
+    const other = nearby[i];
     const dx = unit.x - other.x;
     const dz = unit.z - other.z;
     const distSq = dx * dx + dz * dz;
+    if (distSq >= r2) continue;
+    inContact = true;
+    other._sepInContact = true;
     if (distSq < 1e-5) {
-      // Deterministic “unstack” spin — avoids rng fighting and spreads co-spawned units.
       const spin =
         ((unit.x * 12.9898 + unit.z * 78.233 + unit.id.length * 31.37 + (other.id?.length || 0) * 17.1) %
           (Math.PI * 2)) +
         State.gameSession.elapsedTime * 0.65;
       ax += Math.cos(spin) * 0.42;
       az += Math.sin(spin) * 0.42;
-    } else if (distSq < r2) {
+    } else {
       const dist = Math.sqrt(distSq);
       const overlap = R - dist;
       const push = (overlap / R) * UNIT_SEPARATION_ACCEL * dt;
@@ -617,7 +679,9 @@ function applySeparation(unit, dt) {
       az += (dz / dist) * push;
     }
   }
-  if (Math.abs(ax) < 1e-8 && Math.abs(az) < 1e-8) return;
+
+  unit._sepInContact = inContact;
+  if (!inContact || (Math.abs(ax) < 1e-8 && Math.abs(az) < 1e-8)) return false;
 
   const maxStep = Math.max(unit.speed * dt * 1.15, 0.1);
   const mag = Math.hypot(ax, az);
@@ -631,7 +695,6 @@ function applySeparation(unit, dt) {
 
   let res = trySlide(ax, az);
   const moved2 = (res.x - unit.x) ** 2 + (res.z - unit.z) ** 2;
-  // If head-on push is blocked (units or terrain), try a tangential slip to “orbit” past.
   if (moved2 < 1e-6) {
     const m = Math.hypot(ax, az);
     let px;
@@ -649,13 +712,16 @@ function applySeparation(unit, dt) {
     res = trySlide(px, pz);
   }
 
+  const moved = (res.x - unit.x) ** 2 + (res.z - unit.z) ** 2 > 1e-10;
   unit.x = res.x;
   unit.z = res.z;
   if (!Pathfinding.isPositionWalkable(unit.x, unit.z)) {
     const safe = Pathfinding.pushOutOfObstacle(unit.x, unit.z);
     unit.x = safe.x;
     unit.z = safe.z;
+    return true;
   }
+  return moved;
 }
 
 function getCaptureDurationSeconds(maxHp) {
@@ -825,23 +891,43 @@ export function updateCombat(time, dt) {
     if ((b.captureProgress || 0) > 0) b._captureTick = false;
   });
 
+  const armed = [];
   State.units.forEach(unit => {
     if (unit.hp <= 0 || unit.type === 'harvester') return;
-
     if (unit.damage <= 0 && unit.type !== 'engineer') return;
-
-    if (unit.state === 'attacking') {
-      handleAttackState(unit, time, dt);
-    } else if (unit.state === 'idle') {
-      if (!tryReturnToGuardPosition(unit)) {
-        autoAcquireTarget(unit);
-      }
-    } else if (unit.state === 'moving' && unit.playerCommanded) {
-      tryEngageWhileOnMoveOrder(unit);
-    } else if (unit.state === 'moving' && !unit.playerCommanded) {
-      autoAcquireTarget(unit);
-    }
+    armed.push(unit);
   });
+
+  for (let i = 0; i < armed.length; i++) {
+    const unit = armed[i];
+    if (unit.state === 'attacking') handleAttackState(unit, time, dt);
+  }
+
+  // Idle / moving auto-acquire: round-robin budget (not every unit every frame).
+  const acquireBudget = Math.max(1, COMBAT_ACQUIRE_PER_FRAME | 0);
+  const n = armed.length;
+  if (n > 0) {
+    let acquired = 0;
+    let scanned = 0;
+    let idx = acquireCursor % n;
+    while (scanned < n && acquired < acquireBudget) {
+      const unit = armed[idx];
+      idx = (idx + 1) % n;
+      scanned++;
+      if (unit.state === 'attacking') continue;
+      if (unit.state === 'idle') {
+        if (!tryReturnToGuardPosition(unit)) autoAcquireTarget(unit);
+        acquired++;
+      } else if (unit.state === 'moving' && unit.playerCommanded) {
+        tryEngageWhileOnMoveOrder(unit);
+        acquired++;
+      } else if (unit.state === 'moving' && !unit.playerCommanded) {
+        autoAcquireTarget(unit);
+        acquired++;
+      }
+    }
+    acquireCursor = idx;
+  }
 
   State.buildings.forEach(b => {
     if ((b.captureProgress || 0) > 0 && !b._captureTick) {
@@ -1518,21 +1604,24 @@ function autoAcquireTarget(unit) {
     return;
   }
 
-  // Enemy buildings: only if this unit is close enough to personally spot them and the cell is lit now
-  let nearestBldgDist = visionR * 1.05;
+  // Enemy buildings: spatial query in vision (not full map forEach)
+  const bScan = visionR * 1.05;
+  let nearestBldgDist = bScan;
   let nearestBldg = null;
-  State.buildings.forEach(b => {
-    if (b.hp <= 0) return;
-    if (b.team === unit.team) return;
+  const nearbyB = buildingGrid.queryRadius(unit.x, unit.z, bScan);
+  for (let i = 0; i < nearbyB.length; i++) {
+    const b = nearbyB[i];
+    if (b.hp <= 0) continue;
+    if (b.team === unit.team) continue;
     const dist = Pathfinding.getDistance(unit.x, unit.z, b.x, b.z);
-    if (dist > visionR * 1.05) return;
-    if (!withinGuardLeash(b.x, b.z)) return;
-    if (!Fog.isVisibleToTeam(unit.team, b.x, b.z)) return;
+    if (dist > bScan) continue;
+    if (!withinGuardLeash(b.x, b.z)) continue;
+    if (!Fog.isVisibleToTeam(unit.team, b.x, b.z)) continue;
     if (dist < nearestBldgDist) {
       nearestBldgDist = dist;
       nearestBldg = b;
     }
-  });
+  }
 
   if (nearestBldg) {
     unit.state = 'attacking';
@@ -1573,19 +1662,22 @@ export function checkWinCondition() {
  */
 function resolveMoveOrderGoal(fromX, fromZ, targetX, targetZ) {
   const goal = clampWorldToPlayableDisk(targetX, targetZ, 0);
-  const reach = Pathfinding.findNearestReachable(fromX, fromZ, goal.x, goal.z, 72);
+  const reach = Pathfinding.findNearestReachable(fromX, fromZ, goal.x, goal.z, 72, true);
   if (reach) return { x: reach.x, z: reach.z };
 
   const pushed = Pathfinding.pushOutOfObstacle(goal.x, goal.z);
   const pushedGoal = clampWorldToPlayableDisk(pushed.x, pushed.z, 0);
-  if (
-    Pathfinding.isPositionWalkable(pushedGoal.x, pushedGoal.z) &&
-    Pathfinding.findPath(fromX, fromZ, pushedGoal.x, pushedGoal.z)
-  ) {
-    return pushedGoal;
+  if (Pathfinding.isPositionWalkable(pushedGoal.x, pushedGoal.z)) {
+    if (Pathfinding.canTakePathfindSlot(true)) {
+      Pathfinding.notePathfindSlot(true);
+      if (Pathfinding.findPath(fromX, fromZ, pushedGoal.x, pushedGoal.z)) {
+        return pushedGoal;
+      }
+    } else {
+      return pushedGoal;
+    }
   }
 
-  // Give up on the click — order them near where they already are (no fake far marker).
   const home = Pathfinding.pushOutOfObstacle(fromX, fromZ);
   return clampWorldToPlayableDisk(home.x, home.z, 0);
 }
@@ -1628,13 +1720,9 @@ export function commandMove(unitIds, targetX, targetZ, options = {}) {
     const rawX = goal.x + offsetX + (Math.random() - 0.5) * jitterAmount;
     const rawZ = goal.z + offsetZ + (Math.random() - 0.5) * jitterAmount;
     let t = clampWorldToPlayableDisk(rawX, rawZ, 0);
-    const slot = Pathfinding.findNearestReachable(unit.x, unit.z, t.x, t.z, 40);
-    if (slot) {
-      t = { x: slot.x, z: slot.z };
-    } else {
-      const pushed = Pathfinding.pushOutOfObstacle(t.x, t.z);
-      t = clampWorldToPlayableDisk(pushed.x, pushed.z, 0);
-    }
+    // Formation slots: cheap walkable snap only (no per-unit A* storm). Pathing resolves at move time.
+    const pushed = Pathfinding.pushOutOfObstacle(t.x, t.z);
+    t = clampWorldToPlayableDisk(pushed.x, pushed.z, 0);
 
     unit.state = 'moving';
     unit.targetPos = { x: t.x, z: t.z };

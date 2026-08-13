@@ -1,8 +1,24 @@
 /**
  * laser-controls always attaches raycaster + cursor to the hand entity. We use a child
  * (rotation -90 X, RTSVR4-style) for the visible ray and hits; this keeps the parent ray off.
+ *
+ * Desktop / touch: the aim raycaster stays off (hands live on the camera rig).
+ * VR / Quest: raycaster objects are `.clickable, #ground-hit` — never the moon plate.
  */
 (function () {
+  function isPresentingWebXR(scene) {
+    if (!scene) return false;
+    try {
+      if (typeof scene.is === 'function' && scene.is('vr-mode')) return true;
+    } catch (_) { /* ignore */ }
+    try {
+      var xr = scene.renderer && scene.renderer.xr;
+      if (xr && xr.isPresenting) return true;
+      if (xr && typeof xr.getSession === 'function' && xr.getSession()) return true;
+    } catch (_) { /* ignore */ }
+    return false;
+  }
+
   /**
    * laser-controls re-enables the parent raycaster every frame while the trigger is held.
    * That draws wrong-direction “laser” lines from the controller root. Kill it every tick; the
@@ -22,20 +38,32 @@
     }
   }
 
+  function setChildAimRaycasterEnabled(handEl, on) {
+    var aim = handEl && handEl.querySelector && handEl.querySelector('[data-vr-aim-ray]');
+    if (!aim || !aim.components || !aim.components.raycaster) return;
+    var enabled = !!aim.components.raycaster.data.enabled;
+    if (enabled === !!on) return;
+    aim.setAttribute('raycaster', 'enabled', on ? 'true' : 'false');
+    aim.setAttribute('raycaster', 'showLine', on ? 'true' : 'false');
+  }
+
   AFRAME.registerComponent('rts-vr-hand-ray', {
     init: function () {
       this.onReady = this.onReady.bind(this);
       this.el.addEventListener('controllerconnected', this.onReady);
       this.el.addEventListener('controllermodelready', this.onReady);
+      setChildAimRaycasterEnabled(this.el, isPresentingWebXR(this.el.sceneEl));
     },
     onReady: function () {
       neuterParentRay(this.el);
+      setChildAimRaycasterEnabled(this.el, isPresentingWebXR(this.el.sceneEl));
     },
     tick: function () {
       if (this.el.components.cursor) {
         this.el.removeAttribute('cursor');
       }
       neuterParentRay(this.el);
+      setChildAimRaycasterEnabled(this.el, isPresentingWebXR(this.el.sceneEl));
     },
     remove: function () {
       this.el.removeEventListener('controllerconnected', this.onReady);
@@ -54,7 +82,11 @@
       this.hoverTarget = null;
       this._hoverNullStreak = 0;
     },
-    tick: function () {
+    tock: function () {
+      if (!isPresentingWebXR(this.el.sceneEl)) {
+        this.setHoverTarget(null);
+        return;
+      }
       var fn = globalThis.__rtsPickVrUiHoverTarget;
       if (typeof fn !== 'function') return;
       var hand = this.el.parentElement;

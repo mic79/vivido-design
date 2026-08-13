@@ -9,6 +9,7 @@ import {
   MAX_PROJECTILES, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT, HEALTH_BAR_Y_OFFSET,
   getResourceFieldPositions, BUILD_RADIUS_FROM_HQ, BARRACKS_UNITS,
   MAP_NAV_PLANE_SPAN_M, FOG_GRID_SIZE, MAP_UNIT_NAV_RADIUS,
+  FOG_OVERLAY_REDRAW_HZ,
 } from './config.js';
 import * as State from './state.js';
 import * as Fog from './fog.js';
@@ -18,6 +19,7 @@ import {
   sampleGameplayEntityY,
   sampleGameplayEntityYCached,
 } from './moon-environment.js';
+import * as Perf from './perf-profiler.js';
 
 let RESOURCE_FIELD_LAYOUT = getResourceFieldPositions();
 
@@ -124,8 +126,13 @@ let groundMesh = null;
 let fogOverlayCanvas = null;
 let fogOverlayCtx = null;
 let fogOverlayTexture = null;
+/** Explored shroud (alpha blend). Live vision is discarded in-shader. */
 let fogOverlayMesh = null;
+/** Unexplored blackout — opaque + depth write so terrain/skirts underneath are not shaded. */
+let fogUnexploredMesh = null;
 let fogOverlayImageData = null;
+let _fogOverlayLastDrawMs = 0;
+let _fogOverlayGridHash = null;
 let buildRadiusMesh = null;
 /** Red ribbon on the ground marking `MAP_UNIT_NAV_RADIUS` (traversable disk edge). */
 let playableBorderMesh = null;
@@ -152,6 +159,18 @@ const _zeroScale = new THREE.Vector3(0, 0, 0);
 const _cameraWorldPos = new THREE.Vector3();
 /** Scratch for `_color.lerp` targets — avoids `new THREE.Color()` in hot paths. */
 const _tmpLerpColor = new THREE.Color();
+const _frustum = new THREE.Frustum();
+const _projScreen = new THREE.Matrix4();
+const _cullSphere = new THREE.Sphere();
+let _frustumLive = false;
+/** Menu and game-over are a paused world — same cheap path as the 240 FPS lobby. */
+let _pausedStaticUploaded = false;
+let _pausedCamKey = '';
+let _pausedSelSig = '';
+let _liveReady = false;
+let _liveCamKey = '';
+let _liveVisSig = '';
+let _fogOverlayWroteThisFrame = false;
 
 // Projectile pool
 const activeProjectiles = [];
@@ -170,8 +189,14 @@ export async function initRenderer(sceneEl) {
   refreshPlayableBorderRing();
 
   configureBattlefieldShadows(sceneEl);
+  installRenderGate(sceneEl);
 
   console.log('✅ Renderer initialized with InstancedMesh');
+
+  if (!Perf.shouldLoadGltfAssets()) {
+    console.log('[perf] simplegeo: keeping non-textured primitive InstancedMesh geometry');
+    return;
+  }
 
   await tryReplaceHqWithGltfModel(sceneEl);
   await tryReplaceRefineryWithGltfModel(sceneEl);
@@ -304,6 +329,8 @@ function createUnitMeshes() {
     mesh.instanceColor = new THREE.InstancedBufferAttribute(
       new Float32Array(MAX_INSTANCES_PER_TYPE * 3), 3
     );
+    // Map-wide InstancedMesh: bounding sphere spans the playable disk, so frustum cull
+    // almost never skips a draw. Keep false to avoid per-frame sphere rebuild cost.
     mesh.frustumCulled = false;
     mesh.castShadow = true;
     mesh.receiveShadow = false;
@@ -556,6 +583,7 @@ function syncHqTexturedOne(building, worldMat4, drawVisible, THREE_w) {
   if (!root) {
     root = hqTexturedTemplate.clone(true);
     root.name = `hq_lander_${building.id}`;
+    root.frustumCulled = true;
     applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
     scene3D.add(root);
     hqTexturedByBuildingId.set(building.id, root);
@@ -571,6 +599,7 @@ function syncRefineryTexturedOne(building, worldMat4, drawVisible, THREE_w) {
   if (!root) {
     root = refineryTexturedTemplate.clone(true);
     root.name = `refinery_gltf_${building.id}`;
+    root.frustumCulled = true;
     applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
     scene3D.add(root);
     refineryTexturedByBuildingId.set(building.id, root);
@@ -586,6 +615,7 @@ function syncBarracksTexturedOne(building, worldMat4, drawVisible, THREE_w) {
   if (!root) {
     root = barracksTexturedTemplate.clone(true);
     root.name = `barracks_gltf_${building.id}`;
+    root.frustumCulled = true;
     applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
     scene3D.add(root);
     barracksTexturedByBuildingId.set(building.id, root);
@@ -601,6 +631,7 @@ function syncWarFactoryTexturedOne(building, worldMat4, drawVisible, THREE_w) {
   if (!root) {
     root = warFactoryTexturedTemplate.clone(true);
     root.name = `war_factory_gltf_${building.id}`;
+    root.frustumCulled = true;
     applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
     scene3D.add(root);
     warFactoryTexturedByBuildingId.set(building.id, root);
@@ -1528,27 +1559,65 @@ function buildNavigableFogOverlayGeometry(THREE) {
   return geo;
 }
 
+function setFogOverlayVisible(on) {
+  if (fogOverlayMesh) fogOverlayMesh.visible = on;
+  if (fogUnexploredMesh) fogUnexploredMesh.visible = on;
+}
+
+function disposeFogOverlayMeshes() {
+  const geo = fogOverlayMesh && fogOverlayMesh.geometry;
+  if (fogUnexploredMesh) {
+    scene3D.remove(fogUnexploredMesh);
+    if (fogUnexploredMesh.material) {
+      fogUnexploredMesh.material.map = null;
+      fogUnexploredMesh.material.dispose();
+    }
+    fogUnexploredMesh = null;
+  }
+  if (fogOverlayMesh) {
+    scene3D.remove(fogOverlayMesh);
+    if (fogOverlayMesh.material) {
+      fogOverlayMesh.material.map = null;
+      fogOverlayMesh.material.dispose();
+    }
+    fogOverlayMesh = null;
+  }
+  if (geo) geo.dispose();
+  if (fogOverlayTexture) {
+    fogOverlayTexture.dispose();
+    fogOverlayTexture = null;
+  }
+  fogOverlayCanvas = null;
+  fogOverlayCtx = null;
+  fogOverlayImageData = null;
+  _fogOverlayGridHash = null;
+  _fogOverlayLastDrawMs = 0;
+}
+
 /** Re-sample fog after terrain / Story hills change (still navigable-bowl only). */
 function refreshFogOverlayGeometry() {
   const THREE = window.THREE;
   if (!THREE || !fogOverlayMesh) return;
-  fogOverlayMesh.geometry?.dispose();
-  fogOverlayMesh.geometry = buildNavigableFogOverlayGeometry(THREE);
+  const old = fogOverlayMesh.geometry;
+  const geo = buildNavigableFogOverlayGeometry(THREE);
+  geo.computeBoundingSphere();
+  geo.computeBoundingBox();
+  fogOverlayMesh.geometry = geo;
+  if (fogUnexploredMesh) fogUnexploredMesh.geometry = geo;
+  if (old && old !== geo) old.dispose();
   fogOverlayMesh.rotation.set(0, 0, 0);
   fogOverlayMesh.position.set(0, 0, 0);
+  if (fogUnexploredMesh) {
+    fogUnexploredMesh.rotation.set(0, 0, 0);
+    fogUnexploredMesh.position.set(0, 0, 0);
+  }
 }
 
 function createFogPlane() {
   const THREE = window.THREE;
   if (!THREE || !scene3D) return;
 
-  if (fogOverlayMesh) {
-    scene3D.remove(fogOverlayMesh);
-    fogOverlayMesh.geometry?.dispose();
-    fogOverlayMesh.material?.map?.dispose();
-    fogOverlayMesh.material?.dispose();
-    fogOverlayMesh = null;
-  }
+  disposeFogOverlayMeshes();
 
   fogOverlayCanvas = document.createElement('canvas');
   fogOverlayCanvas.width = FOG_GRID_SIZE;
@@ -1562,8 +1631,32 @@ function createFogPlane() {
   fogOverlayTexture.magFilter = THREE.NearestFilter;
   fogOverlayTexture.minFilter = THREE.NearestFilter;
   fogOverlayTexture.flipY = true;
+  fogOverlayTexture.premultiplyAlpha = false;
 
-  const mat = new THREE.MeshBasicMaterial({
+  const geo = buildNavigableFogOverlayGeometry(THREE);
+  geo.computeBoundingSphere();
+  geo.computeBoundingBox();
+
+  // Unexplored: opaque black, writes depth FIRST so PBR terrain/skirts under blackout are z-rejected.
+  const matOpaque = new THREE.MeshBasicMaterial({
+    map: fogOverlayTexture,
+    alphaTest: 0.9,
+    transparent: false,
+    depthWrite: true,
+    depthTest: true,
+    side: THREE.DoubleSide,
+    color: 0xffffff,
+  });
+  fogUnexploredMesh = new THREE.Mesh(geo, matOpaque);
+  fogUnexploredMesh.name = 'rts-world-fog-unexplored';
+  fogUnexploredMesh.renderOrder = -10;
+  fogUnexploredMesh.frustumCulled = false;
+  fogUnexploredMesh.visible = false;
+  fogUnexploredMesh.raycast = () => {};
+  scene3D.add(fogUnexploredMesh);
+
+  // Explored veil only (mid alpha). Live vision (a=0) and unexplored (a=1) are discarded.
+  const matVeil = new THREE.MeshBasicMaterial({
     map: fogOverlayTexture,
     transparent: true,
     opacity: 1,
@@ -1573,8 +1666,19 @@ function createFogPlane() {
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
+    alphaTest: 0.12,
   });
-  fogOverlayMesh = new THREE.Mesh(buildNavigableFogOverlayGeometry(THREE), mat);
+  matVeil.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <alphatest_fragment>',
+      `
+#ifdef USE_ALPHATEST
+	if ( diffuseColor.a < 0.12 || diffuseColor.a > 0.80 ) discard;
+#endif
+`
+    );
+  };
+  fogOverlayMesh = new THREE.Mesh(geo, matVeil);
   fogOverlayMesh.name = 'rts-world-fog-overlay';
   fogOverlayMesh.renderOrder = 4;
   fogOverlayMesh.frustumCulled = false;
@@ -1696,41 +1800,68 @@ export function refreshPlayableBorderRing() {
 
 /** Resize fog tint mesh + canvas after map profile / fog grid / terrain changes. */
 export function resizeWorldFogOverlay() {
-  const THREE = window.THREE;
-  if (!THREE || !scene3D || !fogOverlayMesh || !fogOverlayCanvas) {
-    createFogPlane();
-    return;
-  }
-  fogOverlayCanvas.width = FOG_GRID_SIZE;
-  fogOverlayCanvas.height = FOG_GRID_SIZE;
-  fogOverlayImageData = fogOverlayCtx.createImageData(FOG_GRID_SIZE, FOG_GRID_SIZE);
-  refreshFogOverlayGeometry();
-  if (fogOverlayTexture) fogOverlayTexture.needsUpdate = true;
+  // XR / CanvasTexture keeps the old GPU size if we only mutate canvas.width.
+  // FFA (40) → Story (48) then showed the previous match's fog stretched over the new map.
+  createFogPlane();
+}
+
+/** Match start: drop skip/frustum/fog-hash leftovers from the previous game (esp. FFA → Story). */
+export function resetMatchViewState() {
+  _liveReady = false;
+  _liveCamKey = '';
+  _liveVisSig = '';
+  _frustumLive = false;
+  _pausedStaticUploaded = false;
+  _pausedCamKey = '';
+  _pausedSelSig = '';
+  _fogOverlayGridHash = null;
+  _fogOverlayLastDrawMs = 0;
+  groundMesh = null;
+  createFogPlane();
 }
 
 function updateWorldFogOverlay() {
+  _fogOverlayWroteThisFrame = false;
   if (!fogOverlayMesh || !fogOverlayCtx || !fogOverlayTexture || !fogOverlayImageData) return;
 
-  if (!Fog.shouldDrawWorldFogOverlay()) {
-    fogOverlayMesh.visible = false;
+  if (!Fog.shouldDrawWorldFogOverlay() || !Perf.getAblation().fogOverlay) {
+    setFogOverlayVisible(false);
     return;
   }
 
   const myPid = State.gameSession.myPlayerId;
   const player = State.players[myPid];
   if (!player) {
-    fogOverlayMesh.visible = false;
+    setFogOverlayVisible(false);
     return;
   }
 
   const grid = Fog.getTeamGrid(player.team);
   if (!grid) {
-    fogOverlayMesh.visible = false;
+    setFogOverlayVisible(false);
     return;
   }
 
-  fogOverlayMesh.visible = true;
+  setFogOverlayVisible(true);
+  const now = performance.now();
+  const minInterval = 1000 / Math.max(1, FOG_OVERLAY_REDRAW_HZ);
+  const forceDraw = _fogOverlayGridHash == null;
+  if (!forceDraw && now - _fogOverlayLastDrawMs < minInterval) return;
+  _fogOverlayLastDrawMs = now;
+
+  let hash = 2166136261;
+  for (let i = 0; i < grid.length; i++) {
+    hash = Math.imul(hash ^ grid[i], 16777619);
+  }
+  if (hash === _fogOverlayGridHash) return;
+  _fogOverlayGridHash = hash;
+
   const d = fogOverlayImageData.data;
+  const need = FOG_GRID_SIZE * FOG_GRID_SIZE * 4;
+  if (d.length < need) {
+    resizeWorldFogOverlay();
+    return;
+  }
   // Stronger shroud vs live vision: moon albedo is already dark, so prior alphas (~68/128)
   // barely read. Keep v===2 fully clear; dim explored; nearly blackout unexplored.
   for (let gz = 0; gz < FOG_GRID_SIZE; gz++) {
@@ -1749,16 +1880,17 @@ function updateWorldFogOverlay() {
         d[i + 2] = 28;
         d[i + 3] = 145;
       } else {
-        // Never seen — heavy blackout.
+        // Never seen — opaque blackout (alpha 255 → unexplored mesh, veil discards).
         d[i] = 0;
         d[i + 1] = 0;
         d[i + 2] = 6;
-        d[i + 3] = 220;
+        d[i + 3] = 255;
       }
     }
   }
   fogOverlayCtx.putImageData(fogOverlayImageData, 0, 0);
   fogOverlayTexture.needsUpdate = true;
+  _fogOverlayWroteThisFrame = true;
 }
 
 // ==========================================
@@ -1774,22 +1906,232 @@ function unitVisibleToPlayer(unit, myPid) {
   return unit._visM;
 }
 
+function worldIsPaused() {
+  // Menu is already cheap (few lobby pieces). Only freeze the post-match world —
+  // treating the lobby as paused hid units spawned after the first paint.
+  return !!State.gameSession.gameOver;
+}
+
+function readPausedCamKey() {
+  if (typeof window !== 'undefined' && window.__rtsCamSkipKey) return window.__rtsCamSkipKey;
+  const cam = scene3D && scene3D.getObjectByProperty('type', 'PerspectiveCamera');
+  if (!cam) return '';
+  cam.getWorldPosition(_cameraWorldPos);
+  cam.getWorldQuaternion(_quat);
+  return (
+    `${_cameraWorldPos.x.toFixed(1)},${_cameraWorldPos.y.toFixed(1)},${_cameraWorldPos.z.toFixed(1)},` +
+    `${_quat.x.toFixed(2)},${_quat.y.toFixed(2)},${_quat.z.toFixed(2)},${_quat.w.toFixed(2)}`
+  );
+}
+
+function readPausedSelectionSig() {
+  let ids = '';
+  State.selectedUnits.forEach((id) => { ids += id + ','; });
+  const b = UI.activeBuildingPanel;
+  const r = UI.activeResourceField;
+  return `${ids}|${b && b.id != null ? b.id : ''}|${r && r.id != null ? r.id : ''}`;
+}
+
+function sceneElRenderer() {
+  return typeof document !== 'undefined' ? document.querySelector('a-scene') : null;
+}
+
+function xrIsPresenting() {
+  const sceneEl = sceneElRenderer();
+  const xr = sceneEl && sceneEl.renderer && sceneEl.renderer.xr;
+  return !!(xr && xr.isPresenting);
+}
+
+function setSceneRenderEnabled(on) {
+  const sceneEl = sceneElRenderer();
+  if (!sceneEl) return;
+  if (xrIsPresenting()) {
+    sceneEl.__rtsSkipRender = false;
+    return;
+  }
+  sceneEl.__rtsSkipRender = !on;
+}
+
+function installRenderGate(sceneEl) {
+  const r = sceneEl && sceneEl.renderer;
+  if (!r || r.__rtsRenderGate) return;
+  r.__rtsRenderGate = true;
+  const orig = r.render.bind(r);
+  r.render = function (scene, camera) {
+    if (sceneEl.__rtsSkipRender) return;
+    orig(scene, camera);
+  };
+}
+
+function syncShadowMapAutoUpdate(enabled) {
+  const sceneEl = sceneElRenderer();
+  const sm = sceneEl && sceneEl.renderer && sceneEl.renderer.shadowMap;
+  if (!sm) return;
+  sm.autoUpdate = enabled;
+  if (!enabled) sm.needsUpdate = false;
+}
+
+function refreshCameraFrustum() {
+  const cam = scene3D && scene3D.getObjectByProperty('type', 'PerspectiveCamera');
+  if (!cam) {
+    _frustumLive = false;
+    return;
+  }
+  cam.updateMatrixWorld();
+  _projScreen.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+  _frustum.setFromProjectionMatrix(_projScreen);
+  _frustumLive = true;
+}
+
+function unitCullRadius(unit) {
+  const s = UNIT_SHAPES[unit.type];
+  if (!s) return 4;
+  if (s.type === 'cylinder') {
+    return Math.max(s.radiusBottom || 0, s.radiusTop || 0, (s.height || 2) * 0.5) + 2.5;
+  }
+  return Math.max(s.width || 2, s.height || 2, s.depth || 2) * 0.5 + 2.5;
+}
+
+function unitInCameraFrustum(unit, y) {
+  _cullSphere.center.set(unit.x, y, unit.z);
+  _cullSphere.radius = unitCullRadius(unit);
+  return _frustum.intersectsSphere(_cullSphere);
+}
+
+function hideTransientFx() {
+  if (projectileMesh) projectileMesh.count = 0;
+  setFogOverlayVisible(false);
+}
+
+/** Only on-screen (frustum) state — off-screen motion must not keep presenting an empty view. */
+function onScreenVisualSig() {
+  if (!_frustumLive) return null;
+  let s = '';
+  State.units.forEach((u) => {
+    if (u.hp <= 0) return;
+    const y = sampleGameplayEntityYCached(u, u.x, u.z);
+    if (!unitInCameraFrustum(u, y)) return;
+    s +=
+      u.id +
+      ':' +
+      ((u.x * 8) | 0) +
+      ',' +
+      ((u.z * 8) | 0) +
+      ',' +
+      (((u.rotation || 0) * 8) | 0) +
+      ',' +
+      (u.hp | 0) +
+      ',' +
+      (u.state || '') +
+      ';';
+  });
+  State.buildings.forEach((b) => {
+    const y = sampleGameplayEntityYCached(b, b.x, b.z);
+    _cullSphere.center.set(b.x, y, b.z);
+    _cullSphere.radius = 14;
+    if (!_frustum.intersectsSphere(_cullSphere)) return;
+    s +=
+      'b' +
+      b.id +
+      ':' +
+      (b.hp | 0) +
+      ',' +
+      (((b.constructionProgress || 0) * 20) | 0) +
+      ';';
+  });
+  if (activeProjectiles.length) s += 'p' + activeProjectiles.length + ':' + (performance.now() | 0);
+  s += readPausedSelectionSig();
+  if (State.gameSession.buildMode) s += '|bm';
+  s += fogUnexploredMesh && fogUnexploredMesh.visible ? '|F' : '|f';
+  return s;
+}
+
 export function updateRendering() {
+  const paused = worldIsPaused();
+  setSceneRenderEnabled(true);
+
+  if (paused) {
+    _liveReady = false;
+    if (_pausedStaticUploaded) {
+      const camKey = readPausedCamKey();
+      const selSig = readPausedSelectionSig();
+      const camMoved = camKey !== _pausedCamKey;
+      const selChanged = selSig !== _pausedSelSig;
+      _pausedCamKey = camKey;
+      _pausedSelSig = selSig;
+      if (!camMoved && !selChanged) {
+        setSceneRenderEnabled(false);
+        return;
+      }
+      if (camMoved) {
+        refreshCameraFrustum();
+        Perf.time('render.units', () => updateUnitInstances());
+        Perf.time('render.health', () => updateHealthBars());
+      }
+      if (selChanged) {
+        Perf.time('render.rings', () => updateSelectionRings());
+        Perf.time('render.orders', () => {
+          updateOrderDestinationMarkers();
+          updateOrderPathLines();
+        });
+      }
+      return;
+    }
+  } else {
+    if (_pausedStaticUploaded) syncShadowMapAutoUpdate(true);
+    _pausedStaticUploaded = false;
+    _pausedCamKey = '';
+    _pausedSelSig = '';
+    Perf.time('render.fogOverlay', () => updateWorldFogOverlay());
+    const camKey = readPausedCamKey();
+    const camMoved = !_liveReady || camKey !== _liveCamKey;
+    if (camMoved) refreshCameraFrustum();
+    const vis = onScreenVisualSig();
+    const canSkip =
+      _liveReady &&
+      _frustumLive &&
+      vis != null &&
+      !camMoved &&
+      vis === _liveVisSig &&
+      activeProjectiles.length === 0;
+    _liveCamKey = camKey;
+    if (vis != null) _liveVisSig = vis;
+    if (canSkip) {
+      setSceneRenderEnabled(false);
+      return;
+    }
+  }
+
   renderFogFrame++;
+  refreshCameraFrustum();
   if (playableBorderMesh) {
     playableBorderMesh.visible = !!State.gameSession.gameStarted;
   }
-  updateUnitInstances();
-  updateBuildingInstances();
-  updateHealthBars();
-  updateSelectionRings();
-  updateOrderDestinationMarkers();
-  updateOrderPathLines();
-  updateOrderConfirmPulse();
-  updateResourceFields();
-  updateProjectiles();
-  updateBuildBoundary();
-  updateWorldFogOverlay();
+  Perf.time('render.units', () => updateUnitInstances());
+  Perf.time('render.buildings', () => updateBuildingInstances());
+  Perf.time('render.health', () => updateHealthBars());
+  Perf.time('render.rings', () => updateSelectionRings());
+  Perf.time('render.orders', () => {
+    updateOrderDestinationMarkers();
+    updateOrderPathLines();
+    if (!paused) updateOrderConfirmPulse();
+  });
+  Perf.time('render.resources', () => updateResourceFields());
+  if (paused) {
+    hideTransientFx();
+  } else {
+    Perf.time('render.projectiles', () => updateProjectiles());
+  }
+  Perf.time('render.misc', () => updateBuildBoundary());
+  if (paused) {
+    Perf.time('render.fogOverlay', () => updateWorldFogOverlay());
+    _pausedStaticUploaded = true;
+    _pausedCamKey = readPausedCamKey();
+    _pausedSelSig = readPausedSelectionSig();
+    syncShadowMapAutoUpdate(false);
+  } else {
+    _liveReady = true;
+  }
 }
 
 /** Higher = should win a limited InstancedMesh slot (same-type overflow used to hide harvesters first). */
@@ -1834,38 +2176,49 @@ function updateUnitInstances() {
     const list = byType[type];
     list.sort((a, b) => unitInstanceSortKey(b, myPid) - unitInstanceSortKey(a, myPid));
 
+    let drawn = 0;
+    const pulseOn = State.gameSession.gameStarted && !State.gameSession.gameOver;
     for (let i = 0; i < list.length; i++) {
       const unit = list[i];
-      if (i >= MAX_INSTANCES_PER_TYPE) {
+      const fogVis = unitVisibleToPlayer(unit, myPid);
+      const pickable =
+        fogVis
+        || (State.selectedUnits.has(unit.id) && unit.ownerId === myPid);
+      unit._renderVisible = pickable;
+      if (!pickable) {
         unit._renderIndex = -1;
-        unit._renderVisible = false;
         continue;
       }
 
-      const fogVis = unitVisibleToPlayer(unit, myPid);
-      const visible =
-        fogVis
-        || (State.selectedUnits.has(unit.id) && unit.ownerId === myPid);
-
-      if (visible) {
-        _euler.set(0, unit.rotation || 0, 0);
-        _quat.setFromEuler(_euler);
-        const gY = sampleGameplayEntityYCached(unit, unit.x, unit.z);
-        _mat4.compose(
-          _pos.set(unit.x, gY, unit.z),
-          _quat,
-          _scale.set(1, 1, 1)
-        );
-      } else {
-        _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+      const gY = sampleGameplayEntityYCached(unit, unit.x, unit.z);
+      if (_frustumLive && !unitInCameraFrustum(unit, gY)) {
+        unit._renderIndex = -1;
+        continue;
+      }
+      if (drawn >= MAX_INSTANCES_PER_TYPE) {
+        unit._renderIndex = -1;
+        continue;
       }
 
-      mesh.setMatrixAt(i, _mat4);
+      _euler.set(0, unit.rotation || 0, 0);
+      _quat.setFromEuler(_euler);
+      _mat4.compose(
+        _pos.set(unit.x, gY, unit.z),
+        _quat,
+        _scale.set(1, 1, 1)
+      );
+
+      const slot = drawn++;
+      mesh.setMatrixAt(slot, _mat4);
 
       if (unit.type === 'harvester') {
         const baseColor = PLAYER_COLORS[unit.ownerId] || 0xffffff;
         switch (unit.state) {
           case 'harvesting': {
+            if (!pulseOn) {
+              _color.setHex(baseColor);
+              break;
+            }
             const pulse = 0.6 + Math.sin(performance.now() * 0.005) * 0.4;
             _color.setRGB(pulse * 0.2, pulse, pulse * 0.3);
             break;
@@ -1875,6 +2228,10 @@ function updateUnitInstances() {
             break;
           }
           case 'depositing': {
+            if (!pulseOn) {
+              _color.setHex(baseColor);
+              break;
+            }
             const pulse2 = 0.7 + Math.sin(performance.now() * 0.008) * 0.3;
             _color.setRGB(1.0, 0.5 * pulse2, 0.1);
             break;
@@ -1896,6 +2253,7 @@ function updateUnitInstances() {
 
         switch (unit.state) {
           case 'attacking': {
+            if (!pulseOn) break;
             const rPulse = 0.5 + Math.sin(performance.now() * 0.008) * 0.5;
             _color.lerp(_tmpLerpColor.setHex(0xff2222), rPulse * 0.5);
             break;
@@ -1948,13 +2306,12 @@ function updateUnitInstances() {
       if (artilleryGltfActive && unit.type === 'artillery') {
         _color.lerp(_tmpLerpColor.setRGB(1, 1, 1), 0.4);
       }
-      mesh.setColorAt(i, _color);
+      mesh.setColorAt(slot, _color);
 
-      unit._renderIndex = i;
-      unit._renderVisible = visible;
+      unit._renderIndex = slot;
     }
 
-    counts[type] = Math.min(list.length, MAX_INSTANCES_PER_TYPE);
+    counts[type] = drawn;
   }
 
   // Update counts and mark dirty
@@ -2145,7 +2502,7 @@ function updateHealthBars() {
     const hpPct = unit.hp / unit.maxHp;
     if (hpPct >= 1) return; // Don't show bar when full HP
     const uGY = sampleGameplayEntityYCached(unit, unit.x, unit.z);
-    addBar(unit.x, uGY + HEALTH_BAR_Y_OFFSET, unit.z, hpPct, unit._renderVisible);
+    addBar(unit.x, uGY + HEALTH_BAR_Y_OFFSET, unit.z, hpPct, unit._renderIndex >= 0);
   });
 
   // Buildings
@@ -2885,13 +3242,7 @@ export function disposeRenderer() {
   orderConfirmPulses.length = 0;
   if (resourceFieldMesh) { scene3D.remove(resourceFieldMesh); resourceFieldMesh.dispose(); }
   if (projectileMesh) { scene3D.remove(projectileMesh); projectileMesh.dispose(); }
-  if (fogOverlayMesh) {
-    scene3D.remove(fogOverlayMesh);
-    fogOverlayMesh.geometry?.dispose();
-    fogOverlayMesh.material?.map?.dispose();
-    fogOverlayMesh.material?.dispose();
-    fogOverlayMesh = null;
-  }
+  disposeFogOverlayMeshes();
   if (playableBorderMesh) {
     scene3D.remove(playableBorderMesh);
     playableBorderMesh.geometry?.dispose();

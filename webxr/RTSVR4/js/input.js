@@ -5,7 +5,7 @@
 
 import {
   UNIT_TYPES, BUILDING_TYPES, clampWorldToCameraNavDisk, isWorldInsidePlayableDisk,
-  SPAWN_POSITIONS,
+  SPAWN_POSITIONS, MAP_CAMERA_PAN_RADIUS,
 } from './config.js';
 import * as State from './state.js';
 import * as Buildings from './buildings.js';
@@ -94,11 +94,7 @@ export function beginLobbyIntroOrbitAroundHq(pivotX, pivotZ) {
     deltaYaw: LOBBY_INTRO_DELTA_YAW,
   };
   cameraRig.y = yStart;
-  const rig = document.getElementById('cameraRig');
-  if (rig) {
-    rig.object3D.position.set(cameraRig.x, cameraRig.y, cameraRig.z);
-    rig.object3D.rotation.y = cameraRig.rotY;
-  }
+  applyCameraRigIfChanged();
   syncFlatScreenCameraPitch();
 }
 
@@ -346,14 +342,8 @@ function refreshVrAimRaycasterObjects(handEl) {
 
 /** Wrist UI lives under `#leftHand`; matrices must be current before a raw THREE raycast in XR. */
 function ensureVrWristUiWorldMatrices() {
-  const sceneEl = document.querySelector('a-scene');
-  if (sceneEl && sceneEl.object3D) {
-    try {
-      sceneEl.object3D.updateMatrixWorld(true);
-    } catch (_) {
-      /* ignore */
-    }
-  }
+  // Only the rig / hands / wrist — never `scene.object3D.updateMatrixWorld(true)`
+  // (that walked the moon plate + skirts every VR hover tick).
   ['cameraRig', 'leftHand', 'rightHand', 'vr-wrist-panel'].forEach((id) => {
     const el = document.getElementById(id);
     if (el && el.object3D) {
@@ -364,6 +354,10 @@ function ensureVrWristUiWorldMatrices() {
       }
     }
   });
+}
+
+function isWorldHitEntity(el) {
+  return !!el && (el.id === 'ground' || el.id === 'ground-hit');
 }
 
 function resolveClickableEntityFromHitObject(hitObj, clickableEntities) {
@@ -394,7 +388,7 @@ function pickFromChildRaycasterIntersections(controllerEl) {
     let o = hit.object;
     while (o && !o.el) o = o.parent;
     const ael = o && o.el;
-    if (!ael || ael.id === 'ground') continue;
+    if (!ael || isWorldHitEntity(ael)) continue;
     const target = domClickableAncestor(ael);
     if (!target || !target.classList || !target.classList.contains('clickable')) continue;
     if (entityOrAncestorHasNoRaycast(target)) continue;
@@ -445,10 +439,10 @@ function pickFromManualClickableRay(controllerEl) {
         }
         o = o.parent;
       }
-      if (!ael || ael.id === 'ground') continue;
+      if (!ael || isWorldHitEntity(ael)) continue;
       target = domClickableAncestor(ael);
     }
-    if (!target || target.id === 'ground') continue;
+    if (!target || isWorldHitEntity(target)) continue;
     if (entityOrAncestorHasNoRaycast(target)) continue;
     if (!target.classList || !target.classList.contains('clickable')) continue;
     return { target, intersection: hit };
@@ -489,7 +483,8 @@ function pickFirstClickableAlongControllerRay(controllerElRaw) {
 function pickVrUiHoverTargetFromControllerRay(controllerElRaw) {
   const controllerEl = vrHandElForUiPick(controllerElRaw) || controllerElRaw;
   if (!controllerEl) return null;
-  prepareVrAimRaycasterForPick(controllerEl);
+  // Read the aim raycaster's last tock — do not checkIntersections again
+  // (that used to mesh-test the moon plate every hover tick on Quest).
   const fromRc = pickFromChildRaycasterIntersections(controllerEl);
   return fromRc ? fromRc.target : null;
 }
@@ -988,9 +983,10 @@ export function initInput(sceneEl) {
   window.addEventListener('contextmenu', e => e.preventDefault());
 
   window.addEventListener('wheel', e => {
-    if (lobbyIntroOrbit) return;
+    if (lobbyIntroOrbit) lobbyIntroOrbit = null;
     cameraRig.y += e.deltaY * 0.05;
     cameraRig.y = Math.max(CAMERA_Y_MIN, Math.min(CAMERA_Y_MAX, cameraRig.y));
+    applyCameraRigIfChanged();
   });
 
   window.__rtsIsVrGripHeld = function () {
@@ -1136,11 +1132,7 @@ export function positionCameraForPlayer(playerId) {
   if (Math.hypot(cameraRig.x, cameraRig.z) > 0.01) {
     cameraRig.rotY = Math.atan2(cameraRig.x, cameraRig.z);
   }
-  const rig = document.getElementById('cameraRig');
-  if (rig) {
-    rig.object3D.position.set(cameraRig.x, cameraRig.y, cameraRig.z);
-    rig.object3D.rotation.y = cameraRig.rotY;
-  }
+  applyCameraRigIfChanged();
   syncFlatScreenCameraPitch();
 }
 
@@ -1291,17 +1283,15 @@ export function updateInput(dt) {
 
   } // end !lobbyIntroOrbit
 
-  const camEnd = clampWorldToCameraNavDisk(cameraRig.x, cameraRig.z);
-  cameraRig.x = camEnd.x;
-  cameraRig.z = camEnd.z;
-
-  // Apply camera position
-  const rig = document.getElementById('cameraRig');
-  if (rig) {
-    rig.object3D.position.set(cameraRig.x, cameraRig.y, cameraRig.z);
-    rig.object3D.rotation.y = cameraRig.rotY;
+  const panR = MAP_CAMERA_PAN_RADIUS;
+  const panD2 = cameraRig.x * cameraRig.x + cameraRig.z * cameraRig.z;
+  if (panR > 0 && panD2 > panR * panR + 0.04) {
+    const s = panR / Math.sqrt(panD2);
+    cameraRig.x *= s;
+    cameraRig.z *= s;
   }
-  if (!isVR) syncFlatScreenCameraPitch();
+
+  applyCameraRigIfChanged();
 }
 
 let lastClickTime = 0;
@@ -1411,6 +1401,25 @@ function resolveOverlapPicks(hitUnit, hitBuilding, hitResource, pickNdc, origin,
   };
 }
 
+/**
+ * Left-click priority: confident entity picks always win (must not miss visible clicks).
+ * Terrain deselect only when a hit is a weak sphere-graze and ground is clearly closer.
+ */
+function pickScreenIsConfident(pen) {
+  return Number.isFinite(pen) && pen <= 0.055;
+}
+
+function selectionRayIsTerrainGraze(origin, direction, obstaclePen, pickNdc) {
+  if (!pickNdc || !Number.isFinite(obstaclePen)) return false;
+  // Visible click on the unit/building silhouette → never steal for deselect.
+  if (pickScreenIsConfident(obstaclePen)) return false;
+  const groundHit = raycastGround(origin, direction);
+  if (!groundHit) return false;
+  const gPen = Renderer.pickScreenNdcErrorForGroundPoint(groundHit.x, groundHit.z, pickNdc);
+  // Strict margin: only dump inflated pick spheres that barely graze the ray.
+  return gPen < obstaclePen - 0.045;
+}
+
 /** Same as mouse left-click on the world: select units (any owner), buildings, resources, clear on empty ground. */
 function performWorldSelectionRay(origin, direction, shiftHeld, pickNdc) {
   const pickBoost = getScreenPickRadiusBoost();
@@ -1428,6 +1437,25 @@ function performWorldSelectionRay(origin, direction, shiftHeld, pickNdc) {
   ));
 
   if (hitUnit) {
+    if (
+      !shiftHeld &&
+      pickNdc &&
+      selectionRayIsTerrainGraze(
+        origin,
+        direction,
+        Renderer.pickScreenNdcErrorForUnit(hitUnit, pickNdc),
+        pickNdc
+      )
+    ) {
+      // Weak graze on a unit sphere while aiming at open ground → deselect, don't re-pick.
+      if (State.selectedUnits.size > 0 || UI.activeBuildingPanel || UI.activeResourceField) {
+        State.deselectAll();
+        UI.hideBuildingPanel();
+        UI.showStatus('');
+      }
+      return;
+    }
+
     const now = Date.now();
     const isDoubleClick = (now - lastClickTime < 400) && (hitUnit.id === lastClickTargetId);
     lastClickTime = now;
@@ -1464,6 +1492,24 @@ function performWorldSelectionRay(origin, direction, shiftHeld, pickNdc) {
   lastClickTargetId = null;
 
   if (hitBuilding) {
+    if (
+      !shiftHeld &&
+      pickNdc &&
+      selectionRayIsTerrainGraze(
+        origin,
+        direction,
+        Renderer.pickScreenNdcErrorForBuilding(hitBuilding, pickNdc),
+        pickNdc
+      )
+    ) {
+      if (State.selectedUnits.size > 0 || UI.activeBuildingPanel || UI.activeResourceField) {
+        State.deselectAll();
+        UI.hideBuildingPanel();
+        UI.showStatus('');
+      }
+      return;
+    }
+
     State.deselectAll();
     UI.showBuildingPanel(hitBuilding);
     if (hitBuilding.ownerId === State.gameSession.myPlayerId) {
@@ -1475,6 +1521,24 @@ function performWorldSelectionRay(origin, direction, shiftHeld, pickNdc) {
   }
 
   if (hitResource) {
+    if (
+      !shiftHeld &&
+      pickNdc &&
+      selectionRayIsTerrainGraze(
+        origin,
+        direction,
+        Renderer.pickScreenNdcErrorForResourceField(hitResource, pickNdc),
+        pickNdc
+      )
+    ) {
+      if (State.selectedUnits.size > 0 || UI.activeBuildingPanel || UI.activeResourceField) {
+        State.deselectAll();
+        UI.hideBuildingPanel();
+        UI.showStatus('');
+      }
+      return;
+    }
+
     State.deselectAll();
     UI.hideBuildingPanel();
     UI.showResourceFieldPanel(hitResource);
@@ -1482,8 +1546,7 @@ function performWorldSelectionRay(origin, direction, shiftHeld, pickNdc) {
     return;
   }
 
-  // Open ground: do not issue move here (use right-click). Fall through to deselect below.
-
+  // True open ground (no entity hit).
   if (
     !shiftHeld
     && (State.selectedUnits.size > 0 || UI.activeBuildingPanel || UI.activeResourceField)
@@ -1737,6 +1800,24 @@ function performVrStyleBattlefieldRay(origin, direction, pickNdc, opts = {}) {
   ));
 
   if (hitUnit) {
+    // Same terrain-graze deselect as mouse: weak sphere hits on open ground clear selection.
+    if (
+      myUnits.length === 0 &&
+      pickNdc &&
+      selectionRayIsTerrainGraze(
+        origin,
+        direction,
+        Renderer.pickScreenNdcErrorForUnit(hitUnit, pickNdc),
+        pickNdc
+      )
+    ) {
+      if (State.selectedUnits.size > 0 || UI.activeBuildingPanel || UI.activeResourceField) {
+        State.deselectAll();
+        UI.hideBuildingPanel();
+        UI.showStatus('');
+      }
+      return true;
+    }
     if (hitUnit.ownerId === State.gameSession.myPlayerId) {
       if (myUnits.length > 0) {
         if (vrFollowChord) {
@@ -1793,6 +1874,23 @@ function performVrStyleBattlefieldRay(origin, direction, pickNdc, opts = {}) {
   }
 
   if (hitBuilding) {
+    if (
+      myUnits.length === 0 &&
+      pickNdc &&
+      selectionRayIsTerrainGraze(
+        origin,
+        direction,
+        Renderer.pickScreenNdcErrorForBuilding(hitBuilding, pickNdc),
+        pickNdc
+      )
+    ) {
+      if (State.selectedUnits.size > 0 || UI.activeBuildingPanel || UI.activeResourceField) {
+        State.deselectAll();
+        UI.hideBuildingPanel();
+        UI.showStatus('');
+      }
+      return true;
+    }
     const ownBuilding = hitBuilding.ownerId === State.gameSession.myPlayerId;
     if (ownBuilding && myUnits.length > 0) {
       /** Loose pick spheres: if the tap is visually on open ground, keep move/attack fall-through. */
@@ -2171,6 +2269,44 @@ function smoothstep01Cam(t) {
   return u * u * (3 - 2 * u);
 }
 
+let _appliedCamX = NaN;
+let _appliedCamY = NaN;
+let _appliedCamZ = NaN;
+let _appliedCamRotY = NaN;
+let _appliedCamPitchDeg = NaN;
+
+function applyCameraRigIfChanged() {
+  const rig = document.getElementById('cameraRig');
+  // `_applied*` start as NaN. `!==` is true against NaN (first apply). `Math.abs(x - NaN) > eps` is always false.
+  const moved =
+    cameraRig.x !== _appliedCamX ||
+    cameraRig.y !== _appliedCamY ||
+    cameraRig.z !== _appliedCamZ ||
+    cameraRig.rotY !== _appliedCamRotY;
+  if (moved && rig && rig.object3D) {
+    rig.object3D.position.set(cameraRig.x, cameraRig.y, cameraRig.z);
+    rig.object3D.rotation.y = cameraRig.rotY;
+    _appliedCamX = cameraRig.x;
+    _appliedCamY = cameraRig.y;
+    _appliedCamZ = cameraRig.z;
+    _appliedCamRotY = cameraRig.rotY;
+  }
+  if (!isVR) syncFlatScreenCameraPitch();
+  if (typeof window !== 'undefined') {
+    const p = Number.isFinite(_appliedCamPitchDeg) ? _appliedCamPitchDeg : 0;
+    window.__rtsCamSkipKey =
+      cameraRig.x.toFixed(2) +
+      ',' +
+      cameraRig.y.toFixed(2) +
+      ',' +
+      cameraRig.z.toFixed(2) +
+      ',' +
+      cameraRig.rotY.toFixed(3) +
+      ',' +
+      p.toFixed(1);
+  }
+}
+
 /**
  * Flat / touch: blend `#camera` pitch with scroll–pinch zoom (`cameraRig.y`). Fully zoomed in →
  * Blends toward horizon when zoomed in. VR skips (headset owns the view).
@@ -2178,12 +2314,15 @@ function smoothstep01Cam(t) {
 function syncFlatScreenCameraPitch() {
   if (isVR) return;
   const camEl = document.getElementById('camera');
-  if (!camEl || typeof camEl.setAttribute !== 'function') return;
+  if (!camEl || !camEl.object3D) return;
   const span = CAMERA_Y_MAX - CAMERA_Y_MIN;
   const tLin = span > 1e-6 ? (CAMERA_Y_MAX - cameraRig.y) / span : 0;
   const t = smoothstep01Cam(tLin);
   const pitchDeg = FLAT_CAM_PITCH_ZOOMED_OUT + FLAT_CAM_PITCH_ZOOM_IN_EXTRA * t;
-  camEl.setAttribute('rotation', { x: pitchDeg, y: 0, z: 0 });
+  const pitchRad = (pitchDeg * Math.PI) / 180;
+  _appliedCamPitchDeg = pitchDeg;
+  if (Math.abs(camEl.object3D.rotation.x - pitchRad) < 1e-4) return;
+  camEl.object3D.rotation.set(pitchRad, 0, 0);
 }
 
 /** `'vr'` | `'touch'` | `'desktop'` — for HUD hints (not authoritative for XR). */

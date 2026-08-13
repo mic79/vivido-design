@@ -12,6 +12,13 @@
     if (!this.objects || !this.objects.length) return;
     this.objects = this.objects.filter(function (obj3d) {
       var node = obj3d;
+      var el = obj3d.el;
+      while (!el && node && node.parent) {
+        node = node.parent;
+        el = node.el;
+      }
+      if (el && el.id === 'ground-hit') return true;
+      node = obj3d;
       while (node) {
         if (node.visible === false) return false;
         node = node.parent;

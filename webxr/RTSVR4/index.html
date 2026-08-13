@@ -6,7 +6,7 @@
   <title>RTS VR IV — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.4.21">
+  <meta name="rts-version" content="0.4.43">
 
   <script type="importmap">
   {
@@ -44,7 +44,7 @@
 
   <a-scene
     id="game-scene"
-    renderer="antialias: false; colorManagement: true; physicallyCorrectLights: true; sortObjects: false"
+    renderer="antialias: false; colorManagement: true; physicallyCorrectLights: true; sortObjects: true"
     vr-mode-ui="enabled: true"
     loading-screen="enabled: false"
     webxr="optionalFeatures: local-floor"
@@ -358,7 +358,7 @@
           id="rightHandRay"
           data-vr-aim-ray
           rotation="-90 0 0"
-          raycaster="objects: .clickable, #ground; far: 200; showLine: true; lineColor: #0f0; lineOpacity: 0.4"
+          raycaster="objects: .clickable, #ground-hit; far: 200; enabled: false; showLine: false; lineColor: #0f0; lineOpacity: 0.4"
           rts-vr-aim-ray-ui-hover
         ></a-entity>
       </a-entity>
@@ -371,8 +371,17 @@
     <!-- Fallback sky if `earthlike_planet.hdr` fails to load; hidden when PMREM background is applied. -->
     <a-sky color="#050508"></a-sky>
 
-    <!-- Ground mesh + material created in moon-environment.js (BattleVR-style subdivided plane + textures) -->
-    <a-entity id="ground" position="0 0 0" rotation="0 0 0"></a-entity>
+    <!-- Ground mesh + material created in moon-environment.js (BattleVR-style subdivided plate + skirts). -->
+    <a-entity id="ground" class="no-raycast" position="0 0 0" rotation="0 0 0"></a-entity>
+    <!-- VR/mobile laser collider only: 2 tris, not drawn. Never point a raycaster at #ground (96² plate + skirts). -->
+    <a-plane
+      id="ground-hit"
+      width="4000"
+      height="4000"
+      rotation="-90 0 0"
+      position="0 0 0"
+      material="shader: flat; visible: false; side: double"
+    ></a-plane>
 
     <!-- Grid lines (subtle) -->
     <a-entity id="gridHelper"></a-entity>

@@ -25,7 +25,7 @@ export function initEffects(sceneEl) {
   const material = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
   particleMesh = new THREE.InstancedMesh(geometry, material, MAX_PARTICLES);
-  particleMesh.count = MAX_PARTICLES;
+  particleMesh.count = 0;
   particleMesh.instanceColor = new THREE.InstancedBufferAttribute(
     new Float32Array(MAX_PARTICLES * 3), 3
   );
@@ -116,6 +116,15 @@ export function updateEffects(dt) {
     particleMesh.setColorAt(i, _fxColor);
   }
 
+  let lastActive = -1;
+  for (let i = 0; i < particles.length; i++) {
+    if (particles[i] && particles[i].active) lastActive = i;
+  }
+  particleMesh.count = lastActive + 1;
   particleMesh.instanceMatrix.needsUpdate = true;
   if (particleMesh.instanceColor) particleMesh.instanceColor.needsUpdate = true;
+}
+
+export function freezeEffects() {
+  if (particleMesh) particleMesh.count = 0;
 }

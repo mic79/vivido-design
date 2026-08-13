@@ -1217,7 +1217,6 @@ function tryAttachHorizonSkirt(THREE, mesh, sceneEl) {
     const g = new THREE.Group();
     g.name = 'rts-horizon-skirt';
     const mat = mesh.material;
-    // Match plate edge density; moderate depth segs (intro + Story).
     const segAlongX = BATTLE_TERRAIN.segmentsWidth;
     const segAlongZ = BATTLE_TERRAIN.segmentsDepth;
     const segDeep = Math.max(44, Math.min(120, Math.ceil(d / 8)));
@@ -1226,7 +1225,7 @@ function tryAttachHorizonSkirt(THREE, mesh, sceneEl) {
       const m = new THREE.Mesh(geo, mat);
       m.receiveShadow = true;
       m.castShadow = false;
-      m.frustumCulled = false;
+      m.frustumCulled = true;
       g.add(m);
     };
     addPatch(-half, half, half, half + d, segAlongX, segDeep);

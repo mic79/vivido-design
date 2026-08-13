@@ -36,7 +36,8 @@ export let MAP_CAMERA_PAN_RADIUS = MAP_UNIT_NAV_RADIUS * (1 + MAP_CAMERA_NAV_EXT
 export let MAP_NAV_PLANE_COLS = Math.ceil((2 * MAP_UNIT_NAV_RADIUS) / MAP_NAV_PLANE_CELL);
 export let MAP_NAV_PLANE_SPAN_M = MAP_NAV_PLANE_COLS * MAP_NAV_PLANE_CELL;
 export let MAP_NAV_PLANE_HALF_M = MAP_NAV_PLANE_SPAN_M * 0.5;
-export let FOG_GRID_SIZE = 20;
+/** Finer grid keeps O(1) `isVisibleToTeam` accurate (disk∩cell bake in fog.js). */
+export let FOG_GRID_SIZE = 40;
 export let FOG_CELL_SIZE = MAP_NAV_PLANE_SPAN_M / FOG_GRID_SIZE;
 
 /** Optional Story override for crystal sites (set each Story run; null = default skirmish layout). */
@@ -72,11 +73,11 @@ export function applyMapProfile(profile) {
   if (MAP_PROFILE === 'story') {
     MAP_SIZE = MAP_SIZE_STORY;
     MAP_TERRAIN_STYLE = 'hills';
-    FOG_GRID_SIZE = 40;
+    FOG_GRID_SIZE = 48;
   } else {
     MAP_SIZE = MAP_SIZE_STANDARD;
     MAP_TERRAIN_STYLE = 'crater';
-    FOG_GRID_SIZE = 20;
+    FOG_GRID_SIZE = 40;
     STORY_RESOURCE_FIELD_POSITIONS = null;
   }
   recomputeMapDerived();
@@ -499,17 +500,30 @@ export const UNIT_SEPARATION_RADIUS = 2.55;
 export const UNIT_SEPARATION_ACCEL = 6.2;
 /** Harder floor on center–center distance (m) applied after move+separation so stacks break up. */
 export const UNIT_CLEARANCE_MIN = 1.12;
+/**
+ * Idle units already in enemy contact: process 1/N of them per sim tick (movers always run).
+ * Keeps melee soft-push without O(all units) queries every frame.
+ */
+export const UNIT_SEPARATION_CONTACT_STAGGER = 4;
 export const FORMATION_SPACING = 4.5; // Spread out to avoid being sniped in lines
 
 // --- Bot AI (fair: no fog/vision/economy cheats — scale these down for easier bots) ---
-export const BOT_TICK_RATE = 4.0;              // Decision cadence (humans can click faster; tune down to soften)
+export const BOT_TICK_RATE = 4.0;              // Decision cadence (orders still gated by APM budget)
+/** Soft cap like a competent human (~2.5 intentional orders/sec). Group selects count as 1. */
+export const BOT_TARGET_APM = 150;
 export const BOT_SCOUT_DELAY = 12;
 export const BOT_SCOUT_DELAY_ECON = 3;       // When no known ore, start scouting almost immediately
 export const BOT_ATTACK_THRESHOLD = 5;         // Earlier main strikes when reserves allow
 export const BOT_FULL_ATTACK_THRESHOLD = 16;   // Larger late-game pushes
 export const BOT_STRIKE_RESERVE_MULT = 0.28;    // Portion of army held back; lower = more aggressive attack
 export const BOT_MAX_PRODUCTION_QUEUE = 5;     // Deep queues (same as player could fill manually)
-export const BOT_FOCUS_FIRE_INTERVAL = 0.28;   // Fair micro: retarget to same fragile visible enemy
+export const BOT_FOCUS_FIRE_INTERVAL = 1.15;   // Human-scale focus-fire micro (also spends APM)
+/** Max units that run auto-acquire per sim frame (round-robin); attacking units always tick. */
+export const COMBAT_ACQUIRE_PER_FRAME = 24;
+/** Minimap redraw cadence (Hz) — shroud/units don't need 60 Hz canvas fills. */
+export const MINIMAP_REDRAW_HZ = 8;
+/** World fog tint texture refresh (Hz); keep in sync with minimap-class FoW cost. */
+export const FOG_OVERLAY_REDRAW_HZ = 8;
 export const BOT_SCOUT_CAP = 3;
 export const BOT_SCOUT_CAP_ECON = 7;           // Parallel scouts when economy must find new fields
 export const BOT_SCOUT_GAP_ECON = 0.45;        // Seconds between scout spawns in econ crisis

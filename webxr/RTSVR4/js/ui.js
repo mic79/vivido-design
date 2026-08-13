@@ -9,6 +9,7 @@ import {
   clampWorldToPlayableDisk,
   clampWorldToCameraNavDisk,
   NET_HOST_PAUSE_AUTO_RESUME_MS,
+  MINIMAP_REDRAW_HZ,
 } from './config.js';
 import * as State from './state.js';
 import * as Buildings from './buildings.js';
@@ -18,6 +19,7 @@ import * as Input from './input.js';
 import * as Network from './network.js';
 import * as Pathfinding from './pathfinding.js';
 import * as NavDebug from './nav-debug-overlay.js';
+import * as Perf from './perf-profiler.js';
 import {
   getStoryBests,
   recordStoryMatch,
@@ -29,6 +31,10 @@ let hudContainer = null;
 let minimapCanvas = null;
 let minimapCtx = null;
 let minimapVisible = false;
+let _minimapLastDrawMs = 0;
+let _minimapFogCanvas = null;
+let _minimapFogCtx = null;
+let _minimapFogImageData = null;
 let menuEl = null;
 let buildMenuEl = null;
 let buildPanelEl = null;
@@ -194,6 +200,7 @@ let vrMinimapCtx = null;
 let vrMinimapTexture = null;
 
 let lastHudHelpPlatform = '';
+let lastVrHudTop = '';
 let mpPauseCountdownIntervalId = null;
 
 function uiMountRoot() {
@@ -1165,40 +1172,46 @@ function maybeRecordStoryMatch() {
 // --- Update functions ---
 export function updateUI() {
   if (Input.getIsVR()) {
-    tryInitVrMinimapTexture();
-    syncVrGameHudVisibility();
+    Perf.time('ui.vr', () => {
+      tryInitVrMinimapTexture();
+      syncVrGameHudVisibility();
+    });
   }
-  updateHUD();
-  if (minimapVisible) updateMinimap();
+  Perf.time('ui.hud', () => updateHUD());
+  if (minimapVisible) {
+    Perf.time('ui.minimap', () => updateMinimap());
+  }
   if (State.gameSession.navDebug) NavDebug.updatePathDebugOverlay();
   // Auto-refresh building panel
-  const showMobileDeploy = activeMobileDeployUnitIds && activeMobileDeployUnitIds.length > 0;
-  if (activeBuildingPanel || showMobileDeploy) {
-    const now = performance.now();
-    const mpClient =
-      State.gameSession.isMultiplayer && !State.gameSession.isHost && State.gameSession.gameStarted;
-    /** MP clients: do not rebuild faster than snapshots (~22/s) — full innerHTML was stealing clicks. */
-    const throttleMs = mpClient ? 280 : 500;
-    /** Do not skip updates while hovering — that froze queue % / afford state on desktop (cursor over panel). */
-    if (!buildPanelPointerActive && now - lastBuildPanelUpdate > throttleMs) {
-      lastBuildPanelUpdate = now;
-      if (activeBuildingPanel) refreshBuildingPanel(false);
-      if (showMobileDeploy) refreshMobileHqDeployPanel();
+  Perf.time('ui.panels', () => {
+    const showMobileDeploy = activeMobileDeployUnitIds && activeMobileDeployUnitIds.length > 0;
+    if (activeBuildingPanel || showMobileDeploy) {
+      const now = performance.now();
+      const mpClient =
+        State.gameSession.isMultiplayer && !State.gameSession.isHost && State.gameSession.gameStarted;
+      /** MP clients: do not rebuild faster than snapshots (~22/s) — full innerHTML was stealing clicks. */
+      const throttleMs = mpClient ? 280 : 500;
+      /** Do not skip updates while hovering — that froze queue % / afford state on desktop (cursor over panel). */
+      if (!buildPanelPointerActive && now - lastBuildPanelUpdate > throttleMs) {
+        lastBuildPanelUpdate = now;
+        if (activeBuildingPanel) refreshBuildingPanel(false);
+        if (showMobileDeploy) refreshMobileHqDeployPanel();
+      }
     }
-  }
-  if (
-    activeBuildingPanel &&
-    buildPanelEl &&
-    buildPanelEl.style.display !== 'none' &&
-    State.gameSession.gameStarted
-  ) {
-    const live = State.buildings.get(activeBuildingPanel.id);
-    if (live) {
-      activeBuildingPanel = live;
-      patchFlatBuildPanelLiveReadouts(live, State.players[State.gameSession.myPlayerId]);
-      if (Input.getIsVR()) syncVrBuildPanelHeaderFromBuilding(live);
+    if (
+      activeBuildingPanel &&
+      buildPanelEl &&
+      buildPanelEl.style.display !== 'none' &&
+      State.gameSession.gameStarted
+    ) {
+      const live = State.buildings.get(activeBuildingPanel.id);
+      if (live) {
+        activeBuildingPanel = live;
+        patchFlatBuildPanelLiveReadouts(live, State.players[State.gameSession.myPlayerId]);
+        if (Input.getIsVR()) syncVrBuildPanelHeaderFromBuilding(live);
+      }
     }
-  }
+  });
 }
 
 function updateHUD() {
@@ -1243,21 +1256,28 @@ function updateHUD() {
   const unitsEl = document.getElementById('hud-units');
   const timeEl = document.getElementById('hud-time');
 
-  if (creditsEl) creditsEl.textContent = `$${Math.floor(player.credits)}`;
-  if (incomeEl) incomeEl.textContent = `+${player.income.toFixed(1)}/s`;
-  if (unitsEl) unitsEl.textContent = `${player.unitCount}/${player.unitCap}`;
+  const creditsText = `$${Math.floor(player.credits)}`;
+  const incomeText = `+${player.income.toFixed(1)}/s`;
+  const unitsText = `${player.unitCount}/${player.unitCap}`;
+  if (creditsEl && creditsEl.textContent !== creditsText) creditsEl.textContent = creditsText;
+  if (incomeEl && incomeEl.textContent !== incomeText) incomeEl.textContent = incomeText;
+  if (unitsEl && unitsEl.textContent !== unitsText) unitsEl.textContent = unitsText;
 
   const elapsed = Math.floor(State.gameSession.elapsedTime);
   const min = Math.floor(elapsed / 60);
   const sec = elapsed % 60;
-  if (timeEl) timeEl.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+  const timeText = `${min}:${sec.toString().padStart(2, '0')}`;
+  if (timeEl && timeEl.textContent !== timeText) timeEl.textContent = timeText;
 
   const vrTop = document.getElementById('vr-hud-top');
-  if (vrTop && Input.getIsVR()) {
-    vrTop.setAttribute(
-      'value',
-      `$${Math.floor(player.credits)}  +${player.income.toFixed(1)}/s  |  ${player.unitCount}/${player.unitCap} units  |  ${min}:${sec.toString().padStart(2, '0')}`
-    );
+  if (vrTop) {
+    const vrTopText = `$${Math.floor(player.credits)}  +${player.income.toFixed(1)}/s  |  ${player.unitCount}/${player.unitCap} units  |  ${min}:${sec.toString().padStart(2, '0')}`;
+    // A-Frame a-text drops updates if `value` is set every tick to a new string while
+    // the previous mesh rebuild is in flight — only write on change.
+    if (vrTopText !== lastVrHudTop) {
+      lastVrHudTop = vrTopText;
+      vrTop.setAttribute('value', vrTopText);
+    }
   }
 
   const botDebugEl = document.getElementById('hud-bot-debug');
@@ -1338,7 +1358,8 @@ function updateHUD() {
         extra += `  |  ${stateDesc}`;
       }
 
-      selEl.innerHTML = `${desc}  |  HP: ${totalHP}/${maxHP}${extra}`;
+      const selHtml = `${desc}  |  HP: ${totalHP}/${maxHP}${extra}`;
+      if (selEl.innerHTML !== selHtml) selEl.innerHTML = selHtml;
       selEl.style.display = Input.getIsVR() ? 'none' : 'block';
 
       const vrSel = document.getElementById('vr-hud-selection');
@@ -1615,21 +1636,46 @@ function drawMinimapToContext(ctx, w, h) {
   const myTeam = State.players[State.gameSession.myPlayerId]?.team ?? 0;
   const fogGrid = Fog.getTeamGrid(myTeam);
   if (fogGrid && !isSpyMode) {
-    const fogPx = FOG_CELL_SIZE * scaleX;
-    const fogPy = FOG_CELL_SIZE * scaleZ;
+    if (
+      !_minimapFogCanvas ||
+      _minimapFogCanvas.width !== FOG_GRID_SIZE ||
+      _minimapFogCanvas.height !== FOG_GRID_SIZE
+    ) {
+      _minimapFogCanvas = document.createElement('canvas');
+      _minimapFogCanvas.width = FOG_GRID_SIZE;
+      _minimapFogCanvas.height = FOG_GRID_SIZE;
+      _minimapFogCtx = _minimapFogCanvas.getContext('2d', { willReadFrequently: true });
+      _minimapFogImageData = _minimapFogCtx.createImageData(FOG_GRID_SIZE, FOG_GRID_SIZE);
+    }
+    const d = _minimapFogImageData.data;
     for (let gz = 0; gz < FOG_GRID_SIZE; gz++) {
       for (let gx = 0; gx < FOG_GRID_SIZE; gx++) {
         const val = fogGrid[gz * FOG_GRID_SIZE + gx];
-        if (val !== 2 && val !== 1) continue;
-        const wx = (gx + 0.5) * FOG_CELL_SIZE - MAP_NAV_PLANE_HALF_M;
-        const wz = (gz + 0.5) * FOG_CELL_SIZE - MAP_NAV_PLANE_HALF_M;
-        const mx = (wx + span * 0.5) * scaleX - fogPx * 0.5;
-        const mz = (wz + span * 0.5) * scaleZ - fogPy * 0.5;
-        // Visible = bright plate; explored = mid shroud (unexplored stays near-black base).
-        ctx.fillStyle = val === 2 ? '#3a3a46' : '#16161e';
-        ctx.fillRect(mx, mz, fogPx + 1, fogPy + 1);
+        const i = (gz * FOG_GRID_SIZE + gx) * 4;
+        if (val === 2) {
+          d[i] = 58;
+          d[i + 1] = 58;
+          d[i + 2] = 70;
+          d[i + 3] = 255;
+        } else if (val === 1) {
+          d[i] = 22;
+          d[i + 1] = 22;
+          d[i + 2] = 30;
+          d[i + 3] = 255;
+        } else {
+          d[i] = 0;
+          d[i + 1] = 0;
+          d[i + 2] = 0;
+          d[i + 3] = 0;
+        }
       }
     }
+    _minimapFogCtx.putImageData(_minimapFogImageData, 0, 0);
+    // Map fog grid → playable plane in minimap space (same transform as cell centers).
+    const fogOrigin = (-MAP_NAV_PLANE_HALF_M + span * 0.5) * scaleX;
+    const fogSize = FOG_GRID_SIZE * FOG_CELL_SIZE * scaleX;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(_minimapFogCanvas, fogOrigin, fogOrigin, fogSize, fogSize);
   } else if (isSpyMode) {
     ctx.fillStyle = '#3a3a46';
     ctx.fillRect(0, 0, w, h);
@@ -1692,6 +1738,11 @@ function drawMinimapToContext(ctx, w, h) {
 
 export function updateMinimap() {
   if (!minimapVisible) return;
+  const now = performance.now();
+  const minInterval = 1000 / Math.max(1, MINIMAP_REDRAW_HZ);
+  if (now - _minimapLastDrawMs < minInterval) return;
+  _minimapLastDrawMs = now;
+
   if (!Input.getIsVR() && minimapCtx && minimapCanvas) {
     drawMinimapToContext(minimapCtx, minimapCanvas.width, minimapCanvas.height);
   }
@@ -1710,6 +1761,17 @@ export function dismissAppStartGate() {
     State.gameSession.menuOpen = true;
   }
   updateMenuVisibility();
+}
+
+/** FFA → Story (and any rematch): drop stale wrist text + minimap fog canvas sized to the old grid. */
+export function resetMatchHud() {
+  lastVrHudTop = '';
+  _minimapFogCanvas = null;
+  _minimapFogCtx = null;
+  _minimapFogImageData = null;
+  _minimapLastDrawMs = 0;
+  const vrTop = document.getElementById('vr-hud-top');
+  if (vrTop) vrTop.setAttribute('value', '');
 }
 
 export function updateMenuVisibility() {

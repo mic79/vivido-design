@@ -1419,7 +1419,12 @@ export function updateNetwork(time) {
    * unit shrink from ~280 bytes to ~70 bytes — at 30 units × 22 Hz that's ≈140 KB/s
    * → ≈40 KB/s, well below the WebRTC backpressure cliff. The client's `applySnapshot`
    * already coerces missing fields to null/0/false defaults so this is safe.
+   *
+   * FoW: each remote peer gets a filtered copy (industry: never ship fog-hidden enemy
+   * positions). Ally units always; enemies only while live-visible. Buildings: ally
+   * always; enemies if live-visible or explored (classic last-known structure).
    */
+  const allUnitSnaps = [];
   State.units.forEach(u => {
     const us = {
       id: u.id,
@@ -1448,9 +1453,10 @@ export function updateNetwork(time) {
     if (u.assignedRefinery != null) us.assignedRefinery = u.assignedRefinery;
     if (u.assignedField != null) us.assignedField = u.assignedField;
     if (u.lastHarvestedField != null) us.lastHarvestedField = u.lastHarvestedField;
-    snapshot.units.push(us);
+    allUnitSnaps.push({ live: u, snap: us });
   });
 
+  const allBuildingSnaps = [];
   State.buildings.forEach(b => {
     const bs = {
       id: b.id,
@@ -1481,30 +1487,93 @@ export function updateNetwork(time) {
         return qs;
       });
     }
-    snapshot.buildings.push(bs);
+    allBuildingSnaps.push({ live: b, snap: bs });
   });
 
-  const payload = { type: 'snapshot', snapshot };
-  /**
-   * Diagnostic only: sample one snapshot every ~5 s (≈110 sent) — cheap enough that
-   * `JSON.stringify` overhead is amortized to <0.05 ms / sec. Helps trace regressions
-   * if the freeze recurs (peer disconnect, payload bloat, etc.).
-   */
+  const spy = !!State.gameSession.debugFog;
+  let sampleBytes = 0;
+  let sampleUnits = 0;
+  let sampleBldgs = 0;
+
+  connections.forEach((conn, playerId) => {
+    if (!conn || !conn.open) return;
+    if (typeof playerId !== 'number') return;
+
+    const units = [];
+    for (let i = 0; i < allUnitSnaps.length; i++) {
+      const { live, snap } = allUnitSnaps[i];
+      if (spy || Fog.isUnitVisibleToPlayer(live, playerId)) units.push(snap);
+    }
+    const buildings = [];
+    for (let i = 0; i < allBuildingSnaps.length; i++) {
+      const { live, snap } = allBuildingSnaps[i];
+      if (spy || Fog.isUnitVisibleToPlayer(live, playerId)) {
+        buildings.push(snap);
+        continue;
+      }
+      const viewer = State.players[playerId];
+      if (viewer && Fog.wasExploredByTeam(viewer.team, live.x, live.z)) {
+        buildings.push(snap);
+      }
+    }
+
+    const peerSnap = {
+      ...snapshot,
+      units,
+      buildings,
+    };
+    const payload = { type: 'snapshot', snapshot: peerSnap };
+    const buffered = getPeerBufferedBytes(conn);
+    if (buffered > NET_PEER_BACKPRESSURE_BYTES) {
+      netBackpressureSkippedCount++;
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (now - netBackpressureLastWarnMs > 5000) {
+        netBackpressureLastWarnMs = now;
+        console.warn(
+          `[RTSVR4 net] backpressure: peer ${conn.peer || '?'} buffered=${buffered} bytes ` +
+          `(>${NET_PEER_BACKPRESSURE_BYTES}) — dropped ${netBackpressureSkippedCount} snapshots so far`
+        );
+      }
+      return;
+    }
+    try {
+      const r = conn.send(payload);
+      if (r && typeof r.then === 'function') {
+        r.catch(err => {
+          const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+          if (now - netBackpressureLastWarnMs > 5000) {
+            netBackpressureLastWarnMs = now;
+            console.warn(`[RTSVR4 net] conn.send rejected for peer ${conn.peer || '?'}:`, err);
+          }
+        });
+      }
+    } catch (err) {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (now - netBackpressureLastWarnMs > 5000) {
+        netBackpressureLastWarnMs = now;
+        console.warn(`[RTSVR4 net] conn.send threw for peer ${conn.peer || '?'}:`, err);
+      }
+    }
+
+    if (time - snapStatLastLogMs > 5000) {
+      try {
+        sampleBytes = Math.max(sampleBytes, JSON.stringify(payload).length);
+        sampleUnits = Math.max(sampleUnits, units.length);
+        sampleBldgs = Math.max(sampleBldgs, buildings.length);
+      } catch (_) { /* ignore */ }
+    }
+  });
+
   if (time - snapStatLastLogMs > 5000) {
     snapStatLastLogMs = time;
-    try {
-      const bytes = JSON.stringify(payload).length;
-      const peerCount = connections.size;
-      let peerBuf = 0;
-      connections.forEach(conn => { peerBuf += getPeerBufferedBytes(conn); });
-      console.log(
-        `[RTSVR4 net] snap=${bytes}B units=${snapshot.units.length} ` +
-        `bldgs=${snapshot.buildings.length} fx=${fxList.length} ` +
-        `peers=${peerCount} bufferedTotal=${peerBuf}B`
-      );
-    } catch (_) { /* ignore */ }
+    let peerBuf = 0;
+    connections.forEach(conn => { peerBuf += getPeerBufferedBytes(conn); });
+    console.log(
+      `[RTSVR4 net] snap≈${sampleBytes}B units≤${sampleUnits} ` +
+      `bldgs≤${sampleBldgs} fx=${fxList.length} ` +
+      `peers=${connections.size} bufferedTotal=${peerBuf}B (FoW-filtered/peer)`
+    );
   }
-  broadcastData(payload);
 }
 
 /** Multiplayer client: replay host-authored visuals/sfx (no gameplay side effects). */

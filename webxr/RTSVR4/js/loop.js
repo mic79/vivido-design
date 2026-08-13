@@ -19,6 +19,7 @@ import * as Network from './network.js';
 import * as Pathfinding from './pathfinding.js';
 import * as Audio from './audio.js';
 import { unitGrid, buildingGrid } from './spatial.js';
+import * as Perf from './perf-profiler.js';
 
 export const FIXED_DT = 1 / 60;  // 60Hz logic timestep
 const MAX_DT = 0.1;        // Cap to prevent spiral of death
@@ -48,11 +49,21 @@ function registerEngineLoopComponentOnce() {
 
       engineStep(timestamp, rawDt);
     },
+    tock() {
+      if (!running) return;
+      const sceneEl = this.el && this.el.sceneEl;
+      Perf.noteGpuFromRenderer(sceneEl && sceneEl.renderer);
+    },
   });
 }
 
 function engineStep(timestamp, rawDt) {
-  Input.updateInput(rawDt);
+  const frameT0 = performance.now();
+  const abl = Perf.getAblation();
+
+  if (abl.input) {
+    Perf.time('input', () => Input.updateInput(rawDt));
+  }
 
   if (!State.gameSession.gameStarted || State.gameSession.gameOver) {
     // Host must keep sending snapshots after gameOver; otherwise the early return
@@ -62,10 +73,12 @@ function engineStep(timestamp, rawDt) {
       State.gameSession.isHost &&
       State.gameSession.gameStarted
     ) {
-      Network.updateNetwork(timestamp);
+      if (abl.network) Perf.time('network', () => Network.updateNetwork(timestamp));
     }
-    Renderer.updateRendering();
-    UI.updateUI();
+    Effects.freezeEffects();
+    if (abl.render) Renderer.updateRendering();
+    if (abl.ui) UI.updateUI();
+    Perf.endFrame(performance.now() - frameT0);
     return;
   }
 
@@ -88,7 +101,9 @@ function engineStep(timestamp, rawDt) {
     }
   }
 
-  Network.updateNetwork(timestamp);
+  if (abl.network) {
+    Perf.time('network', () => Network.updateNetwork(timestamp));
+  }
 
   if (
     State.gameSession.isMultiplayer &&
@@ -99,14 +114,29 @@ function engineStep(timestamp, rawDt) {
     Network.smoothNetClientUnitPositions(rawDt);
   }
 
-  if (State.gameSession.gameStarted && !State.gameSession.gameOver) {
-    Fog.updateFog();
+  // FoW already baked in gameUpdate (sim). Clients that skip sim still need a paint:
+  if (
+    State.gameSession.isMultiplayer &&
+    !State.gameSession.isHost &&
+    State.gameSession.gameStarted &&
+    !State.gameSession.gameOver &&
+    abl.fog
+  ) {
+    Perf.time('fog', () => Fog.updateFog());
   }
 
-  Renderer.updateRendering();
+  if (abl.render) {
+    Renderer.updateRendering();
+  }
   Audio.updateListenerFromCamera();
-  Effects.updateEffects(rawDt);
-  UI.updateUI();
+  if (abl.effects) {
+    Perf.time('effects', () => Effects.updateEffects(rawDt));
+  }
+  if (abl.ui) {
+    UI.updateUI();
+  }
+
+  Perf.endFrame(performance.now() - frameT0);
 }
 
 /** @param {HTMLElement | null} sceneEl a-scene */
@@ -177,40 +207,58 @@ function gameUpdate(dt, time) {
     return;
   }
 
+  const abl = Perf.getAblation();
+
   // 1. Update elapsed time
   State.gameSession.elapsedTime += dt;
 
-  // 2. Rebuild spatial grids
-  unitGrid.clear();
-  buildingGrid.clear();
-  State.units.forEach(u => {
-    if (u.hp > 0) unitGrid.insert(u);
-  });
-  State.buildings.forEach(b => {
-    if (b.hp > 0) buildingGrid.insert(b);
-  });
+  // 2. Rebuild spatial grids, then bake FoW so O(1) visibility matches this tick
+  if (abl.spatial) {
+    Perf.time('spatial', () => {
+      unitGrid.clear();
+      buildingGrid.clear();
+      State.units.forEach(u => {
+        if (u.hp > 0) unitGrid.insert(u);
+      });
+      State.buildings.forEach(b => {
+        if (b.hp > 0) buildingGrid.insert(b);
+      });
+    });
+  }
+
+  if (abl.fog) {
+    Perf.time('fog', () => Fog.updateFog());
+  }
 
   // 3. Bot AI (throttled internally)
-  Bot.updateBotAI(time, dt);
+  if (abl.bot) {
+    Perf.time('bot', () => Bot.updateBotAI(time, dt));
+  }
 
-  // 4. Building construction
-  Buildings.updateConstruction(dt);
-
-  // 5. Production queues
-  Buildings.updateProduction(dt);
-
-  // 6. Passive income
-  Buildings.updateIncome(dt);
+  // 4–6. Buildings
+  if (abl.buildings) {
+    Perf.time('buildings', () => {
+      Buildings.updateConstruction(dt);
+      Buildings.updateProduction(dt);
+      Buildings.updateIncome(dt);
+    });
+  }
 
   // 7–8. Pathfinding budget: combat movers first, then harvesters (shared A* cap per tick).
   Units.syncSquadFollowersFromLeaders();
   Units.syncEngineerRepairApproach();
   Pathfinding.resetPathfindBudgetForTick();
-  Units.updateMovement(dt);
-  Resources.updateHarvesters(dt);
+  if (abl.movement) {
+    Perf.time('movement', () => Units.updateMovement(dt));
+  }
+  if (abl.harvesters) {
+    Perf.time('harvesters', () => Resources.updateHarvesters(dt));
+  }
 
   // 9. Combat
-  Units.updateCombat(time, dt);
+  if (abl.combat) {
+    Perf.time('combat', () => Units.updateCombat(time, dt));
+  }
 
   // 9b. Engineer vehicle repair (host-authoritative; runs after movement + combat)
   Units.updateEngineerRepair(dt);

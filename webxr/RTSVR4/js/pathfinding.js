@@ -927,10 +927,29 @@ export function pushOutOfObstacle(wx, wz) {
   return { x: wx, z: wz };
 }
 
-/** Spiral search for a reachable goal near an unwalkable click. */
-export function findNearestReachable(fromX, fromZ, targetX, targetZ, maxRadius = 36) {
-  if (findPath(fromX, fromZ, targetX, targetZ)) {
-    return { x: targetX, z: targetZ };
+/** Spiral search for a reachable goal near an unwalkable click.
+ * Charges the shared pathfind budget (industry: no unbound A* storms on orders).
+ * @param {boolean} [playerPriority=false]
+ * @returns {{x:number,z:number}|null}
+ */
+export function findNearestReachable(fromX, fromZ, targetX, targetZ, maxRadius = 36, playerPriority = false) {
+  // Cheap accept: already walkable + budgeted path exists
+  if (isPositionWalkable(targetX, targetZ)) {
+    if (!canTakePathfindSlot(playerPriority)) {
+      return { x: targetX, z: targetZ }; // defer A* to movement; goal is walkable
+    }
+    notePathfindSlot(playerPriority);
+    if (findPath(fromX, fromZ, targetX, targetZ)) {
+      return { x: targetX, z: targetZ };
+    }
+  }
+
+  // Prefer local walkable snap without A* (formation slots, near-goal clicks)
+  const snapped = pushOutOfObstacle(targetX, targetZ);
+  if (isPositionWalkable(snapped.x, snapped.z)) {
+    if (!canTakePathfindSlot(playerPriority)) return snapped;
+    notePathfindSlot(playerPriority);
+    if (findPath(fromX, fromZ, snapped.x, snapped.z)) return snapped;
   }
 
   const step = CELL * 0.5;
@@ -938,15 +957,17 @@ export function findNearestReachable(fromX, fromZ, targetX, targetZ, maxRadius =
   for (let radius = step; radius <= maxRadius; radius += step) {
     const n = Math.max(16, Math.ceil(radius * 2));
     for (let i = 0; i < n; i++) {
-      if (++attempts > PATHFIND_SPIRAL_MAX_ATTEMPTS) return null;
+      if (++attempts > PATHFIND_SPIRAL_MAX_ATTEMPTS) return snapped;
+      if (!canTakePathfindSlot(playerPriority)) return snapped;
       const angle = (i / n) * Math.PI * 2;
       const tx = targetX + Math.cos(angle) * radius;
       const tz = targetZ + Math.sin(angle) * radius;
       if (!isPositionWalkable(tx, tz)) continue;
+      notePathfindSlot(playerPriority);
       if (findPath(fromX, fromZ, tx, tz)) {
         return { x: tx, z: tz };
       }
     }
   }
-  return null;
+  return isPositionWalkable(snapped.x, snapped.z) ? snapped : null;
 }

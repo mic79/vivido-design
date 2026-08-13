@@ -7,6 +7,7 @@ import {
   BOT_TICK_RATE, BOT_DEFEND_RADIUS, BOT_SCOUT_DELAY,
   BOT_ATTACK_THRESHOLD, BOT_FULL_ATTACK_THRESHOLD,
   BOT_STRIKE_RESERVE_MULT, BOT_MAX_PRODUCTION_QUEUE, BOT_FOCUS_FIRE_INTERVAL,
+  BOT_TARGET_APM,
   BOT_SCOUT_DELAY_ECON, BOT_SCOUT_CAP, BOT_SCOUT_CAP_ECON, BOT_SCOUT_GAP_ECON,
   BOT_SCOUT_REPATH_SEC, BOT_SCOUT_ARRIVE_RADIUS,
   BOT_SCOUT_DANGER_WEIGHT, BOT_SCOUT_DANGER_ZONE_TTL,
@@ -32,6 +33,38 @@ import { unitGrid } from './spatial.js';
 let lastBotTick = 0;
 
 /**
+ * Human-like order budget: ~BOT_TARGET_APM intentional commands/min.
+ * Group selects count as 1. Refills each bot tick; unused budget carries (capped).
+ * @param {object} mem
+ * @returns {boolean}
+ */
+function botCanSpendOrder(mem) {
+  return (mem._orderBudget || 0) >= 1;
+}
+
+/** @param {object} mem */
+function botSpendOrder(mem) {
+  mem._orderBudget = Math.max(0, (mem._orderBudget || 0) - 1);
+}
+
+/**
+ * @param {object} mem
+ * @param {number} [n=1]
+ * @returns {boolean}
+ */
+function botTrySpendOrders(mem, n = 1) {
+  const need = Math.max(1, n | 0);
+  if ((mem._orderBudget || 0) < need) return false;
+  mem._orderBudget -= need;
+  return true;
+}
+
+function refillBotOrderBudget(mem) {
+  const perTick = BOT_TARGET_APM / 60 / BOT_TICK_RATE;
+  mem._orderBudget = Math.min(BOT_TARGET_APM / 60, (mem._orderBudget || 0) + perTick);
+}
+
+/**
  * Avoid `commandAttackUnit` for bot field orders: every unit used the same targetPos as the
  * enemy center, so grid paths often failed across unwalkable wedges and defenders idled at
  * the nav rim. Attack-move toward a waypoint that is reachable from the **nearest** defender
@@ -41,12 +74,12 @@ let lastBotTick = 0;
  * @param {{ id: string }} enemyRef — unit id wrapper (same shape as `mem.targets` rows / threat list)
  */
 function commandBotEngageEnemyUnits(unitIds, enemyRef) {
-  if (!enemyRef || enemyRef.id == null) return;
+  if (!enemyRef || enemyRef.id == null) return false;
   const tgt = State.units.get(enemyRef.id);
-  if (!tgt || tgt.hp <= 0) return;
+  if (!tgt || tgt.hp <= 0) return false;
 
   const units = unitIds.map(uid => State.units.get(uid)).filter(u => u && u.hp > 0);
-  if (units.length === 0) return;
+  if (units.length === 0) return false;
 
   let anchor = units[0];
   let bestD2 = Infinity;
@@ -79,6 +112,7 @@ function commandBotEngageEnemyUnits(unitIds, enemyRef) {
   for (let i = 0; i < units.length; i++) {
     units[i]._botDefenseCmdAt = stamped;
   }
+  return true;
 }
 
 export function updateBotAI(time, dt) {
@@ -103,6 +137,8 @@ function runBotLogic(player, time) {
   // 0. Fair start delay (perception of human reaction time)
   if (elapsed < (mem.startDelayOffset || 10)) return;
 
+  refillBotOrderBudget(mem);
+
   const myUnits = State.getPlayerUnits(pid);
   const myBuildings = State.getPlayerBuildings(pid);
   const combatUnits = myUnits.filter(u => u.type !== 'harvester' && u.type !== 'engineer' && u.hp > 0);
@@ -110,34 +146,32 @@ function runBotLogic(player, time) {
   /** Story garrisons stay on base; only mobile combat explores / strikes. */
   const mobileCombat = combatUnits.filter(u => u.botRole !== 'garrison');
 
-  // 1. Fair Memory & Visibility
+  // 1. Fair Memory & Visibility (no orders)
   updateBotVisibility(player, elapsed);
   updateDiscoveredResources(player);
   updateThreatLevel(player);
   player.botMemory.militaryEmergency = computeMilitaryEmergency(player, harvesters);
 
-  // Exploration before rally/defense so scouts & harvesters are not overridden the same tick
-  assignBotScoutMissions(player, mobileCombat, elapsed);
-  assignHarvesterExploration(player, harvesters, elapsed);
-
-  // 2. INDUSTRIAL LOOP (Defense First, then Greed)
-  performProductionLogic(player, myBuildings, combatUnits, elapsed);
-  performEconomyLogic(player, myBuildings, harvesters, elapsed);
-
-  // 3. DEFENSIVE CHECK (garrison + mobile)
+  // 2. Defense / missions first (spend limited APM on urgent orders)
   let localThreats = getThreatsToBuildings(player, myBuildings);
   if (localThreats.length > 0) {
     handleDefense(player, combatUnits, localThreats);
   }
-
-  // 4. MISSION CONTROL — mobile army only (leave base garrisons home)
+  handleHarvesterDefense(player, mobileCombat, harvesters, elapsed);
   manageMissions(player, mobileCombat, elapsed);
   doAttackMission(player, mobileCombat, elapsed);
   tickRetaliationMissions(player);
-  tickScoutMissions(player, elapsed);
-  handleHarvesterDefense(player, mobileCombat, harvesters, elapsed);
-  maybeBotEngineerCapture(player, elapsed);
   applyBotFairFocusFire(player, elapsed);
+  maybeBotEngineerCapture(player, elapsed);
+
+  // 3. Exploration / scouts (remaining APM)
+  assignBotScoutMissions(player, mobileCombat, elapsed);
+  tickScoutMissions(player, elapsed);
+  assignHarvesterExploration(player, harvesters, elapsed);
+
+  // 4. Industrial loop (queue builds/units; rally uses 1 group order if budget left)
+  performProductionLogic(player, myBuildings, combatUnits, elapsed);
+  performEconomyLogic(player, myBuildings, harvesters, elapsed);
 }
 
 function updateDiscoveredResources(player) {
@@ -338,18 +372,24 @@ function performProductionLogic(player, buildings, combatUnits, elapsed) {
   }
   
   const econExplore = botNeedsPriorityResourceExploration(player);
-  combatUnits.forEach(u => {
+  const rallyIds = [];
+  for (let i = 0; i < combatUnits.length; i++) {
+    const u = combatUnits[i];
     // Story base garrisons must stay on their pad — herding them to the primary HQ rally
     // yanked them off-leash so damage reactions instantly cancelled (no return fire + stutter).
-    if (u.botRole === 'garrison') return;
+    if (u.botRole === 'garrison') continue;
     const onMission = mem.currentMissions.some(m => m.unitIds.includes(u.id));
     if (u.state === 'idle' && !onMission) {
-      if (econExplore && u.type === 'scoutBike') return;
+      if (econExplore && u.type === 'scoutBike') continue;
       if (Pathfinding.getDistanceSq(u.x, u.z, rallyPoint.x, rallyPoint.z) > 100) {
-        Units.commandAttackMove([u.id], rallyPoint.x, rallyPoint.z);
+        rallyIds.push(u.id);
       }
     }
-  });
+  }
+  // One group move = one human APM action (not N individual clicks).
+  if (rallyIds.length > 0 && botTrySpendOrders(mem, 1)) {
+    Units.commandAttackMove(rallyIds, rallyPoint.x, rallyPoint.z);
+  }
 }
 
 function updateBotVisibility(player, elapsed) {
@@ -565,6 +605,8 @@ function manageRetaliation(player, idleUnits) {
     }
   }
 
+  if (!botCanSpendOrder(mem)) return null;
+
   const mission = {
     type: 'retaliation',
     targetId: hotZone.time,
@@ -574,6 +616,7 @@ function manageRetaliation(player, idleUnits) {
   mem.currentMissions.push(mission);
 
   Units.commandAttackMove(mission.unitIds, targetPos.x, targetPos.z);
+  botSpendOrder(mem);
   console.log(
     `🤖 Bot P${player.id} RETALIATION → [${targetPos.x.toFixed(0)}, ${targetPos.z.toFixed(0)}] (${longRangeNest ? 'flank vs long-range' : 'direct'})`
   );
@@ -631,7 +674,7 @@ function manageMissions(player, combatUnits, elapsed) {
     const assassins = pool.slice(0, 3);
     if (assassins.length >= 2) {
       const prey = State.units.get(target.id);
-      if (prey && prey.hp > 0) {
+      if (prey && prey.hp > 0 && botTrySpendOrders(mem, 1)) {
         const rally = clampWorldToPlayableDisk(prey.x, prey.z, 2);
         mem.currentMissions.push({ type: 'HARASS', targetId: target.id, unitIds: assassins.map(u => u.id), status: 'active' });
         Units.commandAttackMove(assassins.map(u => u.id), rally.x, rally.z);
@@ -658,7 +701,7 @@ function manageMissions(player, combatUnits, elapsed) {
 
   if (availableStrikeUnits.length >= strikeThreshold + unitsReservedForDefense) {
     const buildings = mem.targets.filter(t => t.type === 'building' && State.buildings.get(t.id));
-    if (buildings.length > 0) {
+    if (buildings.length > 0 && botCanSpendOrder(mem)) {
       buildings.sort((a, b) => {
         const bA = State.buildings.get(a.id);
         const bB = State.buildings.get(b.id);
@@ -671,6 +714,7 @@ function manageMissions(player, combatUnits, elapsed) {
       const ids = strikeSquad.map(u => u.id);
       mem.currentMissions.push({ type: 'STRIKE', targetId: target.id, unitIds: ids, status: 'active' });
       Units.commandAttackBuilding(ids, target.id);
+      botSpendOrder(mem);
       UI.showStatus(`🤖 P${pid} is launching a ${strikeSquad.length}-unit strike!`);
     }
   }
@@ -706,6 +750,7 @@ function assignBotScoutMissions(player, combatUnits, elapsed) {
   const hv = State.getPlayerUnits(pid).filter(u => u.type === 'harvester');
   const target = getScoutTarget(player, hq, elapsed, null, hv);
   if (!target) return;
+  if (!botTrySpendOrders(mem, 1)) return;
 
   mem.lastScoutMissionTime = elapsed;
   mem.currentMissions.push({
@@ -743,6 +788,7 @@ function assignHarvesterExploration(player, harvesters, elapsed) {
   const want = Math.min(BOT_HARVESTER_EXPLORE_PER_TICK, eligible.length);
   const targets = allocateDiverseExploreTargets(player, hq, mem, elapsed, want, null, harvesters);
   for (let i = 0; i < targets.length; i++) {
+    if (!botTrySpendOrders(mem, 1)) break;
     const h = eligible[i];
     h._botExploreCmdAt = elapsed;
     Units.commandAttackMove([h.id], targets[i].x, targets[i].z);
@@ -816,6 +862,7 @@ function handleHarvesterDefense(player, combatUnits, harvesters, elapsed) {
 
   const n = Math.min(BOT_HARVESTER_ESCORT_MAX_UNITS, responders.length);
   if (n < 1) return;
+  if (!botTrySpendOrders(mem, 1)) return;
 
   const rally = clampWorldToPlayableDisk(bestH.x, bestH.z, 2);
   Units.commandAttackMove(responders.slice(0, n).map(u => u.id), rally.x, rally.z);
@@ -838,7 +885,7 @@ function tickScoutMissions(player, elapsed) {
     if (distSq <= arriveR2) {
       const hv = State.getPlayerUnits(player.id).filter(u => u.type === 'harvester');
       const next = getScoutTarget(player, hq, elapsed, m.targetPos, hv);
-      if (next) {
+      if (next && botTrySpendOrders(mem, 1)) {
         m.targetPos = next;
         m._lastReissue = elapsed;
         Units.commandAttackMove([u.id], next.x, next.z);
@@ -849,7 +896,7 @@ function tickScoutMissions(player, elapsed) {
     if (elapsed - (m._lastReissue || 0) < BOT_SCOUT_REPATH_SEC) return;
     // Only re-path when truly idle/stuck — not every moving scout (that caused crawl stutter).
     const stuck = u.state === 'idle';
-    if (stuck) {
+    if (stuck && botTrySpendOrders(mem, 1)) {
       m._lastReissue = elapsed;
       Units.commandAttackMove([u.id], m.targetPos.x, m.targetPos.z);
     }
@@ -870,26 +917,27 @@ function doAttackMission(player, combatUnits, elapsed) {
   const needOrders = strikeUnits.filter(u =>
     u.state === 'idle' || (u.state === 'moving' && !u.playerCommanded)
   );
-  if (needOrders.length > 0) {
+  if (needOrders.length > 0 && botTrySpendOrders(mem, 1)) {
     Units.commandAttackBuilding(needOrders.map(u => u.id), strike.targetId);
   }
 }
 
 function tickRetaliationMissions(player) {
   const mem = player.botMemory;
-  mem.currentMissions.forEach(m => {
-    if (m.type !== 'retaliation' || !m.targetPos) return;
+  for (let mi = 0; mi < mem.currentMissions.length; mi++) {
+    const m = mem.currentMissions[mi];
+    if (m.type !== 'retaliation' || !m.targetPos) continue;
     const ids = m.unitIds
       .map(id => State.units.get(id))
       .filter(u => u && u.hp > 0 && u.state === 'idle');
-    if (ids.length > 0) {
+    if (ids.length > 0 && botTrySpendOrders(mem, 1)) {
       Units.commandAttackMove(
         ids.map(u => u.id),
         m.targetPos.x,
         m.targetPos.z
       );
     }
-  });
+  }
 }
 
 /** Anchor a unit uses for “is this my base’s fight?” (Story multi-base). */
@@ -976,6 +1024,7 @@ function handleDefense(player, combatUnits, threats) {
     if (available.length === 0) continue;
 
     for (const u of available) committed.add(u.id);
+    if (!botTrySpendOrders(mem, 1)) break;
     commandBotEngageEnemyUnits(
       available.map(u => u.id),
       { id: threatUnit.id }
@@ -1053,6 +1102,7 @@ function applyBotFairFocusFire(player, elapsed) {
       return true;
     });
     if (needRetarget.length === 0) continue;
+    if (!botTrySpendOrders(mem, 1)) break;
     commandBotEngageEnemyUnits(needRetarget.map(u => u.id), best);
   }
 }
@@ -1089,6 +1139,7 @@ function maybeBotEngineerCapture(player, elapsed) {
   if (!target) return;
 
   if (elapsed - (mem._lastEngCaptureOrder || 0) < 2.5) return;
+  if (!botTrySpendOrders(mem, 1)) return;
   mem._lastEngCaptureOrder = elapsed;
   Units.commandAttackBuilding([engineers[0].id], target.id);
 }

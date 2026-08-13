@@ -1,0 +1,254 @@
+{
+  "when": "2026-08-13T03:05:36.157Z",
+  "out": [
+    {
+      "name": "ffa-look-base",
+      "samples": 20,
+      "skipPct": 75,
+      "uniqueCamKeys": 1,
+      "fpsHudLast": 240,
+      "fpsHudAvg": 240,
+      "fpsHudMin": 240,
+      "callsLast": 15,
+      "trisLast": 191746,
+      "hudText": "RTSVR4 0.4.42 | 240 FPS",
+      "shot": "D:\\backup 2024-04\\Documents\\Backup_MBP_2021-12\\Backup\\Projects\\Apps\\WebXR\\RTSVR4\\bench-poses\\chrome-ffa-look-base.png",
+      "probe": {
+        "enter": 995,
+        "orig": 210,
+        "skipFlag": 785,
+        "frameDelta": 210
+      },
+      "phase": {
+        "n": 0,
+        "tickMs": 0.21175879400279654,
+        "renderMs": 0.1957788944394145,
+        "tockMs": 0.007236180907517821,
+        "intervalMs": 0,
+        "tickMax": 1.800000000745058,
+        "renderMax": 1.3999999985098839
+      },
+      "compTop": [
+        {
+          "k": "tick:rts-engine-loop#game-scene",
+          "ms": 0.16613065327082446,
+          "sum": 165.30000000447035
+        },
+        {
+          "k": "tick:rts-vr-hand-ray#rightHand",
+          "ms": 0.023417085472812606,
+          "sum": 23.30000004544854
+        },
+        {
+          "k": "tick:rts-vr-hand-ray#leftHand",
+          "ms": 0.003316582911577656,
+          "sum": 3.2999999970197678
+        },
+        {
+          "k": "tick:rts-version-fps#game-scene",
+          "ms": 0.001507537688442211,
+          "sum": 1.5
+        },
+        {
+          "k": "tick:light",
+          "ms": 0.0015075376809541904,
+          "sum": 1.4999999925494194
+        },
+        {
+          "k": "tock:rts-engine-loop#game-scene",
+          "ms": 0.0012060301462609563,
+          "sum": 1.1999999955296516
+        },
+        {
+          "k": "tick:tracked-controls#leftHand",
+          "ms": 0.0011055276434325692,
+          "sum": 1.1000000052154064
+        }
+      ],
+      "perf": {
+        "frames": 995,
+        "fps": 239.77636937614253,
+        "frameMs": 0.1637185929595825,
+        "renderMs": 0.019798995026541717,
+        "fogOverlayMs": 0.0013065326715534058,
+        "inputMs": 0.005829145714415977,
+        "botMs": 0.005226130652517529,
+        "fogMs": 0.004020100502512563,
+        "uiMs": 0.051256281362107046,
+        "effectsMs": 0.0005025125628140704,
+        "gpuSkipPct": 78.89447236180904
+      }
+    },
+    {
+      "name": "ffa-edge-out",
+      "samples": 20,
+      "skipPct": 100,
+      "uniqueCamKeys": 1,
+      "fpsHudLast": 240,
+      "fpsHudAvg": 240,
+      "fpsHudMin": 240,
+      "callsLast": 13,
+      "trisLast": 151234,
+      "hudText": "RTSVR4 0.4.42 | 240 FPS",
+      "shot": "D:\\backup 2024-04\\Documents\\Backup_MBP_2021-12\\Backup\\Projects\\Apps\\WebXR\\RTSVR4\\bench-poses\\chrome-ffa-edge-out.png",
+      "probe": {
+        "enter": 995,
+        "orig": 0,
+        "skipFlag": 995,
+        "frameDelta": 0
+      },
+      "phase": {
+        "n": 0,
+        "tickMs": 0.2060301507462808,
+        "renderMs": 0.001608040198758619,
+        "tockMs": 0.011859296475672841,
+        "intervalMs": 0,
+        "tickMax": 3.899999998509884,
+        "renderMax": 0.10000000149011612
+      },
+      "compTop": [
+        {
+          "k": "tick:rts-engine-loop#game-scene",
+          "ms": 0.15557788944424097,
+          "sum": 154.79999999701977
+        },
+        {
+          "k": "tick:rts-vr-hand-ray#rightHand",
+          "ms": 0.024824120602266273,
+          "sum": 24.699999999254942
+        },
+        {
+          "k": "tick:rts-vr-hand-ray#leftHand",
+          "ms": 0.0035175879060023994,
+          "sum": 3.4999999664723873
+        },
+        {
+          "k": "tick:rts-version-fps#game-scene",
+          "ms": 0.003115577894688851,
+          "sum": 3.1000000052154064
+        },
+        {
+          "k": "tock:rts-engine-loop#game-scene",
+          "ms": 0.0019095477334518528,
+          "sum": 1.8999999947845936
+        },
+        {
+          "k": "tick:light",
+          "ms": 0.001708542712819037,
+          "sum": 1.699999999254942
+        },
+        {
+          "k": "tick:tracked-controls#leftHand",
+          "ms": 0.0016080402025026293,
+          "sum": 1.6000000014901161
+        },
+        {
+          "k": "tock:rts-vr-aim-ray-ui-hover#rightHandRay",
+          "ms": 0.0010050251331161614,
+          "sum": 1.0000000074505806
+        },
+        {
+          "k": "tick:look-controls#camera",
+          "ms": 0.000502512570302091,
+          "sum": 0.5000000074505806
+        }
+      ],
+      "perf": {
+        "frames": 995,
+        "fps": 239.86885562055943,
+        "frameMs": 0.15386934672767794,
+        "renderMs": 0.0024120603074979543,
+        "fogOverlayMs": 0.0024120603074979543,
+        "inputMs": 0.007537688434723034,
+        "botMs": 0.0055276381946987845,
+        "fogMs": 0.004422110532546163,
+        "uiMs": 0.058391959800492575,
+        "effectsMs": 0.000804020104995325,
+        "gpuSkipPct": 100
+      }
+    },
+    {
+      "name": "ffa-edge-out-low",
+      "samples": 20,
+      "skipPct": 100,
+      "uniqueCamKeys": 1,
+      "fpsHudLast": 240,
+      "fpsHudAvg": 236,
+      "fpsHudMin": 232,
+      "callsLast": 13,
+      "trisLast": 151234,
+      "hudText": "RTSVR4 0.4.42 | 240 FPS",
+      "shot": "D:\\backup 2024-04\\Documents\\Backup_MBP_2021-12\\Backup\\Projects\\Apps\\WebXR\\RTSVR4\\bench-poses\\chrome-ffa-edge-out-low.png",
+      "probe": {
+        "enter": 992,
+        "orig": 0,
+        "skipFlag": 992,
+        "frameDelta": 0
+      },
+      "phase": {
+        "n": 0,
+        "tickMs": 0.16357214943581946,
+        "renderMs": 0.0017154389535622928,
+        "tockMs": 0.0075681130021179,
+        "intervalMs": 0,
+        "tickMax": 0.8000000007450581,
+        "renderMax": 0.10000000149011612
+      },
+      "compTop": [
+        {
+          "k": "tick:rts-engine-loop#game-scene",
+          "ms": 0.12593340070017892,
+          "sum": 124.80000009387732
+        },
+        {
+          "k": "tick:rts-vr-hand-ray#rightHand",
+          "ms": 0.02108980827296658,
+          "sum": 20.899999998509884
+        },
+        {
+          "k": "tick:rts-version-fps#game-scene",
+          "ms": 0.003329969728299756,
+          "sum": 3.300000000745058
+        },
+        {
+          "k": "tick:rts-vr-hand-ray#leftHand",
+          "ms": 0.0014127144321242928,
+          "sum": 1.4000000022351742
+        },
+        {
+          "k": "tick:light",
+          "ms": 0.0012108980970293674,
+          "sum": 1.2000000141561031
+        },
+        {
+          "k": "tock:rts-engine-loop#game-scene",
+          "ms": 0.001210898074474633,
+          "sum": 1.1999999918043613
+        },
+        {
+          "k": "tick:tracked-controls#leftHand",
+          "ms": 0.0010090817468979526,
+          "sum": 1.000000011175871
+        },
+        {
+          "k": "tock:rts-vr-aim-ray-ui-hover#rightHandRay",
+          "ms": 0.0009081735567957554,
+          "sum": 0.8999999947845936
+        }
+      ],
+      "perf": {
+        "frames": 991,
+        "fps": 239.80060978552063,
+        "frameMs": 0.12411705357906917,
+        "renderMs": 0.0016145307897739525,
+        "fogOverlayMs": 0.0016145307897739525,
+        "inputMs": 0.005247225020716097,
+        "botMs": 0.002825428860489463,
+        "fogMs": 0.006760847654219954,
+        "uiMs": 0.04248234111999888,
+        "effectsMs": 0.0007063572104234628,
+        "gpuSkipPct": 100
+      }
+    }
+  ]
+}

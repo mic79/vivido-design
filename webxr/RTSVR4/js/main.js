@@ -34,6 +34,7 @@ import {
 import { resolveStorySeed } from './story-history.js';
 import { applyHdrSkyEnvironment } from './sky-hdr-environment.js';
 import { primeSceneRevealBlack, runSceneRevealFromBlack } from './scene-reveal.js';
+import * as Perf from './perf-profiler.js';
 
 /** Units players can actually produce (barracks + war factory + refinery harvester). Excludes e.g. APC. */
 const LOBBY_SHOWCASE_UNIT_TYPES = ['harvester', ...BARRACKS_UNITS, ...FACTORY_UNITS];
@@ -97,6 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function initializeGame(sceneEl) {
   console.log('🎮 RTSVR4 Initializing...');
+  Perf.initPerfFromUrl();
 
   Input.applyImmersiveVrEntryToScene(sceneEl);
 
@@ -110,7 +112,11 @@ function initializeGame(sceneEl) {
     State.gameSession.sceneContentReady = false;
     UI.setBootLoadingMessage('Loading sky & lighting…');
     primeSceneRevealBlack(sceneEl);
-    await applyHdrSkyEnvironment(sceneEl);
+    if (Perf.shouldLoadCubemap()) {
+      await applyHdrSkyEnvironment(sceneEl);
+    } else {
+      console.log('[perf] nocubemap: skipping HDR sky / env map');
+    }
     UI.setBootLoadingMessage('Building terrain…');
     await applyMoonBattlefieldVisuals(sceneEl);
     primeSceneRevealBlack(sceneEl);
@@ -166,6 +172,9 @@ function initializeGame(sceneEl) {
     UI.updateMenuVisibility();
     UI.hideBootLoadingScreen();
 
+    if (typeof window !== 'undefined') {
+      window.__rtsReady = true;
+    }
     console.log('✅ RTSVR4 Ready');
   }, 500);
 }
@@ -398,6 +407,10 @@ async function onStartGame(mode) {
 
     Pathfinding.rebuildNavMeshImmediate();
   }
+
+  Fog.updateFog();
+  Renderer.resetMatchViewState();
+  UI.resetMatchHud();
 
   // Start
   State.gameSession.gameStarted = true;
