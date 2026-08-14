@@ -556,6 +556,9 @@ export function diagnoseStoryHillBake(opts = {}) {
  * piecewise-linear mesh, not the smooth analytic continuation of the same noise.
  */
 let centralTerrainHeightGrid = null;
+/** Baked skirmish GLB after Y-up bake — height samples raycast this instead of the procedural plate. */
+let bakedMoonRoot = null;
+let bakedMoonPlate = null;
 
 /**
  * Full nav-plane height field (plate mesh on-center, analytic elsewhere) so units outside the
@@ -570,6 +573,78 @@ let terrainHeightGen = 0;
 
 export function getTerrainHeightGen() {
   return terrainHeightGen;
+}
+
+let _bakedMoonRaycaster = null;
+
+function raycastBakedMoonY(wx, wz) {
+  const target = bakedMoonPlate || bakedMoonRoot;
+  if (!target || !window.THREE) return null;
+  const THREE = window.THREE;
+  if (!_bakedMoonRaycaster) _bakedMoonRaycaster = new THREE.Raycaster();
+  _bakedMoonRaycaster.far = 500;
+  _bakedMoonRaycaster.set(new THREE.Vector3(wx, 80, wz), new THREE.Vector3(0, -1, 0));
+  const hits = _bakedMoonRaycaster.intersectObject(target, false);
+  if (!hits.length) return null;
+  const y = hits[0].point.y;
+  return Number.isFinite(y) ? y : null;
+}
+
+function adoptBakedMoonHeightField(root) {
+  bakedMoonRoot = root || null;
+  bakedMoonPlate = null;
+  if (!root) {
+    centralTerrainHeightGrid = null;
+    return;
+  }
+  root.updateMatrixWorld(true);
+  root.traverse((o) => {
+    if (o.isMesh && /^Moon_0/i.test(o.name)) bakedMoonPlate = o;
+  });
+  const segW = BATTLE_TERRAIN.segmentsWidth;
+  const segD = BATTLE_TERRAIN.segmentsDepth;
+  const row = segW + 1;
+  const grid = new Float32Array(row * (segD + 1));
+  const MAP = mapPlateM();
+  const half = MAP * 0.5;
+  for (let iy = 0; iy <= segD; iy++) {
+    const wz = half - (iy / segD) * MAP;
+    for (let ix = 0; ix <= segW; ix++) {
+      const wx = -half + (ix / segW) * MAP;
+      const y = raycastBakedMoonY(wx, wz);
+      grid[iy * row + ix] = y != null ? y : 0;
+    }
+  }
+  centralTerrainHeightGrid = grid;
+  rebuildGameplayHeightGrid();
+}
+
+async function finishBakedMoonLook(THREE, sceneEl, root) {
+  const recv =
+    typeof window._getDynamicShadowsEnabled === 'function'
+      ? !!window._getDynamicShadowsEnabled()
+      : true;
+  let cheap = false;
+  root.traverse((obj) => {
+    if (!obj.isMesh) return;
+    if (obj.material && obj.material.userData && obj.material.userData.cheapMoonLook) cheap = true;
+    obj.receiveShadow = recv;
+    obj.castShadow = false;
+    if (obj.material && obj.material.userData) obj.material.userData.shadowRecv = recv;
+  });
+  if (!cheap) {
+    const material = await createBattleMoonMaterial(THREE, sceneEl);
+    if (material) {
+      if (material.userData) material.userData.shadowRecv = recv;
+      root.traverse((obj) => {
+        if (!obj.isMesh) return;
+        obj.material = material;
+        obj.receiveShadow = recv;
+        obj.castShadow = false;
+      });
+    }
+  }
+  adoptBakedMoonHeightField(root);
 }
 
 /**
@@ -2045,10 +2120,13 @@ export async function applyMoonBattlefieldVisuals(sceneEl) {
   if (!groundEl || !groundEl.object3D) return;
 
   horizonSkirtAttached = false;
+  bakedMoonRoot = null;
+  bakedMoonPlate = null;
 
   const baked = await tryLoadBakedSkirmishMoon();
   if (baked) {
     groundEl.setObject3D('mesh', baked);
+    await finishBakedMoonLook(THREE, sceneEl, baked);
     configureTerrainPresentation(sceneEl);
     styleMoonGrid();
     const gridMount = document.getElementById('gridHelper');
@@ -2102,10 +2180,13 @@ export async function rebuildMoonBattlefield(sceneEl) {
   if (prev) disposeGroundVisual(groundEl, keepMat);
 
   horizonSkirtAttached = false;
+  bakedMoonRoot = null;
+  bakedMoonPlate = null;
 
   const baked = await tryLoadBakedSkirmishMoon();
   if (baked) {
     groundEl.setObject3D('mesh', baked);
+    await finishBakedMoonLook(THREE, sceneEl, baked);
     configureTerrainPresentation(sceneEl);
     syncTerrainGridHelperSize();
     return;

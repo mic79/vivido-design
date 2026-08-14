@@ -264,7 +264,7 @@ export function toggleDynamicShadows() {
 
 /**
  * Off = no shadow-map pass, no PCF, maps disposed, moon does not receive.
- * On = 512 PCFSoft + moon/skirts receive so casters actually blob on the ground.
+ * On = 512 PCFSoft + moon/skirts receive so casters blob on the ground.
  */
 function applyDynamicShadowGpuState() {
   const sceneEl = sceneElRenderer() || (typeof document !== 'undefined' ? document.querySelector('a-scene') : null);
@@ -311,14 +311,43 @@ function applyDynamicShadowGpuState() {
   }
 }
 
+/**
+ * Same sun ray as `index.html` directional light. Position is scaled so the
+ * whole nav disk sits *in front of* the shadow camera (Story HQ is ~480 m south;
+ * the old 73 m light sat behind that spawn, so PCF never included it).
+ * Direction is unchanged — only distance along the ray moves.
+ */
+const SUN_OFFSET = { x: -0.005, y: 55, z: -48.83 };
+
+function placeDirectionalLightForNavCoverage(sceneEl, THREE) {
+  if (!sceneEl || !THREE) return;
+  const xz = Math.hypot(SUN_OFFSET.x, SUN_OFFSET.z) || 1;
+  const len = Math.hypot(SUN_OFFSET.x, SUN_OFFSET.y, SUN_OFFSET.z) || 1;
+  const dist = ((MAP_UNIT_NAV_RADIUS + 80) / xz) * len;
+  const scale = dist / len;
+  const pos = {
+    x: SUN_OFFSET.x * scale,
+    y: SUN_OFFSET.y * scale,
+    z: SUN_OFFSET.z * scale,
+  };
+  const lights = sceneEl.querySelectorAll('[light]');
+  for (let i = 0; i < lights.length; i++) {
+    const el = lights[i];
+    const spec = el.getAttribute('light');
+    if (!spec || spec.type !== 'directional') continue;
+    el.setAttribute('position', pos);
+  }
+}
+
 export function configureBattlefieldShadows(sceneEl) {
   const THREE = window.THREE;
   const renderer = sceneEl && sceneEl.renderer;
   if (!renderer || !THREE) return;
 
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  placeDirectionalLightForNavCoverage(sceneEl, THREE);
 
-  // Ortho box must cover `MAP_UNIT_NAV_RADIUS` (~253 m) so rim / corner bases still cast onto ground.
+  // Ortho box must cover `MAP_UNIT_NAV_RADIUS` so rim / Story bases still cast onto ground.
   const ext = Math.ceil(MAP_UNIT_NAV_RADIUS * 1.12 + 24);
   sceneEl.object3D.traverse((obj) => {
     if (!obj.isDirectionalLight) return;
@@ -332,6 +361,12 @@ export function configureBattlefieldShadows(sceneEl) {
     obj.shadow.bias = -0.0006;
     obj.shadow.normalBias = 0.035;
     obj.shadow.camera.updateProjectionMatrix();
+    if (obj.target) {
+      if (!obj.target.parent && sceneEl.object3D) sceneEl.object3D.add(obj.target);
+      obj.target.position.set(0, 0, 0);
+      obj.target.updateMatrixWorld(true);
+    }
+    obj.updateMatrixWorld(true);
   });
   applyDynamicShadowGpuState();
 }
@@ -2110,10 +2145,13 @@ function syncShadowMapFromCasters() {
     if (sm) sm.enabled = false;
     return;
   }
-  // Keep the PCF map live while ON. Freezing after the first hash was racing
-  // lobby/GLTF spawn and skip-render, so Shadows: ON presented an empty map.
-  syncShadowMapAutoUpdate(true);
-  _shadowCasterSig = shadowCasterHash();
+  const sceneEl = sceneElRenderer();
+  const sm = sceneEl && sceneEl.renderer && sceneEl.renderer.shadowMap;
+  if (sm) sm.enabled = true;
+  const sig = shadowCasterHash();
+  const moved = _shadowGpuDirty || _shadowCasterSig === null || sig !== _shadowCasterSig;
+  _shadowCasterSig = sig;
+  syncShadowMapAutoUpdate(moved);
 }
 
 function refreshCameraFrustum() {

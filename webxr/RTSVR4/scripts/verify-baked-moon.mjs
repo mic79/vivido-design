@@ -72,13 +72,15 @@ function moonWorldBox(page) {
         verts: o.geometry?.attributes?.position?.count || 0,
         mat: o.material?.type,
         cheap: !!(o.material && o.material.userData && o.material.userData.cheapMoonLook),
+        epic: !!(o.material && o.material.userData && o.material.userData.epicLightmap),
         hasMap: !!(o.material && o.material.map),
+        hasLightMap: !!(o.material && o.material.lightMap),
         hasNormal: !!(o.material && o.material.normalMap),
         receiveShadow: !!o.receiveShadow,
-        box: boxOf(o, o.name === 'rts-ground-mesh' || /^Moon_0/i.test(o.name)),
+        box: boxOf(o, o.name === 'rts-ground-mesh' || /^Moon_0/i.test(o.name) || /plate/i.test(o.name)),
       };
       meshes.push(rec);
-      if (o.name === 'rts-ground-mesh' || /^Moon_0/i.test(o.name)) plate = rec.box;
+      if (o.name === 'rts-ground-mesh' || /^Moon_0/i.test(o.name) || /plate/i.test(o.name)) plate = rec.box;
     });
     return {
       rootName: root.name,
@@ -180,18 +182,15 @@ function assertGroundLiesOnXz(info, label) {
   if (sx < 150 || sz < 150) throw new Error(`${label}: plate XZ too small ${sx.toFixed(1)}×${sz.toFixed(1)}`);
   if (Math.abs(cy) > 40) throw new Error(`${label}: plate center Y=${cy.toFixed(1)} not under units`);
   const skirts = info.meshes.find(
-    (m) => /^Moon_1/i.test(m.name) || (m.name !== 'rts-ground-mesh' && m.verts > 200)
+    (m) => /^Moon_1/i.test(m.name) || /skirt/i.test(m.name) || (m.name !== 'rts-ground-mesh' && m.verts > 200)
   );
   if (!skirts) throw new Error(`${label}: skirts missing`);
   if (skirts.box.max[1] > 80) {
     throw new Error(`${label}: skirts peak Y=${skirts.box.max[1].toFixed(1)} — drop flipped into the sky`);
   }
-  if (
-    !info.meshes.every(
-      (m) => m.mat === 'MeshLambertMaterial' && m.cheap && m.hasMap && m.hasNormal
-    )
-  ) {
-    throw new Error(`${label}: moon must be Lambert + normal, got ${JSON.stringify(info.meshes)}`);
+  const lit = info.meshes.every((m) => m.mat === 'MeshLambertMaterial' && m.cheap && m.hasMap && m.hasNormal);
+  if (!lit) {
+    throw new Error(`${label}: moon must be Lambert + tiled GLB maps, got ${JSON.stringify(info.meshes)}`);
   }
 }
 
@@ -208,12 +207,26 @@ fs.mkdirSync(SHOT_DIR, { recursive: true });
 
 await page.goto(`http://127.0.0.1:${PORT}/index.html`, { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForFunction(() => window.__rtsReady === true, null, { timeout: 60000 });
-await page.waitForTimeout(600);
+await page.evaluate(() => {
+  if (typeof window._setDynamicShadowsEnabled === 'function') window._setDynamicShadowsEnabled(true);
+});
+await page.waitForTimeout(900);
 
 const startInfo = await moonWorldBox(page);
 const startShot = path.join(SHOT_DIR, 'baked-moon-start.png');
 await page.screenshot({ path: startShot, type: 'png' });
 const startLum = await pngTerrainLum(browser, startShot);
+
+await page.evaluate(() => {
+  if (typeof window._setDynamicShadowsEnabled === 'function') window._setDynamicShadowsEnabled(false);
+});
+await page.waitForTimeout(700);
+const startOffShot = path.join(SHOT_DIR, 'baked-moon-start-noshadow.png');
+await page.screenshot({ path: startOffShot, type: 'png' });
+await page.evaluate(() => {
+  if (typeof window._setDynamicShadowsEnabled === 'function') window._setDynamicShadowsEnabled(true);
+});
+await page.waitForTimeout(700);
 
 const camSave = await page.evaluate(() => {
   const cam = document.getElementById('camera');
@@ -393,8 +406,20 @@ try {
   if (startLum.n < 50) throw new Error(`start terrain sample empty ${JSON.stringify(startLum)}`);
   if (startLum.avg < 28) throw new Error(`start terrain too dark (black/failed shader) avg=${startLum.avg.toFixed(1)}`);
   if (startLum.avg > 210) throw new Error(`start terrain blown out avg=${startLum.avg.toFixed(1)}`);
-  if (startLum.std < 6) {
-    throw new Error(`start terrain too flat (normals/albedo not reading) std=${startLum.std.toFixed(2)}`);
+  if (startLum.std < 8) {
+    throw new Error(`start terrain too flat (GLB albedo not tiling) std=${startLum.std.toFixed(2)}`);
+  }
+  if (startLum.std > 42) {
+    throw new Error(`start terrain posterized/grid (bad lightmap) std=${startLum.std.toFixed(2)}`);
+  }
+  const startBlob = await pngDarkerFrac(browser, startShot, startOffShot, {
+    x: 480,
+    y: 240,
+    w: 320,
+    h: 260,
+  });
+  if (!startBlob || startBlob.darkerFrac < 0.03 || startBlob.mad < 1.2) {
+    throw new Error(`Start screen has no ground blobs under the settlement: ${JSON.stringify(startBlob)}`);
   }
   if (!shadowOn || !shadowOn.smEnabled || !shadowOn.moonReceive || !shadowOn.lightCast) {
     throw new Error(`shadows ON did not enable ground receive: ${JSON.stringify(shadowOn)}`);
