@@ -151,7 +151,12 @@ assert.match(bakedSrc, /lambert\+glb-moon01/);
 assert.match(bakedSrc, /unlitmoon/);
 assert.match(bakedSrc, /planar-xz/);
 assert.match(bakedSrc, /MeshLambertMaterial/);
-assert.match(bakedSrc, /MeshBasicMaterial/);
+assert.match(bakedSrc, /rtsSkirmishBake/);
+assert.doesNotMatch(bakedSrc, /cache: 'no-store'/);
+assert.match(moonSrc, /parkedSkirmish/);
+assert.match(moonSrc, /restoreSkirmishPark/);
+assert.match(moonSrc, /skipHeight/);
+assert.match(moonSrc, /load-before-unload/);
 
 section('dynamic shadow toggle (GPU off, VR wired)');
 const rendSrc = fs.readFileSync(new URL('./js/renderer.js', import.meta.url), 'utf8');

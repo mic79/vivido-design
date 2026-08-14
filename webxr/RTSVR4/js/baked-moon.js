@@ -107,20 +107,26 @@ export function bakedMoonAllowed() {
   return MAP_TERRAIN_STYLE !== 'hills';
 }
 
+let glbBufCache = null;
+
 export async function tryLoadBakedSkirmishMoon() {
   if (!bakedMoonAllowed()) return null;
-  let res;
-  try {
-    res = await fetch(BAKED_SKIRMISH_GLB, { cache: 'no-store' });
-  } catch {
-    return null;
+  if (!glbBufCache) {
+    let res;
+    try {
+      res = await fetch(BAKED_SKIRMISH_GLB);
+    } catch {
+      return null;
+    }
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength < MIN_BAKE_BYTES) {
+      console.warn('[RTSVR4] skip baked moon: file too small', buf.byteLength);
+      return null;
+    }
+    glbBufCache = buf;
   }
-  if (!res.ok) return null;
-  const buf = await res.arrayBuffer();
-  if (buf.byteLength < MIN_BAKE_BYTES) {
-    console.warn('[RTSVR4] skip baked moon: file too small', buf.byteLength);
-    return null;
-  }
+  const buf = glbBufCache;
   let json;
   try {
     json = parseGlbJson(buf);
@@ -146,6 +152,7 @@ export async function tryLoadBakedSkirmishMoon() {
   });
 
   const keep = new W.Group();
+  keep.userData.rtsSkirmishBake = true;
   keep.name = 'rts-ground-mesh';
   const moonMeshes = [];
   gltf.scene.updateMatrixWorld(true);

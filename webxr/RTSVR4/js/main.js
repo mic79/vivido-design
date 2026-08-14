@@ -238,9 +238,9 @@ async function onStartGame(mode) {
     wantStory
       ? 'Generating Story map, hills, and bases… This can take a few seconds.'
       : needsRebuild
-        ? 'Preparing battlefield…'
+        ? 'Switching to skirmish map…'
         : 'Starting match…',
-    wantStory ? 'Loading Story' : 'Starting match'
+    wantStory ? 'Loading Story' : needsRebuild ? 'Switching map' : 'Starting match'
   );
   // Let the overlay paint before heavy sync work freezes the main thread.
   await UI.nextPaint();
@@ -272,7 +272,7 @@ async function onStartGame(mode) {
         clearStoryBlockingHills();
         applyMapProfile('standard');
         if (needsRebuild) {
-          UI.setMatchPreparingMessage('Restoring skirmish terrain…');
+        UI.setMatchPreparingMessage('Switching to skirmish map…');
           await UI.nextPaint();
         }
       }

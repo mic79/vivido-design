@@ -8,7 +8,7 @@
  */
 
 import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M } from './config.js';
-import { tryLoadBakedSkirmishMoon } from './baked-moon.js';
+import { bakedMoonAllowed, tryLoadBakedSkirmishMoon } from './baked-moon.js';
 
 /** Central plate edge length (m) — follows live `MAP_SIZE` (standard 200 / Story 400). */
 function mapPlateM() {
@@ -590,7 +590,36 @@ function raycastBakedMoonY(wx, wz) {
   return Number.isFinite(y) ? y : null;
 }
 
-function adoptBakedMoonHeightField(root) {
+function yieldFrame() {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const failsafe = setTimeout(done, 48);
+    const hop = () => {
+      clearTimeout(failsafe);
+      done();
+    };
+    try {
+      const sceneEl = document.querySelector('a-scene');
+      const xr = sceneEl && sceneEl.renderer && sceneEl.renderer.xr;
+      const session = xr && xr.isPresenting && typeof xr.getSession === 'function' ? xr.getSession() : null;
+      if (session && typeof session.requestAnimationFrame === 'function') {
+        session.requestAnimationFrame(() => hop());
+        return;
+      }
+    } catch (_) {
+      /* */
+    }
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(hop);
+    else setTimeout(hop, 0);
+  });
+}
+
+async function adoptBakedMoonHeightField(root) {
   bakedMoonRoot = root || null;
   bakedMoonPlate = null;
   if (!root) {
@@ -614,12 +643,13 @@ function adoptBakedMoonHeightField(root) {
       const y = raycastBakedMoonY(wx, wz);
       grid[iy * row + ix] = y != null ? y : 0;
     }
+    if ((iy & 15) === 15) await yieldFrame();
   }
   centralTerrainHeightGrid = grid;
   rebuildGameplayHeightGrid();
 }
 
-async function finishBakedMoonLook(THREE, sceneEl, root) {
+async function finishBakedMoonLook(THREE, sceneEl, root, opts = {}) {
   const recv =
     typeof window._getDynamicShadowsEnabled === 'function'
       ? !!window._getDynamicShadowsEnabled()
@@ -644,7 +674,7 @@ async function finishBakedMoonLook(THREE, sceneEl, root) {
       });
     }
   }
-  adoptBakedMoonHeightField(root);
+  if (!opts.skipHeight) await adoptBakedMoonHeightField(root);
 }
 
 /**
@@ -1163,6 +1193,8 @@ function horizonSkirtDepthM() {
 }
 
 let horizonSkirtAttached = false;
+/** Skirmish GLB kept on GPU while Story is showing — Story→skirmish must not decode 40MB again. */
+let parkedSkirmish = null;
 
 /**
  * Skirt patch on the gameplay heightfield lattice — kept for optional debug; live path uses
@@ -2098,18 +2130,51 @@ export function toggleTerrainGrid() {
   return terrainGridVisible;
 }
 
-function disposeGroundVisual(groundEl, keepMat) {
-  const prev = groundEl.getObject3D('mesh');
-  if (!prev) return;
-  disposeHorizonSkirtUnder(prev);
-  prev.traverse((obj) => {
+function disposeGroundObject(root, keepMat) {
+  if (!root) return;
+  disposeHorizonSkirtUnder(root);
+  root.traverse((obj) => {
     if (obj.geometry) obj.geometry.dispose();
     const mats = obj.material == null ? [] : Array.isArray(obj.material) ? obj.material : [obj.material];
     for (const mat of mats) {
       if (mat && mat !== keepMat) disposeMaterial(mat);
     }
   });
+}
+
+function disposeGroundVisual(groundEl, keepMat) {
+  const prev = groundEl.getObject3D('mesh');
+  if (!prev) return;
   groundEl.removeObject3D('mesh');
+  disposeGroundObject(prev, keepMat);
+}
+
+function snapshotSkirmishPark(root) {
+  parkedSkirmish = {
+    root,
+    plate: bakedMoonPlate,
+    centralGrid: centralTerrainHeightGrid,
+    gameplayGrid: gameplayHeightGrid,
+    gameplayN: gameplayHeightN,
+    gameplayHalf: gameplayHeightHalf,
+    gameplayCell: gameplayHeightCell,
+  };
+}
+
+function restoreSkirmishPark() {
+  const live = parkedSkirmish;
+  parkedSkirmish = null;
+  if (!live || !live.root) return null;
+  live.root.visible = true;
+  bakedMoonRoot = live.root;
+  bakedMoonPlate = live.plate;
+  centralTerrainHeightGrid = live.centralGrid;
+  gameplayHeightGrid = live.gameplayGrid;
+  gameplayHeightN = live.gameplayN;
+  gameplayHeightHalf = live.gameplayHalf;
+  gameplayHeightCell = live.gameplayCell;
+  terrainHeightGen += 1;
+  return live.root;
 }
 
 export async function applyMoonBattlefieldVisuals(sceneEl) {
@@ -2165,7 +2230,8 @@ export async function applyMoonBattlefieldVisuals(sceneEl) {
 
 /**
  * Rebuild central plate + skirts after `applyMapProfile` / Story hill changes.
- * Reuses moon material when possible.
+ * Keeps the skirmish GLB resident during Story (load-before-unload) so returning
+ * to 1v1 does not freeze Quest on a 40MB decode + height raycast.
  */
 export async function rebuildMoonBattlefield(sceneEl) {
   const THREE = window.THREE;
@@ -2175,9 +2241,27 @@ export async function rebuildMoonBattlefield(sceneEl) {
   if (!groundEl || !groundEl.object3D) return;
 
   const prev = groundEl.getObject3D('mesh');
-  let keepMat = null;
-  if (prev && prev.isMesh && prev.material) keepMat = prev.material;
-  if (prev) disposeGroundVisual(groundEl, keepMat);
+  const prevIsBake = !!(prev && prev.userData && prev.userData.rtsSkirmishBake);
+
+  if (bakedMoonAllowed() && parkedSkirmish && parkedSkirmish.root) {
+    const restored = restoreSkirmishPark();
+    if (restored) {
+      BATTLE_TERRAIN.segmentsWidth = 96;
+      BATTLE_TERRAIN.segmentsDepth = 96;
+      groundEl.setObject3D('mesh', restored);
+      if (prev && prev !== restored) disposeGroundObject(prev);
+      horizonSkirtAttached = false;
+      await finishBakedMoonLook(THREE, sceneEl, restored, { skipHeight: true });
+      configureTerrainPresentation(sceneEl);
+      syncTerrainGridHelperSize();
+      console.log('[RTSVR4] restored parked skirmish moon');
+      return;
+    }
+  }
+
+  if (!bakedMoonAllowed() && prevIsBake) {
+    snapshotSkirmishPark(prev);
+  }
 
   horizonSkirtAttached = false;
   bakedMoonRoot = null;
@@ -2186,12 +2270,18 @@ export async function rebuildMoonBattlefield(sceneEl) {
   const baked = await tryLoadBakedSkirmishMoon();
   if (baked) {
     groundEl.setObject3D('mesh', baked);
+    if (prev && prev !== baked) {
+      if (parkedSkirmish && prev === parkedSkirmish.root) prev.visible = false;
+      else disposeGroundObject(prev);
+    }
     await finishBakedMoonLook(THREE, sceneEl, baked);
     configureTerrainPresentation(sceneEl);
     syncTerrainGridHelperSize();
     return;
   }
 
+  const keepMat =
+    prev && prev.isMesh && prev.material && !prevIsBake ? prev.material : null;
   const terrainGeom = buildBattleTerrainGeometry(THREE);
   const mesh = new THREE.Mesh(
     terrainGeom,
@@ -2205,8 +2295,11 @@ export async function rebuildMoonBattlefield(sceneEl) {
       : false;
   mesh.castShadow = false;
   groundEl.setObject3D('mesh', mesh);
+  if (prev && prev !== mesh) {
+    if (parkedSkirmish && prev === parkedSkirmish.root) prev.visible = false;
+    else disposeGroundObject(prev, keepMat);
+  }
 
-  // Always re-bind moon maps so Story hills get triplanar (and skirmish gets normals back).
   await applyBattleMoon(THREE, sceneEl, mesh);
   configureTerrainPresentation(sceneEl);
   syncTerrainGridHelperSize();
