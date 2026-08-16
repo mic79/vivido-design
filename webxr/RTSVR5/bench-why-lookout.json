@@ -1,0 +1,57 @@
+{
+  "when": "2026-08-13T02:36:33.577Z",
+  "out": [
+    {
+      "name": "look-spawn",
+      "samples": 32,
+      "skipPct": 78.125,
+      "uniqueCamKeys": 17,
+      "callsAvg": 16,
+      "trisAvg": 191746,
+      "fogUnex": true,
+      "fogVeil": true,
+      "groundRecvShadow": true,
+      "skirtMeshes": 8,
+      "shot": "D:\\backup 2024-04\\Documents\\Backup_MBP_2021-12\\Backup\\Projects\\Apps\\WebXR\\RTSVR4\\bench-poses\\why-look-spawn.png"
+    },
+    {
+      "name": "look-out-180",
+      "samples": 33,
+      "skipPct": 100,
+      "uniqueCamKeys": 1,
+      "callsAvg": 16,
+      "trisAvg": 191746,
+      "fogUnex": true,
+      "fogVeil": true,
+      "groundRecvShadow": true,
+      "skirtMeshes": 8,
+      "shot": "D:\\backup 2024-04\\Documents\\Backup_MBP_2021-12\\Backup\\Projects\\Apps\\WebXR\\RTSVR4\\bench-poses\\why-look-out-180.png"
+    },
+    {
+      "name": "look-out-low",
+      "samples": 33,
+      "skipPct": 100,
+      "uniqueCamKeys": 1,
+      "callsAvg": 16,
+      "trisAvg": 191746,
+      "fogUnex": true,
+      "fogVeil": true,
+      "groundRecvShadow": true,
+      "skirtMeshes": 8,
+      "shot": "D:\\backup 2024-04\\Documents\\Backup_MBP_2021-12\\Backup\\Projects\\Apps\\WebXR\\RTSVR4\\bench-poses\\why-look-out-low.png"
+    },
+    {
+      "name": "look-army-again",
+      "samples": 30,
+      "skipPct": 26.666666666666668,
+      "uniqueCamKeys": 1,
+      "callsAvg": 36,
+      "trisAvg": 385488,
+      "fogUnex": true,
+      "fogVeil": true,
+      "groundRecvShadow": true,
+      "skirtMeshes": 8,
+      "shot": "D:\\backup 2024-04\\Documents\\Backup_MBP_2021-12\\Backup\\Projects\\Apps\\WebXR\\RTSVR4\\bench-poses\\why-look-army-again.png"
+    }
+  ]
+}

@@ -1,0 +1,2833 @@
+// ========================================
+// RTSVR4 — UI System
+// HUD, menus, build panel, production, minimap
+// ========================================
+
+import {
+  UNIT_TYPES, BUILDING_TYPES, PLAYER_COLOR_HEX,
+  MAP_NAV_PLANE_HALF_M, MAP_UNIT_NAV_RADIUS, FOG_GRID_SIZE, FOG_CELL_SIZE,
+  clampWorldToPlayableDisk,
+  clampWorldToCameraNavDisk,
+  NET_HOST_PAUSE_AUTO_RESUME_MS,
+  MINIMAP_REDRAW_HZ,
+} from './config.js';
+import * as State from './state.js';
+import * as Buildings from './buildings.js';
+import * as Units from './units.js';
+import * as Fog from './fog.js';
+import * as Input from './input.js';
+import * as Network from './network.js';
+import * as Pathfinding from './pathfinding.js';
+import * as NavDebug from './nav-debug-overlay.js';
+import * as Perf from './perf-profiler.js';
+import {
+  getStoryBests,
+  recordStoryMatch,
+  queueStoryReplay,
+  formatDuration,
+} from './story-history.js';
+
+let hudContainer = null;
+let minimapCanvas = null;
+let minimapCtx = null;
+let minimapVisible = false;
+let _minimapLastDrawMs = 0;
+let _minimapFogCanvas = null;
+let _minimapFogCtx = null;
+let _minimapFogImageData = null;
+let menuEl = null;
+let buildMenuEl = null;
+let buildPanelEl = null;
+export let activeBuildingPanel = null;
+export let activeResourceField = null;
+/** @type {string[]|null} When set, bottom panel shows Mobile HQ deploy (same shell as building build menu). */
+let activeMobileDeployUnitIds = null;
+let lastMobileDeploySelectionSig = null;
+let lastBuildPanelUpdate = 0;
+/** Last `buildPanelLayoutSig` used for a full `innerHTML` rebuild (queue *timer* excluded — patched separately). */
+let lastBuildPanelRenderedSig = '';
+/** Dismiss handler for the RTS confirm overlay (sell building / vehicles). */
+let rtsConfirmCleanup = null;
+/** True while a sell/destructive confirm is open (desktop DOM and/or wrist VR panel). */
+let rtsConfirmActive = false;
+let pendingRtsConfirmOnConfirm = null;
+
+function stripHtmlForVrText(html) {
+  if (!html) return '';
+  return String(html)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export function isRtsConfirmOpen() {
+  return rtsConfirmActive;
+}
+
+export function dismissRtsConfirm() {
+  rtsConfirmActive = false;
+  pendingRtsConfirmOnConfirm = null;
+  const vrRoot = document.getElementById('vr-confirm-root');
+  if (vrRoot) {
+    vrRoot.setAttribute('visible', 'false');
+    ['vr-confirm-cancel-btn', 'vr-confirm-ok-btn'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.classList.remove('clickable');
+    });
+  }
+  if (typeof rtsConfirmCleanup === 'function') {
+    rtsConfirmCleanup();
+    rtsConfirmCleanup = null;
+  }
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+}
+
+function showVrRtsConfirmDialog(opts) {
+  const title = opts.title || 'Confirm';
+  const message = stripHtmlForVrText(opts.message || '');
+  const confirmLabel = opts.confirmLabel || 'Confirm';
+  const onConfirm = opts.onConfirm;
+
+  rtsConfirmActive = true;
+  pendingRtsConfirmOnConfirm = typeof onConfirm === 'function' ? onConfirm : null;
+
+  const vrRoot = document.getElementById('vr-confirm-root');
+  const titleEl = document.getElementById('vr-confirm-title');
+  const msgEl = document.getElementById('vr-confirm-message');
+  const okLab = document.getElementById('vr-confirm-ok-label');
+  if (titleEl) titleEl.setAttribute('value', title);
+  if (msgEl) msgEl.setAttribute('value', message.slice(0, 220));
+  if (okLab) okLab.setAttribute('value', confirmLabel.slice(0, 28));
+
+  if (vrRoot) vrRoot.setAttribute('visible', 'true');
+  ['vr-confirm-cancel-btn', 'vr-confirm-ok-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.classList.add('clickable');
+  });
+
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+  showStatus('Confirm on wrist — Cancel or confirm with laser + trigger');
+}
+
+/**
+ * Small modal for destructive actions (replaces `confirm()` for styling + VR wrist panel).
+ * @param {{ title: string, message: string, confirmLabel?: string, cancelLabel?: string, onConfirm: () => void }} opts
+ */
+function showRtsConfirmDialog(opts) {
+  dismissRtsConfirm();
+  if (Input.getIsVR()) {
+    showVrRtsConfirmDialog(opts);
+    return;
+  }
+  const title = opts.title || 'Confirm';
+  const message = opts.message || '';
+  const confirmLabel = opts.confirmLabel || 'Confirm';
+  const cancelLabel = opts.cancelLabel || 'Cancel';
+  const onConfirm = opts.onConfirm;
+
+  rtsConfirmActive = true;
+
+  const wrap = document.createElement('div');
+  wrap.id = 'rts-confirm-overlay';
+  wrap.setAttribute('role', 'alertdialog');
+  wrap.setAttribute('aria-modal', 'true');
+  wrap.setAttribute('aria-live', 'assertive');
+  wrap.style.cssText = [
+    'position:fixed',
+    'inset:0',
+    'z-index:430',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'box-sizing:border-box',
+    'padding:24px',
+    'background:rgba(2,6,10,0.78)',
+    'pointer-events:auto',
+    "font-family:'Consolas',monospace",
+    'color:#e8f4ff',
+  ].join(';');
+  wrap.innerHTML = `
+    <div style="max-width:min(480px,92vw);background:rgba(8,20,32,0.97);border:2px solid #8a5a2a;border-radius:12px;padding:22px 24px;box-shadow:0 8px 40px rgba(0,0,0,0.55)">
+      <div style="font-size:18px;font-weight:bold;margin:0 0 10px 0;color:#fc8">${title}</div>
+      <div style="font-size:14px;line-height:1.55;margin:0 0 18px 0;opacity:0.95">${message}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end">
+        <button type="button" id="rts-confirm-cancel" style="padding:10px 18px;font-size:14px;border-radius:8px;border:1px solid #666;background:#1a2228;color:#ccc;cursor:pointer;font-weight:bold">
+          ${cancelLabel}
+        </button>
+        <button type="button" id="rts-confirm-ok" style="padding:10px 18px;font-size:14px;border-radius:8px;border:2px solid #c84;background:#4a2810;color:#ffe;cursor:pointer;font-weight:bold">
+          ${confirmLabel}
+        </button>
+      </div>
+    </div>
+  `;
+
+  const onKeyDown = e => {
+    if (e.key === 'Escape') dismissRtsConfirm();
+  };
+  document.addEventListener('keydown', onKeyDown);
+
+  rtsConfirmCleanup = () => {
+    document.removeEventListener('keydown', onKeyDown);
+    wrap.remove();
+  };
+
+  wrap.querySelector('#rts-confirm-cancel')?.addEventListener('click', () => dismissRtsConfirm());
+  wrap.querySelector('#rts-confirm-ok')?.addEventListener('click', () => {
+    dismissRtsConfirm();
+    try {
+      if (typeof onConfirm === 'function') onConfirm();
+    } catch (err) {
+      console.error(err);
+    }
+  });
+
+  uiMountRoot().appendChild(wrap);
+  const okBtn = wrap.querySelector('#rts-confirm-ok');
+  if (okBtn && typeof okBtn.focus === 'function') okBtn.focus();
+}
+
+/** True while a pointer is down on #hud-build-panel (capture) until global up — skip throttled rebuilds during clicks. */
+let buildPanelPointerActive = false;
+let buildPanelPointerListenersWired = false;
+/** VR: rebuild production rows only when affordability / queue head / type changes. */
+let lastVrBuildButtonsSig = '';
+let vrMinimapCanvas = null;
+let vrMinimapCtx = null;
+let vrMinimapTexture = null;
+
+let lastHudHelpPlatform = '';
+let lastVrHudTop = '';
+let mpPauseCountdownIntervalId = null;
+
+function uiMountRoot() {
+  return document.getElementById('xr-dom-overlay') || document.body;
+}
+
+function createAppStartOverlay() {
+  const el = document.createElement('div');
+  el.id = 'app-start-overlay';
+  /* No dimming layer — full screen is transparent so the WebXR / canvas scene stays visible. */
+  el.style.cssText = [
+    'position:fixed',
+    'inset:0',
+    'z-index:250',
+    'display:none',
+    'flex-direction:column',
+    'width:100%',
+    'height:100%',
+    'box-sizing:border-box',
+    'background:transparent',
+    'pointer-events:none',
+    "font-family:'Consolas',monospace",
+  ].join(';');
+  el.innerHTML = `
+    <div style="flex:2 0 0;min-height:0" aria-hidden="true"></div>
+    <div style="flex:1 0 0;display:flex;align-items:center;justify-content:center;width:100%;min-height:0;pointer-events:none">
+      <button type="button" id="btn-app-start" style="padding:18px 48px;font-size:22px;border-radius:10px;border:2px solid #0f0;background:rgba(4,24,8,0.92);color:#cfc;cursor:pointer;font-weight:bold;letter-spacing:0.12em;pointer-events:auto;box-shadow:0 4px 24px rgba(0,0,0,0.45)">Start</button>
+    </div>
+  `;
+  const btn = el.querySelector('#btn-app-start');
+  if (btn) btn.addEventListener('click', () => dismissAppStartGate());
+  uiMountRoot().appendChild(el);
+}
+
+function createMpPauseOverlay() {
+  if (document.getElementById('mp-pause-overlay')) return;
+  const el = document.createElement('div');
+  el.id = 'mp-pause-overlay';
+  el.setAttribute('role', 'alertdialog');
+  el.setAttribute('aria-modal', 'true');
+  el.setAttribute('aria-live', 'assertive');
+  el.style.cssText = [
+    'position:fixed',
+    'inset:0',
+    'z-index:420',
+    'display:none',
+    'align-items:center',
+    'justify-content:center',
+    'box-sizing:border-box',
+    'padding:24px',
+    'background:rgba(2,6,10,0.72)',
+    'pointer-events:auto',
+    "font-family:'Consolas',monospace",
+    'color:#e8f4ff',
+  ].join(';');
+  el.innerHTML = `
+    <div style="max-width:min(520px,92vw);background:rgba(8,20,32,0.96);border:2px solid #4a9eff;border-radius:12px;padding:22px 24px;box-shadow:0 8px 40px rgba(0,0,0,0.55)">
+      <div id="mp-pause-title" style="font-size:20px;font-weight:bold;margin:0 0 10px 0;color:#9df">Paused</div>
+      <div id="mp-pause-detail" style="font-size:14px;line-height:1.55;margin:0 0 12px 0;opacity:0.95"></div>
+      <div id="mp-pause-countdown" aria-live="polite" style="display:none;font-size:22px;font-weight:bold;color:#fc6;margin:0 0 14px 0;letter-spacing:0.04em"></div>
+      <div id="mp-pause-subline" style="font-size:12px;line-height:1.45;margin:0 0 16px 0;opacity:0.88;color:#bde"></div>
+      <button type="button" id="mp-pause-resume" style="display:none;padding:10px 22px;font-size:15px;border-radius:8px;border:2px solid #6c6;background:#143214;color:#cfc;cursor:pointer;font-weight:bold">
+        Resume now (AI takes dropped seats)
+      </button>
+    </div>
+  `;
+  const btn = el.querySelector('#mp-pause-resume');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      Network.hostResumeFromPause();
+    });
+  }
+  uiMountRoot().appendChild(el);
+}
+
+function clearMpPauseCountdownInterval() {
+  if (mpPauseCountdownIntervalId != null) {
+    clearInterval(mpPauseCountdownIntervalId);
+    mpPauseCountdownIntervalId = null;
+  }
+}
+
+function mpPauseFormattedSubline() {
+  return State.gameSession.mpPauseSubline || '';
+}
+
+/** Large “Auto-resume in Ns” line; timer resets are reflected via `mpPauseAutoResumeAt`. */
+function updateMpPauseCountdownDom() {
+  const el = document.getElementById('mp-pause-countdown');
+  if (!el) return;
+  const until = State.gameSession.mpPauseAutoResumeAt;
+  const show =
+    State.gameSession.mpSessionPaused &&
+    State.gameSession.mpPauseReason === 'remote_left' &&
+    typeof until === 'number' &&
+    until > 0;
+  if (!show) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
+  }
+  const remSec = Math.ceil((until - Date.now()) / 1000);
+  const maxSec = Math.max(1, Math.round(NET_HOST_PAUSE_AUTO_RESUME_MS / 1000));
+  el.style.display = 'block';
+  if (remSec > 0) {
+    el.textContent = `Auto-resume in ${remSec}s (max ${maxSec}s per reset)`;
+  } else {
+    el.textContent = 'Auto-resume in progress…';
+  }
+}
+
+function syncVrMpPauseOverlay() {
+  const vrRoot = document.getElementById('vr-mp-pause-root');
+  if (!vrRoot) return;
+  const inVr = Input.getIsVR();
+  const paused = State.gameSession.mpSessionPaused;
+  const show =
+    inVr &&
+    paused &&
+    (State.gameSession.gameStarted || State.gameSession.isMultiplayer);
+  vrRoot.setAttribute('visible', show ? 'true' : 'false');
+
+  const titleEl = document.getElementById('vr-mp-pause-title');
+  const detailEl = document.getElementById('vr-mp-pause-detail');
+  const subEl = document.getElementById('vr-mp-pause-subline');
+  const cdEl = document.getElementById('vr-mp-pause-countdown');
+  const resumeBtn = document.getElementById('vr-mp-pause-resume-btn');
+
+  if (titleEl) titleEl.setAttribute('value', (State.gameSession.mpPauseTitle || 'Paused').slice(0, 80));
+  if (detailEl) {
+    detailEl.setAttribute('value', stripHtmlForVrText(State.gameSession.mpPauseDetail || '').slice(0, 200));
+  }
+  const subFull = mpPauseFormattedSubline();
+  if (subEl) subEl.setAttribute('value', subFull.slice(0, 160));
+
+  if (cdEl) {
+    const until = State.gameSession.mpPauseAutoResumeAt;
+    const showCd =
+      show &&
+      State.gameSession.mpPauseReason === 'remote_left' &&
+      typeof until === 'number' &&
+      until > 0;
+    if (showCd) {
+      const remSec = Math.ceil((until - Date.now()) / 1000);
+      const maxSec = Math.max(1, Math.round(NET_HOST_PAUSE_AUTO_RESUME_MS / 1000));
+      cdEl.setAttribute(
+        'value',
+        remSec > 0 ? `Auto-resume in ${remSec}s (max ${maxSec}s)` : 'Auto-resume…'
+      );
+      cdEl.setAttribute('visible', true);
+    } else {
+      cdEl.setAttribute('value', '');
+      cdEl.setAttribute('visible', false);
+    }
+  }
+
+  const showResume =
+    show &&
+    State.gameSession.isHost &&
+    State.gameSession.isMultiplayer &&
+    State.gameSession.mpPauseReason === 'remote_left';
+  if (resumeBtn) {
+    resumeBtn.setAttribute('visible', showResume ? 'true' : 'false');
+    if (showResume) resumeBtn.classList.add('clickable');
+    else resumeBtn.classList.remove('clickable');
+  }
+
+  if (show) refreshHandRaycasters();
+}
+
+/** Show or hide the multiplayer disconnect / session pause banner (host + clients). */
+export function syncMpPauseOverlay() {
+  createMpPauseOverlay();
+  syncVrMpPauseOverlay();
+  const root = document.getElementById('mp-pause-overlay');
+  if (!root) return;
+  if (!State.gameSession.mpSessionPaused) {
+    clearMpPauseCountdownInterval();
+    updateMpPauseCountdownDom();
+    root.style.display = 'none';
+    const flat = document.getElementById('menu-status');
+    const vr = document.getElementById('menu-status-vr');
+    if (vr && flat && flat.textContent) {
+      const text = flat.textContent.slice(0, 240);
+      vr.setAttribute('value', text);
+      try {
+        const comp = vr.getAttribute('text');
+        if (comp && typeof comp === 'object') {
+          vr.setAttribute('text', { ...comp, value: text });
+        } else {
+          vr.setAttribute('text', { value: text, align: 'center', width: 0.72, color: '#cccccc' });
+        }
+      } catch (_) { /* ignore */ }
+    }
+    return;
+  }
+  root.style.display = Input.getIsVR() ? 'none' : 'flex';
+  const t = document.getElementById('mp-pause-title');
+  const d = document.getElementById('mp-pause-detail');
+  const s = document.getElementById('mp-pause-subline');
+  const btn = document.getElementById('mp-pause-resume');
+  if (t) t.textContent = State.gameSession.mpPauseTitle || 'Paused';
+  if (d) d.textContent = State.gameSession.mpPauseDetail || '';
+  const subFull = mpPauseFormattedSubline();
+  if (s) s.textContent = subFull;
+  updateMpPauseCountdownDom();
+  if (btn) {
+    const showResume =
+      State.gameSession.isHost &&
+      State.gameSession.isMultiplayer &&
+      State.gameSession.mpPauseReason === 'remote_left';
+    btn.style.display = showResume ? 'inline-block' : 'none';
+  }
+  const vr = document.getElementById('menu-status-vr');
+  if (vr && typeof vr.setAttribute === 'function') {
+    const cd = document.getElementById('mp-pause-countdown');
+    const cdPart = cd && cd.style.display !== 'none' && cd.textContent ? cd.textContent : '';
+    const line = [State.gameSession.mpPauseTitle || 'Paused', cdPart, subFull].filter(Boolean).join(' — ').trim();
+    vr.setAttribute('value', line.slice(0, 240));
+    try {
+      const comp = vr.getAttribute('text');
+      if (comp && typeof comp === 'object') {
+        vr.setAttribute('text', { ...comp, value: line.slice(0, 240) });
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  clearMpPauseCountdownInterval();
+  const until = State.gameSession.mpPauseAutoResumeAt;
+  if (
+    until > Date.now() &&
+    State.gameSession.mpPauseReason === 'remote_left'
+  ) {
+    mpPauseCountdownIntervalId = setInterval(() => {
+      if (!State.gameSession.mpSessionPaused) {
+        clearMpPauseCountdownInterval();
+        return;
+      }
+      updateMpPauseCountdownDom();
+      syncVrMpPauseOverlay();
+      const el = document.getElementById('mp-pause-subline');
+      const line = mpPauseFormattedSubline();
+      if (el) el.textContent = line;
+      const vr2 = document.getElementById('menu-status-vr');
+      if (vr2 && typeof vr2.setAttribute === 'function') {
+        const cd = document.getElementById('mp-pause-countdown');
+        const cdPart = cd && cd.style.display !== 'none' && cd.textContent ? cd.textContent : '';
+        const vline = [State.gameSession.mpPauseTitle || 'Paused', cdPart, line].filter(Boolean).join(' — ').trim();
+        vr2.setAttribute('value', vline.slice(0, 240));
+        try {
+          const comp2 = vr2.getAttribute('text');
+          if (comp2 && typeof comp2 === 'object') {
+            vr2.setAttribute('text', { ...comp2, value: vline.slice(0, 240) });
+          }
+        } catch (_) { /* ignore */ }
+      }
+    }, 500);
+  }
+}
+
+/** Boot: update the line under the title on `#loading-screen`. */
+export function setBootLoadingMessage(text) {
+  const p = document.querySelector('#loading-content p');
+  if (p) p.textContent = text;
+}
+
+let bootLoadingDismissed = false;
+
+/** Call once after sky, terrain, renderer, and scene reveal are done (`main.js`). */
+export function hideBootLoadingScreen() {
+  if (bootLoadingDismissed) return;
+  bootLoadingDismissed = true;
+  const loadingScreen = document.getElementById('loading-screen');
+  if (!loadingScreen) return;
+  loadingScreen.style.opacity = '0';
+  loadingScreen.style.pointerEvents = 'none';
+  setTimeout(() => {
+    loadingScreen.style.display = 'none';
+  }, 500);
+}
+
+function setATextValue(el, value) {
+  if (!el || value == null) return;
+  const v = String(value);
+  el.setAttribute('value', v);
+  try {
+    const comp = el.getAttribute('text');
+    if (comp && typeof comp === 'object') {
+      el.setAttribute('text', { ...comp, value: v });
+    }
+  } catch (_) { /* ignore */ }
+}
+
+function xrPresentingSession() {
+  try {
+    const sceneEl = typeof document !== 'undefined' ? document.querySelector('a-scene') : null;
+    const xr = sceneEl && sceneEl.renderer && sceneEl.renderer.xr;
+    if (!xr || !xr.isPresenting || typeof xr.getSession !== 'function') return null;
+    return xr.getSession() || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function syncVrMatchPreparePanel(message, title) {
+  const root = document.getElementById('vr-match-prepare');
+  if (!root) return;
+  const on = !!State.gameSession.matchPreparing && Input.getIsVR();
+  root.setAttribute('visible', on ? 'true' : 'false');
+  if (!on) return;
+  if (title) setATextValue(document.getElementById('vr-match-prepare-title'), title);
+  if (message) setATextValue(document.getElementById('vr-match-prepare-message'), message);
+}
+
+/**
+ * Wait two frames so overlay / a-text can submit before heavy sync work.
+ * Window rAF is often silent while a WebXR session owns the frame clock (Quest
+ * rematch hung here until the user exited VR). Prefer XRSession rAF, with a
+ * short timeout so startGame can never deadlock.
+ */
+export function nextPaint() {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    const failsafe = setTimeout(done, 64);
+
+    const hopTwice = (arm) => {
+      let n = 0;
+      const hop = () => {
+        n += 1;
+        if (n >= 2) {
+          clearTimeout(failsafe);
+          done();
+          return;
+        }
+        arm(hop);
+      };
+      arm(hop);
+    };
+
+    const session = xrPresentingSession();
+    if (session && typeof session.requestAnimationFrame === 'function') {
+      hopTwice((cb) => {
+        session.requestAnimationFrame(() => cb());
+      });
+      return;
+    }
+    if (typeof requestAnimationFrame === 'function') {
+      hopTwice((cb) => requestAnimationFrame(cb));
+      return;
+    }
+    clearTimeout(failsafe);
+    setTimeout(done, 0);
+  });
+}
+
+/**
+ * Full-screen “preparing match” blocker (Story generate / terrain rebuild).
+ * @param {boolean} on
+ * @param {string} [message]
+ * @param {string} [title]
+ */
+export function setMatchPreparing(on, message, title) {
+  State.gameSession.matchPreparing = !!on;
+  const overlay = document.getElementById('match-prepare-overlay');
+  if (overlay) {
+    if (on) {
+      overlay.hidden = false;
+      overlay.classList.add('is-visible');
+      const msgEl = document.getElementById('match-prepare-message');
+      const titleEl = document.getElementById('match-prepare-title');
+      if (msgEl && message) msgEl.textContent = message;
+      if (titleEl && title) titleEl.textContent = title;
+    } else {
+      overlay.classList.remove('is-visible');
+      overlay.hidden = true;
+    }
+  }
+  const menuStatus = document.getElementById('menu-status');
+  if (menuStatus && on && message) menuStatus.textContent = message;
+  const vrStatus = document.getElementById('menu-status-vr');
+  if (vrStatus && on && message) setATextValue(vrStatus, message);
+  if (menuEl) menuEl.classList.toggle('is-preparing', !!on);
+  updateMenuVisibility();
+  syncVrMatchPreparePanel(message, title);
+}
+
+export function setMatchPreparingMessage(message) {
+  const msgEl = document.getElementById('match-prepare-message');
+  if (msgEl && message) msgEl.textContent = message;
+  const menuStatus = document.getElementById('menu-status');
+  if (menuStatus && message) menuStatus.textContent = message;
+  const vrStatus = document.getElementById('menu-status-vr');
+  if (vrStatus && message) setATextValue(vrStatus, message);
+  syncVrMatchPreparePanel(message);
+}
+
+export function initUI() {
+  /** World span (m) for flat + VR minimap — matches pathfinding nav grid (`planeSpanM`). */
+  window.__rtsMinimapWorldSpanM = Pathfinding.getNavGridSpec().planeSpanM;
+  window.__rtsMapUnitNavRadius = MAP_UNIT_NAV_RADIUS;
+
+  window.__rtsVrMinimapClick = (wx, wz, moveMode) => {
+    if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
+    if (State.gameSession.mpSessionPaused) return;
+    if (moveMode) {
+      const c = clampWorldToPlayableDisk(wx, wz, 0);
+      const unitIds = Array.from(State.selectedUnits);
+      if (unitIds.length > 0) {
+        Network.sendCommand({ action: 'move', unitIds, x: c.x, z: c.z });
+        showStatus('Moving...');
+      }
+    } else {
+      const c = clampWorldToCameraNavDisk(wx, wz);
+      Input.jumpCameraTo(c.x, c.z);
+    }
+  };
+
+  createAppStartOverlay();
+  createHUD();
+  createMinimap();
+  createMenu();
+  createBuildMenu();
+  createMpPauseOverlay();
+  window._dismissAppStartGate = dismissAppStartGate;
+  window._dismissRtsConfirm = dismissRtsConfirm;
+  window._confirmRtsConfirm = () => {
+    const fn = pendingRtsConfirmOnConfirm;
+    dismissRtsConfirm();
+    if (typeof fn === 'function') {
+      try {
+        fn();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+  window._hostResumeMpPause = () => Network.hostResumeFromPause();
+
+  window._requestSellBuilding = buildingId => {
+    if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
+    const b = State.buildings.get(buildingId);
+    if (!b || b.ownerId !== State.gameSession.myPlayerId) return;
+    const fail = Buildings.getSellBuildingFailureCode(buildingId, State.gameSession.myPlayerId);
+    if (fail) {
+      showStatus(Network.commandFailureMessage(fail));
+      return;
+    }
+    const refund = BUILDING_TYPES[b.type]?.cost ?? 0;
+    const name = BUILDING_TYPES[b.type]?.name || b.type;
+    showRtsConfirmDialog({
+      title: 'Sell structure?',
+      message: `Sell <b>${name}</b> for <b>$${refund}</b>. Queued training is cancelled and refunded. This cannot be undone.`,
+      confirmLabel: `Sell for $${refund}`,
+      onConfirm: () => {
+        const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+        const sent = Network.sendCommand({ action: 'sellBuilding', buildingId }, (ok, code) => {
+          if (ok) {
+            showStatus(`Sold ${name} (+$${refund})`);
+            hideBuildingPanel();
+          } else {
+            showStatus(Network.commandFailureMessage(code));
+            refreshBuildingPanel(true);
+          }
+        });
+        if (mpClient && sent) showStatus('Sell order sent…');
+      },
+    });
+  };
+
+  window._requestSellSelectedVehicles = () => {
+    if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
+    const me = State.gameSession.myPlayerId;
+    const { unitIds, totalRefund } = Units.computeVehicleSellFromSelection(me);
+    if (unitIds.length === 0) return;
+    const n = unitIds.length;
+    showRtsConfirmDialog({
+      title:
+        n > 1
+          ? `Sell ${n} selected vehicles (in War Factory range)?`
+          : 'Sell 1 selected vehicle (in War Factory range)?',
+      message: `Refund <b>$${totalRefund}</b> for the <b>${n}</b> currently selected vehicle(s) that are <b>in range</b> of your War Factory. Nothing else is removed. Mobile HQ cannot be sold this way.`,
+      confirmLabel: `Sell for $${totalRefund}`,
+      onConfirm: () => {
+        const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+        const sent = Network.sendCommand({ action: 'sellVehicles', unitIds: unitIds.slice() }, (ok, code) => {
+          if (ok) showStatus(`Sold ${n} selected vehicle(s) (+$${totalRefund})`);
+          else showStatus(Network.commandFailureMessage(code));
+        });
+        if (mpClient && sent) showStatus('Sell order sent…');
+      },
+    });
+  };
+
+  updateMenuVisibility();
+}
+
+// --- HUD ---
+function getHudControlsHelpHtml() {
+  if (Input.getIsVR()) {
+    return `VR: <b>Right trigger</b> — select / move / attack (only that controller's laser is shown while the trigger is held). With units selected, tap another friendly to <b>add to selection</b>; hold <b>grip + trigger on the same hand</b> and aim at a friendly to <b>follow</b> (engineers repair nearby damaged vehicles). <b>Left X</b> — cancel build placement or open menu. <b>Y</b> map · <b>B</b> deselect & cancel build · <b>A</b> select all · grips pan · Shadows / MSAA 4x on wrist HUD.<br>
+      <span style="opacity:0.85">Flat screen (if you peek at the mirror): WASD pan · Q/E rotate · scroll zoom · left / right click · <b>N</b> nav map (blue walkable).</span>`;
+  }
+  if (Input.getInputPlatform() === 'touch') {
+    return `<div style="font-weight:bold;color:#8cf;margin-bottom:6px;">Touch</div>
+      <ul style="margin:0;padding-left:1.1em;line-height:1.5;">
+        <li><b>Tap</b> — select, open HQ or crystals; with your army selected, <b>tap another of your units</b> to add it to the group · <b>tap open ground</b> to move</li>
+        <li><b>Two fingers</b> — drag to pan · pinch zoom · twist to rotate</li>
+        <li><b>Long-press open ground</b> — clear selection</li>
+        <li><b>Long-press your unit</b> — with <b>no</b> army selected, selects nearby same type; with <b>units already selected</b>, <b>hold (~0.5s) on a friendly</b> to <b>follow</b> it (or move if your aim favors ground — engineers repair nearby vehicles when escorting)</li>
+        <li><b>Map</b> — drag on minimap to jump the camera; <b>Map · show/hide</b> sits under the minimap</li>
+      </ul>
+      <p style="margin:10px 0 0 0;opacity:0.85;font-size:11px;">Zoom in (pinch) for easier taps on single units; zoomed out is best for overview and orders.</p>`;
+  }
+  return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left: Select · Left on open ground: Deselect · Right: Move / attack / follow (engineers repair nearby friendly vehicles; right-click follow a vehicle to stay with it)<br>
+    HQ click: Build · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, 3D plane + minimap) · Esc: Menu · Shadows / MSAA 4x: menu / HUD toggles (MSAA reloads the page to recreate the GL context)<br>
+    <span style="opacity:0.85">VR: Laser + trigger on menu & map · grip+trigger on one hand for follow · X menu · Y map · B deselect · A select all · grips pan · Shadows and MSAA 4x on wrist menu and match HUD</span>`;
+}
+
+function updateFlatHudButtons() {
+  if (Input.getIsVR()) return;
+  const m = document.getElementById('hud-minimap-toggle');
+  if (m) {
+    m.textContent = minimapVisible ? 'Map · hide' : 'Map · show';
+    const showMapToggle =
+      State.gameSession.gameStarted && !Input.getIsVR() && Input.getInputPlatform() === 'touch';
+    m.style.display = showMapToggle ? '' : 'none';
+  }
+}
+
+function wireFlatHudActions() {
+  const gh = () => document.getElementById('game-hud');
+  document.getElementById('hud-help-toggle')?.addEventListener('click', () => {
+    const root = gh();
+    if (!root) return;
+    const open = root.classList.toggle('rts-help-open');
+    const btn = document.getElementById('hud-help-toggle');
+    if (btn) btn.textContent = open ? 'Close' : 'Help';
+  });
+  document.getElementById('hud-main-menu-toggle')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    Input.toggleMenu();
+  });
+  document.getElementById('hud-sell-vehicle-btn')?.addEventListener('click', () => {
+    window._requestSellSelectedVehicles?.();
+  });
+  document.getElementById('hud-shadows-toggle')?.addEventListener('click', () => {
+    window._toggleDynamicShadows?.();
+  });
+  document.getElementById('hud-msaa-toggle')?.addEventListener('click', () => {
+    window._toggleMsaa4x?.();
+  });
+}
+
+function createHUD() {
+  hudContainer = document.createElement('div');
+  hudContainer.id = 'game-hud';
+  lastHudHelpPlatform = '';
+  hudContainer.innerHTML = `
+    <div id="hud-resources" style="
+      position: fixed; top: 8px; left: 8px;
+      color: #0f0; font-family: 'Consolas', monospace; font-size: 14px;
+      background: rgba(0,0,0,0.7); padding: 6px 12px; border-radius: 4px;
+      z-index: 100; pointer-events: none; user-select: none;
+    ">
+      <div style="display: flex; flex-direction: row; align-items: flex-start; gap: 6px; flex-wrap: wrap;">
+        <button type="button" id="hud-main-menu-toggle" class="hud" aria-label="Main menu"
+          style="pointer-events: auto; flex: 0 0 auto; touch-action: manipulation;
+          box-sizing: border-box; min-width: 44px; min-height: 44px; padding: 0 10px;
+          border-radius: 6px; border: 1px solid #666; background: rgba(22,28,34,0.95); color: #ddd;
+          font-family: Consolas, monospace; font-size: 20px; line-height: 1; align-items: center; justify-content: center;">☰</button>
+        <div id="hud-resources-stats" style="flex: 1; min-width: 0;">
+          <span id="hud-credits">$1000</span>
+          <span style="color: #555; margin: 0 6px;">|</span>
+          <span id="hud-income" style="color: #4f4;">+2/s</span>
+          <span style="color: #555; margin: 0 6px;">|</span>
+          <span id="hud-units" style="color: #aaf;">0/30</span>
+          <span style="color: #555; margin: 0 6px;">|</span>
+          <span id="hud-time" style="color: #ff8;">0:00</span>
+        </div>
+      </div>
+      <div id="hud-bot-debug" style="
+        display: none; margin-top: 5px; padding-top: 5px; border-top: 1px solid #333;
+        font-size: 12px; color: #eb8; line-height: 1.45;
+      "></div>
+      <div id="hud-version-fps" style="
+        margin-top: 4px; font-size: 11px; color: #8ab0aa; letter-spacing: 0.02em;
+      ">RTSVR5 …</div>
+    </div>
+    <div id="hud-flat-actions" class="hud" style="
+      display: none; position: fixed; top: 8px; right: 8px; z-index: 126;
+      flex-direction: row; flex-wrap: wrap; justify-content: flex-end; gap: 6px; align-items: center;
+      pointer-events: auto; user-select: none; touch-action: manipulation;
+      font-family: Consolas, monospace;">
+      <button type="button" id="hud-help-toggle" style="
+        font-size: 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid #666;
+        background: rgba(22,28,34,0.95); color: #ddd;">Help</button>
+      <button type="button" id="hud-shadows-toggle" style="
+        font-size: 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid #3a6a50;
+        background: rgba(16,40,28,0.95); color: #d8ffe8;">Shadows: ON</button>
+      <button type="button" id="hud-msaa-toggle" style="
+        font-size: 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid #3a6a50;
+        background: rgba(16,40,28,0.95); color: #d8ffe8;">MSAA 4x: OFF</button>
+    </div>
+    <div id="hud-help-panel" class="hud">
+      <div id="hud-controls" style="
+        color: #bbb; font-family: 'Consolas', monospace; font-size: 12px;
+        line-height: 1.55; pointer-events: none; user-select: none;
+      ">${getHudControlsHelpHtml()}</div>
+    </div>
+    <div id="hud-selection" style="
+      position: fixed; bottom: 8px; left: 8px;
+      color: #fff; font-family: 'Consolas', monospace; font-size: 13px;
+      background: rgba(0,0,0,0.7); padding: 6px 12px; border-radius: 4px;
+      z-index: 100; pointer-events: none; user-select: none;
+      display: none; max-width: min(400px, 92vw);
+    "></div>
+    <div id="hud-sell-vehicle-wrap" style="
+      display: none; position: fixed; bottom: 52px; left: 8px; z-index: 101;
+      pointer-events: auto; user-select: none; touch-action: manipulation;
+    ">
+      <button type="button" id="hud-sell-vehicle-btn" class="hud" aria-label="Sell selected vehicles that are in range of your War Factory"
+        style="padding: 8px 12px; border-radius: 8px; border: 1px solid #8a5a2a;
+        background: rgba(42, 28, 12, 0.95); color: #fec; font-family: Consolas, monospace; font-size: 12px;
+        cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.35);">
+        Sell selected (War Factory range)…
+      </button>
+    </div>
+    <div id="hud-status" style="
+      position: fixed; bottom: 8px; right: 8px;
+      color: #ff0; font-family: 'Consolas', monospace; font-size: 13px;
+      background: rgba(0,0,0,0.7); padding: 6px 12px; border-radius: 4px;
+      z-index: 100; pointer-events: none; user-select: none; max-width: min(320px, 88vw);
+    "></div>
+    <div id="hud-victory" style="
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      color: #ff0; font-family: Arial, sans-serif; font-size: 36px; font-weight: bold;
+      text-shadow: 0 0 20px rgba(255,255,0,0.5);
+      background: rgba(0,0,0,0.8); padding: 30px 50px; border-radius: 12px;
+      z-index: 200; display: none; text-align: center;
+    "></div>
+  `;
+  uiMountRoot().appendChild(hudContainer);
+  wireFlatHudActions();
+  updateFlatHudButtons();
+}
+
+// --- Build Menu (building placement) ---
+function createBuildMenu() {
+  buildMenuEl = document.createElement('div');
+  buildMenuEl.id = 'build-menu';
+  buildMenuEl.style.cssText = `
+    position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,10,0,0.9); padding: 12px 16px;
+    border: 1px solid #0a0; border-radius: 8px;
+    z-index: 150; display: none; text-align: center;
+    font-family: 'Consolas', monospace;
+  `;
+
+  // The standalone B-key build menu has been removed, as building placement is now done by selecting the HQ.
+}
+
+// --- Minimap ---
+function createMinimap() {
+  const container = document.createElement('div');
+  container.id = 'minimap-container';
+  container.style.cssText = `
+    position: fixed; bottom: 60px; right: 8px;
+    width: 180px;
+    display: none; flex-direction: column; align-items: center; gap: 6px;
+    background: rgba(0,0,0,0.8); border: 1px solid #444; border-radius: 12px;
+    padding: 6px 6px 8px; box-sizing: border-box;
+    z-index: 100; pointer-events: auto;
+  `;
+
+  const mapWrap = document.createElement('div');
+  mapWrap.id = 'minimap-map-wrap';
+  mapWrap.style.cssText =
+    'width: 180px; height: 180px; flex-shrink: 0; border-radius: 50%; overflow: hidden; box-shadow: 0 0 0 1px rgba(255,255,255,0.14);';
+
+  minimapCanvas = document.createElement('canvas');
+  minimapCanvas.id = 'minimap';
+  minimapCanvas.width = 180;
+  minimapCanvas.height = 180;
+  minimapCanvas.style.cssText = 'width: 100%; height: 100%; border-radius: 50%; cursor: crosshair; display: block;';
+
+  const mapToggleBtn = document.createElement('button');
+  mapToggleBtn.type = 'button';
+  mapToggleBtn.id = 'hud-minimap-toggle';
+  mapToggleBtn.textContent = 'Map · show';
+  mapToggleBtn.style.cssText = `
+    display: none; width: 100%; flex-shrink: 0;
+    font-size: 12px; padding: 8px 6px; border-radius: 6px; border: 1px solid #666;
+    background: rgba(22,28,34,0.95); color: #9fc; font-family: Consolas, monospace;
+    touch-action: manipulation;
+  `;
+  mapToggleBtn.addEventListener('click', () => toggleMinimap());
+
+  const handleMinimapClick = (e, isMoveOnly = false) => {
+    const rect = minimapCanvas.getBoundingClientRect();
+    const lx = e.clientX - rect.left;
+    const lz = e.clientY - rect.top;
+    const span =
+      typeof window.__rtsMinimapWorldSpanM === 'number'
+        ? window.__rtsMinimapWorldSpanM
+        : Pathfinding.getNavGridSpec().planeSpanM;
+
+    // World X → right, world +Z → down (matches default NE spawn at bottom-right of widget).
+    let wx = (lx / rect.width) * span - span * 0.5;
+    let wz = (lz / rect.height) * span - span * 0.5;
+
+    if (e.button === 2 || isMoveOnly) {
+      if (State.gameSession.mpSessionPaused) return;
+      const disk = clampWorldToPlayableDisk(wx, wz, 0);
+      wx = disk.x;
+      wz = disk.z;
+      const unitIds = Array.from(State.selectedUnits);
+      if (unitIds.length > 0) {
+        Network.sendCommand({ action: 'move', unitIds, x: wx, z: wz });
+      }
+    } else {
+      const disk = clampWorldToCameraNavDisk(wx, wz);
+      Input.jumpCameraTo(disk.x, disk.z);
+    }
+  };
+
+  minimapCanvas.addEventListener('mousedown', (e) => {
+    e.stopPropagation(); // Prevent main canvas from deselecting
+    if (e.button === 0) minimapCanvas._isDragging = true;
+    handleMinimapClick(e);
+  });
+
+  minimapCanvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault(); // Disable browser right-click menu
+  });
+
+  const minimapEventPoint = ev =>
+    ev.touches && ev.touches.length
+      ? ev.touches[0]
+      : ev.changedTouches && ev.changedTouches.length
+        ? ev.changedTouches[0]
+        : ev;
+
+  minimapCanvas.addEventListener(
+    'touchstart',
+    e => {
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();
+      const p = minimapEventPoint(e);
+      minimapCanvas._isDragging = true;
+      minimapCanvas._touchDragId = e.touches[0] ? e.touches[0].identifier : null;
+      handleMinimapClick(p);
+      Input.notifyTouchInteraction('tap');
+    },
+    { passive: false }
+  );
+
+  minimapCanvas.addEventListener(
+    'touchmove',
+    e => {
+      if (!minimapCanvas._isDragging || minimapCanvas._touchDragId == null) return;
+      const t = Array.from(e.touches).find(tch => tch.identifier === minimapCanvas._touchDragId);
+      if (!t) return;
+      e.stopPropagation();
+      if (e.cancelable) e.preventDefault();
+      handleMinimapClick(t);
+    },
+    { passive: false }
+  );
+
+  minimapCanvas.addEventListener('touchend', e => {
+    minimapCanvas._isDragging = false;
+    minimapCanvas._touchDragId = null;
+    e.stopPropagation();
+  });
+  minimapCanvas.addEventListener('touchcancel', () => {
+    minimapCanvas._isDragging = false;
+    minimapCanvas._touchDragId = null;
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (minimapCanvas._isDragging) handleMinimapClick(e);
+  });
+  window.addEventListener('mouseup', () => {
+    minimapCanvas._isDragging = false;
+  });
+
+  mapWrap.appendChild(minimapCanvas);
+  container.appendChild(mapWrap);
+  container.appendChild(mapToggleBtn);
+  uiMountRoot().appendChild(container);
+  minimapCtx = minimapCanvas.getContext('2d');
+}
+
+// --- Main Menu ---
+function createMenu() {
+  menuEl = document.createElement('div');
+  menuEl.id = 'game-menu';
+  menuEl.style.cssText = `
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: rgba(0,10,0,0.92); padding: 30px;
+    border: 1px solid #0f0; border-radius: 12px;
+    z-index: 300; text-align: center; font-family: 'Consolas', monospace;
+    min-width: 320px; pointer-events: auto;
+  `;
+  menuEl.innerHTML = `
+    <h2 style="color: #0f0; margin: 0 0 20px 0; font-size: 28px; letter-spacing: 0.1em;">RTS VR V</h2>
+    <button id="btn-start-story" style="${btnStyle('#0a6')}" onclick="window._startGame('story')">📖 Story (sci-fi kit)</button>
+    <button id="btn-start-1v1" style="${btnStyle('#0a0')}" onclick="window._startGame('1v1')">⚔️ 1v1 vs Bot</button>
+    <button id="btn-start-2v2" style="${btnStyle('#06a')}" onclick="window._startGame('2v2')">🤝 2v2 Co-op vs Bots</button>
+    <button id="btn-start-ffa" style="${btnStyle('#a60')}" onclick="window._startGame('ffa')">👑 FFA (4 Players)</button>
+    <div id="story-history-panel" class="story-history-panel" aria-live="polite"></div>
+    <hr style="border-color: #333; margin: 15px 0;">
+    <p style="color:#aaa;font-size:12px;margin:0;">Multiplayer — same lobby # as host (BattleVR-style)</p>
+    <p style="color:#8ac;font-size:11px;margin:6px 0 0 0;line-height:1.45;">1–4 humans: FFA uses every connected seat; host should keep this tab focused (background mode uses a slower backup timer + keepalive). Clients auto-rejoin the lobby briefly if the link drops before Start.</p>
+    <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin:8px 0 10px 0;">
+      <button type="button" id="btn-lobby-minus" style="${btnStyle('#333')};padding:6px 14px;">−</button>
+      <span id="menu-lobby-num" style="color:#fff;font-size:20px;font-weight:bold;min-width:1.5em;text-align:center;">1</span>
+      <button type="button" id="btn-lobby-plus" style="${btnStyle('#333')};padding:6px 14px;">+</button>
+    </div>
+    <button id="btn-host" style="${btnStyle('#008')}" onclick="window._hostGame()">🌐 Host Multiplayer</button>
+    <button id="btn-join" style="${btnStyle('#800')}" onclick="window._joinGame()">🔗 Join Multiplayer</button>
+    <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
+      <button type="button" id="btn-toggle-shadows" style="${btnStyle('#163')}" onclick="window._toggleDynamicShadows()">Shadows: ON</button>
+      <button type="button" id="btn-toggle-msaa" style="${btnStyle('#163')}" onclick="window._toggleMsaa4x()">MSAA 4x: OFF</button>
+    </div>
+    <p id="menu-status" style="color: #888; font-size: 12px; margin-top: 15px;">Select a game mode</p>
+  `;
+  uiMountRoot().appendChild(menuEl);
+
+  const minus = menuEl.querySelector('#btn-lobby-minus');
+  const plus = menuEl.querySelector('#btn-lobby-plus');
+  if (minus) minus.addEventListener('click', () => Network.adjustLobby(-1));
+  if (plus) plus.addEventListener('click', () => Network.adjustLobby(1));
+
+  window._startGame = startGame;
+  window._hostGame = hostGame;
+  window._joinGame = joinGame;
+  window._replayStory = replayStory;
+  window._lobbyDelta = d => Network.adjustLobby(d);
+  Network.refreshLobbyDisplay();
+  refreshStoryHistoryPanel();
+  syncDynamicShadowToggleUi();
+  syncMsaa4xToggleUi();
+}
+
+function shadowToggleLabel(on) {
+  return on ? 'Shadows: ON' : 'Shadows: OFF';
+}
+
+export function syncDynamicShadowToggleUi() {
+  const on = typeof window._getDynamicShadowsEnabled === 'function'
+    ? !!window._getDynamicShadowsEnabled()
+    : true;
+  const label = shadowToggleLabel(on);
+  const color = on ? '#143328' : '#2a1818';
+  const textColor = on ? '#d8ffe8' : '#ffccbb';
+  const desk = document.getElementById('btn-toggle-shadows');
+  if (desk) {
+    desk.textContent = label;
+    desk.style.background = on ? '#163' : '#422';
+  }
+  const hud = document.getElementById('hud-shadows-toggle');
+  if (hud) {
+    hud.textContent = label;
+    hud.style.background = on ? 'rgba(16,40,28,0.95)' : 'rgba(48,20,16,0.95)';
+    hud.style.borderColor = on ? '#3a6a50' : '#6a3a30';
+    hud.style.color = textColor;
+  }
+  const vrMenuLabel = document.getElementById('vr-btn-shadows-label');
+  if (vrMenuLabel) {
+    vrMenuLabel.setAttribute('value', label);
+    vrMenuLabel.setAttribute('color', textColor);
+  }
+  const vrMenuBtn = document.getElementById('vr-btn-shadows');
+  if (vrMenuBtn) vrMenuBtn.setAttribute('material', `color: ${color}; transparent: true; opacity: 0.95; side: double`);
+  const vrHudLabel = document.getElementById('vr-hud-shadows-label');
+  if (vrHudLabel) {
+    vrHudLabel.setAttribute('value', label);
+    vrHudLabel.setAttribute('color', textColor);
+  }
+  const vrHudBtn = document.getElementById('vr-hud-shadows-btn');
+  if (vrHudBtn) vrHudBtn.setAttribute('material', `color: ${color}; transparent: true; opacity: 0.95; side: double`);
+  refreshHandRaycasters();
+}
+
+function msaa4xToggleLabel(on) {
+  return on ? 'MSAA 4x: ON' : 'MSAA 4x: OFF';
+}
+
+export function syncMsaa4xToggleUi() {
+  const on = typeof window._getMsaa4xEnabled === 'function'
+    ? !!window._getMsaa4xEnabled()
+    : false;
+  const label = msaa4xToggleLabel(on);
+  const color = on ? '#143328' : '#2a1818';
+  const textColor = on ? '#d8ffe8' : '#ffccbb';
+  const desk = document.getElementById('btn-toggle-msaa');
+  if (desk) {
+    desk.textContent = label;
+    desk.style.background = on ? '#163' : '#422';
+  }
+  const hud = document.getElementById('hud-msaa-toggle');
+  if (hud) {
+    hud.textContent = label;
+    hud.style.background = on ? 'rgba(16,40,28,0.95)' : 'rgba(48,20,16,0.95)';
+    hud.style.borderColor = on ? '#3a6a50' : '#6a3a30';
+    hud.style.color = textColor;
+  }
+  const vrMenuLabel = document.getElementById('vr-btn-msaa-label');
+  if (vrMenuLabel) {
+    vrMenuLabel.setAttribute('value', label);
+    vrMenuLabel.setAttribute('color', textColor);
+  }
+  const vrMenuBtn = document.getElementById('vr-btn-msaa');
+  if (vrMenuBtn) vrMenuBtn.setAttribute('material', `color: ${color}; transparent: true; opacity: 0.95; side: double`);
+  const vrHudLabel = document.getElementById('vr-hud-msaa-label');
+  if (vrHudLabel) {
+    vrHudLabel.setAttribute('value', label);
+    vrHudLabel.setAttribute('color', textColor);
+  }
+  const vrHudBtn = document.getElementById('vr-hud-msaa-btn');
+  if (vrHudBtn) vrHudBtn.setAttribute('material', `color: ${color}; transparent: true; opacity: 0.95; side: double`);
+  refreshHandRaycasters();
+}
+
+/** BoltVR-style: enable .clickable on menu hit targets and refresh hand raycasters. */
+function syncVrMenuInteractive(show) {
+  const menu = document.getElementById('vr-game-menu');
+  if (!menu) return;
+  const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+  const busy = !!State.gameSession.matchPreparing;
+  menu.querySelectorAll('.js-vr-menu-btn').forEach(btn => {
+    const schema = btn.getAttribute('rts-vr-menu-btn') || '';
+    const hostOnlyStart =
+      mpClient &&
+      (/action:\s*story\b/.test(schema) ||
+        /action:\s*1v1\b/.test(schema) ||
+        /action:\s*2v2\b/.test(schema) ||
+        /action:\s*ffa\b/.test(schema));
+    if (show && !busy && !hostOnlyStart) {
+      btn.classList.add('clickable');
+      if (btn.object3D) btn.object3D.visible = true;
+    } else if (show && (busy || hostOnlyStart)) {
+      btn.classList.remove('clickable');
+      if (btn.object3D) btn.object3D.visible = true;
+    } else {
+      btn.classList.remove('clickable');
+      if (btn.object3D) btn.object3D.visible = false;
+    }
+  });
+  refreshHandRaycasters();
+}
+
+function refreshHandRaycasters() {
+  ['#leftHandRay', '#rightHandRay', '#leftHand', '#rightHand'].forEach(sel => {
+    const h = document.querySelector(sel);
+    if (h?.components?.raycaster?.refreshObjects) {
+      h.components.raycaster.refreshObjects();
+    }
+  });
+}
+
+function syncVrGameHudVisibility() {
+  const hud = document.getElementById('vr-game-hud');
+  const inVr = Input.getIsVR();
+  const inMatch = State.gameSession.gameStarted && !State.gameSession.menuOpen;
+  const showHud = inVr && inMatch;
+  if (hud) hud.setAttribute('visible', showHud ? 'true' : 'false');
+
+  const vrRoot = document.getElementById('vr-minimap-root');
+  if (vrRoot) {
+    vrRoot.setAttribute('visible', showHud && minimapVisible ? 'true' : 'false');
+  }
+  const plane = document.getElementById('vr-minimap-plane');
+  if (plane) {
+    const on = showHud && minimapVisible;
+    plane.classList.toggle('clickable', on);
+    plane.setAttribute('visible', on ? 'true' : 'false');
+  }
+  const hudShadows = document.getElementById('vr-hud-shadows-btn');
+  if (hudShadows) {
+    hudShadows.classList.toggle('clickable', !!showHud);
+    hudShadows.setAttribute('visible', showHud ? 'true' : 'false');
+  }
+  const hudMsaa = document.getElementById('vr-hud-msaa-btn');
+  if (hudMsaa) {
+    hudMsaa.classList.toggle('clickable', !!showHud);
+    hudMsaa.setAttribute('visible', showHud ? 'true' : 'false');
+  }
+
+  const confirmRoot = document.getElementById('vr-confirm-root');
+  if (confirmRoot) {
+    confirmRoot.setAttribute('visible', inVr && rtsConfirmActive ? 'true' : 'false');
+  }
+
+  const buildRoot = document.getElementById('vr-build-panel-root');
+  if (buildRoot) {
+    const showBuildUi =
+      !!(activeBuildingPanel || (activeMobileDeployUnitIds && activeMobileDeployUnitIds.length > 0));
+    buildRoot.setAttribute(
+      'visible',
+      showHud && showBuildUi && !rtsConfirmActive ? 'true' : 'false'
+    );
+  }
+
+  const mpPauseRoot = document.getElementById('vr-mp-pause-root');
+  if (mpPauseRoot && inVr && State.gameSession.mpSessionPaused) {
+    syncVrMpPauseOverlay();
+  }
+}
+
+function tryInitVrMinimapTexture() {
+  if (vrMinimapCtx) return;
+  const plane = document.getElementById('vr-minimap-plane');
+  if (!plane) return;
+  const mesh = plane.getObject3D('mesh');
+  if (!mesh || !mesh.material) return;
+
+  vrMinimapCanvas = document.createElement('canvas');
+  vrMinimapCanvas.width = 180;
+  vrMinimapCanvas.height = 180;
+  vrMinimapCtx = vrMinimapCanvas.getContext('2d');
+
+  const map = new THREE.CanvasTexture(vrMinimapCanvas);
+  if (THREE.SRGBColorSpace !== undefined) {
+    map.colorSpace = THREE.SRGBColorSpace;
+  }
+  mesh.material.map = map;
+  mesh.material.color.setRGB(1, 1, 1);
+  mesh.material.needsUpdate = true;
+  vrMinimapTexture = map;
+}
+
+function btnStyle(bg) {
+  return `
+    display: block; width: 100%; padding: 12px; margin: 6px 0;
+    background: ${bg}; color: #fff; border: none; border-radius: 6px;
+    font-family: 'Consolas', monospace; font-size: 15px; cursor: pointer;
+    transition: filter 0.15s, transform 0.1s;
+  `;
+}
+
+/**
+ * Rebuild Story bests + recent matches (localStorage) in the main menu.
+ */
+export function refreshStoryHistoryPanel() {
+  const panel = document.getElementById('story-history-panel');
+  if (!panel) return;
+  const { matches, fastestWin, mostKills, mostCredits } = getStoryBests();
+  if (matches.length === 0) {
+    panel.innerHTML = `
+      <div class="story-history-empty">
+        Story maps are seeded — finished matches save here with Replay.
+        Tip: open with <code>?storySeed=3707587151</code> to force a seed.
+      </div>`;
+    return;
+  }
+
+  const bestLine = (label, m, extra) => {
+    if (!m) return '';
+    return `<div class="story-best-row"><span>${label}</span><span>${extra} · seed ${m.seed}</span>
+      <button type="button" class="story-replay-btn" data-seed="${m.seed}">Replay</button></div>`;
+  };
+
+  const recent = matches.slice(0, 6).map(m => {
+    const mark = m.draw ? '≈' : m.won ? '✓' : '✗';
+    const markClass = m.draw ? 'draw' : m.won ? 'win' : 'loss';
+    return `<div class="story-recent-row">
+      <span class="story-result ${markClass}">${mark}</span>
+      <span class="story-recent-meta">${formatDuration(m.durationSec)} · ${m.stats.kills} kills · seed ${m.seed}</span>
+      <button type="button" class="story-replay-btn" data-seed="${m.seed}">Replay</button>
+    </div>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="story-history-title">Story records</div>
+    <div class="story-bests">
+      ${bestLine('Fastest win', fastestWin, fastestWin ? formatDuration(fastestWin.durationSec) : '')}
+      ${bestLine('Most kills', mostKills, mostKills ? `${mostKills.stats.kills} kills` : '')}
+      ${bestLine('Most credits', mostCredits, mostCredits ? `$${mostCredits.stats.creditsEarned}` : '')}
+    </div>
+    <div class="story-recent-title">Recent</div>
+    <div class="story-recent-list">${recent}</div>
+  `;
+
+  panel.querySelectorAll('.story-replay-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const seed = Number(btn.getAttribute('data-seed'));
+      if (Number.isFinite(seed)) replayStory(seed);
+    });
+  });
+}
+
+function replayStory(seed) {
+  if (State.gameSession.matchPreparing) {
+    showStatus('Still preparing the battlefield — please wait…');
+    return;
+  }
+  if (State.gameSession.isMultiplayer) {
+    showStatus('Story replay is solo — leave multiplayer lobby first.');
+    return;
+  }
+  queueStoryReplay(seed >>> 0);
+  showStatus(`Replaying Story seed ${seed >>> 0}…`);
+  startGame('story');
+}
+
+function maybeRecordStoryMatch() {
+  const gs = State.gameSession;
+  if (!gs.gameOver || gs.storyHistoryRecorded) return;
+  if (gs.matchMode !== 'story' || gs.storySeed == null) return;
+  gs.storyHistoryRecorded = true;
+
+  const me = State.players[gs.myPlayerId];
+  const won = gs.winner !== -1 && me && gs.winner === me.team;
+  const draw = gs.winner === -1;
+  const meta = gs.storyMeta || {};
+  const stats = (me && me.stats) || {};
+
+  recordStoryMatch({
+    id: `story_${Date.now()}_${gs.storySeed}`,
+    seed: gs.storySeed >>> 0,
+    playedAt: Date.now(),
+    won,
+    draw,
+    durationSec: Math.floor(gs.elapsedTime),
+    bases: meta.bases || 0,
+    hills: meta.hills || 0,
+    ore: meta.ore || 0,
+    stats: {
+      unitsProduced: stats.unitsProduced || 0,
+      unitsLost: stats.unitsLost || 0,
+      kills: stats.kills || 0,
+      buildingsBuilt: stats.buildingsBuilt || 0,
+      buildingsLost: stats.buildingsLost || 0,
+      creditsEarned: stats.creditsEarned || 0,
+    },
+  });
+  refreshStoryHistoryPanel();
+}
+
+// --- Update functions ---
+export function updateUI() {
+  if (Input.getIsVR()) {
+    Perf.time('ui.vr', () => {
+      tryInitVrMinimapTexture();
+      syncVrGameHudVisibility();
+    });
+  }
+  Perf.time('ui.hud', () => updateHUD());
+  if (minimapVisible) {
+    Perf.time('ui.minimap', () => updateMinimap());
+  }
+  if (State.gameSession.navDebug) NavDebug.updatePathDebugOverlay();
+  // Auto-refresh building panel
+  Perf.time('ui.panels', () => {
+    const showMobileDeploy = activeMobileDeployUnitIds && activeMobileDeployUnitIds.length > 0;
+    if (activeBuildingPanel || showMobileDeploy) {
+      const now = performance.now();
+      const mpClient =
+        State.gameSession.isMultiplayer && !State.gameSession.isHost && State.gameSession.gameStarted;
+      /** MP clients: do not rebuild faster than snapshots (~22/s) — full innerHTML was stealing clicks. */
+      const throttleMs = mpClient ? 280 : 500;
+      /** Do not skip updates while hovering — that froze queue % / afford state on desktop (cursor over panel). */
+      if (!buildPanelPointerActive && now - lastBuildPanelUpdate > throttleMs) {
+        lastBuildPanelUpdate = now;
+        if (activeBuildingPanel) refreshBuildingPanel(false);
+        if (showMobileDeploy) refreshMobileHqDeployPanel();
+      }
+    }
+    if (
+      activeBuildingPanel &&
+      buildPanelEl &&
+      buildPanelEl.style.display !== 'none' &&
+      State.gameSession.gameStarted
+    ) {
+      const live = State.buildings.get(activeBuildingPanel.id);
+      if (live) {
+        activeBuildingPanel = live;
+        patchFlatBuildPanelLiveReadouts(live, State.players[State.gameSession.myPlayerId]);
+        if (Input.getIsVR()) syncVrBuildPanelHeaderFromBuilding(live);
+      }
+    }
+  });
+}
+
+function updateHUD() {
+  const player = State.players[State.gameSession.myPlayerId];
+  if (!player) return;
+
+  if (!State.gameSession.gameStarted) {
+    lastHudHelpPlatform = '';
+    minimapVisible = false;
+    const mmc = document.getElementById('minimap-container');
+    if (mmc) mmc.style.display = 'none';
+    const gh = document.getElementById('game-hud');
+    if (gh) {
+      gh.classList.remove('rts-help-open', 'rts-touch', 'rts-vr-session');
+    }
+    const helpBtn = document.getElementById('hud-help-toggle');
+    if (helpBtn) helpBtn.textContent = 'Help';
+    updateFlatHudButtons();
+  }
+
+  const ghud = document.getElementById('game-hud');
+  if (ghud && State.gameSession.gameStarted) {
+    ghud.classList.toggle('rts-vr-session', Input.getIsVR());
+    if (!Input.getIsVR()) {
+      ghud.classList.toggle('rts-touch', Input.getInputPlatform() === 'touch');
+    } else {
+      ghud.classList.remove('rts-touch');
+    }
+  }
+
+  const controlsHelpEl = document.getElementById('hud-controls');
+  if (controlsHelpEl && State.gameSession.gameStarted) {
+    const helpKey = Input.getIsVR() ? 'vr' : Input.getInputPlatform();
+    if (helpKey !== lastHudHelpPlatform) {
+      lastHudHelpPlatform = helpKey;
+      controlsHelpEl.innerHTML = getHudControlsHelpHtml();
+    }
+  }
+
+  const creditsEl = document.getElementById('hud-credits');
+  const incomeEl = document.getElementById('hud-income');
+  const unitsEl = document.getElementById('hud-units');
+  const timeEl = document.getElementById('hud-time');
+
+  const creditsText = `$${Math.floor(player.credits)}`;
+  const incomeText = `+${player.income.toFixed(1)}/s`;
+  const unitsText = `${player.unitCount}/${player.unitCap}`;
+  if (creditsEl && creditsEl.textContent !== creditsText) creditsEl.textContent = creditsText;
+  if (incomeEl && incomeEl.textContent !== incomeText) incomeEl.textContent = incomeText;
+  if (unitsEl && unitsEl.textContent !== unitsText) unitsEl.textContent = unitsText;
+
+  const elapsed = Math.floor(State.gameSession.elapsedTime);
+  const min = Math.floor(elapsed / 60);
+  const sec = elapsed % 60;
+  const timeText = `${min}:${sec.toString().padStart(2, '0')}`;
+  if (timeEl && timeEl.textContent !== timeText) timeEl.textContent = timeText;
+
+  const vrTop = document.getElementById('vr-hud-top');
+  if (vrTop) {
+    const vrTopText = `$${Math.floor(player.credits)}  +${player.income.toFixed(1)}/s  |  ${player.unitCount}/${player.unitCap} units  |  ${min}:${sec.toString().padStart(2, '0')}`;
+    // A-Frame a-text drops updates if `value` is set every tick to a new string while
+    // the previous mesh rebuild is in flight — only write on change.
+    if (vrTopText !== lastVrHudTop) {
+      lastVrHudTop = vrTopText;
+      vrTop.setAttribute('value', vrTopText);
+    }
+  }
+
+  const botDebugEl = document.getElementById('hud-bot-debug');
+  if (botDebugEl) {
+    if (State.gameSession.debugFog && State.gameSession.gameStarted) {
+      const bots = State.players.filter(p => p.isBot && p.isActive && !p.isDefeated);
+      if (bots.length === 0) {
+        botDebugEl.style.display = 'none';
+      } else {
+        botDebugEl.style.display = 'block';
+        botDebugEl.innerHTML =
+          '<span style="color:#888;font-size:10px;">Spy · bots</span><br>' +
+          bots
+            .map(
+              p =>
+                `<span style="color:${p.colorHex}">${p.name}</span> · $${Math.floor(p.credits)} · ${p.unitCount}/${p.unitCap}`
+            )
+            .join('<br>');
+      }
+    } else {
+      botDebugEl.style.display = 'none';
+    }
+  }
+
+  const vrSpy = document.getElementById('vr-hud-spy');
+  if (vrSpy && Input.getIsVR()) {
+    if (State.gameSession.debugFog && State.gameSession.gameStarted) {
+      const bots = State.players.filter(p => p.isBot && p.isActive && !p.isDefeated);
+      if (bots.length === 0) {
+        vrSpy.setAttribute('visible', false);
+      } else {
+        vrSpy.setAttribute('visible', true);
+        vrSpy.setAttribute(
+          'value',
+          bots.map(p => `${p.name} $${Math.floor(p.credits)} ${p.unitCount}/${p.unitCap}`).join('  ·  ')
+        );
+      }
+    } else {
+      vrSpy.setAttribute('visible', false);
+    }
+  }
+
+  // Selection info
+  const selEl = document.getElementById('hud-selection');
+  if (selEl) {
+    if (State.selectedUnits.size > 0) {
+      const selected = State.getSelectedUnits();
+      const types = {};
+      selected.forEach(u => { types[u.type] = (types[u.type] || 0) + 1; });
+      const desc = Object.entries(types).map(([t, c]) =>
+        `${UNIT_TYPES[t]?.name || t}×${c}`
+      ).join('  ');
+      const totalHPRaw = selected.reduce((s, u) => s + u.hp, 0);
+      const maxHPRaw = selected.reduce((s, u) => s + u.maxHp, 0);
+      const totalHP = Math.round(totalHPRaw);
+      const maxHP = Math.round(maxHPRaw);
+
+      let extra = '';
+
+      // Show harvester state details
+      const harvesters = selected.filter(u => u.type === 'harvester');
+      if (harvesters.length > 0) {
+        const h = harvesters[0];
+        const stateLabel = getHarvesterStateLabel(h);
+        extra += `  |  ${stateLabel}`;
+        if (h.cargo > 0) extra += `  💰 Cargo: $${h.cargo}`;
+      }
+
+      // Show combat unit state
+      const combatUnits = selected.filter(u => u.type !== 'harvester' && u.type !== 'mobileHq');
+      if (combatUnits.length > 0 && harvesters.length === 0) {
+        const states = {};
+        combatUnits.forEach(u => { states[u.state] = (states[u.state] || 0) + 1; });
+        const stateDesc = Object.entries(states).map(([s, c]) => {
+          const icon = s === 'attacking' ? '⚔️' : s === 'moving' ? '🏃' : '⏸️';
+          return `${icon}${c}`;
+        }).join(' ');
+        extra += `  |  ${stateDesc}`;
+      }
+
+      const selHtml = `${desc}  |  HP: ${totalHP}/${maxHP}${extra}`;
+      if (selEl.innerHTML !== selHtml) selEl.innerHTML = selHtml;
+      selEl.style.display = Input.getIsVR() ? 'none' : 'block';
+
+      const vrSel = document.getElementById('vr-hud-selection');
+      if (vrSel && Input.getIsVR()) {
+        let plainExtra = '';
+        const harvestersP = selected.filter(u => u.type === 'harvester');
+        if (harvestersP.length > 0) {
+          const h = harvestersP[0];
+          plainExtra += ` | ${getHarvesterStatePlain(h)}`;
+          if (h.cargo > 0) plainExtra += ` cargo $${h.cargo}`;
+        }
+        const combatP = selected.filter(u => u.type !== 'harvester' && u.type !== 'mobileHq');
+        if (combatP.length > 0 && harvestersP.length === 0) {
+          const states = {};
+          combatP.forEach(u => { states[u.state] = (states[u.state] || 0) + 1; });
+          plainExtra +=
+            ' | ' +
+            Object.entries(states)
+              .map(([s, c]) => `${s.slice(0, 4)}×${c}`)
+              .join(' ');
+        }
+        vrSel.setAttribute('value', `${desc} | HP ${totalHP}/${maxHP}${plainExtra}`);
+        vrSel.setAttribute('visible', true);
+      }
+
+      const sellPack =
+        State.gameSession.gameStarted && !State.gameSession.menuOpen
+          ? Units.computeVehicleSellFromSelection(State.gameSession.myPlayerId)
+          : { unitIds: [], totalRefund: 0 };
+      const sellViz = sellPack.unitIds.length > 0;
+      const sw = document.getElementById('hud-sell-vehicle-wrap');
+      if (sw) {
+        sw.style.display = sellViz && !Input.getIsVR() ? 'block' : 'none';
+      }
+      const sellBtn = document.getElementById('hud-sell-vehicle-btn');
+      if (sellBtn) {
+        if (sellViz) {
+          const m = sellPack.unitIds.length;
+          sellBtn.textContent =
+            m === 1
+              ? 'Sell 1 selected (in WF range)…'
+              : `Sell ${m} selected (in WF range)…`;
+        } else {
+          sellBtn.textContent = 'Sell selected (War Factory range)…';
+        }
+      }
+      const vrSell = document.getElementById('vr-sell-vehicle-root');
+      if (vrSell && Input.getIsVR()) {
+        vrSell.setAttribute('visible', sellViz);
+      }
+      const vrSellLab = document.getElementById('vr-hud-sell-vehicle-label');
+      if (vrSellLab && Input.getIsVR()) {
+        if (sellViz) {
+          const m = sellPack.unitIds.length;
+          vrSellLab.setAttribute('value', m === 1 ? 'Sell 1 selected (WF)' : `Sell ${m} selected (WF)`);
+        } else {
+          vrSellLab.setAttribute('value', 'Sell selected (WF)');
+        }
+      }
+    } else {
+      selEl.style.display = 'none';
+      const vrSel = document.getElementById('vr-hud-selection');
+      if (vrSel) vrSel.setAttribute('visible', false);
+      const sw = document.getElementById('hud-sell-vehicle-wrap');
+      if (sw) sw.style.display = 'none';
+      const vrSell = document.getElementById('vr-sell-vehicle-root');
+      if (vrSell) vrSell.setAttribute('visible', false);
+      const sellBtn = document.getElementById('hud-sell-vehicle-btn');
+      if (sellBtn) sellBtn.textContent = 'Sell selected (War Factory range)…';
+      const vrSellLab = document.getElementById('vr-hud-sell-vehicle-label');
+      if (vrSellLab) vrSellLab.setAttribute('value', 'Sell selected (WF)');
+    }
+  }
+
+  // Victory/defeat
+  const victoryEl = document.getElementById('hud-victory');
+  if (State.gameSession.gameOver) {
+    maybeRecordStoryMatch();
+    const victoryStatsPlayers = State.players.filter(p => p.isActive);
+    if (victoryEl && !victoryEl.dataset.rtsVictoryPopulated) {
+      victoryEl.dataset.rtsVictoryPopulated = '1';
+      const myTeam = player.team;
+      let title = '🏆 VICTORY!';
+      let titleColor = '#0f0';
+      
+      if (State.gameSession.winner === -1) {
+        title = '⏰ DRAW (Time Limit)';
+        titleColor = '#ff0';
+      } else if (State.gameSession.winner !== myTeam) {
+        title = '💀 DEFEAT';
+        titleColor = '#f00';
+      }
+
+      const storySeed = State.gameSession.matchMode === 'story' ? State.gameSession.storySeed : null;
+      const storyFooter =
+        storySeed != null
+          ? `<div style="margin-top: 18px; font-size: 13px; color: #8c8;">
+              Story seed <span style="color:#cfc">${storySeed}</span>
+              <button type="button" id="btn-victory-replay-story" style="margin-left:10px;padding:6px 12px;background:#0a6;color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:Consolas,monospace;">Replay map</button>
+            </div>`
+          : '';
+
+      // Generate Stats Table
+      let statsHtml = `
+        <div style="font-size: 28px; color: ${titleColor}; margin-bottom: 20px; letter-spacing: 2px;">${title}</div>
+        <table style="width: 100%; border-collapse: collapse; font-family: 'Consolas', monospace; font-size: 14px; text-align: left; color: #fff;">
+          <thead>
+            <tr style="border-bottom: 1px solid #444;">
+              <th style="padding: 10px 5px;">Category</th>
+              ${victoryStatsPlayers.map(p => `<th style="padding: 10px 5px; color: ${p.colorHex}">${p.name}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            ${renderStatRow(victoryStatsPlayers, 'Units Produced', 'unitsProduced')}
+            ${renderStatRow(victoryStatsPlayers, 'Units Lost', 'unitsLost')}
+            ${renderStatRow(victoryStatsPlayers, 'Combat Kills', 'kills')}
+            <tr style="height: 10px;"></tr>
+            ${renderStatRow(victoryStatsPlayers, 'Buildings Built', 'buildingsBuilt')}
+            ${renderStatRow(victoryStatsPlayers, 'Buildings Lost', 'buildingsLost')}
+            <tr style="height: 10px;"></tr>
+            ${renderStatRow(victoryStatsPlayers, 'Credits Earned', 'creditsEarned', val => `$${Math.floor(val)}`)}
+          </tbody>
+        </table>
+        ${storyFooter}
+        <div style="margin-top: 25px; font-size: 14px; color: #888;">Press <span style="color:#eee">Esc</span> to return to command center</div>
+      `;
+
+      victoryEl.innerHTML = statsHtml;
+      victoryEl.style.width = '600px'; 
+      victoryEl.style.maxWidth = '90vw';
+      victoryEl.style.display = 'block';
+
+      const replayBtn = document.getElementById('btn-victory-replay-story');
+      if (replayBtn && storySeed != null) {
+        replayBtn.addEventListener('click', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          replayStory(storySeed);
+        });
+      }
+    }
+
+    const vrRoot = document.getElementById('vr-hud-victory-root');
+    const vrTitle = document.getElementById('vr-victory-title');
+    const vrLab = document.getElementById('vr-victory-labels');
+    const vrCols = [
+      document.getElementById('vr-victory-col0'),
+      document.getElementById('vr-victory-col1'),
+      document.getElementById('vr-victory-col2'),
+      document.getElementById('vr-victory-col3'),
+    ];
+    if (vrRoot && Input.getIsVR() && vrTitle && vrLab) {
+      const myTeam = player.team;
+      let title = 'VICTORY';
+      let titleColor = '#00ff66';
+      if (State.gameSession.winner === -1) {
+        title = 'DRAW (time limit)';
+        titleColor = '#ffff00';
+      } else if (State.gameSession.winner !== myTeam) {
+        title = 'DEFEAT';
+        titleColor = '#ff4444';
+      }
+      vrTitle.setAttribute('value', title);
+      vrTitle.setAttribute('color', titleColor);
+      vrLab.setAttribute(
+        'value',
+        [
+          'Category',
+          '----------',
+          'Produced',
+          'Lost',
+          'Kills',
+          'Bldg+',
+          'Bldg-',
+          'Credits',
+        ].join('\n')
+      );
+      victoryStatsPlayers.forEach((p, i) => {
+        const el = vrCols[i];
+        if (!el) return;
+        const lines = [
+          p.name,
+          '----------',
+          String(p.stats.unitsProduced),
+          String(p.stats.unitsLost),
+          String(p.stats.kills),
+          String(p.stats.buildingsBuilt),
+          String(p.stats.buildingsLost),
+          `$${Math.floor(p.stats.creditsEarned)}`,
+        ];
+        el.setAttribute('value', lines.join('\n'));
+        el.setAttribute('color', p.colorHex);
+        el.setAttribute('visible', true);
+      });
+      for (let i = victoryStatsPlayers.length; i < 4; i++) {
+        if (vrCols[i]) vrCols[i].setAttribute('visible', false);
+      }
+      vrRoot.setAttribute('visible', true);
+    }
+  } else {
+    // RUTHLESS UI CLEANUP: Hide the victory screen if a match is NOT over
+    if (victoryEl) {
+      delete victoryEl.dataset.rtsVictoryPopulated;
+      if (victoryEl.style.display !== 'none') {
+        victoryEl.style.display = 'none';
+      }
+    }
+    const vrRoot = document.getElementById('vr-hud-victory-root');
+    if (vrRoot) vrRoot.setAttribute('visible', false);
+  }
+
+  // Mobile HQ deploy panel (same bottom shell as HQ build menu)
+  if (State.gameSession.gameStarted && !State.gameSession.menuOpen) {
+    const myId = State.gameSession.myPlayerId;
+    const selected = State.getSelectedUnits();
+    const mobile = selected.filter(
+      u => u.ownerId === myId && u.type === 'mobileHq' && u.hp > 0
+    );
+    const onlyMobile = mobile.length > 0 && mobile.length === selected.length;
+    const sig = onlyMobile ? mobile.map(u => u.id).sort().join(',') : '';
+    if (sig !== lastMobileDeploySelectionSig) {
+      lastMobileDeploySelectionSig = sig;
+      if (sig) showMobileHqDeployPanel(mobile.map(u => u.id));
+      else hideMobileHqDeployPanel();
+    }
+  }
+}
+
+function renderStatRow(players, label, statKey, formatter = val => val) {
+  return `
+    <tr style="border-bottom: 1px solid #222;">
+      <td style="padding: 8px 5px; color: #aaa;">${label}</td>
+      ${players.map(p => `<td style="padding: 8px 5px; font-weight: bold;">${formatter(p.stats[statKey])}</td>`).join('')}
+    </tr>
+  `;
+}
+
+function drawMinimapToContext(ctx, w, h) {
+  const span =
+    typeof window.__rtsMinimapWorldSpanM === 'number'
+      ? window.__rtsMinimapWorldSpanM
+      : Pathfinding.getNavGridSpec().planeSpanM;
+  const scaleX = w / span;
+  const scaleZ = h / span;
+  const cx = w * 0.5;
+  const cz = h * 0.5;
+  const isSpyMode = State.gameSession.debugFog;
+
+  ctx.save();
+  // +X right, +Z down — NE corner bases sit bottom-right (toward center = up-left on map).
+  ctx.beginPath();
+  if (typeof ctx.ellipse === 'function') {
+    ctx.ellipse(
+      cx,
+      cz,
+      MAP_UNIT_NAV_RADIUS * scaleX,
+      MAP_UNIT_NAV_RADIUS * scaleZ,
+      0,
+      0,
+      Math.PI * 2
+    );
+  } else {
+    ctx.arc(cx, cz, MAP_UNIT_NAV_RADIUS * scaleX, 0, Math.PI * 2);
+  }
+  ctx.clip();
+
+  ctx.fillStyle = '#06060a';
+  ctx.fillRect(0, 0, w, h);
+
+  if (State.gameSession.navDebug) {
+    Pathfinding.drawNavDebugToMinimapContext(ctx, w, h);
+  }
+
+  const myTeam = State.players[State.gameSession.myPlayerId]?.team ?? 0;
+  const fogGrid = Fog.getTeamGrid(myTeam);
+  if (fogGrid && !isSpyMode) {
+    if (
+      !_minimapFogCanvas ||
+      _minimapFogCanvas.width !== FOG_GRID_SIZE ||
+      _minimapFogCanvas.height !== FOG_GRID_SIZE
+    ) {
+      _minimapFogCanvas = document.createElement('canvas');
+      _minimapFogCanvas.width = FOG_GRID_SIZE;
+      _minimapFogCanvas.height = FOG_GRID_SIZE;
+      _minimapFogCtx = _minimapFogCanvas.getContext('2d', { willReadFrequently: true });
+      _minimapFogImageData = _minimapFogCtx.createImageData(FOG_GRID_SIZE, FOG_GRID_SIZE);
+    }
+    const d = _minimapFogImageData.data;
+    for (let gz = 0; gz < FOG_GRID_SIZE; gz++) {
+      for (let gx = 0; gx < FOG_GRID_SIZE; gx++) {
+        const val = fogGrid[gz * FOG_GRID_SIZE + gx];
+        const i = (gz * FOG_GRID_SIZE + gx) * 4;
+        if (val === 2) {
+          d[i] = 58;
+          d[i + 1] = 58;
+          d[i + 2] = 70;
+          d[i + 3] = 255;
+        } else if (val === 1) {
+          d[i] = 22;
+          d[i + 1] = 22;
+          d[i + 2] = 30;
+          d[i + 3] = 255;
+        } else {
+          d[i] = 0;
+          d[i + 1] = 0;
+          d[i + 2] = 0;
+          d[i + 3] = 0;
+        }
+      }
+    }
+    _minimapFogCtx.putImageData(_minimapFogImageData, 0, 0);
+    // Map fog grid → playable plane in minimap space (same transform as cell centers).
+    const fogOrigin = (-MAP_NAV_PLANE_HALF_M + span * 0.5) * scaleX;
+    const fogSize = FOG_GRID_SIZE * FOG_CELL_SIZE * scaleX;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(_minimapFogCanvas, fogOrigin, fogOrigin, fogSize, fogSize);
+  } else if (isSpyMode) {
+    ctx.fillStyle = '#3a3a46';
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  ctx.fillStyle = '#4f8';
+  State.resourceFields.forEach(field => {
+    if (!field.depleted && Fog.wasExploredByTeam(myTeam, field.x, field.z)) {
+      const mx = (field.x + span * 0.5) * scaleX;
+      const mz = (field.z + span * 0.5) * scaleZ;
+      ctx.fillRect(mx - 3, mz - 3, 6, 6);
+    }
+  });
+
+  State.buildings.forEach(b => {
+    if (b.hp <= 0) return;
+    if (!Fog.wasExploredByTeam(myTeam, b.x, b.z)) return;
+    const mx = (b.x + span * 0.5) * scaleX;
+    const mz = (b.z + span * 0.5) * scaleZ;
+    ctx.fillStyle = PLAYER_COLOR_HEX[b.ownerId] || '#888';
+    ctx.fillRect(mx - 3, mz - 3, 6, 6);
+  });
+
+  State.units.forEach(unit => {
+    if (unit.hp <= 0) return;
+    if (unit.team !== myTeam && !Fog.isUnitVisibleToPlayer(unit, State.gameSession.myPlayerId)) return;
+    const mx = (unit.x + span * 0.5) * scaleX;
+    const mz = (unit.z + span * 0.5) * scaleZ;
+    ctx.fillStyle = PLAYER_COLOR_HEX[unit.ownerId] || '#888';
+    ctx.fillRect(mx - 1, mz - 1, 3, 3);
+  });
+
+  const cam = Input.getCameraState();
+  const camMx = (cam.x + span * 0.5) * scaleX;
+  const camMz = (cam.z + span * 0.5) * scaleZ;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(camMx - 12, camMz - 8, 24, 16);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  if (typeof ctx.ellipse === 'function') {
+    ctx.ellipse(
+      cx,
+      cz,
+      MAP_UNIT_NAV_RADIUS * scaleX,
+      MAP_UNIT_NAV_RADIUS * scaleZ,
+      0,
+      0,
+      Math.PI * 2
+    );
+  } else {
+    ctx.arc(cx, cz, MAP_UNIT_NAV_RADIUS * scaleX, 0, Math.PI * 2);
+  }
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+export function updateMinimap() {
+  if (!minimapVisible) return;
+  const now = performance.now();
+  const minInterval = 1000 / Math.max(1, MINIMAP_REDRAW_HZ);
+  if (now - _minimapLastDrawMs < minInterval) return;
+  _minimapLastDrawMs = now;
+
+  if (!Input.getIsVR() && minimapCtx && minimapCanvas) {
+    drawMinimapToContext(minimapCtx, minimapCanvas.width, minimapCanvas.height);
+  }
+  if (Input.getIsVR() && vrMinimapCtx && vrMinimapCanvas) {
+    drawMinimapToContext(vrMinimapCtx, vrMinimapCanvas.width, vrMinimapCanvas.height);
+    if (vrMinimapTexture) vrMinimapTexture.needsUpdate = true;
+  }
+}
+
+// --- Public API ---
+export function dismissAppStartGate() {
+  if (!State.gameSession.awaitingAppStart) return;
+  State.gameSession.awaitingAppStart = false;
+  /** VR lobby uses `#vr-game-menu`; if the menu was toggled closed before Start, show would stay false and lobby buttons never got `.clickable`. */
+  if (Input.getIsVR()) {
+    State.gameSession.menuOpen = true;
+  }
+  updateMenuVisibility();
+}
+
+/** FFA → Story (and any rematch): drop stale wrist text + minimap fog canvas sized to the old grid. */
+export function resetMatchHud() {
+  lastVrHudTop = '';
+  _minimapFogCanvas = null;
+  _minimapFogCtx = null;
+  _minimapFogImageData = null;
+  _minimapLastDrawMs = 0;
+  const vrTop = document.getElementById('vr-hud-top');
+  if (vrTop) vrTop.setAttribute('value', '');
+}
+
+export function updateMenuVisibility() {
+  const flatBar = document.getElementById('hud-flat-actions');
+  if (flatBar) {
+    flatBar.style.display =
+      State.gameSession.gameStarted && !Input.getIsVR() ? 'flex' : 'none';
+  }
+  if (State.gameSession.gameStarted && !Input.getIsVR()) {
+    updateFlatHudButtons();
+  }
+
+  const gate = document.getElementById('app-start-overlay');
+  if (gate) {
+    const showStart =
+      State.gameSession.awaitingAppStart &&
+      State.gameSession.sceneContentReady &&
+      !Input.getIsVR();
+    gate.style.display = showStart ? 'flex' : 'none';
+  }
+
+  const ghAll = document.getElementById('game-hud');
+  if (ghAll) {
+    if (State.gameSession.awaitingAppStart) {
+      ghAll.style.display = 'none';
+      ghAll.classList.remove('rts-pre-match');
+    } else {
+      ghAll.style.display = '';
+      /** Lobby / mode picker (after Start gate): hide match HUD; see `.rts-pre-match` in styles.css. */
+      ghAll.classList.toggle('rts-pre-match', !State.gameSession.gameStarted);
+    }
+  }
+
+  const vrVer = document.getElementById('vr-version-fps');
+  if (vrVer) {
+    vrVer.setAttribute('visible', State.gameSession.awaitingAppStart ? 'false' : 'true');
+  }
+  const vrStart = document.getElementById('vr-app-start');
+  if (vrStart) {
+    const showVrStart = !!(
+      State.gameSession.awaitingAppStart &&
+      State.gameSession.sceneContentReady &&
+      Input.getIsVR()
+    );
+    vrStart.setAttribute('visible', showVrStart ? 'true' : 'false');
+    const vrb = document.getElementById('vr-btn-app-start');
+    if (vrb) {
+      if (showVrStart) vrb.classList.add('clickable');
+      else vrb.classList.remove('clickable');
+    }
+  }
+
+  if (menuEl) {
+    const showHtml =
+      !State.gameSession.awaitingAppStart && State.gameSession.menuOpen && !Input.getIsVR();
+    menuEl.style.display = showHtml ? 'block' : 'none';
+    menuEl.classList.toggle('is-preparing', !!State.gameSession.matchPreparing);
+    if (showHtml && !menuEl.dataset.storyHistoryShown) {
+      menuEl.dataset.storyHistoryShown = '1';
+      refreshStoryHistoryPanel();
+    } else if (!showHtml) {
+      delete menuEl.dataset.storyHistoryShown;
+    }
+    const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+    const busy = !!State.gameSession.matchPreparing;
+    ['btn-start-story', 'btn-start-1v1', 'btn-start-2v2', 'btn-start-ffa'].forEach(id => {
+      const btn = menuEl.querySelector(`#${id}`);
+      if (!btn) return;
+      btn.disabled = !!mpClient || busy;
+      btn.style.opacity = mpClient || busy ? '0.35' : '1';
+      btn.style.pointerEvents = mpClient || busy ? 'none' : 'auto';
+    });
+    ['btn-host', 'btn-join'].forEach(id => {
+      const btn = menuEl.querySelector(`#${id}`);
+      if (!btn) return;
+      btn.disabled = busy;
+      btn.style.opacity = busy ? '0.35' : '1';
+      btn.style.pointerEvents = busy ? 'none' : 'auto';
+    });
+  }
+  const vrGameMenu = document.getElementById('vr-game-menu');
+  let showVrGameMenu = false;
+  if (vrGameMenu) {
+    showVrGameMenu =
+      !State.gameSession.awaitingAppStart &&
+      State.gameSession.menuOpen &&
+      Input.getIsVR() &&
+      !State.gameSession.matchPreparing;
+    vrGameMenu.setAttribute('visible', showVrGameMenu ? 'true' : 'false');
+    syncVrMenuInteractive(showVrGameMenu);
+    const vrShadows = document.getElementById('vr-btn-shadows');
+    if (vrShadows) {
+      vrShadows.classList.toggle('clickable', !!showVrGameMenu);
+    }
+    const vrMsaa = document.getElementById('vr-btn-msaa');
+    if (vrMsaa) {
+      vrMsaa.classList.toggle('clickable', !!showVrGameMenu);
+    }
+  }
+  /** Same predicate as `#vr-game-menu` visibility — used by `rts-vr-menu-btn` (attribute alone can lag XR). */
+  globalThis.__rtsVrShowGameMenu = !!showVrGameMenu;
+  syncVrMatchPreparePanel();
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+}
+
+export function setMinimapVisible(on) {
+  minimapVisible = !!on;
+  const container = document.getElementById('minimap-container');
+  const mapWrap = document.getElementById('minimap-map-wrap');
+  const touchGame =
+    State.gameSession.gameStarted && !Input.getIsVR() && Input.getInputPlatform() === 'touch';
+  if (container) {
+    if (Input.getIsVR()) {
+      container.style.display = 'none';
+    } else if (touchGame) {
+      container.style.display = 'flex';
+      if (mapWrap) mapWrap.style.display = minimapVisible ? 'block' : 'none';
+    } else {
+      container.style.display = minimapVisible ? 'flex' : 'none';
+      if (mapWrap) mapWrap.style.display = '';
+    }
+  }
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+  updateFlatHudButtons();
+}
+
+export function toggleMinimap() {
+  setMinimapVisible(!minimapVisible);
+}
+
+export function showBuildMenu() {
+  if (buildMenuEl) {
+    buildMenuEl.style.display = buildMenuEl.style.display === 'none' ? 'block' : 'none';
+  }
+}
+
+export function hideBuildMenu() {
+  if (buildMenuEl) buildMenuEl.style.display = 'none';
+}
+
+function ensureHudBuildPanel() {
+  if (buildPanelEl) return;
+  buildPanelEl = document.createElement('div');
+  buildPanelEl.id = 'hud-build-panel';
+  buildPanelEl.className = 'hud';
+  buildPanelEl.style.cssText = `
+      position: fixed; bottom: 60px; left: 8px;
+      background: rgba(0,10,0,0.9); padding: 12px;
+      border: 1px solid #0a0; border-radius: 8px;
+      z-index: 110; min-width: 280px;
+      font-family: 'Consolas', monospace; pointer-events: auto;
+    `;
+  uiMountRoot().appendChild(buildPanelEl);
+  if (!buildPanelPointerListenersWired) {
+    buildPanelPointerListenersWired = true;
+    const clearBuildPanelPointer = () => {
+      buildPanelPointerActive = false;
+    };
+    buildPanelEl.addEventListener(
+      'pointerdown',
+      () => {
+        buildPanelPointerActive = true;
+      },
+      true
+    );
+    window.addEventListener('pointerup', clearBuildPanelPointer, true);
+    window.addEventListener('pointercancel', clearBuildPanelPointer, true);
+    buildPanelEl.addEventListener(
+      'touchstart',
+      () => {
+        buildPanelPointerActive = true;
+      },
+      { capture: true, passive: true }
+    );
+    window.addEventListener('touchend', clearBuildPanelPointer, true);
+    window.addEventListener('touchcancel', clearBuildPanelPointer, true);
+  }
+}
+
+function refreshMobileHqDeployPanel() {
+  if (!buildPanelEl || !activeMobileDeployUnitIds || activeMobileDeployUnitIds.length === 0) return;
+
+  const alive = activeMobileDeployUnitIds
+    .map(id => State.units.get(id))
+    .filter(u => u && u.type === 'mobileHq' && u.hp > 0 && u.ownerId === State.gameSession.myPlayerId);
+  if (alive.length === 0) {
+    hideMobileHqDeployPanel();
+    return;
+  }
+
+  const names = UNIT_TYPES.mobileHq?.name || 'Mobile HQ';
+  const totalHp = alive.reduce((s, u) => s + u.hp, 0);
+  const maxHp = alive.reduce((s, u) => s + u.maxHp, 0);
+  const deployLabel = alive.length > 1 ? `Deploy ${alive.length} (${names})` : 'Deploy as HQ';
+
+  let html = `<div style="color: #0f0; font-size: 14px; font-weight: bold; margin-bottom: 4px;">
+    ${names}
+    <span style="color: #888; font-size: 11px; float: right;">HP: ${Math.floor(totalHp)}/${maxHp}</span>
+  </div>`;
+  html += `<div style="color:#8ac;font-size:11px;margin:4px 0;">Opens a new build radius here (clear of structures & crystals).</div>`;
+  html += `<div><button type="button" style="
+      display: inline-block; padding: 8px 14px; margin: 4px 0 0 0;
+      background: #1a3a1a; color: #fff; border: 1px solid #0a0; border-radius: 4px;
+      cursor: pointer; font-family: Consolas, monospace; font-size: 13px;
+    " onclick="window._deployMobileHq && window._deployMobileHq()">${deployLabel}</button></div>`;
+  html += '<div style="color: #555; font-size: 10px; margin-top: 4px;">Space to close panel · Deselect to cancel</div>';
+  buildPanelEl.innerHTML = html;
+  refreshVrMobileDeployPanel();
+}
+
+function refreshVrMobileDeployPanel() {
+  const root = document.getElementById('vr-build-buttons');
+  const titleEl = document.getElementById('vr-build-title');
+  const queueEl = document.getElementById('vr-build-queue');
+  if (!root || !Input.getIsVR()) return;
+  if (!activeMobileDeployUnitIds || activeMobileDeployUnitIds.length === 0) return;
+
+  while (root.firstChild) root.removeChild(root.firstChild);
+  if (queueEl) queueEl.setAttribute('visible', false);
+
+  const alive = activeMobileDeployUnitIds
+    .map(id => State.units.get(id))
+    .filter(u => u && u.type === 'mobileHq' && u.hp > 0 && u.ownerId === State.gameSession.myPlayerId);
+  if (alive.length === 0) return;
+
+  if (titleEl) {
+    titleEl.setAttribute(
+      'value',
+      `${UNIT_TYPES.mobileHq?.name || 'Mobile HQ'}  HP ${Math.floor(alive.reduce((s, u) => s + u.hp, 0))}/${alive.reduce((s, u) => s + u.maxHp, 0)}`
+    );
+  }
+
+  const rowH = 0.088;
+  const btnW = 0.64;
+  vrAddBuildRow(root, 0, 0.08, btnW, rowH, 'Deploy as HQ', 'confirm', true, { kind: 'deployMobileHq' });
+  refreshHandRaycasters();
+}
+
+function showMobileHqDeployPanel(unitIds) {
+  activeBuildingPanel = null;
+  activeResourceField = null;
+  activeMobileDeployUnitIds = unitIds.filter(id => {
+    const u = State.units.get(id);
+    return u && u.type === 'mobileHq' && u.hp > 0 && u.ownerId === State.gameSession.myPlayerId;
+  });
+  if (activeMobileDeployUnitIds.length === 0) return;
+
+  lastBuildPanelUpdate = 0;
+  ensureHudBuildPanel();
+
+  window._deployMobileHq = () => {
+    const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+    const sent = Network.sendCommand(
+      { action: 'deployMobileHq', unitIds: activeMobileDeployUnitIds.slice() },
+      (ok, code) => {
+        if (ok) showStatus('HQ deployed');
+        else showStatus(Network.commandFailureMessage(code));
+        refreshMobileHqDeployPanel();
+      }
+    );
+    if (mpClient && sent) {
+      showStatus('Deploy order sent…');
+    }
+  };
+
+  refreshMobileHqDeployPanel();
+  buildPanelEl.style.display = 'block';
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+}
+
+/** @public Deselect / spacebar should clear the Mobile HQ deploy panel. */
+export function hideMobileHqDeployPanel() {
+  activeMobileDeployUnitIds = null;
+  window._deployMobileHq = undefined;
+  if (buildPanelEl && !activeBuildingPanel) {
+    buildPanelEl.style.display = 'none';
+    buildPanelEl.innerHTML = '';
+  }
+  const vrBtns = document.getElementById('vr-build-buttons');
+  if (vrBtns && !activeBuildingPanel) {
+    while (vrBtns.firstChild) vrBtns.removeChild(vrBtns.firstChild);
+  }
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+}
+
+export function showBuildingPanel(building) {
+  activeMobileDeployUnitIds = null;
+  lastMobileDeploySelectionSig = null;
+  window._deployMobileHq = undefined;
+  activeBuildingPanel = building;
+  lastBuildPanelUpdate = 0; // Force immediate refresh
+  lastBuildPanelRenderedSig = '';
+  lastVrBuildButtonsSig = '';
+
+  ensureHudBuildPanel();
+
+  refreshBuildingPanel(true);
+  buildPanelEl.style.display = 'block';
+
+  window._queueUnit = (bId, uType) => {
+    const label = UNIT_TYPES[uType]?.name || uType;
+    const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+    const sent = Network.sendCommand(
+      { action: 'produce', buildingId: bId, unitType: uType },
+      (ok, code) => {
+        if (ok) showStatus(`Training ${label}`);
+        else showStatus(Network.commandFailureMessage(code));
+        refreshBuildingPanel(true);
+      }
+    );
+    if (mpClient && sent) {
+      showStatus(`Order sent: ${label}…`);
+    }
+  };
+
+  window._cancelQueueUnit = (bId, uType) => {
+    const label = UNIT_TYPES[uType]?.name || uType;
+    const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
+    const sent = Network.sendCommand(
+      { action: 'cancelProduce', buildingId: bId, unitType: uType },
+      (ok, code) => {
+        if (ok) showStatus(`Cancelled ${label}`);
+        else showStatus(Network.commandFailureMessage(code));
+        refreshBuildingPanel(true);
+      }
+    );
+    if (mpClient && sent) {
+      showStatus(`Cancel sent: ${label}…`);
+    }
+  };
+
+  window._startBuildMode = (type) => {
+    const hqId =
+      activeBuildingPanel &&
+      activeBuildingPanel.type === 'hq' &&
+      State.buildings.has(activeBuildingPanel.id)
+        ? activeBuildingPanel.id
+        : null;
+    Input.toggleBuildMode(type);
+    State.gameSession.buildModeHQId =
+      State.gameSession.buildMode && hqId ? hqId : null;
+    hideBuildingPanel();
+  };
+}
+
+/**
+ * MP client: production bar uses host `startedAtElapsed` + match `elapsedTime` so the UI still
+ * drains if `remainingTime` in snapshots is briefly stale (send/mutation races on the host).
+ */
+function queueHeadRemainingForUi(building) {
+  const q = building.productionQueue || [];
+  if (!q.length) return null;
+  const cur = q[0];
+  const tot = cur.totalTime > 0 ? cur.totalTime : 1;
+  const mpClient =
+    State.gameSession.isMultiplayer && !State.gameSession.isHost && State.gameSession.gameStarted;
+  if (!mpClient) return cur.remainingTime;
+  const st = Number(cur.startedAtElapsed);
+  if (!Number.isFinite(st)) return cur.remainingTime;
+  const synced = st + tot - State.gameSession.elapsedTime;
+  return Math.max(0, Math.min(cur.remainingTime, synced));
+}
+
+/**
+ * Full panel layout signature (no per-frame queue *timer* — `remainingTime` is patched via
+ * `patchFlatBuildPanelLiveReadouts` every UI tick so MP clients see host-accurate progress).
+ */
+function buildPanelLayoutSig(building, player) {
+  const q = building.productionQueue || [];
+  const qKey = q.length === 0 ? 'e' : `${q.length}:${q.map(x => x.unitType).join('|')}`;
+  const credB = player ? Math.floor(player.credits / 5) * 5 : 0;
+  const uc = player ? player.unitCount : 0;
+  return [
+    building.id,
+    building.type,
+    building.ownerId,
+    building.isBuilt ? '1' : '0',
+    Math.floor(building.hp),
+    credB,
+    uc,
+    qKey,
+    building.type !== 'hq' && building.isBuilt ? 'sell1' : 'sell0',
+  ].join('|');
+}
+
+/** Update queue bar / HP line without replacing buttons (keeps clicks stable). */
+function patchFlatBuildPanelLiveReadouts(building, player) {
+  if (!buildPanelEl) return;
+  const hpEl = document.getElementById('hud-build-title-hp');
+  if (hpEl) {
+    hpEl.textContent = `HP: ${Math.floor(building.hp)}/${Math.floor(building.maxHp ?? building.hp)}`;
+  }
+  const qBlock = document.getElementById('hud-build-queue-block');
+  const queue = building.productionQueue || [];
+  if (qBlock) {
+    if (queue.length === 0) {
+      qBlock.style.display = 'none';
+    } else {
+      qBlock.style.display = 'block';
+      const current = queue[0];
+      const tot = current.totalTime > 0 ? current.totalTime : 1;
+      const remUi = queueHeadRemainingForUi(building) ?? current.remainingTime;
+      const pct = Math.max(0, Math.min(100, Math.floor((1 - remUi / tot) * 100)));
+      const qt = document.getElementById('hud-build-queue-text');
+      const qb = document.getElementById('hud-build-queue-bar');
+      if (qt) {
+        qt.innerHTML = `Building: ${UNIT_TYPES[current.unitType]?.name || current.unitType} <span style="color:#ff0">${pct}%</span> <span style="color: #666;">(${queue.length} in queue)</span>`;
+      }
+      if (qb) qb.style.width = `${pct}%`;
+    }
+  }
+
+  if (!player || building.ownerId !== State.gameSession.myPlayerId) return;
+  const opts = document.getElementById('hud-build-options');
+  if (!opts) return;
+  if (building.type === 'hq') {
+    const types = ['barracks', 'warFactory', 'refinery'];
+    types.forEach(type => {
+      const btn = opts.querySelector(`[data-rts-hq-build="${type}"]`);
+      if (!btn) return;
+      const stats = BUILDING_TYPES[type];
+      const affordable = player.credits >= stats.cost;
+      btn.style.background = affordable ? '#1a3a1a' : '#2a1a1a';
+      btn.style.color = affordable ? '#fff' : '#666';
+      btn.style.borderColor = affordable ? '#0a0' : '#400';
+      btn.style.cursor = affordable ? 'pointer' : 'not-allowed';
+      if (affordable) {
+        btn.setAttribute('onclick', `window._startBuildMode('${type}')`);
+        btn.setAttribute('onmouseover', "this.style.background='#2a5a2a'");
+        btn.setAttribute('onmouseout', "this.style.background='#1a3a1a'");
+      } else {
+        btn.removeAttribute('onclick');
+        btn.removeAttribute('onmouseover');
+        btn.removeAttribute('onmouseout');
+      }
+      const price = btn.querySelector('.rts-btn-price');
+      if (price) price.style.color = affordable ? '#0f0' : '#f44';
+    });
+  } else {
+    Buildings.getProductionOptions(building.id).forEach(opt => {
+      const btn = opts.querySelector(`[data-rts-produce="${opt.type}"]`);
+      if (!btn) return;
+      const affordable = player.credits >= opt.cost;
+      const atCap = player.unitCount >= player.unitCap;
+      const canBuild = affordable && !atCap;
+      btn.style.background = canBuild ? '#1a3a1a' : '#2a1a1a';
+      btn.style.color = canBuild ? '#fff' : '#666';
+      btn.style.borderColor = canBuild ? '#0a0' : '#400';
+      btn.style.cursor = canBuild ? 'pointer' : 'not-allowed';
+      if (canBuild) {
+        btn.setAttribute('onclick', `window._queueUnit('${building.id}', '${opt.type}')`);
+        btn.setAttribute('onmouseover', "this.style.background='#2a5a2a'");
+        btn.setAttribute('onmouseout', "this.style.background='#1a3a1a'");
+      } else {
+        btn.removeAttribute('onclick');
+        btn.removeAttribute('onmouseover');
+        btn.removeAttribute('onmouseout');
+      }
+      const price = btn.querySelector('.rts-btn-price');
+      if (price) price.style.color = affordable ? '#0f0' : '#f44';
+    });
+  }
+}
+
+/** VR: update title + queue readout without destroying clickable rows (MP snapshot spam). */
+function vrBuildButtonsSig(building, player) {
+  const q = building.productionQueue || [];
+  const qh = q.length > 0 ? q[0].unitType : '-';
+  const cr = player ? Math.floor(player.credits) : 0;
+  const uc = player ? player.unitCount : 0;
+  return [
+    building.id,
+    building.type,
+    building.isBuilt ? '1' : '0',
+    Math.floor(building.hp),
+    cr,
+    uc,
+    q.length,
+    qh,
+    building.type !== 'hq' && building.isBuilt ? 'sell1' : 'sell0',
+  ].join('|');
+}
+
+function syncVrBuildPanelHeaderFromBuilding(building) {
+  if (!Input.getIsVR()) return;
+  const titleEl = document.getElementById('vr-build-title');
+  const queueEl = document.getElementById('vr-build-queue');
+  const bStats = BUILDING_TYPES[building.type];
+  if (titleEl) {
+    titleEl.setAttribute(
+      'value',
+      `${bStats?.name || building.type}  HP ${building.hp}/${building.maxHp}`
+    );
+  }
+  const queue = building.productionQueue || [];
+  if (queueEl) {
+    if (queue.length > 0) {
+      const current = queue[0];
+      const tot = current.totalTime > 0 ? current.totalTime : 1;
+      const remUi = queueHeadRemainingForUi(building) ?? current.remainingTime;
+      const pct = Math.max(0, Math.min(100, Math.floor((1 - remUi / tot) * 100)));
+      queueEl.setAttribute(
+        'value',
+        `Queue: ${UNIT_TYPES[current.unitType]?.name || current.unitType} ${pct}% (${queue.length})`
+      );
+      queueEl.setAttribute('visible', true);
+    } else {
+      queueEl.setAttribute('visible', false);
+    }
+  }
+}
+
+function refreshBuildingPanel(force = false) {
+  if (!buildPanelEl || !activeBuildingPanel) return;
+
+  const live = State.buildings.get(activeBuildingPanel.id);
+  if (!live) {
+    hideBuildingPanel();
+    return;
+  }
+  activeBuildingPanel = live;
+
+  const player = State.players[State.gameSession.myPlayerId];
+  if (!force) {
+    const sig = buildPanelLayoutSig(live, player);
+    if (sig === lastBuildPanelRenderedSig) {
+      patchFlatBuildPanelLiveReadouts(live, player);
+      syncVrBuildPanelHeaderFromBuilding(live);
+      return;
+    }
+    lastBuildPanelRenderedSig = sig;
+  } else {
+    lastBuildPanelRenderedSig = buildPanelLayoutSig(live, player);
+  }
+
+  const building = live;
+  const bStats = BUILDING_TYPES[building.type];
+  const options = Buildings.getProductionOptions(building.id);
+  const queue = building.productionQueue;
+
+  let html = `<div style="color: #0f0; font-size: 14px; font-weight: bold; margin-bottom: 4px;">
+    ${bStats?.name || building.type}
+    <span id="hud-build-title-hp" style="color: #888; font-size: 11px; float: right;">HP: ${Math.floor(building.hp)}/${Math.floor(building.maxHp ?? building.hp)}</span>
+  </div>`;
+
+  // Queue display (ids: patched every frame without innerHTML)
+  if (queue.length > 0) {
+    const current = queue[0];
+    const tot = current.totalTime > 0 ? current.totalTime : 1;
+    const remUi = queueHeadRemainingForUi(building) ?? current.remainingTime;
+    const pct = Math.max(0, Math.min(100, Math.floor((1 - remUi / tot) * 100)));
+    html += `<div id="hud-build-queue-block" style="margin-bottom: 8px;">
+      <div id="hud-build-queue-text" style="color: #ff0; font-size: 12px; margin: 4px 0;"></div>
+      <div style="background: #333; height: 4px; border-radius: 2px;">
+        <div id="hud-build-queue-bar" style="background: #0f0; height: 100%; width: ${pct}%; border-radius: 2px;"></div>
+      </div>
+    </div>`;
+  }
+
+  // Options (only if owned by player)
+  if (building.ownerId !== State.gameSession.myPlayerId) {
+    buildPanelEl.innerHTML = html;
+    if (force) lastVrBuildButtonsSig = '';
+    refreshVrBuildingPanel();
+    return;
+  }
+
+  html += '<div id="hud-build-options">';
+  if (building.type === 'hq') {
+    const buildableTypes = ['barracks', 'warFactory', 'refinery'];
+    buildableTypes.forEach(type => {
+      const stats = BUILDING_TYPES[type];
+      const affordable = player && player.credits >= stats.cost;
+      html += `
+        <button type="button" data-rts-hq-build="${type}" style="
+          display: inline-block; padding: 6px 10px; margin: 3px;
+          background: ${affordable ? '#1a3a1a' : '#2a1a1a'};
+          color: ${affordable ? '#fff' : '#666'};
+          border: 1px solid ${affordable ? '#0a0' : '#400'};
+          border-radius: 4px; cursor: ${affordable ? 'pointer' : 'not-allowed'};
+          font-family: Consolas, monospace; font-size: 12px;
+          transition: background 0.15s;
+        " ${affordable ? `onclick="window._startBuildMode('${type}')"` : ''}
+           ${affordable ? `onmouseover="this.style.background='#2a5a2a'" onmouseout="this.style.background='#1a3a1a'"` : ''}
+           title="Build ${stats.name}&#10;Cost: $${stats.cost} | Build Time: ${stats.buildTime}s">
+          ${stats.name}<br><span class="rts-btn-price" style="font-size: 10px; color: ${affordable ? '#0f0' : '#f44'};">$${stats.cost}</span>
+        </button>
+      `;
+    });
+  } else {
+    options.forEach(opt => {
+      const affordable = player && player.credits >= opt.cost;
+      const atCap = player && player.unitCount >= player.unitCap;
+      const canBuild = affordable && !atCap;
+      html += `
+        <button type="button" data-rts-produce="${opt.type}" style="
+          display: inline-block; padding: 6px 10px; margin: 3px;
+          background: ${canBuild ? '#1a3a1a' : '#2a1a1a'};
+          color: ${canBuild ? '#fff' : '#666'};
+          border: 1px solid ${canBuild ? '#0a0' : '#400'};
+          border-radius: 4px; cursor: ${canBuild ? 'pointer' : 'not-allowed'};
+          font-family: Consolas, monospace; font-size: 12px;
+          transition: background 0.15s;
+        " ${canBuild ? `onclick="window._queueUnit('${building.id}', '${opt.type}')"` : ''}
+           oncontextmenu="window._cancelQueueUnit('${building.id}', '${opt.type}'); return false;"
+           ${canBuild ? `onmouseover="this.style.background='#2a5a2a'" onmouseout="this.style.background='#1a3a1a'"` : ''}
+           title="${opt.description}&#10;DMG: ${opt.damage} | HP: ${opt.hp} | Range: ${opt.range} | Speed: ${opt.speed}&#10;[Right-Click] to cancel 1">
+          ${opt.name}<br><span class="rts-btn-price" style="font-size: 10px; color: ${affordable ? '#0f0' : '#f44'};">$${opt.cost}</span>
+        </button>
+      `;
+    });
+  }
+  if (building.type !== 'hq' && building.isBuilt) {
+    const sr = bStats?.cost ?? 0;
+    html += `
+      <button type="button" data-rts-sell-building style="
+        display: inline-block; padding: 6px 10px; margin: 3px;
+        background: #4a2810;
+        color: #fec;
+        border: 1px solid #8a5a2a;
+        border-radius: 4px; cursor: pointer;
+        font-family: Consolas, monospace; font-size: 12px;
+        transition: background 0.15s;
+      " onclick="window._requestSellBuilding('${building.id}')"
+         onmouseover="this.style.background='#5a3820'" onmouseout="this.style.background='#4a2810'"
+         title="Remove this structure and refund its build cost. Queued training is cancelled and refunded.">
+        Sell structure<br><span style="font-size: 10px; color: #fc8;">+$${sr}</span>
+      </button>
+    `;
+  }
+  html += '</div>';
+  html += '<div style="color: #555; font-size: 10px; margin-top: 4px;">Click to build | Space to close</div>';
+
+  buildPanelEl.innerHTML = html;
+  if (force) lastVrBuildButtonsSig = '';
+  refreshVrBuildingPanel();
+}
+
+function vrAddBuildRow(parent, cx, y, w, h, line1, line2, enabled, buildSchema) {
+  const el = document.createElement('a-entity');
+  el.setAttribute('position', `${cx} ${y} 0.012`);
+  const col = enabled ? '#1a3a1a' : '#2a1a1a';
+  el.setAttribute('geometry', `primitive: plane; width: ${w}; height: ${h}`);
+  el.setAttribute('material', `color: ${col}; transparent: true; opacity: 0.95`);
+  if (enabled) {
+    el.setAttribute('class', 'clickable');
+    el.setAttribute('vr-button-hover', 'hoverColor: #3a6a3a');
+    const parts = Object.entries(buildSchema).map(([k, v]) => `${k}: ${v}`);
+    el.setAttribute('rts-vr-build-btn', parts.join('; '));
+  }
+  const t1 = document.createElement('a-text');
+  t1.setAttribute('class', 'no-raycast');
+  t1.setAttribute('value', line1);
+  t1.setAttribute('position', '0 0.02 0.015');
+  t1.setAttribute('align', 'center');
+  t1.setAttribute('width', '1.15');
+  t1.setAttribute('color', enabled ? '#ffffff' : '#666666');
+  el.appendChild(t1);
+  const t2 = document.createElement('a-text');
+  t2.setAttribute('class', 'no-raycast');
+  t2.setAttribute('value', line2);
+  t2.setAttribute('position', '0 -0.03 0.015');
+  t2.setAttribute('align', 'center');
+  t2.setAttribute('width', '0.95');
+  t2.setAttribute('color', enabled ? '#88ff88' : '#884444');
+  el.appendChild(t2);
+  parent.appendChild(el);
+}
+
+function refreshVrBuildingPanel() {
+  const root = document.getElementById('vr-build-buttons');
+  if (!root || !activeBuildingPanel || !Input.getIsVR()) return;
+  const live = State.buildings.get(activeBuildingPanel.id);
+  if (!live) {
+    hideBuildingPanel();
+    return;
+  }
+  activeBuildingPanel = live;
+
+  const building = live;
+  const options = Buildings.getProductionOptions(building.id);
+  const player = State.players[State.gameSession.myPlayerId];
+  const queue = building.productionQueue;
+
+  syncVrBuildPanelHeaderFromBuilding(building);
+
+  let y = 0.08;
+  const rowH = 0.088;
+  const btnW = 0.64;
+  const cx = 0;
+
+  if (building.ownerId !== State.gameSession.myPlayerId) {
+    while (root.firstChild) root.removeChild(root.firstChild);
+    lastVrBuildButtonsSig = '';
+    refreshHandRaycasters();
+    return;
+  }
+
+  const btnSig = vrBuildButtonsSig(building, player);
+  if (btnSig === lastVrBuildButtonsSig) {
+    refreshHandRaycasters();
+    return;
+  }
+  lastVrBuildButtonsSig = btnSig;
+
+  while (root.firstChild) root.removeChild(root.firstChild);
+
+  if (building.type === 'hq') {
+    const buildableTypes = ['barracks', 'warFactory', 'refinery'];
+    buildableTypes.forEach(type => {
+      const stats = BUILDING_TYPES[type];
+      const affordable = player && player.credits >= stats.cost;
+      vrAddBuildRow(root, cx, y, btnW, rowH, stats.name, `$${stats.cost}`, affordable, {
+        kind: 'build',
+        buildingType: type,
+      });
+      y -= rowH + 0.018;
+    });
+  } else {
+    options.forEach(opt => {
+      const affordable = player && player.credits >= opt.cost;
+      const atCap = player && player.unitCount >= player.unitCap;
+      const canBuild = affordable && !atCap;
+      vrAddBuildRow(root, cx, y, btnW, rowH, opt.name, `$${opt.cost}`, canBuild, {
+        kind: 'produce',
+        buildingId: building.id,
+        unitType: opt.type,
+      });
+      y -= rowH + 0.018;
+    });
+  }
+
+  if (building.type !== 'hq' && building.isBuilt) {
+    const sr = BUILDING_TYPES[building.type]?.cost ?? 0;
+    vrAddBuildRow(root, cx, y, btnW, rowH, 'Sell structure', `+$${sr}`, true, {
+      kind: 'sellBuilding',
+      buildingId: building.id,
+    });
+    y -= rowH + 0.018;
+  }
+
+  if (queue.length > 0) {
+    const first = queue[0];
+    vrAddBuildRow(
+      root,
+      cx,
+      y,
+      btnW,
+      rowH,
+      `Cancel ${UNIT_TYPES[first.unitType]?.name || first.unitType}`,
+      'queue',
+      true,
+      {
+        kind: 'cancel',
+        buildingId: building.id,
+        unitType: first.unitType,
+      }
+    );
+  }
+
+  refreshHandRaycasters();
+}
+
+export function hideBuildingPanel() {
+  activeMobileDeployUnitIds = null;
+  lastMobileDeploySelectionSig = null;
+  window._deployMobileHq = undefined;
+  lastBuildPanelRenderedSig = '';
+  lastVrBuildButtonsSig = '';
+  if (buildPanelEl) buildPanelEl.style.display = 'none';
+  activeBuildingPanel = null;
+  activeResourceField = null;
+  const vrBtns = document.getElementById('vr-build-buttons');
+  if (vrBtns) {
+    while (vrBtns.firstChild) vrBtns.removeChild(vrBtns.firstChild);
+  }
+  syncVrGameHudVisibility();
+  refreshHandRaycasters();
+}
+
+export function showResourceFieldPanel(resource) {
+  activeResourceField = resource;
+}
+
+/** In-headset hint while placing a structure (DOM #build-placement-banner is not visible in VR). */
+export function setVrBuildPlacementHint(name, cost) {
+  const el = document.getElementById('vr-hud-build-mode');
+  if (!el || !Input.getIsVR()) return;
+  el.setAttribute('value', `Placing: ${name} ($${cost}) — trigger on ground · X cancel`);
+  el.setAttribute('visible', true);
+}
+
+export function clearVrBuildPlacementHint() {
+  const el = document.getElementById('vr-hud-build-mode');
+  if (!el) return;
+  el.setAttribute('value', '');
+  el.setAttribute('visible', false);
+}
+
+export function showStatus(msg) {
+  const el = document.getElementById('hud-status');
+  if (el) {
+    el.textContent = msg;
+    // Auto-clear after 3 seconds
+    el._timeout && clearTimeout(el._timeout);
+    if (msg) {
+      el._timeout = setTimeout(() => { el.textContent = ''; }, 3000);
+    }
+  }
+  const vrSt = document.getElementById('vr-hud-status');
+  if (vrSt) {
+    vrSt.setAttribute('value', msg || '');
+    vrSt._timeout && clearTimeout(vrSt._timeout);
+    if (msg) {
+      vrSt._timeout = setTimeout(() => {
+        vrSt.setAttribute('value', '');
+      }, 3000);
+    }
+  }
+}
+
+// --- Game start callbacks ---
+let onStartCallback = null;
+let onHostCallback = null;
+let onJoinCallback = null;
+
+export function setCallbacks(onStart, onHost, onJoin) {
+  onStartCallback = onStart;
+  onHostCallback = onHost;
+  onJoinCallback = onJoin;
+}
+
+function startGame(mode) {
+  if (State.gameSession.matchPreparing) {
+    showStatus('Still preparing the battlefield — please wait…');
+    return;
+  }
+  if (State.gameSession.isMultiplayer && !State.gameSession.isHost) {
+    showStatus('Only the host can start a match from this device.');
+    return;
+  }
+  if (onStartCallback) onStartCallback(mode);
+}
+function hostGame() {
+  if (State.gameSession.matchPreparing) return;
+  if (onHostCallback) onHostCallback();
+}
+function joinGame() {
+  if (State.gameSession.matchPreparing) return;
+  if (onJoinCallback) onJoinCallback();
+}
+
+function getHarvesterStatePlain(unit) {
+  switch (unit.state) {
+    case 'harvesting': return 'Harvesting';
+    case 'movingToField': return 'To field';
+    case 'movingToRefinery': return 'To refinery';
+    case 'depositing': return 'Unloading';
+    case 'idle': return 'Idle';
+    case 'moving': return 'Moving';
+    default: return unit.state;
+  }
+}
+
+function getHarvesterStateLabel(unit) {
+  switch (unit.state) {
+    case 'harvesting':      return '<span style="color:#4f8">⛏ Harvesting</span>';
+    case 'movingToField':   return '<span style="color:#6cc">🔍 Moving to field</span>';
+    case 'movingToRefinery':return '<span style="color:#fd0">🚛 Returning with cargo</span>';
+    case 'depositing':      return '<span style="color:#f80">📦 Unloading</span>';
+    case 'idle':            return '<span style="color:#888">⏸ Idle</span>';
+    case 'moving':          return '<span style="color:#aaa">🏃 Moving (manual)</span>';
+    default:                return `<span style="color:#888">${unit.state}</span>`;
+  }
+}

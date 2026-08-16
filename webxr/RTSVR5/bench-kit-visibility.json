@@ -1,0 +1,103 @@
+{
+  "rows": [
+    {
+      "kind": "overview",
+      "visMesh": 283,
+      "visInst": 581,
+      "lod0Inst": 0,
+      "lod2Inst": 2468,
+      "joined": 0,
+      "frustumOnInst": 0,
+      "span": [
+        117.3,
+        8.6,
+        131
+      ],
+      "instSpan": [
+        118.9,
+        9.7,
+        137.6
+      ],
+      "cam": [
+        28.5,
+        68,
+        28.5
+      ],
+      "fogOn": false,
+      "calls": 888,
+      "tris": 517025,
+      "label": "1v1-spawn"
+    },
+    {
+      "kind": "story",
+      "visMesh": 223,
+      "visInst": 452,
+      "lod0Inst": 0,
+      "lod2Inst": 6176,
+      "joined": 0,
+      "frustumOnInst": 0,
+      "span": [
+        440.8,
+        40.6,
+        482.7
+      ],
+      "instSpan": [
+        353.8,
+        42.9,
+        486.9
+      ],
+      "cam": [
+        -25,
+        32,
+        -6.7
+      ],
+      "fogOn": false,
+      "calls": 561,
+      "tris": 1400142,
+      "label": "story-far"
+    },
+    {
+      "kind": "story",
+      "visMesh": 223,
+      "visInst": 452,
+      "lod0Inst": 0,
+      "lod2Inst": 6176,
+      "joined": 0,
+      "frustumOnInst": 0,
+      "span": [
+        440.8,
+        40.6,
+        482.7
+      ],
+      "instSpan": [
+        353.8,
+        42.9,
+        486.9
+      ],
+      "cam": [
+        -21.5,
+        10,
+        21.1
+      ],
+      "fogOn": false,
+      "calls": 600,
+      "tris": 1282533,
+      "label": "story-near",
+      "target": {
+        "x": -31.46503257751465,
+        "y": 0.1122591644525528,
+        "z": 11.144630432128906,
+        "name": "SM_Cliff_2_lod2",
+        "count": 134,
+        "d": 19
+      }
+    }
+  ],
+  "logs": [
+    "[RTSVR5] overview kit file {url: assets/terrain/scifi-overview-lods.glb, bytes: 88885464, quest: false}",
+    "[RTSVR5] kit ready {kind: overview, bytes: 88885464, combinedLod: false, spanXZ: Array(2), groundY: -0.05}",
+    "[RTSVR5] kit distance LOD {kind: overview, combinedLod: false, sourceMeshes: 2750, types: 863, withLod0: 0}",
+    "[RTSVR5] kit terrain {kind: overview, restored: false}",
+    "[RTSVR5] kit distance LOD {kind: story, combinedLod: false, sourceMeshes: 6398, types: 674, withLod0: 0}"
+  ]
+}
