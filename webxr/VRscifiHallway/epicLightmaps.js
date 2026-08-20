@@ -152,12 +152,17 @@ function decodeEpicLmGlsl(mode) {
 			);
 		}
 		epicLm = epicToneMapLM( epicLm, epicContrast, epicWhitePoint );
+		{
+			float lmLuma = max( epicLm.r, max( epicLm.g, epicLm.b ) );
+			float shadow = 1.0 - smoothstep( 0.04, 0.38, lmLuma );
+			epicLm += vec3( epicAmbient ) * shadow;
+		}
 		${assign}
 	}`;
 }
 
 function injectHqUniforms(shader, params, uScaleBias, uAdd, uScale) {
-  const { intensity, directionality, contrast, flipMode, debugMode, whitePoint } = params;
+  const { intensity, directionality, contrast, flipMode, debugMode, whitePoint, ambient } = params;
   shader.uniforms.lm_coordinateScaleBias = { value: uScaleBias };
   shader.uniforms.lm_lightmapAdd = { value: uAdd };
   shader.uniforms.lm_lightmapScale = { value: uScale };
@@ -165,6 +170,8 @@ function injectHqUniforms(shader, params, uScaleBias, uAdd, uScale) {
   shader.uniforms.epicDirectionality = { value: directionality };
   shader.uniforms.epicContrast = { value: contrast };
   shader.uniforms.epicWhitePoint = { value: whitePoint ?? 1.8 };
+  shader.uniforms.epicAmbient = { value: ambient ?? 0 };
+  shader.uniforms.epicAlbedoLift = { value: params.albedoLift ?? 0 };
   shader.uniforms.epicFlipMode = { value: flipMode };
   shader.uniforms.epicDebugMode = { value: debugMode };
 
@@ -178,6 +185,8 @@ uniform float epicIntensity;
 uniform float epicDirectionality;
 uniform float epicContrast;
 uniform float epicWhitePoint;
+uniform float epicAmbient;
+uniform float epicAlbedoLift;
 uniform int epicFlipMode;
 uniform int epicDebugMode;
 ${HQ_DECODE}`,
@@ -267,6 +276,10 @@ uniform int epicHasEmissiveMap;`,
 		vec3 alb = diffuseColor.rgb;
 		if ( max(alb.r, max(alb.g, alb.b)) < 0.001 ) alb = vec3(0.25);
 		reflectedLight.indirectDiffuse *= alb;
+		float albL = max(alb.r, max(alb.g, alb.b));
+		vec3 tint = alb / albL;
+		float darkMat = 1.0 - smoothstep(0.16, 0.72, albL);
+		reflectedLight.indirectDiffuse += tint * epicAlbedoLift * darkMat;
 	}`,
     );
     shader.fragmentShader = shader.fragmentShader.replace(
@@ -276,7 +289,7 @@ uniform int epicHasEmissiveMap;`,
   };
 
   mat.customProgramCacheKey = () =>
-    `epicBasicKeep2|ch${texCoord}|f${params.flipMode}|d${params.debugMode}|i${params.intensity}|c${params.contrast}|w${params.whitePoint}`;
+    `epicBasicKeep2|ch${texCoord}|f${params.flipMode}|d${params.debugMode}|i${params.intensity}|c${params.contrast}|w${params.whitePoint}|a${params.ambient ?? 0}|l${params.albedoLift ?? 0}`;
   mat.needsUpdate = true;
   return mat;
 }
@@ -390,7 +403,7 @@ function makeStandardLitMaterial(src, params, isMetal, opts = {}) {
   };
 
   mat.customProgramCacheKey = () =>
-    `epicStdKeep5|${isMetal ? 'm' : 'd'}|ke${keepEnv ? 1 : 0}|ch${texCoord}|f${params.flipMode}|i${params.intensity}|c${params.contrast}|w${params.whitePoint}|e${mat.envMapIntensity}`;
+    `epicStdKeep5|${isMetal ? 'm' : 'd'}|ke${keepEnv ? 1 : 0}|ch${texCoord}|f${params.flipMode}|i${params.intensity}|c${params.contrast}|w${params.whitePoint}|e${mat.envMapIntensity}|a${params.ambient ?? 0}`;
   mat.needsUpdate = true;
   return mat;
 }
@@ -429,7 +442,9 @@ function makeLitMaterial(src, params) {
     return mat;
   }
   const kind = classifyMaterial(src);
-  if (kind === 'metal') return makeStandardLitMaterial(src, params, true);
+  if (kind === 'metal' || params.forceStandard) {
+    return makeStandardLitMaterial(src, params, kind === 'metal');
+  }
   // Opaque dielectrics: MeshBasic × HQ LM (Epic semantics: albedo * lightmap).
   // MeshStandard applies Lambert/PI and under-lit interiors even with PI compensation.
   return makeBasicLitMaterial(src, params);
@@ -490,6 +505,10 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
   const debugMode = opts.debugMode ?? 0;
   const forceTexCoord = opts.forceTexCoord ?? null;
   const envMapIntensity = opts.envMapIntensity ?? 1.0;
+  const baseAmbient = opts.ambient ?? 0;
+  const indoorAmbient = opts.indoorAmbient ?? 0;
+  const indoorRe = opts.indoorRe ?? /indoor|interior/i;
+  const albedoLift = opts.albedoLift ?? 0;
   const parser = gltf.parser;
   const json = parser.json;
   const lightmaps = json.extensions?.EPIC_lightmap_textures?.lightmaps;
@@ -545,20 +564,25 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
       }
       uvStats[localTexCoord] = (uvStats[localTexCoord] || 0) + 1;
 
+      const meshLabel = `${mesh.name || ''} ${mesh.parent?.name || ''}`;
+      const indoor = indoorRe.test(meshLabel);
       const params = {
         texture: baseTex,
         texCoord: localTexCoord,
         lightmapAdd: lm.lightmapAdd,
         lightmapScale: lm.lightmapScale,
         coordinateScaleBias: lm.coordinateScaleBias,
-        intensity,
+        intensity: indoor ? intensity * (opts.indoorIntensityScale ?? 1) : intensity * (opts.outdoorIntensityScale ?? 1),
         directionality,
         contrast,
         whitePoint,
         flipMode,
         debugMode,
         envMapIntensity,
-        meshLabel: `${mesh.name || ''} ${mesh.parent?.name || ''}`,
+        ambient: baseAmbient + (indoor ? indoorAmbient : 0),
+        albedoLift,
+        forceStandard: !!opts.forceStandard,
+        meshLabel,
       };
 
       const srcMats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -591,6 +615,9 @@ export async function applyEpicLightmaps(gltf, opts = {}) {
           contrast,
           whitePoint,
           envMapIntensity,
+          localParams.ambient ?? 0,
+          localParams.albedoLift ?? 0,
+          opts.forceStandard ? 1 : 0,
           needsAlphaPreserve(src) ? 'a' : 'o',
         ].join('|');
         if (matCache.has(key)) return matCache.get(key);
