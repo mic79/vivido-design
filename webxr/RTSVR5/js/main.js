@@ -193,18 +193,17 @@ async function prepareMapForMode(mode, sceneEl, prevProfile) {
   const groundEl = document.getElementById('ground');
   const live = groundEl && typeof groundEl.getObject3D === 'function' ? groundEl.getObject3D('mesh') : null;
   const liveKind = live && live.userData && live.userData.rtsKitKind;
-  const wantKind = wantStory ? 'story' : 'overview';
-  const needsTerrain = liveKind !== wantKind || prevProfile !== nextProfile || wantStory;
+  // Skirmish and Story share the same story kit — only rebuild if it isn't loaded yet.
+  // Fog grid size may still change with profile; resize overlay after.
+  const needsTerrain = liveKind !== 'story';
 
   if (needsTerrain) {
     UI.showStatus(wantStory ? 'Generating Story battlefield…' : 'Loading skirmish battlefield…');
     await rebuildMoonBattlefield(sceneEl);
-    Renderer.configureBattlefieldShadows(sceneEl);
-    Renderer.resizeWorldFogOverlay();
-    Renderer.refreshPlayableBorderRing();
-  } else {
-    Renderer.refreshPlayableBorderRing();
   }
+  Renderer.configureBattlefieldShadows(sceneEl);
+  Renderer.resizeWorldFogOverlay();
+  Renderer.refreshPlayableBorderRing();
 
   const plane = document.getElementById('vr-minimap-plane');
   if (plane) {
@@ -242,8 +241,8 @@ async function onStartGame(mode) {
   const groundEl = document.getElementById('ground');
   const liveMesh = groundEl && typeof groundEl.getObject3D === 'function' ? groundEl.getObject3D('mesh') : null;
   const liveKind = liveMesh && liveMesh.userData && liveMesh.userData.rtsKitKind;
-  const wantKind = wantStory ? 'story' : 'overview';
-  const needsRebuild = prevProfile !== nextProfile || wantStory || liveKind !== wantKind;
+  const wantKind = 'story';
+  const needsRebuild = prevProfile !== nextProfile || liveKind !== wantKind;
 
   UI.setMatchPreparing(
     true,

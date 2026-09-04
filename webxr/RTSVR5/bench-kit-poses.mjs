@@ -265,6 +265,19 @@ async function main() {
       }
     });
     rows.push(await samplePose(page, 'look-hmd-100'));
+
+    // Same pose, headset pitched down 40° — cull MUST change vs look-hmd-100.
+    await page.evaluate(() => {
+      const THREE = window.THREE;
+      const eyes = window.__rtsKitCullTestCameras;
+      const eye = eyes && eyes[0];
+      if (!eye || !THREE) return;
+      eye.rotateX(-40 * Math.PI / 180);
+      eye.updateMatrixWorld(true);
+      window.__rtsKitCullForceXr = true;
+      if (typeof window.__rtsUpdateKitLod === 'function') window.__rtsUpdateKitLod();
+    });
+    rows.push(await samplePose(page, 'look-hmd-pitch'));
     await page.evaluate(() => {
       window.__rtsKitCullForceXr = false;
       window.__rtsKitCullTestCameras = null;
@@ -289,6 +302,7 @@ async function main() {
   const fp = rows.find((r) => r.label === 'look-fp');
   const fpXr = rows.find((r) => r.label === 'look-fp-xr');
   const hmd = rows.find((r) => r.label === 'look-hmd-100');
+  const hmdPitch = rows.find((r) => r.label === 'look-hmd-pitch');
   let fail = 0;
   const kitCalls = kit && (kit.callsAvg || kit.calls);
   const starCalls = stars && (stars.callsAvg || stars.calls);
@@ -309,10 +323,10 @@ async function main() {
     });
     fail = 1;
   }
-  for (const row of [fp, fpXr, hmd]) {
+  for (const row of [fp, fpXr, hmd, hmdPitch]) {
     if (!row) continue;
     const hidden = row.cull && row.cull.hiddenInFront;
-    if (hidden > 12) {
+    if (row.label !== 'look-hmd-pitch' && hidden > 12) {
       console.error(`FAIL ${row.label} hid meshes in the look cone`, row.cull);
       fail = 1;
     }
@@ -320,6 +334,13 @@ async function main() {
       console.error(`FAIL ${row.label} drew almost nothing at eye height`, row);
       fail = 1;
     }
+  }
+  if (hmd && hmdPitch && hmd.visInstCount === hmdPitch.visInstCount && hmd.visMesh === hmdPitch.visMesh) {
+    console.error('FAIL headset pitch did not change kit cull (rotation ignored)', {
+      n: hmd.visInstCount,
+      mesh: hmd.visMesh,
+    });
+    fail = 1;
   }
   process.exit(fail);
 }

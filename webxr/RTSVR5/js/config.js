@@ -72,14 +72,14 @@ function recomputeMapDerived() {
  */
 export function applyMapProfile(profile) {
   MAP_PROFILE = profile === 'story' ? 'story' : 'standard';
+  // Both Story and skirmish use the same sci-fi kit + moon plate (proven ~90 FPS).
+  // Overview dirt/rocks and crater moon were sparse and slower — abandoned as default.
+  MAP_SIZE = MAP_SIZE_STORY;
+  MAP_TERRAIN_STYLE = 'kit';
   if (MAP_PROFILE === 'story') {
-    MAP_SIZE = MAP_SIZE_STORY;
-    MAP_TERRAIN_STYLE = 'kit';
     FOG_GRID_SIZE = 48;
     MAP_NAV_AREA_SCALE = 1;
   } else {
-    MAP_SIZE = MAP_SIZE_STANDARD;
-    MAP_TERRAIN_STYLE = 'kit';
     FOG_GRID_SIZE = 40;
     MAP_NAV_AREA_SCALE = 1;
     STORY_RESOURCE_FIELD_POSITIONS = null;

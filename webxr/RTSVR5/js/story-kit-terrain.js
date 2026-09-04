@@ -2,7 +2,7 @@
  * Story battlefield: Modular Sci-Fi kit GLB (no landscape). Centered on origin,
  * water planes / giant outlier cliffs hidden, dark fill plate under gaps.
  */
-import { MAP_SIZE } from './config.js';
+import { MAP_SIZE, MAP_UNIT_NAV_RADIUS } from './config.js';
 import { ensureThreeGltfLoaders } from './three-gltf-umd.js';
 
 export const STORY_KIT_GLB = 'assets/terrain/scifi-rts-overview.glb';
@@ -10,8 +10,12 @@ export const STORY_KIT_LOD2_GLB = 'assets/terrain/scifi-rts-kit-lod2.glb';
 export const STORY_KIT_LOD0_GLB = 'assets/terrain/scifi-rts-kit-lod0.glb';
 export const OVERVIEW_KIT_GLB = 'assets/terrain/scifi-overview-lods.glb';
 export const OVERVIEW_KIT_QUEST_GLB = 'assets/terrain/scifi-overview-lods-quest.glb';
+/** Skirmish dirt+rocks (~1.3MB float rebake). Full catalog is `?fullkit=1` only. */
+export const OVERVIEW_ROCKS_GLB = 'assets/terrain/scifi-overview-rocks.glb';
+export const OVERVIEW_GROUNDSCAPE_GLB = 'assets/terrain/scifi-overview-groundscape.glb';
 const MIN_BYTES = 8_000_000;
 const MIN_OVERVIEW_BYTES = 400_000;
+const MIN_ROCKS_BYTES = 100_000;
 /** Switch to LOD0 when closer than this × mesh radius (clamped). */
 const LOD_NEAR_RADIUS_MUL = 6.5;
 const LOD_NEAR_MIN = 52;
@@ -20,6 +24,8 @@ const LOD_FAR_MUL = 1.5;
 
 let glbBufCache = null;
 let overviewBufCache = null;
+/** Mirrors whether `overviewBufCache` is the full catalog or rocks-only. */
+let overviewBufIsFull = null;
 /** @type {null | { batches: object[] }} */
 let kitLodState = null;
 let kitGltfLoader = null;
@@ -99,6 +105,37 @@ function meshName(obj) {
   return `${obj.name || ''} ${obj.parent && obj.parent.name ? obj.parent.name : ''}`;
 }
 
+/** Named prop node with TRS — quantized mesh AABBs must not drive centering.
+ * Prefer the outermost SM_* ancestor (holder), not a child mesh named SM_*_1. */
+function actorNodeForMesh(obj, sceneRoot) {
+  let n = obj;
+  let found = null;
+  while (n && n !== sceneRoot) {
+    if (n.name && /SM_/i.test(n.name)) found = n;
+    n = n.parent;
+  }
+  return found || (obj.parent && obj.parent !== sceneRoot ? obj.parent : obj);
+}
+
+function expandClusterFromActorNodes(scene, W) {
+  const cluster = new W.Box3();
+  const dirtMins = [];
+  let any = false;
+  const p = new W.Vector3();
+  scene.updateMatrixWorld(true);
+  scene.traverse((obj) => {
+    if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible) return;
+    const actor = actorNodeForMesh(obj, scene);
+    p.set(actor.position.x, actor.position.y, actor.position.z);
+    cluster.expandByPoint(p);
+    any = true;
+    if (/SM_Dirt|SM_Rock/i.test(actor.name || '') || /SM_Dirt|SM_Rock/i.test(meshName(obj))) {
+      dirtMins.push(p.y);
+    }
+  });
+  return { cluster, dirtMins, any };
+}
+
 function findGltfScene(gltf, name) {
   const scenes = gltf.scenes || [];
   for (let i = 0; i < scenes.length; i++) {
@@ -109,7 +146,7 @@ function findGltfScene(gltf, name) {
 
 /**
  * @param {object} gltf
- * @param {{ kind: string, skipIndoor?: boolean, clipRadius?: number, hideScale?: number, bytes?: number }} opts
+ * @param {{ kind: string, skipIndoor?: boolean, clipRadius?: number, hideScale?: number, bytes?: number, keepNameRe?: RegExp|null, noPlate?: boolean, targetSpanM?: number, skipDistanceLod?: boolean }} opts
  */
 function assembleKitWrap(gltf, opts) {
   const W = window.THREE;
@@ -117,6 +154,9 @@ function assembleKitWrap(gltf, opts) {
   const skipIndoor = opts.skipIndoor !== false;
   const clipRadius = opts.clipRadius == null ? 420 : opts.clipRadius;
   const hideScale = opts.hideScale == null ? 20 : opts.hideScale;
+  const keepNameRe = opts.keepNameRe || null;
+  const noPlate = !!opts.noPlate;
+  const targetSpanM = opts.targetSpanM > 0 ? opts.targetSpanM : 0;
 
   const scene = findGltfScene(gltf, 'LOD2') || gltf.scene;
   // Overview is a 122 m diorama — keep LOD2 only. Holding the LOD0 scene doubled GPU memory
@@ -128,74 +168,221 @@ function assembleKitWrap(gltf, opts) {
     const unusedLod0 = findGltfScene(gltf, 'LOD0');
     if (unusedLod0 && unusedLod0 !== scene) {
       unusedLod0.traverse((obj) => {
+        // Geos are LOD0-only; materials are often shared with LOD2 — do not dispose mats here.
         if (obj.geometry && obj.geometry.dispose) obj.geometry.dispose();
+        obj.geometry = null;
       });
+      if (unusedLod0.parent) unusedLod0.parent.remove(unusedLod0);
     }
   }
 
+  let kept = 0;
+  let dropped = 0;
+  let matsDisposed = 0;
+  const dropList = [];
   scene.traverse((obj) => {
     if (!obj.isMesh && !obj.isSkinnedMesh) return;
     const n = meshName(obj);
     if (/WaterPlane|Skybox|Template_Map_Floor/i.test(n) || (skipIndoor && /Indoor/i.test(n))) {
       obj.visible = false;
+      dropList.push(obj);
+      dropped++;
       return;
     }
-    if (worldScaleMax(obj, W) > hideScale) obj.visible = false;
+    if (keepNameRe && !keepNameRe.test(n)) {
+      obj.visible = false;
+      dropList.push(obj);
+      dropped++;
+      return;
+    }
+    if (worldScaleMax(obj, W) > hideScale) {
+      obj.visible = false;
+      dropList.push(obj);
+      dropped++;
+      return;
+    }
+    kept++;
   });
 
-  const box = new W.Box3();
-  let any = false;
-  scene.traverse((obj) => {
-    if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible) return;
-    box.expandByObject(obj);
-    any = true;
-  });
-  if (!any || box.isEmpty()) {
-    console.warn('[RTSVR5] skip kit: no visible meshes', kind);
-    return null;
-  }
-
-  const center = box.getCenter(new W.Vector3());
-  if (clipRadius > 0) {
-    const r2 = clipRadius * clipRadius;
+  // Skirmish rocks-only: the Overview GLB still uploaded ~100 textures for hidden
+  // modules. That VRAM thrash is why 1v1 (few rocks) was slower than Story.
+  if (keepNameRe && dropList.length) {
+    const keepMats = new Set();
     scene.traverse((obj) => {
       if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible) return;
-      const b = new W.Box3().setFromObject(obj);
-      const c = b.getCenter(new W.Vector3());
-      const dx = c.x - center.x;
-      const dz = c.z - center.z;
-      if (dx * dx + dz * dz > r2) obj.visible = false;
+      const mats = obj.material == null ? [] : Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (let i = 0; i < mats.length; i++) if (mats[i]) keepMats.add(mats[i]);
     });
-  }
-
-  const dirtMins = [];
-  const cluster = new W.Box3();
-  let clusterAny = false;
-  scene.traverse((obj) => {
-    if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible) return;
-    cluster.expandByObject(obj);
-    clusterAny = true;
-    if (/SM_Dirt|SM_Rock/i.test(meshName(obj))) {
-      dirtMins.push(new W.Box3().setFromObject(obj).min.y);
+    const doomedMats = new Set();
+    for (let i = 0; i < dropList.length; i++) {
+      const obj = dropList[i];
+      const mats = obj.material == null ? [] : Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (let m = 0; m < mats.length; m++) {
+        if (mats[m] && !keepMats.has(mats[m])) doomedMats.add(mats[m]);
+      }
+      if (obj.geometry && obj.geometry.dispose) obj.geometry.dispose();
+      obj.geometry = null;
+      obj.material = null;
+      if (obj.parent) obj.parent.remove(obj);
     }
-  });
-  if (!clusterAny || cluster.isEmpty()) {
-    console.warn('[RTSVR5] skip kit: cluster empty', kind);
-    return null;
+    const texSeen = new Set();
+    for (const mat of doomedMats) {
+      for (const key of Object.keys(mat)) {
+        const v = mat[key];
+        if (v && v.isTexture && !texSeen.has(v)) {
+          texSeen.add(v);
+          if (v.dispose) v.dispose();
+        }
+      }
+      if (mat.dispose) mat.dispose();
+    }
+    matsDisposed = doomedMats.size;
   }
 
-  dirtMins.sort((a, b) => a - b);
-  const y0 =
-    dirtMins.length > 0
-      ? dirtMins[Math.max(0, Math.floor(dirtMins.length * 0.1))]
-      : cluster.min.y;
-  const cxz = cluster.getCenter(new W.Vector3());
+  // --- Center / scale ---
+  // Story: original mesh-AABB center on the scene root (pivot breaks LOD0 + layout).
+  // Overview groundscape: actor-node center + pivot group (scale must not share the offset node).
+  let cluster;
+  let y0;
+  if (kind === 'overview' && (keepNameRe || targetSpanM > 0)) {
+    const seeded = expandClusterFromActorNodes(scene, W);
+    if (!seeded.any || seeded.cluster.isEmpty()) {
+      console.warn('[RTSVR5] skip kit: no visible meshes', kind);
+      return null;
+    }
+    cluster = seeded.cluster;
+    const dirtMins = seeded.dirtMins;
+    dirtMins.sort((a, b) => a - b);
+    y0 =
+      dirtMins.length > 0
+        ? dirtMins[Math.max(0, Math.floor(dirtMins.length * 0.1))]
+        : cluster.min.y;
+    const cxz = cluster.getCenter(new W.Vector3());
 
-  scene.position.set(-cxz.x, -y0, -cxz.z);
-  scene.updateMatrixWorld(true);
-  if (lod0Root) {
-    lod0Root.position.copy(scene.position);
-    lod0Root.updateMatrixWorld(true);
+    if (clipRadius > 0) {
+      const r2 = clipRadius * clipRadius;
+      const clipDrop = [];
+      const p = new W.Vector3();
+      const center = cxz;
+      scene.traverse((obj) => {
+        if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible) return;
+        const actor = actorNodeForMesh(obj, scene);
+        p.set(actor.position.x, actor.position.y, actor.position.z);
+        const dx = p.x - center.x;
+        const dz = p.z - center.z;
+        if (dx * dx + dz * dz > r2) clipDrop.push(obj);
+      });
+      if (clipDrop.length) {
+        const dropSet = new Set(clipDrop);
+        const keepMats = new Set();
+        scene.traverse((obj) => {
+          if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible || dropSet.has(obj)) return;
+          const mats = obj.material == null ? [] : Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (let i = 0; i < mats.length; i++) if (mats[i]) keepMats.add(mats[i]);
+        });
+        const doomedMats = new Set();
+        for (let i = 0; i < clipDrop.length; i++) {
+          const obj = clipDrop[i];
+          const mats = obj.material == null ? [] : Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (let m = 0; m < mats.length; m++) {
+            if (mats[m] && !keepMats.has(mats[m])) doomedMats.add(mats[m]);
+          }
+          if (obj.geometry && obj.geometry.dispose) obj.geometry.dispose();
+          obj.geometry = null;
+          obj.material = null;
+          if (obj.parent) obj.parent.remove(obj);
+          dropped++;
+        }
+        const texSeen = new Set();
+        for (const mat of doomedMats) {
+          for (const key of Object.keys(mat)) {
+            const v = mat[key];
+            if (v && v.isTexture && !texSeen.has(v)) {
+              texSeen.add(v);
+              if (v.dispose) v.dispose();
+            }
+          }
+          if (mat.dispose) mat.dispose();
+        }
+        matsDisposed += doomedMats.size;
+        kept = 0;
+        scene.traverse((obj) => {
+          if ((obj.isMesh || obj.isSkinnedMesh) && obj.visible) kept++;
+        });
+      }
+    }
+
+    const pivot = new W.Group();
+    pivot.name = 'rts-kit-pivot';
+    while (scene.children.length) pivot.add(scene.children[0]);
+    pivot.position.set(-cxz.x, -y0, -cxz.z);
+    scene.add(pivot);
+    scene.position.set(0, 0, 0);
+    scene.scale.set(1, 1, 1);
+    scene.updateMatrixWorld(true);
+    if (targetSpanM > 0) {
+      const spanNow = Math.max(0.01, cluster.max.x - cluster.min.x, cluster.max.z - cluster.min.z);
+      const want = Math.min(targetSpanM, MAP_SIZE * 0.85);
+      if (spanNow > 0.5 && want > 1) {
+        const s = want / spanNow;
+        if (s > 0.05 && s < 40) {
+          scene.scale.setScalar(s);
+          scene.updateMatrixWorld(true);
+        }
+      }
+    }
+  } else {
+    // Story / full kits: mesh bounds + scene.position offset (pre-pivot behavior).
+    const box = new W.Box3();
+    let any = false;
+    scene.traverse((obj) => {
+      if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible) return;
+      box.expandByObject(obj);
+      any = true;
+    });
+    if (!any || box.isEmpty()) {
+      console.warn('[RTSVR5] skip kit: no visible meshes', kind);
+      return null;
+    }
+    const center = box.getCenter(new W.Vector3());
+    if (clipRadius > 0) {
+      const r2 = clipRadius * clipRadius;
+      scene.traverse((obj) => {
+        if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible) return;
+        const b = new W.Box3().setFromObject(obj);
+        const c = b.getCenter(new W.Vector3());
+        const dx = c.x - center.x;
+        const dz = c.z - center.z;
+        if (dx * dx + dz * dz > r2) obj.visible = false;
+      });
+    }
+    const dirtMins = [];
+    cluster = new W.Box3();
+    let clusterAny = false;
+    scene.traverse((obj) => {
+      if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible) return;
+      cluster.expandByObject(obj);
+      clusterAny = true;
+      if (/SM_Dirt|SM_Rock/i.test(meshName(obj))) {
+        dirtMins.push(new W.Box3().setFromObject(obj).min.y);
+      }
+    });
+    if (!clusterAny || cluster.isEmpty()) {
+      console.warn('[RTSVR5] skip kit: cluster empty', kind);
+      return null;
+    }
+    dirtMins.sort((a, b) => a - b);
+    y0 =
+      dirtMins.length > 0
+        ? dirtMins[Math.max(0, Math.floor(dirtMins.length * 0.1))]
+        : cluster.min.y;
+    const cxz = cluster.getCenter(new W.Vector3());
+    scene.position.set(-cxz.x, -y0, -cxz.z);
+    scene.updateMatrixWorld(true);
+    if (lod0Root) {
+      lod0Root.position.copy(scene.position);
+      lod0Root.updateMatrixWorld(true);
+    }
   }
 
   const recv =
@@ -206,13 +393,39 @@ function assembleKitWrap(gltf, opts) {
     if (!obj.isMesh && !obj.isSkinnedMesh) return;
     obj.castShadow = false;
     obj.receiveShadow = recv;
-    obj.frustumCulled = true;
+    // XR ArrayCamera / pose frustums disagree with what the headset actually shows —
+    // never let Three cull kit meshes (CPU kit LOD owns visibility).
+    obj.frustumCulled = false;
+    if (kind === 'overview' && obj.geometry) {
+      obj.geometry.computeBoundingSphere();
+      obj.geometry.computeBoundingBox();
+    }
     if (obj.material) {
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
       for (const mat of mats) {
         if (!mat) continue;
         mat.fog = false;
-        if ('envMapIntensity' in mat) mat.envMapIntensity = 0.35;
+        if ('envMapIntensity' in mat) mat.envMapIntensity = kind === 'overview' ? 0.15 : 0.35;
+        if (kind === 'overview') {
+          if ('metalness' in mat) mat.metalness = 0;
+          if ('roughness' in mat) mat.roughness = Math.max(0.72, mat.roughness || 0);
+          if (mat.color) mat.color.setHex(0xffffff);
+          if ('emissive' in mat && mat.emissive) {
+            mat.emissive.setHex(0x3a3828);
+            if ('emissiveIntensity' in mat) mat.emissiveIntensity = 0.55;
+          }
+          if (mat.map && 'colorSpace' in mat.map && W.SRGBColorSpace) {
+            mat.map.colorSpace = W.SRGBColorSpace;
+            mat.map.needsUpdate = true;
+          }
+          if (mat.alphaTest > 0 || mat.transparent) {
+            mat.transparent = false;
+            mat.alphaTest = Math.max(mat.alphaTest || 0, 0.35);
+            mat.depthWrite = true;
+          }
+          mat.side = W.DoubleSide;
+          mat.needsUpdate = true;
+        }
       }
     }
   });
@@ -222,19 +435,27 @@ function assembleKitWrap(gltf, opts) {
   wrap.userData.rtsStoryKit = true;
   wrap.userData.rtsKitKind = kind;
   wrap.userData.rtsSkipIndoor = skipIndoor;
+  if (opts.skipDistanceLod) wrap.userData.rtsSkipDistanceLod = true;
   if (lod0Root) wrap.userData.rtsLod0Root = lod0Root;
   wrap.add(scene);
 
-  const plate = new W.Mesh(
-    new W.PlaneGeometry(MAP_SIZE * 1.08, MAP_SIZE * 1.08),
-    new W.MeshLambertMaterial({ color: 0x141210, fog: false })
-  );
-  plate.name = 'rts-kit-ground';
-  plate.rotation.x = -Math.PI / 2;
-  plate.position.y = -0.04;
-  plate.receiveShadow = recv;
-  plate.castShadow = false;
-  wrap.add(plate);
+  if (!noPlate) {
+    const plate = new W.Mesh(
+      new W.PlaneGeometry(MAP_SIZE * 1.08, MAP_SIZE * 1.08),
+      new W.MeshLambertMaterial({
+        color: kind === 'overview' ? 0x8a8a90 : 0x141210,
+        fog: false,
+      })
+    );
+    plate.name = 'rts-kit-ground';
+    plate.rotation.x = -Math.PI / 2;
+    plate.position.y = -0.04;
+    plate.receiveShadow = recv;
+    plate.castShadow = false;
+    plate.frustumCulled = false;
+    plate.userData.rtsMoonPlate = true;
+    wrap.add(plate);
+  }
   wrap.updateMatrixWorld(true);
 
   const span = cluster.max.clone().sub(cluster.min);
@@ -242,6 +463,10 @@ function assembleKitWrap(gltf, opts) {
     kind,
     bytes: opts.bytes || 0,
     combinedLod: !!lod0Root,
+    keep: keepNameRe ? String(keepNameRe) : 'all',
+    meshesKept: kept,
+    meshesDropped: dropped,
+    matsDisposed,
     spanXZ: [+span.x.toFixed(1), +span.z.toFixed(1)],
     groundY: +y0.toFixed(2),
   });
@@ -257,6 +482,45 @@ async function parseKitBuf(buf) {
   });
 }
 
+/** Skirmish Overview catalog (heavy). Default skirmish uses Story kit instead. */
+function wantOverviewFullKit() {
+  if (typeof location === 'undefined') return false;
+  const q = `${location.search || ''}${location.hash || ''}`;
+  return /(?:[?&#]fullkit=1\b)/.test(q);
+}
+
+/** Opt-in empty rocks-only GLB (A/B). Default is Story kit — denser occludes HDR sky fill. */
+function wantOverviewRocksOnly() {
+  if (typeof location === 'undefined') return false;
+  const q = `${location.search || ''}${location.hash || ''}`;
+  return /(?:[?&#]rocks=1\b)/.test(q);
+}
+
+async function ensureStoryKitBuffer() {
+  if (glbBufCache) return glbBufCache;
+  let res;
+  try {
+    res = await fetch(STORY_KIT_LOD2_GLB);
+    if (!res.ok) res = await fetch(STORY_KIT_GLB);
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  const buf = await res.arrayBuffer();
+  if (buf.byteLength < MIN_BYTES) {
+    console.warn('[RTSVR5] skip story kit: file too small', buf.byteLength);
+    return null;
+  }
+  try {
+    parseGlbJson(buf);
+  } catch (err) {
+    console.warn('[RTSVR5] skip story kit: bad GLB', err);
+    return null;
+  }
+  glbBufCache = buf;
+  return buf;
+}
+
 /**
  * @returns {Promise<import('three').Group|null>}
  */
@@ -264,49 +528,99 @@ export async function tryLoadStoryKit() {
   const W = window.THREE;
   if (!W) return null;
 
-  if (!glbBufCache) {
-    let res;
-    try {
-      res = await fetch(STORY_KIT_LOD2_GLB);
-      if (!res.ok) res = await fetch(STORY_KIT_GLB);
-    } catch {
-      return null;
-    }
-    if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    if (buf.byteLength < MIN_BYTES) {
-      console.warn('[RTSVR5] skip story kit: file too small', buf.byteLength);
-      return null;
-    }
-    try {
-      parseGlbJson(buf);
-    } catch (err) {
-      console.warn('[RTSVR5] skip story kit: bad GLB', err);
-      return null;
-    }
-    glbBufCache = buf;
-  }
+  const buf = await ensureStoryKitBuffer();
+  if (!buf) return null;
 
-  const gltf = await parseKitBuf(glbBufCache);
+  const gltf = await parseKitBuf(buf);
   return assembleKitWrap(gltf, {
     kind: 'story',
     skipIndoor: true,
     clipRadius: 420,
-    bytes: glbBufCache.byteLength,
+    bytes: buf.byteLength,
   });
 }
 
 /**
- * Skirmish battlefield: OverviewScene catalog, LOD0+LOD2 in one GLB (textures once).
+ * Overview dirt piles + rocks (~1.3MB float rebake). Never fall back to the 89MB
+ * full Overview — that path uploaded ~100 textures and locked FPS ~67.
+ * @returns {Promise<import('three').Group|null>}
+ */
+export async function tryLoadOverviewGroundscape() {
+  const W = window.THREE;
+  if (!W) return null;
+
+  const urls = [OVERVIEW_GROUNDSCAPE_GLB];
+  let buf = null;
+  let used = urls[0];
+  for (const url of urls) {
+    let res;
+    try {
+      res = await fetch(url);
+    } catch {
+      continue;
+    }
+    if (!res.ok) continue;
+    const next = await res.arrayBuffer();
+    if (next.byteLength < MIN_ROCKS_BYTES) continue;
+    try {
+      const json = parseGlbJson(next);
+      const ext = [...(json.extensionsUsed || []), ...(json.extensionsRequired || [])];
+      if (ext.some((e) => /quantization/i.test(String(e)))) {
+        console.warn('[RTSVR5] skip groundscape: quantized GLB (rebake required)', url);
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    buf = next;
+    used = url;
+    break;
+  }
+  if (!buf) {
+    console.warn('[RTSVR5] overview groundscape missing — skirmish stays moon-only');
+    return null;
+  }
+
+  console.log('[RTSVR5] overview groundscape', {
+    url: used,
+    bytes: buf.byteLength,
+  });
+  const gltf = await parseKitBuf(buf);
+  return assembleKitWrap(gltf, {
+    kind: 'overview',
+    skipIndoor: true,
+    clipRadius: 0,
+    keepNameRe: null,
+    noPlate: true,
+    targetSpanM: MAP_SIZE * 0.72,
+    skipDistanceLod: true,
+    bytes: buf.byteLength,
+  });
+}
+
+/**
+ * Skirmish Overview scenery (opt-in only).
+ * Default skirmish is flat moon (`MAP_TERRAIN_STYLE=crater`) + optional groundscape props.
+ * `?rocks=1` loads rocks extract; `?fullkit=1` full catalog (VRAM heavy — A/B only).
  * @returns {Promise<import('three').Group|null>}
  */
 export async function tryLoadOverviewKit() {
   const W = window.THREE;
   if (!W) return null;
 
-  if (!overviewBufCache) {
+  const full = wantOverviewFullKit();
+  const rocks = !full && wantOverviewRocksOnly();
+  if (!full && !rocks) {
+    return null;
+  }
+
+  if (!overviewBufCache || overviewBufIsFull !== full) {
     const quest = wantQuestOverview();
-    const urls = quest ? [OVERVIEW_KIT_QUEST_GLB, OVERVIEW_KIT_GLB] : [OVERVIEW_KIT_GLB];
+    const urls = full
+      ? quest
+        ? [OVERVIEW_KIT_QUEST_GLB, OVERVIEW_KIT_GLB]
+        : [OVERVIEW_KIT_GLB]
+      : [OVERVIEW_ROCKS_GLB];
     let buf = null;
     let used = urls[0];
     for (const url of urls) {
@@ -318,7 +632,8 @@ export async function tryLoadOverviewKit() {
       }
       if (!res.ok) continue;
       const next = await res.arrayBuffer();
-      if (next.byteLength < MIN_OVERVIEW_BYTES) continue;
+      const minBytes = full ? MIN_OVERVIEW_BYTES : MIN_ROCKS_BYTES;
+      if (next.byteLength < minBytes) continue;
       try {
         parseGlbJson(next);
       } catch {
@@ -329,11 +644,18 @@ export async function tryLoadOverviewKit() {
       break;
     }
     if (!buf) {
-      console.warn('[RTSVR5] skip overview kit: missing GLB');
+      console.warn('[RTSVR5] skip overview kit: missing GLB', { full, rocks, urls });
       return null;
     }
     overviewBufCache = buf;
-    console.log('[RTSVR5] overview kit file', { url: used, bytes: buf.byteLength, quest });
+    overviewBufIsFull = full;
+    console.log('[RTSVR5] overview kit file', {
+      url: used,
+      bytes: buf.byteLength,
+      quest,
+      rocksOnly: rocks,
+      full,
+    });
   }
 
   const gltf = await parseKitBuf(overviewBufCache);
@@ -341,6 +663,10 @@ export async function tryLoadOverviewKit() {
     kind: 'overview',
     skipIndoor: true,
     clipRadius: 0,
+    keepNameRe: rocks ? /SM_Rock/i : null,
+    noPlate: false,
+    targetSpanM: rocks ? MAP_SIZE * 0.72 : 0,
+    skipDistanceLod: !!rocks,
     bytes: overviewBufCache.byteLength,
   });
 }
@@ -772,6 +1098,10 @@ export function resetKitLodState(root) {
 export async function setupStoryKitDistanceLod(root, THREE) {
   kitLodState = null;
   if (!root || !THREE) return;
+  if (root.userData && root.userData.rtsSkipDistanceLod) {
+    console.log('[RTSVR5] kit distance LOD skipped (overview groundscape)');
+    return;
+  }
   root.updateMatrixWorld(true);
   if (!THREE.InstancedMesh) return;
 
@@ -866,17 +1196,29 @@ export async function setupStoryKitDistanceLod(root, THREE) {
 
 let _kitCamVec = null;
 let _kitProj = null;
+let _kitProjA = null;
+let _kitEyeLocal = null;
+let _kitEyeWorld = null;
+let _kitEyeInv = null;
 let _kitSphere = null;
 let _kitBox = null;
+let _kitXrPoseKey = '';
 const _kitFrustums = [];
 
-function instanceCullPad(xr) {
-  return xr ? 8 : 3;
+function instanceCullPad(xr, it) {
+  // Headset FOV + timewarp sees wider than the cull frustum; pad must cover
+  // large rock/building extents or they pop off while still on-screen.
+  const span =
+    it && it.maxx != null
+      ? Math.max(it.maxx - it.minx, it.maxy - it.miny, it.maxz - it.minz)
+      : 0;
+  if (xr) return Math.max(48, span * 0.85 + 24);
+  return Math.max(12, span * 0.35 + 6);
 }
 
 function instanceCullRadius(it, xr) {
   const base = Math.max(it.r || 4, 4);
-  return xr ? base * 2.5 + 10 : base * 1.5 + 4;
+  return xr ? base * 4 + 28 : base * 2 + 8;
 }
 
 function itemTooSmallOnScreen(it, cx, cy, cz) {
@@ -884,24 +1226,19 @@ function itemTooSmallOnScreen(it, cx, cy, cz) {
   const dy = it.y - cy;
   const dz = it.z - cz;
   const d2 = dx * dx + dy * dy + dz * dz;
-  if (d2 < 40 * 40) return false;
+  if (d2 < 55 * 55) return false;
   const d = Math.sqrt(d2);
   const r = it.rVis || it.r || 4;
-  return r / d < 0.0055;
+  // Was 0.0055 — culled mid-size props while still readable in VR periphery.
+  return r / d < 0.0025;
 }
 
-function aabbInAnyFrustum(it, xr) {
-  if (!_kitFrustums.length) return true;
-  if (it.minx == null || !_kitBox) {
-    return sphereInAnyFrustum(it.x, it.y, it.z, instanceCullRadius(it, xr));
-  }
-  const pad = instanceCullPad(xr);
-  _kitBox.min.set(it.minx - pad, it.miny - pad, it.minz - pad);
-  _kitBox.max.set(it.maxx + pad, it.maxy + pad, it.maxz + pad);
-  for (let i = 0; i < _kitFrustums.length; i++) {
-    if (_kitFrustums[i].intersectsBox(_kitBox)) return true;
-  }
-  return false;
+function aabbInAnyFrustum(_it, _xr) {
+  // ALWAYS visible. Previous CPU frustum used viewer-pose × cameraRig in a way that
+  // stayed near the *spawn* facing: as you yaw/pitch away, a growing wedge of the
+  // real view was treated as "outside" (~deg-proportional pop-out). Distance LOD
+  // below is enough; InstancedMesh already batches draws.
+  return true;
 }
 
 function xrSessionActive(renderer, sceneEl) {
@@ -911,38 +1248,47 @@ function xrSessionActive(renderer, sceneEl) {
   return false;
 }
 
-function sphereInAnyFrustum(x, y, z, r) {
-  if (!_kitSphere || !_kitFrustums.length) return true;
-  _kitSphere.center.set(x, y, z);
-  _kitSphere.radius = r;
-  for (let i = 0; i < _kitFrustums.length; i++) {
-    if (_kitFrustums[i].intersectsSphere(_kitSphere)) return true;
-  }
-  return false;
-}
-
 function projectionLooksValid(cam) {
   const pe = cam && cam.projectionMatrix && cam.projectionMatrix.elements;
   return !!(pe && Math.abs(pe[0]) > 1e-6 && Math.abs(pe[5]) > 1e-6);
 }
 
-function composeEyeWorld(eye, parent) {
-  if (parent && parent.matrixWorld) {
-    parent.updateMatrixWorld(true);
-    eye.matrixWorld.multiplyMatrices(parent.matrixWorld, eye.matrix);
-  } else {
-    eye.matrixWorld.copy(eye.matrix);
+function pushWorldProjFrustum(THREE, n, worldMat, projMat) {
+  if (!_kitEyeInv) _kitEyeInv = new THREE.Matrix4();
+  _kitEyeInv.copy(worldMat).invert();
+  if (!_kitFrustums[n]) _kitFrustums[n] = new THREE.Frustum();
+  _kitProj.multiplyMatrices(projMat, _kitEyeInv);
+  // Widen cull FOV (~22%) so periphery matches what the headset still composites.
+  const e = _kitProj.elements;
+  e[0] *= 0.78;
+  e[5] *= 0.78;
+  _kitFrustums[n].setFromProjectionMatrix(_kitProj);
+}
+
+function xrViewerPose(renderer) {
+  try {
+    const xr = renderer && renderer.xr;
+    if (!xr || typeof xr.getFrame !== 'function' || typeof xr.getReferenceSpace !== 'function') return null;
+    const frame = xr.getFrame();
+    const space = xr.getReferenceSpace();
+    if (!frame || !space || typeof frame.getViewerPose !== 'function') return null;
+    return frame.getViewerPose(space);
+  } catch (_) {
+    return null;
   }
-  eye.matrixWorldInverse.copy(eye.matrixWorld).invert();
 }
 
 function refreshKitCullFrustums(THREE, renderCam) {
   const sceneEl = typeof document !== 'undefined' ? document.querySelector('a-scene') : null;
   const renderer = sceneEl && sceneEl.renderer;
   if (!_kitProj) _kitProj = new THREE.Matrix4();
+  if (!_kitProjA) _kitProjA = new THREE.Matrix4();
+  if (!_kitEyeLocal) _kitEyeLocal = new THREE.Matrix4();
+  if (!_kitEyeWorld) _kitEyeWorld = new THREE.Matrix4();
   if (!_kitSphere) _kitSphere = new THREE.Sphere();
   if (!_kitBox) _kitBox = new THREE.Box3();
   let n = 0;
+  _kitXrPoseKey = '';
   const testCams = typeof window !== 'undefined' ? window.__rtsKitCullTestCameras : null;
   const addCam = (cam) => {
     if (!cam || cam.isArrayCamera) return;
@@ -952,29 +1298,58 @@ function refreshKitCullFrustums(THREE, renderCam) {
     cam.updateMatrixWorld();
     if (!_kitFrustums[n]) _kitFrustums[n] = new THREE.Frustum();
     _kitProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    const e = _kitProj.elements;
+    e[0] *= 0.85;
+    e[5] *= 0.85;
     _kitFrustums[n].setFromProjectionMatrix(_kitProj);
     n++;
   };
   if (Array.isArray(testCams) && testCams.length) {
     for (let i = 0; i < testCams.length; i++) addCam(testCams[i]);
   } else if (xrSessionActive(renderer, sceneEl)) {
-    // Do NOT call renderer.xr.updateCamera() here. That path rewrites eye
-    // projection from PerspectiveCamera.fov (~50°) and hides headset-visible
-    // meshes. Views already wrote XR projection + local matrix this frame.
-    const userCam = kitCullCamera();
+    // Headset orientation lives on XRViewerPose, NOT on the RTS #camera entity.
+    // Thumbstick yaws cameraRig (parent.matrixWorld). Using Three eye.matrix here
+    // was often identity at cull time → frustum ignored look-up/down.
+    const userCam = renderCam && !renderCam.isArrayCamera ? renderCam : kitCullCamera();
     const parent = userCam && userCam.parent;
-    const xrCam = renderer && renderer.xr && typeof renderer.xr.getCamera === 'function' ? renderer.xr.getCamera() : null;
-    const eyes = xrCam && xrCam.cameras;
-    if (eyes && eyes.length) {
-      for (let i = 0; i < eyes.length; i++) {
-        const eye = eyes[i];
-        if (!eye || eye.isArrayCamera) continue;
-        if (!projectionLooksValid(eye)) continue;
-        composeEyeWorld(eye, parent);
-        if (!_kitFrustums[n]) _kitFrustums[n] = new THREE.Frustum();
-        _kitProj.multiplyMatrices(eye.projectionMatrix, eye.matrixWorldInverse);
-        _kitFrustums[n].setFromProjectionMatrix(_kitProj);
+    if (parent && parent.updateMatrixWorld) parent.updateMatrixWorld(true);
+    const pose = xrViewerPose(renderer);
+    const views = pose && pose.views;
+    if (views && views.length) {
+      _kitXrPoseKey = poseViewKey(views);
+      for (let i = 0; i < views.length; i++) {
+        const view = views[i];
+        const tm = view.transform && view.transform.matrix;
+        const pm = view.projectionMatrix;
+        if (!tm || !pm) continue;
+        _kitEyeLocal.fromArray(tm);
+        if (parent && parent.matrixWorld) {
+          _kitEyeWorld.multiplyMatrices(parent.matrixWorld, _kitEyeLocal);
+        } else {
+          _kitEyeWorld.copy(_kitEyeLocal);
+        }
+        _kitProjA.fromArray(pm);
+        pushWorldProjFrustum(THREE, n, _kitEyeWorld, _kitProjA);
         n++;
+      }
+    } else {
+      const xrCam = renderer && renderer.xr && typeof renderer.xr.getCamera === 'function' ? renderer.xr.getCamera() : null;
+      const eyes = xrCam && xrCam.cameras;
+      if (eyes && eyes.length) {
+        for (let i = 0; i < eyes.length; i++) {
+          const eye = eyes[i];
+          if (!eye || eye.isArrayCamera || !projectionLooksValid(eye)) continue;
+          if (parent && parent.matrixWorld) {
+            parent.updateMatrixWorld(true);
+            _kitEyeWorld.multiplyMatrices(parent.matrixWorld, eye.matrix);
+          } else if (eye.matrixWorld) {
+            _kitEyeWorld.copy(eye.matrixWorld);
+          } else {
+            continue;
+          }
+          pushWorldProjFrustum(THREE, n, _kitEyeWorld, eye.projectionMatrix);
+          n++;
+        }
       }
     }
   } else {
@@ -986,7 +1361,18 @@ function refreshKitCullFrustums(THREE, renderCam) {
 function kitCullKey(cam) {
   if (!cam || !cam.matrixWorld) return '';
   const e = cam.matrixWorld.elements;
-  return `${e[12].toFixed(2)},${e[13].toFixed(2)},${e[14].toFixed(3)},${e[0].toFixed(3)},${e[8].toFixed(3)}`;
+  // e[9]/e[10] capture headset pitch; yaw-only keys skipped look-down recull.
+  return `${e[12].toFixed(2)},${e[13].toFixed(2)},${e[14].toFixed(2)},${e[0].toFixed(3)},${e[8].toFixed(3)},${e[9].toFixed(3)},${e[10].toFixed(3)}`;
+}
+
+function poseViewKey(views) {
+  let k = '';
+  for (let i = 0; i < views.length; i++) {
+    const m = views[i].transform && views[i].transform.matrix;
+    if (!m) continue;
+    k += `${m[0].toFixed(3)},${m[8].toFixed(3)},${m[9].toFixed(3)},${m[10].toFixed(3)},${m[12].toFixed(2)},${m[13].toFixed(2)},${m[14].toFixed(2)};`;
+  }
+  return k;
 }
 
 function kitCullCamera() {
@@ -1027,139 +1413,64 @@ function showAllKitInstances() {
   kitLodState.uploadedFull = !kitLodState.hasLod0;
 }
 
-/** Re-bucket kit instances by camera distance / frustum. No-op if kit is not loaded. */
+/** Re-bucket kit instances by camera distance only (no view frustum). */
 export function updateStoryKitLodFromView(renderCam) {
   if (!kitLodState || !kitLodState.batches.length) return;
   if (kitLodState.root && kitLodState.root.visible === false) return;
   const THREE = window.THREE;
   if (!THREE) return;
   if (!_kitCamVec) _kitCamVec = new THREE.Vector3();
-  const sceneEl = typeof document !== 'undefined' ? document.querySelector('a-scene') : null;
-  const renderer = sceneEl && sceneEl.renderer;
-  const xr = xrSessionActive(renderer, sceneEl);
+
+  const hasLod0 = !!kitLodState.hasLod0;
+  // No LOD0 swap → upload every instance once and leave them alone. Frustum cull
+  // was the yaw-proportional pop-out bug; do not bring it back.
+  if (!hasLod0) {
+    if (!kitLodState.uploadedFull) showAllKitInstances();
+    return;
+  }
+
   const cam = renderCam && !renderCam.isArrayCamera ? renderCam : kitCullCamera();
   if (!cam || !cam.matrixWorld) return;
   cam.updateMatrixWorld();
-  refreshKitCullFrustums(THREE, renderCam);
-  if (xr && _kitFrustums.length < 1) {
-    showAllKitInstances();
-    kitLodState.lastCullKey = '';
-    return;
+  if (typeof cam.getWorldPosition === 'function') cam.getWorldPosition(_kitCamVec);
+  else {
+    _kitCamVec.set(
+      cam.matrixWorld.elements[12],
+      cam.matrixWorld.elements[13],
+      cam.matrixWorld.elements[14]
+    );
   }
-  let keyCam = cam;
-  const testCams = typeof window !== 'undefined' ? window.__rtsKitCullTestCameras : null;
-  if (Array.isArray(testCams) && testCams[0]) {
-    keyCam = testCams[0];
-    keyCam.updateMatrixWorld();
-  } else if (xr && renderer && renderer.xr && typeof renderer.xr.getCamera === 'function') {
-    const xrCam = renderer.xr.getCamera();
-    if (xrCam && xrCam.cameras && xrCam.cameras[0] && !xrCam.cameras[0].isArrayCamera) {
-      keyCam = xrCam.cameras[0];
-      // matrixWorld already composed in refreshKitCullFrustums — do not
-      // updateMatrixWorld() (that drops the rig parent and parks the eye at origin).
-    } else {
-      keyCam.updateMatrixWorld();
-    }
-  } else {
-    keyCam.updateMatrixWorld();
-  }
-  if (typeof keyCam.getWorldPosition === 'function') keyCam.getWorldPosition(_kitCamVec);
-  else if (typeof cam.getWorldPosition === 'function') cam.getWorldPosition(_kitCamVec);
   const cx = _kitCamVec.x;
   const cy = _kitCamVec.y;
   const cz = _kitCamVec.z;
-  const fx = -keyCam.matrixWorld.elements[8];
-  const fy = -keyCam.matrixWorld.elements[9];
-  const fz = -keyCam.matrixWorld.elements[10];
-  const key = kitCullKey(keyCam);
-  const hasLod0 = !!kitLodState.hasLod0;
-  if (!hasLod0 && kitLodState.lastCullKey === key && kitLodState.uploadedFull) return;
-  if (!hasLod0 && kitLodState.uploadedFull) {
-    let allIn = true;
-    for (let b = 0; b < kitLodState.batches.length && allIn; b++) {
-      const items = kitLodState.batches[b].items;
-      for (let i = 0; i < items.length; i++) {
-        const it = items[i];
-        if (!aabbInAnyFrustum(it, xr)) {
-          allIn = false;
-          break;
-        }
-      }
-    }
-    if (allIn) {
-      kitLodState.lastCullKey = key;
-      return;
-    }
-  }
+  const key = kitCullKey(cam);
+  if (kitLodState.lastCullKey === key) return;
   kitLodState.lastCullKey = key;
 
   const batches = kitLodState.batches;
-  let anyPartial = false;
-  let drewAny = false;
-  let uniqueOn = 0;
-  let uniqueOff = 0;
-  let instOn = 0;
-  let hiddenInFront = 0;
   for (let b = 0; b < batches.length; b++) {
     const batch = batches[b];
     const items = batch.items;
     const nItems = items.length;
     if (batch.unique && batch.mesh) {
       const it = items[0];
-      if (xr) {
-        // Stereo render culls per eye. CPU-hiding here used a stale/wrong
-        // frustum and dropped pieces sitting in the headset view.
-        batch.mesh.visible = true;
-        batch.mesh.frustumCulled = true;
-        it.drawn = true;
-        uniqueOn++;
-        drewAny = true;
-        continue;
-      }
       batch.mesh.frustumCulled = false;
-      const vis = aabbInAnyFrustum(it, xr) && !itemTooSmallOnScreen(it, cx, cy, cz);
+      const vis = !itemTooSmallOnScreen(it, cx, cy, cz);
       batch.mesh.visible = vis;
       it.drawn = vis;
-      if (vis) {
-        uniqueOn++;
-        drewAny = true;
-      } else {
-        uniqueOff++;
-        anyPartial = true;
-        const dx = it.x - cx;
-        const dy = it.y - cy;
-        const dz = it.z - cz;
-        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (dist > 0.2 && dist < 55) {
-          const ndot = (dx * fx + dy * fy + dz * fz) / dist;
-          if (ndot > 0.65) hiddenInFront++;
-        }
-      }
       continue;
     }
     let n0 = 0;
     let n2 = 0;
     for (let i = 0; i < nItems; i++) {
       const it = items[i];
-      if (!aabbInAnyFrustum(it, xr)) {
-        it.drawn = false;
-        const dx = it.x - cx;
-        const dy = it.y - cy;
-        const dz = it.z - cz;
-        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (dist > 0.2 && dist < 55) {
-          const ndot = (dx * fx + dy * fy + dz * fz) / dist;
-          if (ndot > 0.65) hiddenInFront++;
-        }
-        continue;
-      }
       if (itemTooSmallOnScreen(it, cx, cy, cz)) {
         it.drawn = false;
         continue;
       }
       it.drawn = true;
       let lod = it.lod;
-      if (hasLod0 && batch.mesh0) {
+      if (batch.mesh0) {
         const dx = it.x - cx;
         const dy = it.y - cy;
         const dz = it.z - cz;
@@ -1175,32 +1486,20 @@ export function updateStoryKitLodFromView(renderCam) {
         batch.mesh2.setMatrixAt(n2++, it.matrix);
       }
     }
-    if (n0 + n2 < nItems) anyPartial = true;
-    if (n0 + n2 > 0) drewAny = true;
-    instOn += n0 + n2;
     if (batch.mesh0) {
       batch.mesh0.count = n0;
       batch.mesh0.visible = n0 > 0;
       batch.mesh0.instanceMatrix.needsUpdate = n0 > 0;
+      batch.mesh0.frustumCulled = false;
     }
     if (batch.mesh2) {
       batch.mesh2.count = n2;
       batch.mesh2.visible = n2 > 0;
       batch.mesh2.instanceMatrix.needsUpdate = n2 > 0;
+      batch.mesh2.frustumCulled = false;
     }
   }
-  kitLodState.uploadedFull = !hasLod0 && drewAny && !anyPartial;
-  if (typeof window !== 'undefined') {
-    window.__rtsKitCullDebug = {
-      xr,
-      nFrustums: _kitFrustums.length,
-      uniqueOn,
-      uniqueOff,
-      instOn,
-      hiddenInFront,
-      fov: keyCam.fov || 0,
-    };
-  }
+  kitLodState.uploadedFull = false;
 }
 
 if (typeof window !== 'undefined') window.__rtsUpdateKitLod = updateStoryKitLodFromView;

@@ -1,0 +1,69 @@
+{
+  "rows": [
+    {
+      "label": "1v1-default",
+      "camY": 32,
+      "calls": 14,
+      "tris": 19704,
+      "tex": 29,
+      "fps": 493.7931034482759,
+      "callsAvg": 14,
+      "fogCpu": 0.005586592180852118,
+      "bg": "texture",
+      "env": true,
+      "kind": "overview"
+    },
+    {
+      "label": "1v1-y42",
+      "camY": 42,
+      "calls": 15,
+      "tris": 19776,
+      "tex": 29,
+      "fps": 550.1689844311569,
+      "callsAvg": 15,
+      "fogCpu": 0.005337361537092642,
+      "bg": "texture",
+      "env": true,
+      "kind": "overview"
+    },
+    {
+      "label": "1v1-y68-out",
+      "camY": 68,
+      "calls": 30,
+      "tris": 168429,
+      "tex": 29,
+      "fps": 506.11883271488534,
+      "callsAvg": 28.463894967177243,
+      "fogCpu": 0.005689277896490478,
+      "bg": "texture",
+      "env": true,
+      "kind": "overview"
+    },
+    {
+      "label": "1v1-y68-out-nobg",
+      "camY": 68,
+      "calls": 29,
+      "tris": 168417,
+      "tex": 29,
+      "fps": 535.0614822198962,
+      "callsAvg": 29,
+      "fogCpu": 0.003830227744428144,
+      "bg": "color",
+      "env": true,
+      "kind": "overview"
+    },
+    {
+      "label": "story-default",
+      "camY": 42,
+      "calls": 408,
+      "tris": 1103969,
+      "tex": 118,
+      "fps": 86.27795790518452,
+      "callsAvg": 408.54140127388536,
+      "fogCpu": 0.002547770703009739,
+      "bg": "texture",
+      "env": true,
+      "kind": "story"
+    }
+  ]
+}

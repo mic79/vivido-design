@@ -9,7 +9,7 @@
 
 import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, isStoryMapProfile } from './config.js';
 import { bakedMoonAllowed, tryLoadBakedSkirmishMoon } from './baked-moon.js';
-import { tryLoadStoryKit, tryLoadOverviewKit, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState } from './story-kit-terrain.js';
+import { tryLoadStoryKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState } from './story-kit-terrain.js';
 
 /** Central plate edge length (m) — follows live `MAP_SIZE` (standard 200 / Story 400). */
 function mapPlateM() {
@@ -107,6 +107,8 @@ function assetUrlCandidates(relativePath) {
  * Default ~3.5 km → ~1.4 m drop at the 100 m rim (readable “surface” roll). Try ~9000 for subtler sag.
  */
 function moonHorizonCurvatureRadiusM() {
+  // Skirmish crater plate stays flat so Overview dirt/rocks sit on a level foundation.
+  if (MAP_TERRAIN_STYLE === 'crater') return Infinity;
   if (typeof window !== 'undefined' && window.RTS_MOON_CURVATURE_RADIUS === 0) return Infinity;
   if (
     typeof window !== 'undefined' &&
@@ -1635,7 +1637,12 @@ export function configureTerrainPresentation(sceneEl) {
 }
 
 function disposeMaterial(mat) {
-  if (mat && mat.dispose) mat.dispose();
+  if (!mat) return;
+  for (const key of Object.keys(mat)) {
+    const v = mat[key];
+    if (v && v.isTexture && typeof v.dispose === 'function') v.dispose();
+  }
+  if (typeof mat.dispose === 'function') mat.dispose();
 }
 
 /** When true, skip moon textures and draw slope heat from world-space geometric normals. */
@@ -2262,12 +2269,44 @@ function kitKindOf(obj) {
   return null;
 }
 
+function clearOverviewGroundscapeProps(groundEl) {
+  if (!groundEl || typeof groundEl.getObject3D !== 'function') return;
+  const prev = groundEl.getObject3D('overviewProps');
+  if (!prev) return;
+  groundEl.removeObject3D('overviewProps');
+  disposeGroundObject(prev);
+}
+
+/**
+ * Flat moon plate + cheap Overview dirt/rocks props (1.3MB float groundscape).
+ * Never loads the full Overview catalog here.
+ */
+async function attachOverviewGroundscapeProps(groundEl, sceneEl) {
+  clearOverviewGroundscapeProps(groundEl);
+  if (!groundEl || typeof groundEl.setObject3D !== 'function') return false;
+  if (isStoryMapProfile()) return false;
+  if (MAP_TERRAIN_STYLE === 'kit') return false;
+
+  const props = await tryLoadOverviewGroundscape();
+  if (!props) return false;
+
+  props.name = 'rts-overview-props';
+  props.userData.rtsOverviewProps = true;
+  // Sit slightly above the moon plate so z-fight is rare.
+  props.position.y = 0.02;
+  groundEl.setObject3D('overviewProps', props);
+  console.log('[RTSVR5] overview groundscape props attached');
+  return true;
+}
+
 async function mountKitTerrain(groundEl, prev, sceneEl, kind) {
+  clearOverviewGroundscapeProps(groundEl);
   const prevKind = kitKindOf(prev);
   if (prevKind === kind) {
     bakedMoonRoot = prev;
     configureTerrainPresentation(sceneEl);
     syncTerrainGridHelperSize();
+    if (kind === 'overview' || kind === 'story') await dressKitGroundPlateWithMoon(prev, sceneEl);
     console.log('[RTSVR5] kit terrain (already loaded)', kind);
     return true;
   }
@@ -2289,10 +2328,27 @@ async function mountKitTerrain(groundEl, prev, sceneEl, kind) {
   groundEl.setObject3D('mesh', kitRoot);
   kitRoot.visible = true;
   if (prev && prev !== kitRoot) disposeGroundObject(prev);
+  // Moon albedo under Story/Overview kits — black Lambert plate reads as a void.
+  await dressKitGroundPlateWithMoon(kitRoot, sceneEl);
   configureTerrainPresentation(sceneEl);
   syncTerrainGridHelperSize();
   console.log('[RTSVR5] kit terrain', { kind, restored: false });
   return true;
+}
+
+/** Flat moon albedo/normal on the kit ground plate — foundation under Overview rocks, not black. */
+export async function dressKitGroundPlateWithMoon(kitRoot, sceneEl) {
+  const THREE = window.THREE;
+  if (!THREE || !kitRoot) return;
+  let plate = null;
+  kitRoot.traverse((o) => {
+    if (plate) return;
+    if (o.isMesh && (o.name === 'rts-kit-ground' || o.userData?.rtsMoonPlate)) plate = o;
+  });
+  if (!plate) return;
+  await applyBattleMoon(THREE, sceneEl, plate);
+  // Keep plate flat — skirt OK, no planet sag on this mesh (it's already a plane).
+  console.log('[RTSVR5] kit ground plate dressed with moon textures');
 }
 
 function mountLobbyKitPlate(groundEl, sceneEl) {
@@ -2338,8 +2394,7 @@ export async function applyMoonBattlefieldVisuals(sceneEl) {
   if (MAP_TERRAIN_STYLE === 'kit') {
     const prev = groundEl.getObject3D('mesh');
     if (prev && prev.userData && prev.userData.rtsKitKind) {
-      const kind = isStoryMapProfile() ? 'story' : 'overview';
-      const ok = await mountKitTerrain(groundEl, prev, sceneEl, kind);
+      const ok = await mountKitTerrain(groundEl, prev, sceneEl, 'story');
       if (ok) {
         styleMoonGrid();
         const gridMount = document.getElementById('gridHelper');
@@ -2375,6 +2430,7 @@ export async function applyMoonBattlefieldVisuals(sceneEl) {
         if (o.isLineSegments) terrainGridVisible = o.visible;
       });
     }
+    await attachOverviewGroundscapeProps(groundEl, sceneEl);
     return;
   }
 
@@ -2401,11 +2457,13 @@ export async function applyMoonBattlefieldVisuals(sceneEl) {
       if (o.isLineSegments) terrainGridVisible = o.visible;
     });
   }
+  await attachOverviewGroundscapeProps(groundEl, sceneEl);
 }
 
 /**
- * Rebuild central plate after `applyMapProfile`. Kit GLBs are not kept resident across
- * Story/skirmish switches — parking both PBR kits is what made PCVR crawl.
+ * Rebuild central plate after `applyMapProfile`.
+ * Do NOT park Story kit while skirmish runs — ~100 textures stay in VRAM and crush FPS.
+ * Skirmish moon bake may still park across a Story visit (smaller footprint).
  */
 export async function rebuildMoonBattlefield(sceneEl) {
   const THREE = window.THREE;
@@ -2419,13 +2477,19 @@ export async function rebuildMoonBattlefield(sceneEl) {
   const prevIsKit = !!(prev && prev.userData && prev.userData.rtsStoryKit);
 
   if (MAP_TERRAIN_STYLE === 'kit') {
-    const kind = isStoryMapProfile() ? 'story' : 'overview';
-    const ok = await mountKitTerrain(groundEl, prev, sceneEl, kind);
+    // Skirmish and Story share the same modular sci-fi kit (Story-proven look + FPS).
+    const ok = await mountKitTerrain(groundEl, prev, sceneEl, 'story');
     if (ok) return;
-    console.warn('[RTSVR5] kit terrain failed to load', kind);
+    console.warn('[RTSVR5] kit terrain failed to load', 'story');
   }
 
-  if (prevIsKit) snapshotKitPark(prev);
+  // Leaving kit → skirmish: free Story GPU memory immediately.
+  if (prevIsKit) {
+    groundEl.removeObject3D('mesh');
+    disposeGroundObject(prev);
+    parkedKit = null;
+    resetKitLodState();
+  }
 
   if (bakedMoonAllowed() && parkedSkirmish && parkedSkirmish.root) {
     const restored = restoreSkirmishPark();
@@ -2433,14 +2497,14 @@ export async function rebuildMoonBattlefield(sceneEl) {
       BATTLE_TERRAIN.segmentsWidth = 96;
       BATTLE_TERRAIN.segmentsDepth = 96;
       groundEl.setObject3D('mesh', restored);
-      if (prev && prev !== restored) {
-        if (parkedKit && prev === parkedKit.root) prev.visible = false;
-        else disposeGroundObject(prev);
+      if (prev && prev !== restored && !prevIsKit) {
+        disposeGroundObject(prev);
       }
       horizonSkirtAttached = false;
       await finishBakedMoonLook(THREE, sceneEl, restored, { skipHeight: true });
       configureTerrainPresentation(sceneEl);
       syncTerrainGridHelperSize();
+      await attachOverviewGroundscapeProps(groundEl, sceneEl);
       console.log('[RTSVR5] restored parked skirmish moon');
       return;
     }
@@ -2457,19 +2521,19 @@ export async function rebuildMoonBattlefield(sceneEl) {
   const baked = await tryLoadBakedSkirmishMoon();
   if (baked) {
     groundEl.setObject3D('mesh', baked);
-    if (prev && prev !== baked) {
+    if (prev && prev !== baked && !prevIsKit) {
       if (parkedSkirmish && prev === parkedSkirmish.root) prev.visible = false;
-      else if (parkedKit && prev === parkedKit.root) prev.visible = false;
       else disposeGroundObject(prev);
     }
     await finishBakedMoonLook(THREE, sceneEl, baked);
     configureTerrainPresentation(sceneEl);
     syncTerrainGridHelperSize();
+    await attachOverviewGroundscapeProps(groundEl, sceneEl);
     return;
   }
 
   const keepMat =
-    prev && prev.isMesh && prev.material && !prevIsBake ? prev.material : null;
+    prev && prev.isMesh && prev.material && !prevIsBake && !prevIsKit ? prev.material : null;
   const terrainGeom = buildBattleTerrainGeometry(THREE);
   const mesh = new THREE.Mesh(
     terrainGeom,
@@ -2483,13 +2547,13 @@ export async function rebuildMoonBattlefield(sceneEl) {
       : false;
   mesh.castShadow = false;
   groundEl.setObject3D('mesh', mesh);
-  if (prev && prev !== mesh) {
+  if (prev && prev !== mesh && !prevIsKit) {
     if (parkedSkirmish && prev === parkedSkirmish.root) prev.visible = false;
-    else if (parkedKit && prev === parkedKit.root) prev.visible = false;
     else disposeGroundObject(prev, keepMat);
   }
 
   await applyBattleMoon(THREE, sceneEl, mesh);
   configureTerrainPresentation(sceneEl);
   syncTerrainGridHelperSize();
+  await attachOverviewGroundscapeProps(groundEl, sceneEl);
 }

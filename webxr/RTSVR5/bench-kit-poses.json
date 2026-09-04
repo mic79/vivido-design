@@ -11,13 +11,14 @@
       "cull": {
         "xr": false,
         "nFrustums": 1,
+        "pose": false,
         "uniqueOn": 249,
         "uniqueOff": 33,
         "instOn": 1788,
         "hiddenInFront": 0,
         "fov": 80
       },
-      "fps": 55.15285219055039,
+      "fps": 54.27942101938187,
       "callsAvg": 789,
       "trisAvg": 447272
     },
@@ -32,13 +33,14 @@
       "cull": {
         "xr": false,
         "nFrustums": 1,
+        "pose": false,
         "uniqueOn": 0,
         "uniqueOff": 282,
         "instOn": 0,
         "hiddenInFront": 0,
         "fov": 80
       },
-      "fps": 239.59957331670722,
+      "fps": 239.22660986370926,
       "callsAvg": 8,
       "trisAvg": 19078
     },
@@ -53,13 +55,14 @@
       "cull": {
         "xr": false,
         "nFrustums": 1,
+        "pose": false,
         "uniqueOn": 5,
         "uniqueOff": 277,
         "instOn": 958,
         "hiddenInFront": 0,
         "fov": 80
       },
-      "fps": 95.59300064820353,
+      "fps": 94.15584415584416,
       "callsAvg": 409,
       "trisAvg": 279021
     },
@@ -74,57 +77,82 @@
       "cull": {
         "xr": false,
         "nFrustums": 1,
+        "pose": false,
         "uniqueOn": 210,
         "uniqueOff": 72,
         "instOn": 1226,
         "hiddenInFront": 0,
         "fov": 85
       },
-      "fps": 57.7120721006293,
+      "fps": 54.579971523364456,
       "callsAvg": 755,
       "trisAvg": 407005
     },
     {
       "label": "look-fp-xr",
-      "calls": 758,
-      "tris": 447270,
-      "visInst": 546,
-      "visInstCount": 1569,
-      "visMesh": 282,
+      "calls": 824,
+      "tris": 460943,
+      "visInst": 565,
+      "visInstCount": 1631,
+      "visMesh": 230,
       "hookErr": null,
       "cull": {
         "xr": true,
         "nFrustums": 1,
-        "uniqueOn": 282,
-        "uniqueOff": 0,
-        "instOn": 1569,
+        "pose": false,
+        "uniqueOn": 230,
+        "uniqueOff": 52,
+        "instOn": 1631,
         "hiddenInFront": 0,
         "fov": 85
       },
-      "fps": 56.804544363616806,
-      "callsAvg": 758,
-      "trisAvg": 447270
+      "fps": 45.53079319439879,
+      "callsAvg": 824,
+      "trisAvg": 460943
     },
     {
       "label": "look-hmd-100",
-      "calls": 777,
-      "tris": 416807,
-      "visInst": 552,
-      "visInstCount": 1691,
-      "visMesh": 282,
+      "calls": 823,
+      "tris": 426680,
+      "visInst": 567,
+      "visInstCount": 1751,
+      "visMesh": 230,
       "hookErr": null,
       "cull": {
         "xr": true,
         "nFrustums": 1,
-        "uniqueOn": 282,
-        "uniqueOff": 0,
-        "instOn": 1691,
+        "pose": false,
+        "uniqueOn": 230,
+        "uniqueOff": 52,
+        "instOn": 1751,
         "hiddenInFront": 0,
         "fov": 100
       },
-      "fps": 53.61930294893566,
-      "callsAvg": 777,
-      "trisAvg": 416807
+      "fps": 51.5750218203235,
+      "callsAvg": 823,
+      "trisAvg": 426680
+    },
+    {
+      "label": "look-hmd-pitch",
+      "calls": 826,
+      "tris": 405247,
+      "visInst": 563,
+      "visInstCount": 1482,
+      "visMesh": 235,
+      "hookErr": null,
+      "cull": {
+        "xr": true,
+        "nFrustums": 1,
+        "pose": false,
+        "uniqueOn": 235,
+        "uniqueOff": 47,
+        "instOn": 1482,
+        "hiddenInFront": 20,
+        "fov": 100
+      },
+      "fps": 49.2845786963434,
+      "callsAvg": 826,
+      "trisAvg": 405247
     }
   ]
 }

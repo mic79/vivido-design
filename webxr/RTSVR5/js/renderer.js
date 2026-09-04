@@ -1781,8 +1781,9 @@ function buildNavigableFogOverlayGeometry(THREE) {
 
 function setFogOverlayVisible(on) {
   if (fogOverlayMesh) fogOverlayMesh.visible = on;
-  // Kit IS the map. Opaque unexplored blackout was for moon PBR; it hid 99% of the modules after load.
-  if (fogUnexploredMesh) fogUnexploredMesh.visible = on && MAP_TERRAIN_STYLE !== 'kit';
+  // Opaque unexplored blackout hid the moon plate + Overview rocks on skirmish and
+  // filled most of the screen (fillrate cliff). Soft veil only — same as Story kit.
+  if (fogUnexploredMesh) fogUnexploredMesh.visible = false;
 }
 
 function disposeFogOverlayMeshes() {

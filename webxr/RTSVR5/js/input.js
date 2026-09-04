@@ -1117,12 +1117,17 @@ export function positionCameraForPlayer(playerId) {
   const groundEl = typeof document !== 'undefined' ? document.getElementById('ground') : null;
   const kit = groundEl && groundEl.getObject3D && groundEl.getObject3D('mesh');
   const kitKind = kit && kit.userData && kit.userData.rtsKitKind;
-  // Overview catalog is ~122 m at origin; Story kit ~540×620. Rim+50 m back looks off the art.
-  const inward = kitKind === 'overview' ? 0.32 : kitKind === 'story' ? 0.62 : 0.8;
-  const startCamBackM = kitKind === 'overview' ? 12 : kitKind === 'story' ? 28 : 50;
+  // Overview groundscape (dirt/rocks on moon plate): same framing as Story so props fill the view.
+  // `?fullkit=1` diorama still gets the higher/closer overview cam.
+  const fullOverview =
+    kitKind === 'overview' &&
+    typeof location !== 'undefined' &&
+    /(?:[?&#]fullkit=1\b)/.test(`${location.search || ''}${location.hash || ''}`);
+  const inward = fullOverview ? 0.32 : kitKind === 'story' || kitKind === 'overview' ? 0.62 : 0.8;
+  const startCamBackM = fullOverview ? 12 : kitKind === 'story' || kitKind === 'overview' ? 28 : 50;
   const bx = spawn.x * inward;
   const bz = spawn.z * inward;
-  cameraRig.y = kitKind === 'overview' ? 68 : kitKind === 'story' ? 42 : 36;
+  cameraRig.y = fullOverview ? 68 : kitKind === 'story' || kitKind === 'overview' ? 42 : 36;
   if (Math.hypot(bx, bz) > 0.01) {
     cameraRig.rotY = Math.atan2(bx, bz);
   } else {
