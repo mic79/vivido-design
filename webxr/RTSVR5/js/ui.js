@@ -1012,7 +1012,7 @@ function createMenu() {
   `;
   menuEl.innerHTML = `
     <h2 style="color: #0f0; margin: 0 0 20px 0; font-size: 28px; letter-spacing: 0.1em;">RTS VR V</h2>
-    <button id="btn-start-story" style="${btnStyle('#0a6')}" onclick="window._startGame('story')">📖 Story (sci-fi kit)</button>
+    <button id="btn-start-story" style="${btnStyle('#0a6')}" onclick="window._startGame('story')">📖 Story (hills)</button>
     <button id="btn-start-1v1" style="${btnStyle('#0a0')}" onclick="window._startGame('1v1')">⚔️ 1v1 vs Bot</button>
     <button id="btn-start-2v2" style="${btnStyle('#06a')}" onclick="window._startGame('2v2')">🤝 2v2 Co-op vs Bots</button>
     <button id="btn-start-ffa" style="${btnStyle('#a60')}" onclick="window._startGame('ffa')">👑 FFA (4 Players)</button>

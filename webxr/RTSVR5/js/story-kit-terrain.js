@@ -227,7 +227,7 @@ function dirtFloorYFromMins(dirtMins, fallbackMinY) {
 
 /**
  * @param {object} gltf
- * @param {{ kind: string, skipIndoor?: boolean, clipRadius?: number, hideScale?: number, bytes?: number, keepNameRe?: RegExp|null, noPlate?: boolean, targetSpanM?: number, skipDistanceLod?: boolean }} opts
+ * @param {{ kind: string, skipIndoor?: boolean, clipRadius?: number, hideScale?: number, bytes?: number, keepNameRe?: RegExp|null, noPlate?: boolean, targetSpanM?: number, skipDistanceLod?: boolean, asProps?: boolean, url?: string, quest?: boolean }} opts
  */
 function assembleKitWrap(gltf, opts) {
   const W = window.THREE;
@@ -237,6 +237,7 @@ function assembleKitWrap(gltf, opts) {
   const hideScale = opts.hideScale == null ? 20 : opts.hideScale;
   const keepNameRe = opts.keepNameRe || null;
   const noPlate = !!opts.noPlate;
+  const asProps = !!opts.asProps;
   const targetSpanM = opts.targetSpanM > 0 ? opts.targetSpanM : 0;
 
   const scene = findGltfScene(gltf, 'LOD2') || gltf.scene;
@@ -332,7 +333,7 @@ function assembleKitWrap(gltf, opts) {
   let cluster;
   let y0;
   let y0Source = 'dirt';
-  if (kind === 'overview' && (keepNameRe || targetSpanM > 0)) {
+  if ((kind === 'overview' || asProps) && (keepNameRe || targetSpanM > 0)) {
     const seeded = expandClusterFromActorNodes(scene, W);
     if (!seeded.any || seeded.cluster.isEmpty()) {
       console.warn('[RTSVR5] skip kit: no visible meshes', kind);
@@ -407,7 +408,8 @@ function assembleKitWrap(gltf, opts) {
     scene.updateMatrixWorld(true);
     if (targetSpanM > 0) {
       const spanNow = Math.max(0.01, cluster.max.x - cluster.min.x, cluster.max.z - cluster.min.z);
-      const want = Math.min(targetSpanM, MAP_SIZE * 0.85);
+      // Props on skirmish: allow span up to nav diameter. Overview extract: clamp to plate.
+      const want = asProps ? targetSpanM : Math.min(targetSpanM, MAP_SIZE * 0.85);
       if (spanNow > 0.5 && want > 1) {
         const s = want / spanNow;
         if (s > 0.05 && s < 40) {
@@ -500,7 +502,7 @@ function assembleKitWrap(gltf, opts) {
         } else if ('envMapIntensity' in mat) {
           mat.envMapIntensity = kind === 'overview' ? 0.15 : 0.35;
         }
-        if (kind === 'overview') {
+        if (kind === 'overview' && !asProps) {
           if ('metalness' in mat) mat.metalness = 0;
           if ('roughness' in mat) mat.roughness = Math.max(0.72, mat.roughness || 0);
           if (mat.color) mat.color.setHex(0xffffff);
@@ -525,11 +527,17 @@ function assembleKitWrap(gltf, opts) {
   });
 
   const wrap = new W.Group();
-  wrap.name =
-    kind === 'overview' ? 'rts-overview-kit' : kind === 'rocks' ? 'rts-rocks-kit' : 'rts-story-kit';
-  wrap.userData.rtsStoryKit = true;
-  wrap.userData.rtsKitKind = kind;
+  wrap.name = asProps
+    ? 'rts-rocks-props'
+    : kind === 'overview'
+      ? 'rts-overview-kit'
+      : kind === 'rocks'
+        ? 'rts-rocks-kit'
+        : 'rts-story-kit';
+  wrap.userData.rtsStoryKit = !asProps;
+  wrap.userData.rtsKitKind = asProps ? 'rocks-props' : kind;
   wrap.userData.rtsSkipIndoor = skipIndoor;
+  if (asProps) wrap.userData.rtsQuestRocksProps = true;
   if (opts.url) wrap.userData.rtsKitUrl = opts.url;
   if (opts.quest != null) wrap.userData.rtsKitQuest = !!opts.quest;
   if (opts.skipDistanceLod) wrap.userData.rtsSkipDistanceLod = true;
@@ -782,6 +790,66 @@ export async function tryLoadOverviewGroundscape() {
     targetSpanM: MAP_SIZE * 0.72,
     skipDistanceLod: true,
     bytes: buf.byteLength,
+    url: used,
+  });
+}
+
+/**
+ * Quest UE rocks as *props* on the crater moon (product path B0).
+ * Does not replace the heightfield — moon bake stays the ground.
+ * @returns {Promise<import('three').Group|null>}
+ */
+export async function tryLoadQuestRocksProps() {
+  const W = window.THREE;
+  if (!W) return null;
+
+  const urls = wantQuestAssets()
+    ? [STORY_KIT_QUEST_GLB, STORY_ROCKS_GLB]
+    : [STORY_ROCKS_GLB, STORY_KIT_QUEST_GLB];
+
+  let buf = null;
+  let used = urls[0];
+  for (const url of urls) {
+    let res;
+    try {
+      res = await fetch(url);
+    } catch {
+      continue;
+    }
+    if (!res.ok) continue;
+    const next = await res.arrayBuffer();
+    const minBytes = url === STORY_KIT_QUEST_GLB ? MIN_QUEST_KIT_BYTES : MIN_STORY_ROCKS_BYTES;
+    if (next.byteLength < minBytes) continue;
+    try {
+      parseGlbJson(next);
+    } catch {
+      continue;
+    }
+    buf = next;
+    used = url;
+    break;
+  }
+  if (!buf) {
+    console.warn('[RTSVR5] quest rocks props missing');
+    return null;
+  }
+
+  console.log('[RTSVR5] quest rocks props file', { url: used, bytes: buf.byteLength });
+  const gltf = await parseKitBuf(buf);
+  // Dressing on crater moon: scale to skirmish nav diameter, keep rocks materials,
+  // no Overview emissive hacks, no distance-LOD singleton fight with Story kit.
+  return assembleKitWrap(gltf, {
+    kind: 'rocks',
+    asProps: true,
+    skipIndoor: true,
+    clipRadius: 0,
+    keepNameRe: null,
+    noPlate: true,
+    targetSpanM: Math.max(MAP_SIZE * 0.9, MAP_UNIT_NAV_RADIUS * 2 * 0.92),
+    skipDistanceLod: false,
+    bytes: buf.byteLength,
+    url: used,
+    quest: /scifi-rts-quest\.glb/i.test(used),
   });
 }
 

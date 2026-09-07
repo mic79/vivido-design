@@ -7,9 +7,10 @@
  * green → yellow → red; **≥45°** solid red. Uses mesh geometric normals (not the tiled normal map).
  */
 
-import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual } from './config.js';
+import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
 import { bakedMoonAllowed, tryLoadBakedSkirmishMoon } from './baked-moon.js';
-import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
+import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
+import * as State from './state.js';
 
 /** Central plate edge length (m) — follows live `MAP_SIZE` (standard 200 / Story 400). */
 function mapPlateM() {
@@ -2313,22 +2314,74 @@ function clearOverviewGroundscapeProps(groundEl) {
  * Flat moon plate + cheap Overview dirt/rocks props (1.3MB float groundscape).
  * Never loads the full Overview catalog here.
  */
-async function attachOverviewGroundscapeProps(groundEl, sceneEl) {
+/**
+ * Skirmish dressing on the crater moon (not a second terrain).
+ *   B0 (default in-match) — Quest UE rocks props (`scifi-rts-quest.glb`)
+ *   A0 — moon only (`?scenery=A0` / `?noprops=1`) — also forced in lobby/intro
+ *   A1 — legacy groundscape (`?scenery=A1` / `?groundscape=1`)
+ */
+async function attachSkirmishSceneryProps(groundEl, sceneEl) {
   clearOverviewGroundscapeProps(groundEl);
   if (!groundEl || typeof groundEl.setObject3D !== 'function') return false;
   if (isStoryMapProfile()) return false;
   if (MAP_TERRAIN_STYLE === 'kit') return false;
 
-  const props = await tryLoadOverviewGroundscape();
+  // Intro/lobby: clean RTSVR4 moon only. Props attach when a 1v1 match is preparing/running.
+  const inMatch =
+    !!(State.gameSession && (State.gameSession.matchPreparing || State.gameSession.gameStarted));
+  const mode = !inMatch ? 'A0' : skirmishSceneryMode();
+  if (mode === 'A0') {
+    console.log('[RTSVR5] scenery A0: moon only', { inMatch });
+    return false;
+  }
+
+  let props = null;
+  if (mode === 'A1') {
+    props = await tryLoadOverviewGroundscape();
+  } else {
+    props = await tryLoadQuestRocksProps();
+  }
   if (!props) return false;
 
   props.name = 'rts-overview-props';
   props.userData.rtsOverviewProps = true;
-  // Sit slightly above the moon plate so z-fight is rare.
-  props.position.y = 0.02;
+  props.userData.rtsSceneryMode = mode;
+  // Seat props on the crater surface (not a flat +0.02 above Y=0).
+  try {
+    const THREE = window.THREE;
+    props.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(props);
+    if (!box.isEmpty()) {
+      const cx = (box.min.x + box.max.x) * 0.5;
+      const cz = (box.min.z + box.max.z) * 0.5;
+      const moonY = sampleMoonTerrainWorldY(cx, cz);
+      const lift = moonY - box.min.y;
+      props.position.y = lift;
+    } else {
+      props.position.y = 0.02;
+    }
+  } catch (_) {
+    props.position.y = 0.02;
+  }
   groundEl.setObject3D('overviewProps', props);
-  console.log('[RTSVR5] overview groundscape props attached');
+  try {
+    // Instance shared rock meshes (~20 draws). LOD tick is gated on gameStarted.
+    await setupStoryKitDistanceLod(props, window.THREE);
+  } catch (err) {
+    console.warn('[RTSVR5] props instancing failed', err);
+  }
+  console.log('[RTSVR5] skirmish scenery props', {
+    mode,
+    url: props.userData && props.userData.rtsKitUrl,
+    quest: !!(props.userData && props.userData.rtsKitQuest),
+    y: props.position.y,
+  });
   return true;
+}
+
+/** Public: attach B0/A1 props after lobby→1v1 when moon mesh was already resident. */
+export async function ensureSkirmishSceneryProps(groundEl, sceneEl) {
+  return attachSkirmishSceneryProps(groundEl, sceneEl);
 }
 
 function applyLeanLookIfNeeded(kitRoot) {
@@ -2540,7 +2593,7 @@ async function applyMoonBattlefieldVisualsInner(sceneEl) {
         if (o.isLineSegments) terrainGridVisible = o.visible;
       });
     }
-    await attachOverviewGroundscapeProps(groundEl, sceneEl);
+    await attachSkirmishSceneryProps(groundEl, sceneEl);
     return;
   }
 
@@ -2567,7 +2620,7 @@ async function applyMoonBattlefieldVisualsInner(sceneEl) {
       if (o.isLineSegments) terrainGridVisible = o.visible;
     });
   }
-  await attachOverviewGroundscapeProps(groundEl, sceneEl);
+  await attachSkirmishSceneryProps(groundEl, sceneEl);
 }
 
 /**
@@ -2620,7 +2673,7 @@ async function rebuildMoonBattlefieldInner(sceneEl) {
       await finishBakedMoonLook(THREE, sceneEl, restored, { skipHeight: true });
       configureTerrainPresentation(sceneEl);
       syncTerrainGridHelperSize();
-      await attachOverviewGroundscapeProps(groundEl, sceneEl);
+      await attachSkirmishSceneryProps(groundEl, sceneEl);
       console.log('[RTSVR5] restored parked skirmish moon');
       return;
     }
@@ -2644,7 +2697,7 @@ async function rebuildMoonBattlefieldInner(sceneEl) {
     await finishBakedMoonLook(THREE, sceneEl, baked);
     configureTerrainPresentation(sceneEl);
     syncTerrainGridHelperSize();
-    await attachOverviewGroundscapeProps(groundEl, sceneEl);
+    await attachSkirmishSceneryProps(groundEl, sceneEl);
     return;
   }
 
@@ -2671,7 +2724,7 @@ async function rebuildMoonBattlefieldInner(sceneEl) {
   await applyBattleMoon(THREE, sceneEl, mesh);
   configureTerrainPresentation(sceneEl);
   syncTerrainGridHelperSize();
-  await attachOverviewGroundscapeProps(groundEl, sceneEl);
+  await attachSkirmishSceneryProps(groundEl, sceneEl);
 }
 
 /**

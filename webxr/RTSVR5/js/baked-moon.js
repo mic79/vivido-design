@@ -102,11 +102,9 @@ function setPlanarUv1(geo, W, bbox) {
 export function bakedMoonAllowed() {
   if (typeof location === 'undefined') return false;
   const q = `${location.search || ''}${location.hash || ''}`;
-  // UE island bake leaves a black void outside a jagged patch. Default skirmish
-  // uses the full flat procedural moon plate; opt in with `?uebake=1`.
-  if (!/(?:[?&#]uebake=1\b)/.test(q)) return false;
   if (/(?:[?&#]livepbr=1\b)|(?:[?&#]livepbr(?:&|$))/.test(q)) return false;
   if (/(?:[?&#]nobake=1\b)|(?:[?&#]nobake(?:&|$))/.test(q)) return false;
+  // Same as RTSVR4: crater skirmish uses the UE Lambert moon bake by default.
   return MAP_TERRAIN_STYLE === 'crater';
 }
 

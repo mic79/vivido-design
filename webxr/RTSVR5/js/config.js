@@ -24,8 +24,8 @@ export const MAP_SIZE_STORY = 640;
 
 /** Live map metrics — reassigned by `applyMapProfile`. Importers see updates (ES live bindings). */
 export let MAP_PROFILE = /** @type {MapProfileId} */ ('standard');
-/** Terrain style: crater rim (standard) vs sci-fi kit GLB (story). */
-export let MAP_TERRAIN_STYLE = /** @type {'crater'|'hills'|'kit'} */ ('kit');
+/** Terrain: crater (1v1, RTSVR4 path) | hills (Story) | kit (opt-in `?kit=1`). */
+export let MAP_TERRAIN_STYLE = /** @type {'crater'|'hills'|'kit'} */ ('crater');
 /** Live nav-area multiplier (skirmish 4 = 2× radius; Story kit = 1 so play stays on the kit). */
 export let MAP_NAV_AREA_SCALE = 1;
 export let MAP_SIZE = MAP_SIZE_STANDARD;
@@ -66,24 +66,53 @@ function recomputeMapDerived() {
 }
 
 /**
- * Switch between standard skirmish map and Story (sci-fi kit terrain).
- * Call before terrain rebuild / pathfinding / fog init when starting a match.
+ * Switch between standard skirmish map and Story.
+ * Default = RTSVR4 path (Quest ~100–120 FPS): 1v1 crater moon, Story hills.
+ * Sci-fi kit: `?kit=1` (or rocks-file / Quest `?leanrocks=1`).
  * @param {MapProfileId} profile
  */
 export function applyMapProfile(profile) {
   MAP_PROFILE = profile === 'story' ? 'story' : 'standard';
-  // Story always full kit. Skirmish: full kit, or ?leanrocks=1 → rocks GLB.
-  MAP_SIZE = MAP_SIZE_STORY;
-  MAP_TERRAIN_STYLE = 'kit';
+  const forceKit = wantKitTerrain();
   if (MAP_PROFILE === 'story') {
+    MAP_SIZE = MAP_SIZE_STORY;
+    MAP_TERRAIN_STYLE = forceKit ? 'kit' : 'hills';
     FOG_GRID_SIZE = 48;
     MAP_NAV_AREA_SCALE = 1;
   } else {
+    MAP_SIZE = MAP_SIZE_STANDARD;
+    MAP_TERRAIN_STYLE = forceKit ? 'kit' : 'crater';
     FOG_GRID_SIZE = 40;
-    MAP_NAV_AREA_SCALE = 1;
+    MAP_NAV_AREA_SCALE = forceKit ? 1 : 4;
     STORY_RESOURCE_FIELD_POSITIONS = null;
   }
   recomputeMapDerived();
+}
+
+/**
+ * Skirmish 1v1 scenery mode (crater moon base + optional dressing).
+ *   B0 (default) — moon + Quest UE rocks props
+ *   A0 — moon only (`?scenery=A0` or `?noprops=1`)
+ *   A1 — moon + legacy groundscape (`?scenery=A1` or `?groundscape=1`)
+ * Full kit-as-terrain remains `?kit=1` (separate from these).
+ */
+export function skirmishSceneryMode() {
+  const q = searchQuery() + (typeof location !== 'undefined' ? location.hash || '' : '');
+  if (/(?:[?&#]scenery=A0\b)|(?:[?&#]noprops=1\b)/i.test(q)) return 'A0';
+  if (/(?:[?&#]scenery=A1\b)|(?:[?&#]groundscape=1\b)/i.test(q)) return 'A1';
+  if (/(?:[?&#]scenery=B0\b)/i.test(q)) return 'B0';
+  return 'B0';
+}
+
+/** Sci-fi kit GLB as full terrain (`?kit=1`, or rocks-file A/B / Quest leanrocks). */
+export function wantKitTerrain() {
+  const q = searchQuery() + (typeof location !== 'undefined' ? location.hash || '' : '');
+  if (/(?:[?&#]kit=1\b)/i.test(q)) return true;
+  if (/(?:[?&#]leanrocksFile=1\b)/i.test(q)) return true;
+  if (/(?:[?&#]rocksfile=[\w.-]+)/i.test(q)) return true;
+  // Quest leanrocks file path (desktop leanrocks remaps to full-kit look elsewhere).
+  if (/(?:[?&#]leanrocks=1\b)/i.test(q) && !isDesktopPcvrHost()) return true;
+  return false;
 }
 
 export function isKitTerrain() {

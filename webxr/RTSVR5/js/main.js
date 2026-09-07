@@ -22,11 +22,10 @@ import {
   FACTORY_UNITS,
   getMatchStartSpawnForPlayer,
   applyMapProfile,
-  skirmishKitKind,
   MAP_PROFILE,
   MAP_UNIT_NAV_RADIUS,
 } from './config.js';
-import { applyMoonBattlefieldVisuals, rebuildMoonBattlefield, clearStoryBlockingHills } from './moon-environment.js';
+import { applyMoonBattlefieldVisuals, rebuildMoonBattlefield, clearStoryBlockingHills, ensureSkirmishSceneryProps } from './moon-environment.js';
 import {
   generateStoryLayout,
   applyStoryLayoutToWorld,
@@ -191,15 +190,16 @@ function initializeGame(sceneEl) {
 async function prepareMapForMode(mode, sceneEl, prevProfile) {
   const wantStory = mode === 'story';
   const nextProfile = wantStory ? 'story' : 'standard';
-  const groundEl = document.getElementById('ground');
-  const live = groundEl && typeof groundEl.getObject3D === 'function' ? groundEl.getObject3D('mesh') : null;
-  const liveKind = live && live.userData && live.userData.rtsKitKind;
-  const wantKind = wantStory ? 'story' : skirmishKitKind();
-  const needsTerrain = liveKind !== wantKind;
 
-  if (needsTerrain) {
-    UI.showStatus(wantStory ? 'Generating Story battlefield…' : 'Loading skirmish battlefield…');
+  // Always rebuild when profile changes (or Story). Kit-kind equality used to skip
+  // this when both modes shared kind=story — VR menu then looked like "no map switch".
+  if (prevProfile !== nextProfile || wantStory) {
+    UI.showStatus(wantStory ? 'Generating Story battlefield…' : 'Restoring skirmish map…');
     await rebuildMoonBattlefield(sceneEl);
+  } else if (!wantStory) {
+    // Lobby already mounted crater moon (no props). Attach B0 rocks now that matchPreparing is set.
+    const groundEl = document.getElementById('ground');
+    if (groundEl) await ensureSkirmishSceneryProps(groundEl, sceneEl);
   }
   Renderer.configureBattlefieldShadows(sceneEl);
   Renderer.resizeWorldFogOverlay();
@@ -238,11 +238,7 @@ async function onStartGame(mode) {
   const prevProfile = MAP_PROFILE;
   const wantStory = mode === 'story';
   const nextProfile = wantStory ? 'story' : 'standard';
-  const groundEl = document.getElementById('ground');
-  const liveMesh = groundEl && typeof groundEl.getObject3D === 'function' ? groundEl.getObject3D('mesh') : null;
-  const liveKind = liveMesh && liveMesh.userData && liveMesh.userData.rtsKitKind;
-  const wantKind = wantStory ? 'story' : skirmishKitKind();
-  const needsRebuild = prevProfile !== nextProfile || liveKind !== wantKind;
+  const needsRebuild = prevProfile !== nextProfile || wantStory;
 
   UI.setMatchPreparing(
     true,
@@ -259,12 +255,9 @@ async function onStartGame(mode) {
   try {
     try {
       if (mode === 'story') {
+        UI.setMatchPreparingMessage('Rolling Story layout (bases, hills, ore)…');
+        await UI.nextPaint();
         applyMapProfile('story');
-        UI.setMatchPreparingMessage('Loading sci-fi kit battlefield…');
-        await UI.nextPaint();
-        await prepareMapForMode(mode, sceneEl, prevProfile);
-        UI.setMatchPreparingMessage('Rolling Story layout (bases, ore)…');
-        await UI.nextPaint();
         const forcedSeed = resolveStorySeed();
         storyLayout =
           forcedSeed != null ? generateStoryLayout(forcedSeed) : generateStoryLayout();
@@ -276,11 +269,18 @@ async function onStartGame(mode) {
             `mobile=${(storyLayout.mobileTypes || []).length}` +
             (forcedSeed != null ? ' (replay/forced)' : '')
         );
+        UI.setMatchPreparingMessage(
+          forcedSeed != null
+            ? `Building terrain for seed ${storyLayout.seed}…`
+            : 'Building Story hills mesh…'
+        );
+        await UI.nextPaint();
+        await prepareMapForMode(mode, sceneEl, prevProfile);
       } else {
         clearStoryBlockingHills();
         applyMapProfile('standard');
         if (needsRebuild) {
-        UI.setMatchPreparingMessage('Switching to skirmish map…');
+          UI.setMatchPreparingMessage('Switching to skirmish map…');
           await UI.nextPaint();
         }
         await prepareMapForMode(mode, sceneEl, prevProfile);
