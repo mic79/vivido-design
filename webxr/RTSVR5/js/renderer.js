@@ -1847,9 +1847,13 @@ function buildNavigableFogOverlayGeometry(THREE) {
 
 function setFogOverlayVisible(on) {
   if (fogOverlayMesh) fogOverlayMesh.visible = on;
-  // Opaque unexplored blackout hid the moon plate + Overview rocks on skirmish and
-  // filled most of the screen (fillrate cliff). Soft veil only — same as Story kit.
-  if (fogUnexploredMesh) fogUnexploredMesh.visible = false;
+  // Soft veil alone discards α>0.8, so unexplored never covers the moon — Story hills
+  // then shade the whole plate+skirt (fillrate cliff vs RTSVR4 ~120 FPS). Opaque FoW
+  // depth-writes first and z-rejects terrain (RTSVR4 behavior). Keep soft-only for kit
+  // so Overview/kit rocks are not blacked out.
+  if (fogUnexploredMesh) {
+    fogUnexploredMesh.visible = !!(on && MAP_TERRAIN_STYLE !== 'kit');
+  }
 }
 
 function disposeFogOverlayMeshes() {
