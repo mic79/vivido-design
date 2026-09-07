@@ -25,6 +25,7 @@ const BUCKETS = [
   'render.projectiles',
   'render.fogOverlay',
   'render.misc',
+  'render.sig',
   'render',
   'effects',
   // UI breakdown

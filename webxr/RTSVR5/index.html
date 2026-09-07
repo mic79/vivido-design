@@ -6,7 +6,7 @@
   <title>RTS VR V — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.5.0">
+  <meta name="rts-version" content="0.5.26">
 
   <script type="importmap">
   {
@@ -23,7 +23,18 @@
 </head>
 <body>
   <script>
+    // Flat ground: disables the fictitious horizon sag in moon-environment.js. Only the
+    // procedural fallback terrain uses it — the kit GLB plate is flat on its own — so this
+    // shows up when no terrain GLB mounts.
+    window.RTS_MOON_CURVATURE_RADIUS = 0;
+
     window.__rtsMsaa4x = (function () {
+      var q = (location.search || '') + (location.hash || '');
+      if (/[?&#]msaa=1\b/i.test(q)) return true;
+      if (/[?&#]msaa=0\b/i.test(q)) return false;
+      // Do NOT auto-enable MSAA for ?leanrocks=1. Rocks GPU time is low (~1 ms), but on
+      // PCVR/VD the frame cadence follows kit residency, not spare GPU — forced MSAA just
+      // fights the user's OFF toggle and never bought sustained 90 Hz.
       try {
         var v = localStorage.getItem('rtsvr5-msaa4x');
         if (v === '1' || v === 'on' || v === 'true') return true;

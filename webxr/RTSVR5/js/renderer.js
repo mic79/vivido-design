@@ -10,6 +10,7 @@ import {
   getResourceFieldPositions, BUILD_RADIUS_FROM_HQ, BARRACKS_UNITS,
   MAP_NAV_PLANE_SPAN_M, FOG_GRID_SIZE, MAP_UNIT_NAV_RADIUS,
   FOG_OVERLAY_REDRAW_HZ, MAP_TERRAIN_STYLE,
+  skirmishKitKind,
 } from './config.js';
 import * as State from './state.js';
 import * as Fog from './fog.js';
@@ -195,6 +196,28 @@ let _msaa4xOn = readMsaa4xPref();
 
 function readMsaa4xPref() {
   try {
+    const q = typeof location !== 'undefined' ? `${location.search || ''}${location.hash || ''}` : '';
+    if (/(?:[?&#]msaa=1\b)/i.test(q)) return true;
+    if (/(?:[?&#]msaa=0\b)/i.test(q)) return false;
+
+    const plat = typeof navigator !== 'undefined' ? navigator.platform || '' : '';
+    const desktop = /Win32|Win64|MacIntel|Linux x86_64|Linux i686/i.test(plat);
+    // Desktop PCVR / IWE: sticky localStorage MSAA4x drops intro ~87→~37 (measured).
+    // Ignore stored "on" unless this tab explicitly enabled it (session flag) or ?msaa=1.
+    if (desktop) {
+      // Session-only: honor an explicit in-tab MSAA toggle after reload. Never force
+      // MSAA on for the rocks kit — spare GPU ms does not buy PCVR/VD cadence.
+      try {
+        if (sessionStorage.getItem('rtsvr5-msaa4x-session') === '1') {
+          const v = localStorage.getItem(MSAA4X_PREF_KEY);
+          return v === '1' || v === 'on' || v === 'true';
+        }
+      } catch (_) {
+        /* */
+      }
+      return false;
+    }
+
     const v = localStorage.getItem(MSAA4X_PREF_KEY);
     if (v === '0' || v === 'off' || v === 'false') return false;
     if (v === '1' || v === 'on' || v === 'true') return true;
@@ -203,6 +226,37 @@ function readMsaa4xPref() {
   }
   if (typeof window !== 'undefined' && window.__rtsMsaa4x === true) return true;
   return false;
+}
+
+function desktopXrFramebufferScale() {
+  const plat = typeof navigator !== 'undefined' ? navigator.platform || '' : '';
+  const desktop = /Win32|Win64|MacIntel|Linux x86_64|Linux i686/i.test(plat);
+  // 0.5.21 pushed the rocks kit to scale 1 to spend its GPU headroom (0.93 ms/frame
+  // against the full kit's 3.57 ms). That was 1.78x the pixels for nothing: it bought no
+  // frame rate — the PCVR cadence is not workload-driven — so the rocks path is back on
+  // the same 0.75 buffer as every other kit.
+  const scaleBase = desktop ? 0.75 : 1;
+  let scale = scaleBase;
+  try {
+    const q = typeof location !== 'undefined' ? `${location.search || ''}${location.hash || ''}` : '';
+    const m = /[?&#]xrscale=([\d.]+)/.exec(q);
+    if (m) {
+      // Above 1 measured identical GPU cost to 1.0 — the runtime clamps to its
+      // recommended size, so supersampling is not available through this knob.
+      const v = parseFloat(m[1]);
+      if (Number.isFinite(v)) scale = Math.max(0.4, Math.min(1, v));
+    }
+  } catch (_) {
+    /* */
+  }
+  return scale;
+}
+
+function applyDesktopXrFramebufferScale(renderer, reason) {
+  if (!renderer || !renderer.xr || typeof renderer.xr.setFramebufferScaleFactor !== 'function') return;
+  const scale = desktopXrFramebufferScale();
+  renderer.xr.setFramebufferScaleFactor(scale);
+  console.log('[RTSVR5] XR framebuffer scale', scale, reason || '');
 }
 
 // Projectile pool
@@ -218,21 +272,9 @@ export async function initRenderer(sceneEl) {
   }
   // Desktop PCVR / Immersive Web Emulator: native headset buffers * 2 eyes is why
   // "any module on screen" falls to ~36 FPS. Quest standalone stays 1. Must run
-  // before the XR session starts.
+  // before the XR session starts — and again on enter-vr (runtimes reset it).
   try {
-    const plat = typeof navigator !== 'undefined' ? navigator.platform || '' : '';
-    const desktop = /Win32|Win64|MacIntel|Linux x86_64|Linux i686/i.test(plat);
-    let scale = desktop ? 0.75 : 1;
-    const q = typeof location !== 'undefined' ? `${location.search || ''}${location.hash || ''}` : '';
-    const m = /[?&#]xrscale=([\d.]+)/.exec(q);
-    if (m) {
-      const v = parseFloat(m[1]);
-      if (Number.isFinite(v)) scale = Math.max(0.4, Math.min(1, v));
-    }
-    if (renderer && renderer.xr && typeof renderer.xr.setFramebufferScaleFactor === 'function' && scale < 0.999) {
-      renderer.xr.setFramebufferScaleFactor(scale);
-      console.log('[RTSVR5] XR framebuffer scale', scale, desktop ? '(desktop PCVR)' : '');
-    }
+    applyDesktopXrFramebufferScale(renderer, '(init)');
   } catch (_) {
     /* ignore */
   }
@@ -251,9 +293,27 @@ export async function initRenderer(sceneEl) {
   installRenderGate(sceneEl);
   if (sceneEl && !sceneEl.__rtsXrShadowBound) {
     sceneEl.__rtsXrShadowBound = true;
-    const syncXrShadows = () => applyDynamicShadowGpuState();
-    sceneEl.addEventListener('enter-vr', syncXrShadows);
-    sceneEl.addEventListener('exit-vr', syncXrShadows);
+    const syncXrPresent = () => {
+      applyDynamicShadowGpuState();
+      try {
+        applyDesktopXrFramebufferScale(sceneEl.renderer, '(enter-vr)');
+      } catch (_) {
+        /* */
+      }
+      try {
+        const gl = sceneEl.renderer && sceneEl.renderer.getContext && sceneEl.renderer.getContext();
+        const attrs = gl && gl.getContextAttributes && gl.getContextAttributes();
+        if (attrs && attrs.antialias && skirmishKitKind() !== 'rocks') {
+          console.warn(
+            '[RTSVR5] WebGL antialias/MSAA is ON during XR — intro/match will tank. Reload with MSAA off (?msaa=0).'
+          );
+        }
+      } catch (_) {
+        /* */
+      }
+    };
+    sceneEl.addEventListener('enter-vr', syncXrPresent);
+    sceneEl.addEventListener('exit-vr', syncXrPresent);
   }
 
   console.log('✅ Renderer initialized with InstancedMesh');
@@ -317,6 +377,12 @@ export function setMsaa4xEnabled(on) {
   _msaa4xOn = !!on;
   try {
     localStorage.setItem(MSAA4X_PREF_KEY, _msaa4xOn ? '1' : '0');
+  } catch (_) {
+    /* ignore */
+  }
+  try {
+    if (_msaa4xOn) sessionStorage.setItem('rtsvr5-msaa4x-session', '1');
+    else sessionStorage.removeItem('rtsvr5-msaa4x-session');
   } catch (_) {
     /* ignore */
   }
@@ -2248,7 +2314,9 @@ function shadowCasterHash() {
 }
 
 function syncShadowMapFromCasters() {
-  if (!_dynamicShadowsOn) {
+  // XR gets no dynamic shadows (see applyDynamicShadowGpuState). Without the same guard
+  // here, this per-frame sync re-enabled shadowMap one frame after enter-vr re-applied it.
+  if (!_dynamicShadowsOn || xrIsPresenting()) {
     syncShadowMapAutoUpdate(false);
     const sceneEl = sceneElRenderer();
     const sm = sceneEl && sceneEl.renderer && sceneEl.renderer.shadowMap;
@@ -2380,7 +2448,10 @@ export function updateRendering() {
     const camKey = readPausedCamKey();
     const camMoved = !_liveReady || camKey !== _liveCamKey;
     if (camMoved) refreshCameraFrustum();
-    const vis = onScreenVisualSig();
+    let vis = null;
+    Perf.time('render.sig', () => {
+      vis = onScreenVisualSig();
+    });
     const canSkip =
       _liveReady &&
       _frustumLive &&

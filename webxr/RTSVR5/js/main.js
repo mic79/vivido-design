@@ -22,6 +22,7 @@ import {
   FACTORY_UNITS,
   getMatchStartSpawnForPlayer,
   applyMapProfile,
+  skirmishKitKind,
   MAP_PROFILE,
   MAP_UNIT_NAV_RADIUS,
 } from './config.js';
@@ -193,9 +194,8 @@ async function prepareMapForMode(mode, sceneEl, prevProfile) {
   const groundEl = document.getElementById('ground');
   const live = groundEl && typeof groundEl.getObject3D === 'function' ? groundEl.getObject3D('mesh') : null;
   const liveKind = live && live.userData && live.userData.rtsKitKind;
-  // Skirmish and Story share the same story kit — only rebuild if it isn't loaded yet.
-  // Fog grid size may still change with profile; resize overlay after.
-  const needsTerrain = liveKind !== 'story';
+  const wantKind = wantStory ? 'story' : skirmishKitKind();
+  const needsTerrain = liveKind !== wantKind;
 
   if (needsTerrain) {
     UI.showStatus(wantStory ? 'Generating Story battlefield…' : 'Loading skirmish battlefield…');
@@ -241,7 +241,7 @@ async function onStartGame(mode) {
   const groundEl = document.getElementById('ground');
   const liveMesh = groundEl && typeof groundEl.getObject3D === 'function' ? groundEl.getObject3D('mesh') : null;
   const liveKind = liveMesh && liveMesh.userData && liveMesh.userData.rtsKitKind;
-  const wantKind = 'story';
+  const wantKind = wantStory ? 'story' : skirmishKitKind();
   const needsRebuild = prevProfile !== nextProfile || liveKind !== wantKind;
 
   UI.setMatchPreparing(

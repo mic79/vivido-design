@@ -1109,6 +1109,27 @@ export function jumpCameraTo(x, z) {
   cameraRig.z = camClamp.z;
 }
 
+/**
+ * Measurement hook (pose benches only) — read the live rig, or place it exactly.
+ * Perf claims from a single spawn pose have hidden view-dependent cliffs before.
+ * @param {{x?:number,y?:number,z?:number,rotY?:number}} [pose]
+ */
+export function cameraRigPose(pose) {
+  if (pose) {
+    if (Number.isFinite(pose.x)) cameraRig.x = pose.x;
+    if (Number.isFinite(pose.y)) cameraRig.y = pose.y;
+    if (Number.isFinite(pose.z)) cameraRig.z = pose.z;
+    if (Number.isFinite(pose.rotY)) cameraRig.rotY = pose.rotY;
+    applyCameraRigIfChanged();
+    syncFlatScreenCameraPitch();
+  }
+  return { x: cameraRig.x, y: cameraRig.y, z: cameraRig.z, rotY: cameraRig.rotY };
+}
+
+if (typeof window !== 'undefined') {
+  window.__rtsCameraRigPose = cameraRigPose;
+}
+
 /** RTS camera above a player's base corner, yaw toward map center (matches W forward = −sin(rotY), −cos(rotY)). */
 export function positionCameraForPlayer(playerId) {
   const p = State.players[playerId];
@@ -1123,11 +1144,11 @@ export function positionCameraForPlayer(playerId) {
     kitKind === 'overview' &&
     typeof location !== 'undefined' &&
     /(?:[?&#]fullkit=1\b)/.test(`${location.search || ''}${location.hash || ''}`);
-  const inward = fullOverview ? 0.32 : kitKind === 'story' || kitKind === 'overview' ? 0.62 : 0.8;
-  const startCamBackM = fullOverview ? 12 : kitKind === 'story' || kitKind === 'overview' ? 28 : 50;
+  const inward = fullOverview ? 0.32 : kitKind === 'story' || kitKind === 'story-lean' || kitKind === 'overview' || kitKind === 'rocks' ? 0.62 : 0.8;
+  const startCamBackM = fullOverview ? 12 : kitKind === 'story' || kitKind === 'story-lean' || kitKind === 'overview' || kitKind === 'rocks' ? 28 : 50;
   const bx = spawn.x * inward;
   const bz = spawn.z * inward;
-  cameraRig.y = fullOverview ? 68 : kitKind === 'story' || kitKind === 'overview' ? 42 : 36;
+  cameraRig.y = fullOverview ? 68 : kitKind === 'story' || kitKind === 'story-lean' || kitKind === 'overview' || kitKind === 'rocks' ? 42 : 36;
   if (Math.hypot(bx, bz) > 0.01) {
     cameraRig.rotY = Math.atan2(bx, bz);
   } else {

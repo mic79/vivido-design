@@ -7,9 +7,9 @@
  * green → yellow → red; **≥45°** solid red. Uses mesh geometric normals (not the tiled normal map).
  */
 
-import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, isStoryMapProfile } from './config.js';
+import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual } from './config.js';
 import { bakedMoonAllowed, tryLoadBakedSkirmishMoon } from './baked-moon.js';
-import { tryLoadStoryKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState } from './story-kit-terrain.js';
+import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
 
 /** Central plate edge length (m) — follows live `MAP_SIZE` (standard 200 / Story 400). */
 function mapPlateM() {
@@ -2168,17 +2168,49 @@ function disposeGroundObject(root, keepMat) {
   if (typeof resetKitLodState === 'function') resetKitLodState(root);
   const extra = root.userData && root.userData.rtsLod0Root;
   disposeHorizonSkirtUnder(root);
+  const mats = new Set();
+  const geos = new Set();
   root.traverse((obj) => {
-    if (obj.geometry) obj.geometry.dispose();
-    const mats = obj.material == null ? [] : Array.isArray(obj.material) ? obj.material : [obj.material];
-    for (const mat of mats) {
-      if (mat && mat !== keepMat) disposeMaterial(mat);
+    if (obj.geometry) geos.add(obj.geometry);
+    const list = obj.material == null ? [] : Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] && list[i] !== keepMat) mats.add(list[i]);
     }
+    obj.geometry = null;
+    obj.material = null;
   });
   if (extra && extra !== root) {
     extra.traverse((obj) => {
-      if (obj.geometry) obj.geometry.dispose();
+      if (obj.geometry) geos.add(obj.geometry);
+      obj.geometry = null;
     });
+  }
+  for (const geo of geos) {
+    if (geo && geo.dispose) geo.dispose();
+  }
+  for (const mat of mats) disposeMaterial(mat);
+}
+
+/**
+ * Drop previous kit from the scene and free GPU before loading another.
+ * Loading first then disposing peaked at old+new VRAM and locked full-kit remount ~40 FPS in XR.
+ */
+function purgeKitFromGround(groundEl, sceneEl) {
+  if (!groundEl) return;
+  const prev = groundEl.getObject3D('mesh');
+  if (!prev) return;
+  groundEl.removeObject3D('mesh');
+  disposeGroundObject(prev);
+  parkedKit = null;
+  resetKitLodState();
+  bakedMoonRoot = null;
+  horizonSkirtAttached = false;
+  try {
+    const r = sceneEl && sceneEl.renderer;
+    if (r && r.renderLists && typeof r.renderLists.dispose === 'function') r.renderLists.dispose();
+    if (r && r.info && r.info.reset) r.info.reset();
+  } catch (_) {
+    /* */
   }
 }
 
@@ -2299,22 +2331,66 @@ async function attachOverviewGroundscapeProps(groundEl, sceneEl) {
   return true;
 }
 
+function applyLeanLookIfNeeded(kitRoot) {
+  // Desktop ?leanrocks=1 and ?leanlook=1 both land here: full kit + depth occluders.
+  // Explicit ?rocksfile= / ?leanrocksFile=1 still mounts the rocks GLB instead.
+  if (!kitRoot || !leanRocksStoryLeanRequested()) return;
+  if (kitKindOf(kitRoot) !== 'story') return;
+  if (kitRoot.userData && kitRoot.userData.rtsLeanRocksVisual) return;
+  applyLeanRocksHideBuildings(kitRoot);
+}
+
 async function mountKitTerrain(groundEl, prev, sceneEl, kind) {
   clearOverviewGroundscapeProps(groundEl);
   const prevKind = kitKindOf(prev);
-  if (prevKind === kind) {
+  const wantLean = leanRocksStoryLeanRequested() && kind === 'story';
+  const hadLean = !!(prev && prev.userData && prev.userData.rtsLeanRocksVisual);
+  // Same file kind but lean visual flipped → remount when leaving lean (mats mutated),
+  // or just apply depth occluders when entering lean on an already-loaded story kit.
+  if (prevKind === kind && wantLean === hadLean) {
     bakedMoonRoot = prev;
     configureTerrainPresentation(sceneEl);
     syncTerrainGridHelperSize();
-    if (kind === 'overview' || kind === 'story') await dressKitGroundPlateWithMoon(prev, sceneEl);
-    console.log('[RTSVR5] kit terrain (already loaded)', kind);
+    if (kind === 'overview' || kind === 'story' || kind === 'rocks') {
+      await dressKitGroundPlateWithMoon(prev, sceneEl);
+    }
+    console.log('[RTSVR5] kit terrain (already loaded)', kind, { lean: hadLean });
     return true;
+  }
+  if (prevKind === kind && wantLean && !hadLean) {
+    bakedMoonRoot = prev;
+    await dressKitGroundPlateWithMoon(prev, sceneEl);
+    applyLeanLookIfNeeded(prev);
+    configureTerrainPresentation(sceneEl);
+    syncTerrainGridHelperSize();
+    console.log('[RTSVR5] kit terrain lean applied in-place', kind);
+    return true;
+  }
+
+  // Purge OLD kit GPU before parsing/uploading the next (never peak at both resident).
+  if (prev) {
+    purgeKitFromGround(groundEl, sceneEl);
+    // Give the driver a couple of frames to reclaim before the next GLB upload.
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    try {
+      const r = sceneEl && sceneEl.renderer;
+      const gl = r && r.getContext && r.getContext();
+      if (gl && gl.finish) gl.finish();
+      if (r && typeof r.render === 'function' && sceneEl.object3D && sceneEl.camera) {
+        r.render(sceneEl.object3D, sceneEl.camera);
+      }
+    } catch (_) {
+      /* */
+    }
+    await new Promise((r) => setTimeout(r, 250));
   }
 
   horizonSkirtAttached = false;
   let kitRoot = null;
   if (kind === 'story') {
     kitRoot = await tryLoadStoryKit();
+  } else if (kind === 'rocks') {
+    kitRoot = await tryLoadRocksKit();
   } else {
     kitRoot = await tryLoadOverviewKit();
   }
@@ -2327,12 +2403,17 @@ async function mountKitTerrain(groundEl, prev, sceneEl, kind) {
   await adoptKitHeightField(kitRoot);
   groundEl.setObject3D('mesh', kitRoot);
   kitRoot.visible = true;
-  if (prev && prev !== kitRoot) disposeGroundObject(prev);
-  // Moon albedo under Story/Overview kits — black Lambert plate reads as a void.
+  bakedMoonRoot = kitRoot;
   await dressKitGroundPlateWithMoon(kitRoot, sceneEl);
+  applyLeanLookIfNeeded(kitRoot);
   configureTerrainPresentation(sceneEl);
   syncTerrainGridHelperSize();
-  console.log('[RTSVR5] kit terrain', { kind, restored: false });
+  console.log('[RTSVR5] kit terrain', {
+    kind,
+    lean: !!(kitRoot.userData && kitRoot.userData.rtsLeanRocksVisual),
+    restored: false,
+    purgedPrev: !!prev,
+  });
   return true;
 }
 
@@ -2346,9 +2427,10 @@ export async function dressKitGroundPlateWithMoon(kitRoot, sceneEl) {
     if (o.isMesh && (o.name === 'rts-kit-ground' || o.userData?.rtsMoonPlate)) plate = o;
   });
   if (!plate) return;
+  const kind = kitRoot.userData && kitRoot.userData.rtsKitKind;
+  // Same full triplanar moon + horizon skirt for story, leanrocks, and rocks-file A/B.
   await applyBattleMoon(THREE, sceneEl, plate);
-  // Keep plate flat — skirt OK, no planet sag on this mesh (it's already a plane).
-  console.log('[RTSVR5] kit ground plate dressed with moon textures');
+  console.log('[RTSVR5] kit ground plate dressed with moon textures', { kind });
 }
 
 function mountLobbyKitPlate(groundEl, sceneEl) {
@@ -2380,7 +2462,34 @@ function mountLobbyKitPlate(groundEl, sceneEl) {
   return true;
 }
 
+/**
+ * `?noterrain=1` — stop drawing the ground entirely (kit plate, horizon skirt, procedural
+ * mesh, whichever mounted). Perf ablation only: height sampling, pathfinding and unit
+ * placement all still read the terrain data, so only the draw goes away.
+ */
+function applyNoTerrainIfRequested() {
+  let want = false;
+  try {
+    want = typeof location !== 'undefined' && /(?:^|[?&#])noterrain=1(?:&|$)/i.test(location.search || '');
+  } catch (_) {
+    return;
+  }
+  if (!want) return;
+  const groundEl = document.getElementById('ground');
+  const mesh = groundEl && groundEl.getObject3D && groundEl.getObject3D('mesh');
+  if (!mesh) return;
+  // Hiding the root is enough: three skips invisible subtrees, so per-child LOD flags
+  // cannot bring any of it back.
+  mesh.visible = false;
+  console.log('[RTSVR5] noterrain: ground hidden');
+}
+
 export async function applyMoonBattlefieldVisuals(sceneEl) {
+  await applyMoonBattlefieldVisualsInner(sceneEl);
+  applyNoTerrainIfRequested();
+}
+
+async function applyMoonBattlefieldVisualsInner(sceneEl) {
   const THREE = window.THREE;
   if (!THREE || !sceneEl) return;
 
@@ -2394,7 +2503,8 @@ export async function applyMoonBattlefieldVisuals(sceneEl) {
   if (MAP_TERRAIN_STYLE === 'kit') {
     const prev = groundEl.getObject3D('mesh');
     if (prev && prev.userData && prev.userData.rtsKitKind) {
-      const ok = await mountKitTerrain(groundEl, prev, sceneEl, 'story');
+      const kind = isStoryMapProfile() ? 'story' : skirmishKitKind();
+      const ok = await mountKitTerrain(groundEl, prev, sceneEl, kind);
       if (ok) {
         styleMoonGrid();
         const gridMount = document.getElementById('gridHelper');
@@ -2466,6 +2576,11 @@ export async function applyMoonBattlefieldVisuals(sceneEl) {
  * Skirmish moon bake may still park across a Story visit (smaller footprint).
  */
 export async function rebuildMoonBattlefield(sceneEl) {
+  await rebuildMoonBattlefieldInner(sceneEl);
+  applyNoTerrainIfRequested();
+}
+
+async function rebuildMoonBattlefieldInner(sceneEl) {
   const THREE = window.THREE;
   if (!THREE || !sceneEl) return;
 
@@ -2477,10 +2592,11 @@ export async function rebuildMoonBattlefield(sceneEl) {
   const prevIsKit = !!(prev && prev.userData && prev.userData.rtsStoryKit);
 
   if (MAP_TERRAIN_STYLE === 'kit') {
-    // Skirmish and Story share the same modular sci-fi kit (Story-proven look + FPS).
-    const ok = await mountKitTerrain(groundEl, prev, sceneEl, 'story');
+    // Story: full kit. Desktop ?leanrocks=1 → full kit + lean look. Quest / rocksfile → rocks GLB.
+    const kind = isStoryMapProfile() ? 'story' : skirmishKitKind();
+    const ok = await mountKitTerrain(groundEl, prev, sceneEl, kind);
     if (ok) return;
-    console.warn('[RTSVR5] kit terrain failed to load', 'story');
+    console.warn('[RTSVR5] kit terrain failed to load', kind);
   }
 
   // Leaving kit → skirmish: free Story GPU memory immediately.
@@ -2556,4 +2672,40 @@ export async function rebuildMoonBattlefield(sceneEl) {
   configureTerrainPresentation(sceneEl);
   syncTerrainGridHelperSize();
   await attachOverviewGroundscapeProps(groundEl, sceneEl);
+}
+
+/**
+ * Hot-swap skirmish scenery without leaving the page / XR session.
+ * @param {'story'|'story-lean'|'rocks'} kind
+ *   - story: full shaded kit
+ *   - story-lean: full kit + building depth occluders (A/B only)
+ *   - rocks: rocks GLB + baked depth occluders (product `?leanrocks=1`)
+ */
+export async function swapSkirmishKit(kind) {
+  if (kind !== 'story' && kind !== 'story-lean' && kind !== 'rocks') {
+    throw new Error(`swapSkirmishKit: bad kind ${kind}`);
+  }
+  forceLeanRocksVisual(kind === 'story-lean');
+  forceSkirmishKitKind(kind === 'rocks' ? 'rocks' : 'story');
+  const sceneEl = document.querySelector('a-scene');
+  if (!sceneEl) throw new Error('swapSkirmishKit: no a-scene');
+  const groundEl = document.getElementById('ground');
+  await rebuildMoonBattlefield(sceneEl);
+  const live = groundEl && groundEl.getObject3D && groundEl.getObject3D('mesh');
+  const got = live && live.userData && live.userData.rtsKitKind;
+  const gotLean = !!(live && live.userData && live.userData.rtsLeanRocksVisual);
+  const ok =
+    kind === 'rocks'
+      ? got === 'rocks'
+      : kind === 'story-lean'
+        ? got === 'story' && gotLean
+        : got === 'story' && !gotLean;
+  console.log('[RTSVR5] swapSkirmishKit done', { want: kind, got, lean: gotLean, ok });
+  return ok;
+}
+
+if (typeof window !== 'undefined') {
+  window.__rtsSwapSkirmishKit = swapSkirmishKit;
+  window.__rtsForceSkirmishKitKind = forceSkirmishKitKind;
+  window.__rtsForceLeanRocksVisual = forceLeanRocksVisual;
 }

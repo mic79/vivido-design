@@ -4,25 +4,71 @@
  */
 import { MAP_SIZE, MAP_UNIT_NAV_RADIUS } from './config.js';
 import { ensureThreeGltfLoaders } from './three-gltf-umd.js';
+import * as State from './state.js';
 
 export const STORY_KIT_GLB = 'assets/terrain/scifi-rts-overview.glb';
 export const STORY_KIT_LOD2_GLB = 'assets/terrain/scifi-rts-kit-lod2.glb';
 export const STORY_KIT_LOD0_GLB = 'assets/terrain/scifi-rts-kit-lod0.glb';
+/**
+ * Quest standalone base scenery: UE Story kit LOD2 → Draco + KTX2 (ETC1S color,
+ * UASTC normals). Built by `scripts/compress-rts-quest.mjs`. Desktop keeps JPEG LOD2.
+ */
+export const STORY_KIT_QUEST_GLB = 'assets/terrain/scifi-rts-quest.glb';
+/** Skirmish lean A/B: UE rocks/cliffs/dirt only (`export_rts_rocks_glb.py`). */
+export const STORY_ROCKS_GLB = 'assets/terrain/scifi-rts-rocks.glb';
+/** `?rocksx2=1` — same rocks plus a 90°-rotated deep copy: 2430 rocks, 40 textures. */
+export const STORY_ROCKS_X2_GLB = 'assets/terrain/scifi-rts-rocks-x2.glb';
 export const OVERVIEW_KIT_GLB = 'assets/terrain/scifi-overview-lods.glb';
 export const OVERVIEW_KIT_QUEST_GLB = 'assets/terrain/scifi-overview-lods-quest.glb';
 /** Skirmish dirt+rocks (~1.3MB float rebake). Full catalog is `?fullkit=1` only. */
 export const OVERVIEW_ROCKS_GLB = 'assets/terrain/scifi-overview-rocks.glb';
 export const OVERVIEW_GROUNDSCAPE_GLB = 'assets/terrain/scifi-overview-groundscape.glb';
 const MIN_BYTES = 8_000_000;
+/** Quest encode can land under the desktop LOD2 size; still a real kit. */
+const MIN_QUEST_KIT_BYTES = 2_000_000;
 const MIN_OVERVIEW_BYTES = 400_000;
 const MIN_ROCKS_BYTES = 100_000;
+const MIN_STORY_ROCKS_BYTES = 1_000_000;
 /** Switch to LOD0 when closer than this × mesh radius (clamped). */
 const LOD_NEAR_RADIUS_MUL = 6.5;
 const LOD_NEAR_MIN = 52;
 const LOD_NEAR_MAX = 240;
 const LOD_FAR_MUL = 1.5;
 
+let _maxAnisotropy = 0;
+
+/**
+ * Kit GLB textures ship at the Three default anisotropy of 1, which smears ground and
+ * cliff detail at the grazing angles an RTS camera spends most of its time at. Costs
+ * texture-fetch bandwidth only — no extra draws or triangles.
+ */
+function applyKitTextureAnisotropy(mat) {
+  if (!_maxAnisotropy) {
+    try {
+      const sceneEl = document.querySelector('a-scene');
+      const caps = sceneEl && sceneEl.renderer && sceneEl.renderer.capabilities;
+      _maxAnisotropy = caps && caps.getMaxAnisotropy ? caps.getMaxAnisotropy() : 1;
+    } catch (_) {
+      _maxAnisotropy = 1;
+    }
+  }
+  const aniso = Math.min(16, _maxAnisotropy || 1);
+  if (aniso <= 1) return;
+  for (const slot of ['map', 'normalMap', 'roughnessMap', 'aoMap', 'emissiveMap']) {
+    const tex = mat[slot];
+    if (tex && tex.anisotropy !== aniso) {
+      tex.anisotropy = aniso;
+      tex.needsUpdate = true;
+    }
+  }
+}
+
 let glbBufCache = null;
+/** Which Story kit URL `glbBufCache` holds (desktop LOD2 vs Quest KTX2). */
+let glbBufUrl = null;
+let rocksBufCache = null;
+/** Which rocks GLB `rocksBufCache` holds, so `?rocksx2=1` does not reuse the 1x buffer. */
+let rocksBufUrl = null;
 let overviewBufCache = null;
 /** Mirrors whether `overviewBufCache` is the full catalog or rocks-only. */
 let overviewBufIsFull = null;
@@ -36,16 +82,21 @@ function isDesktopOs() {
   return /Win32|Win64|MacIntel|Linux x86_64|Linux i686/i.test(plat);
 }
 
-function wantQuestOverview() {
+/** Quest / Oculus Browser asset path (`?quest=1` forces; `?noquest=1` blocks). */
+function wantQuestAssets() {
   if (typeof location === 'undefined') return false;
   const q = `${location.search || ''}${location.hash || ''}`;
   if (/(?:[?&#]noquest=1\b)/.test(q)) return false;
   if (/(?:[?&#]quest=1\b)/.test(q)) return true;
-  // Desktop (including Immersive Web Emulator spoofing Quest UA) — PNG/desktop
-  // GLB has fewer unique draws than the Quest KTX2 split. Real Quest is Android.
+  // Desktop (including Immersive Web Emulator spoofing Quest UA) — JPEG/desktop
+  // GLB is the PCVR path. Real Quest is Android.
   if (isDesktopOs()) return false;
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   return /Quest|OculusBrowser|\bOculus\b/i.test(ua);
+}
+
+function wantQuestOverview() {
+  return wantQuestAssets();
 }
 
 function sceneRenderer() {
@@ -145,6 +196,35 @@ function findGltfScene(gltf, name) {
 }
 
 /**
+ * Original modular map sat on a water sheet (`SM_WaterPlane*`). That Y is the
+ * true "ground" the props were authored against — dirt mins sit ~1–2 m above it.
+ * @returns {number|null} world-space top of water (median), or null if absent
+ */
+function sampleWaterSurfaceY(scene, W) {
+  const ys = [];
+  scene.updateMatrixWorld(true);
+  scene.traverse((obj) => {
+    if (!obj.isMesh && !obj.isSkinnedMesh) return;
+    if (!/WaterPlane/i.test(meshName(obj))) return;
+    // Measure even if already hidden — geometry is still present for Story.
+    const prev = obj.visible;
+    obj.visible = true;
+    const box = new W.Box3().setFromObject(obj);
+    obj.visible = prev;
+    if (!box.isEmpty()) ys.push(box.max.y);
+  });
+  if (!ys.length) return null;
+  ys.sort((a, b) => a - b);
+  return ys[Math.floor((ys.length - 1) * 0.5)];
+}
+
+function dirtFloorYFromMins(dirtMins, fallbackMinY) {
+  if (!dirtMins.length) return fallbackMinY;
+  dirtMins.sort((a, b) => a - b);
+  return dirtMins[Math.max(0, Math.floor(dirtMins.length * 0.1))];
+}
+
+/**
  * @param {object} gltf
  * @param {{ kind: string, skipIndoor?: boolean, clipRadius?: number, hideScale?: number, bytes?: number, keepNameRe?: RegExp|null, noPlate?: boolean, targetSpanM?: number, skipDistanceLod?: boolean }} opts
  */
@@ -159,9 +239,8 @@ function assembleKitWrap(gltf, opts) {
   const targetSpanM = opts.targetSpanM > 0 ? opts.targetSpanM : 0;
 
   const scene = findGltfScene(gltf, 'LOD2') || gltf.scene;
-  // Overview is a 122 m diorama — keep LOD2 only. Holding the LOD0 scene doubled GPU memory
-  // and the distance swap never paired (0 LOD0 batches).
-  const lod0Root = kind === 'overview' ? null : findGltfScene(gltf, 'LOD0');
+  // Overview / rocks extracts are single-scene. Story may pair LOD0 for distance swap.
+  const lod0Root = kind === 'story' ? findGltfScene(gltf, 'LOD0') : null;
   scene.updateMatrixWorld(true);
   if (lod0Root) lod0Root.updateMatrixWorld(true);
   if (kind === 'overview') {
@@ -183,7 +262,7 @@ function assembleKitWrap(gltf, opts) {
   scene.traverse((obj) => {
     if (!obj.isMesh && !obj.isSkinnedMesh) return;
     const n = meshName(obj);
-    if (/WaterPlane|Skybox|Template_Map_Floor/i.test(n) || (skipIndoor && /Indoor/i.test(n))) {
+    if (/Water|Skybox|Template_Map_Floor/i.test(n) || (skipIndoor && /Indoor/i.test(n))) {
       obj.visible = false;
       dropList.push(obj);
       dropped++;
@@ -204,9 +283,13 @@ function assembleKitWrap(gltf, opts) {
     kept++;
   });
 
-  // Skirmish rocks-only: the Overview GLB still uploaded ~100 textures for hidden
-  // modules. That VRAM thrash is why 1v1 (few rocks) was slower than Story.
-  if (keepNameRe && dropList.length) {
+  // Need water surface Y before disposing WaterPlane geometry (rocks path).
+  const waterYEarly = kind === 'rocks' || keepNameRe ? sampleWaterSurfaceY(scene, W) : null;
+
+  // Dispose hidden meshes' GPU payloads. Rocks extract had water planes left
+  // resident (visible=false only) — same class of VRAM thrash as Overview strip.
+  // Story full kit keeps dropList geometry for waterY sampling / rare re-show.
+  if ((keepNameRe || kind === 'rocks') && dropList.length) {
     const keepMats = new Set();
     scene.traverse((obj) => {
       if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible) return;
@@ -240,10 +323,14 @@ function assembleKitWrap(gltf, opts) {
   }
 
   // --- Center / scale ---
+  // Vertical origin = original water surface when present (moon plate replaces water).
+  // Dirt-min percentile floats the kit ~1.6 m too high vs that sheet.
+  const waterY = waterYEarly != null ? waterYEarly : sampleWaterSurfaceY(scene, W);
   // Story: original mesh-AABB center on the scene root (pivot breaks LOD0 + layout).
   // Overview groundscape: actor-node center + pivot group (scale must not share the offset node).
   let cluster;
   let y0;
+  let y0Source = 'dirt';
   if (kind === 'overview' && (keepNameRe || targetSpanM > 0)) {
     const seeded = expandClusterFromActorNodes(scene, W);
     if (!seeded.any || seeded.cluster.isEmpty()) {
@@ -252,11 +339,8 @@ function assembleKitWrap(gltf, opts) {
     }
     cluster = seeded.cluster;
     const dirtMins = seeded.dirtMins;
-    dirtMins.sort((a, b) => a - b);
-    y0 =
-      dirtMins.length > 0
-        ? dirtMins[Math.max(0, Math.floor(dirtMins.length * 0.1))]
-        : cluster.min.y;
+    y0 = waterY != null ? waterY : dirtFloorYFromMins(dirtMins, cluster.min.y);
+    y0Source = waterY != null ? 'water' : 'dirt';
     const cxz = cluster.getCenter(new W.Vector3());
 
     if (clipRadius > 0) {
@@ -371,11 +455,8 @@ function assembleKitWrap(gltf, opts) {
       console.warn('[RTSVR5] skip kit: cluster empty', kind);
       return null;
     }
-    dirtMins.sort((a, b) => a - b);
-    y0 =
-      dirtMins.length > 0
-        ? dirtMins[Math.max(0, Math.floor(dirtMins.length * 0.1))]
-        : cluster.min.y;
+    y0 = waterY != null ? waterY : dirtFloorYFromMins(dirtMins, cluster.min.y);
+    y0Source = waterY != null ? 'water' : 'dirt';
     const cxz = cluster.getCenter(new W.Vector3());
     scene.position.set(-cxz.x, -y0, -cxz.z);
     scene.updateMatrixWorld(true);
@@ -405,7 +486,19 @@ function assembleKitWrap(gltf, opts) {
       for (const mat of mats) {
         if (!mat) continue;
         mat.fog = false;
-        if ('envMapIntensity' in mat) mat.envMapIntensity = kind === 'overview' ? 0.15 : 0.35;
+        // Rocks extract: glTF default metalness=1 made every cliff read as chrome, and
+        // dirt/rock are dielectric, so metalness stays 0. Environment lighting does NOT —
+        // it was zeroed chasing a frame cost that measured 0.93 ms GPU/frame against the
+        // full kit's 3.57 ms, i.e. the rocks path was never the expensive one.
+        if (kind === 'rocks') {
+          if ('metalness' in mat) mat.metalness = 0;
+          if ('metalnessMap' in mat) mat.metalnessMap = null;
+          if ('envMapIntensity' in mat) mat.envMapIntensity = 0.35;
+          applyKitTextureAnisotropy(mat);
+          mat.needsUpdate = true;
+        } else if ('envMapIntensity' in mat) {
+          mat.envMapIntensity = kind === 'overview' ? 0.15 : 0.35;
+        }
         if (kind === 'overview') {
           if ('metalness' in mat) mat.metalness = 0;
           if ('roughness' in mat) mat.roughness = Math.max(0.72, mat.roughness || 0);
@@ -431,13 +524,15 @@ function assembleKitWrap(gltf, opts) {
   });
 
   const wrap = new W.Group();
-  wrap.name = kind === 'overview' ? 'rts-overview-kit' : 'rts-story-kit';
+  wrap.name =
+    kind === 'overview' ? 'rts-overview-kit' : kind === 'rocks' ? 'rts-rocks-kit' : 'rts-story-kit';
   wrap.userData.rtsStoryKit = true;
   wrap.userData.rtsKitKind = kind;
   wrap.userData.rtsSkipIndoor = skipIndoor;
   if (opts.skipDistanceLod) wrap.userData.rtsSkipDistanceLod = true;
   if (lod0Root) wrap.userData.rtsLod0Root = lod0Root;
   wrap.add(scene);
+  applyTexturePadding(W, wrap);
 
   if (!noPlate) {
     const plate = new W.Mesh(
@@ -469,6 +564,8 @@ function assembleKitWrap(gltf, opts) {
     matsDisposed,
     spanXZ: [+span.x.toFixed(1), +span.z.toFixed(1)],
     groundY: +y0.toFixed(2),
+    y0Source,
+    waterY: waterY != null ? +waterY.toFixed(2) : null,
   });
   return wrap;
 }
@@ -489,7 +586,7 @@ function wantOverviewFullKit() {
   return /(?:[?&#]fullkit=1\b)/.test(q);
 }
 
-/** Opt-in empty rocks-only GLB (A/B). Default is Story kit — denser occludes HDR sky fill. */
+/** Opt-in Overview rocks-only GLB (A/B). Default Overview path is not this flag. */
 function wantOverviewRocksOnly() {
   if (typeof location === 'undefined') return false;
   const q = `${location.search || ''}${location.hash || ''}`;
@@ -497,27 +594,51 @@ function wantOverviewRocksOnly() {
 }
 
 async function ensureStoryKitBuffer() {
-  if (glbBufCache) return glbBufCache;
-  let res;
-  try {
-    res = await fetch(STORY_KIT_LOD2_GLB);
-    if (!res.ok) res = await fetch(STORY_KIT_GLB);
-  } catch {
-    return null;
+  const quest = wantQuestAssets();
+  const urls = quest
+    ? [STORY_KIT_QUEST_GLB, STORY_KIT_LOD2_GLB, STORY_KIT_GLB]
+    : [STORY_KIT_LOD2_GLB, STORY_KIT_GLB];
+  const wantUrl = urls[0];
+  if (glbBufCache && glbBufUrl === wantUrl) return glbBufCache;
+  if (glbBufCache && glbBufUrl !== wantUrl) {
+    glbBufCache = null;
+    glbBufUrl = null;
   }
-  if (!res.ok) return null;
-  const buf = await res.arrayBuffer();
-  if (buf.byteLength < MIN_BYTES) {
-    console.warn('[RTSVR5] skip story kit: file too small', buf.byteLength);
-    return null;
+
+  let buf = null;
+  let used = urls[0];
+  for (const url of urls) {
+    let res;
+    try {
+      res = await fetch(url);
+    } catch {
+      continue;
+    }
+    if (!res.ok) continue;
+    const next = await res.arrayBuffer();
+    const minBytes = url === STORY_KIT_QUEST_GLB ? MIN_QUEST_KIT_BYTES : MIN_BYTES;
+    if (next.byteLength < minBytes) {
+      console.warn('[RTSVR5] skip story kit: file too small', url, next.byteLength);
+      continue;
+    }
+    try {
+      parseGlbJson(next);
+    } catch (err) {
+      console.warn('[RTSVR5] skip story kit: bad GLB', url, err);
+      continue;
+    }
+    buf = next;
+    used = url;
+    break;
   }
-  try {
-    parseGlbJson(buf);
-  } catch (err) {
-    console.warn('[RTSVR5] skip story kit: bad GLB', err);
-    return null;
-  }
+  if (!buf) return null;
   glbBufCache = buf;
+  glbBufUrl = used;
+  console.log('[RTSVR5] story kit file', {
+    url: used,
+    bytes: buf.byteLength,
+    quest,
+  });
   return buf;
 }
 
@@ -537,6 +658,67 @@ export async function tryLoadStoryKit() {
     skipIndoor: true,
     clipRadius: 420,
     bytes: buf.byteLength,
+  });
+}
+
+/**
+ * Opt-in rocks-only GLB (`?leanrocks=1` → `scifi-rts-rocks.glb`) plus a tiny
+ * depth-occluder sidecar so stereo fill stays blocked without loading the full kit.
+ * @returns {Promise<import('three').Group|null>}
+ */
+export async function tryLoadRocksKit() {
+  const W = window.THREE;
+  if (!W) return null;
+
+  // `?rocksfile=NAME` picks any GLB in assets/terrain — used to sweep texture count
+  // (rocks 20 -> 64 -> 88 -> 103) against the PCVR frame cadence.
+  const url = (() => {
+    try {
+      const q = location.search || '';
+      const m = /(?:^|[?&#])rocksfile=([\w.-]+)/i.exec(q);
+      if (m) return `assets/terrain/${m[1].endsWith('.glb') ? m[1] : `${m[1]}.glb`}`;
+      if (/(?:^|[?&#])rocksx2=1(?:&|$)/i.test(q)) return STORY_ROCKS_X2_GLB;
+    } catch (_) {
+      /* no location */
+    }
+    return STORY_ROCKS_GLB;
+  })();
+  if (rocksBufCache && rocksBufUrl !== url) rocksBufCache = null;
+  rocksBufUrl = url;
+
+  if (!rocksBufCache) {
+    let res;
+    try {
+      res = await fetch(url);
+    } catch {
+      return null;
+    }
+    if (!res.ok) {
+      console.warn('[RTSVR5] skip rocks kit: missing', url);
+      return null;
+    }
+    const next = await res.arrayBuffer();
+    if (next.byteLength < MIN_STORY_ROCKS_BYTES) {
+      console.warn('[RTSVR5] skip rocks kit: file too small', next.byteLength);
+      return null;
+    }
+    try {
+      parseGlbJson(next);
+    } catch (err) {
+      console.warn('[RTSVR5] skip rocks kit: bad GLB', err);
+      return null;
+    }
+    rocksBufCache = next;
+    console.log('[RTSVR5] rocks kit file', { url, bytes: next.byteLength });
+  }
+
+  const gltf = await parseKitBuf(rocksBufCache);
+  return assembleKitWrap(gltf, {
+    kind: 'rocks',
+    skipIndoor: true,
+    clipRadius: 420,
+    skipDistanceLod: false,
+    bytes: rocksBufCache.byteLength,
   });
 }
 
@@ -773,12 +955,14 @@ async function loadLod0PrimsByNode(opts = {}) {
   return { byNode, gltf };
 }
 
-function makeInstanced(THREE, geo, mat, n, name, recv) {
+function makeInstanced(THREE, geo, mat, n, name, recv, opts) {
   const inst = new THREE.InstancedMesh(geo, mat, n);
   inst.name = name;
   inst.castShadow = false;
   inst.receiveShadow = !!recv;
-  inst.frustumCulled = false;
+  // Default false: map-spanning Story batches never frustum-skip, and native cull
+  // with bad spheres caused XR pop-out before. Rocks cells opt in explicitly.
+  inst.frustumCulled = !!(opts && opts.frustumCulled);
   inst.count = 0;
   inst.matrixAutoUpdate = false;
   try {
@@ -787,6 +971,42 @@ function makeInstanced(THREE, geo, mat, n, name, recv) {
     /* */
   }
   return inst;
+}
+
+/** World-ish AABB → InstancedMesh.boundingSphere so Three can skip off-screen cells. */
+function syncInstancedBoundsFromItems(THREE, inst, items) {
+  if (!inst || !items || !items.length) return;
+  if (!_kitBoundBox) _kitBoundBox = new THREE.Box3();
+  if (!inst.boundingSphere) inst.boundingSphere = new THREE.Sphere();
+  let minx = Infinity;
+  let miny = Infinity;
+  let minz = Infinity;
+  let maxx = -Infinity;
+  let maxy = -Infinity;
+  let maxz = -Infinity;
+  let any = false;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (!it.drawn) continue;
+    any = true;
+    if (it.minx < minx) minx = it.minx;
+    if (it.miny < miny) miny = it.miny;
+    if (it.minz < minz) minz = it.minz;
+    if (it.maxx > maxx) maxx = it.maxx;
+    if (it.maxy > maxy) maxy = it.maxy;
+    if (it.maxz > maxz) maxz = it.maxz;
+  }
+  if (!any) {
+    inst.boundingSphere.center.set(0, 0, 0);
+    inst.boundingSphere.radius = 0;
+    return;
+  }
+  _kitBoundBox.min.set(minx, miny, minz);
+  _kitBoundBox.max.set(maxx, maxy, maxz);
+  _kitBoundBox.getBoundingSphere(inst.boundingSphere);
+  // Pad for headset FOV / timewarp periphery without CPU eye-frustum math.
+  inst.boundingSphere.radius *= 1.12;
+  inst.frustumCulled = true;
 }
 
 function sphereFromObject(obj, tmpBox, tmpSize, tmpCenter) {
@@ -831,9 +1051,9 @@ function pushInstancedBatch(THREE, root, parentInv, local, batches, spec) {
   const tmpBox = new THREE.Box3();
   const tmpSize = new THREE.Vector3();
   const tmpCenter = new THREE.Vector3();
-  // Unique pieces stay as Mesh (cheaper than InstancedMesh n=1) but Three's
-  // frustumCulled uses the XR ArrayCamera parent — hide-in-view in VR.
-  // CPU-cull with the same eye frustums as instances.
+  // Unique pieces stay as Mesh (cheaper than InstancedMesh n=1).
+  // Keep frustumCulled=false on uniques — XR ArrayCamera + tight unique bounds caused
+  // on-screen pop-out before; InstancedMesh cells use native cull instead.
   if (n < 2 && !geo0) {
     for (let i = 0; i < n; i++) {
       const mesh = spec.meshes[i];
@@ -846,6 +1066,7 @@ function pushInstancedBatch(THREE, root, parentInv, local, batches, spec) {
         mesh,
         mesh0: null,
         mesh2: null,
+        label: spec.label || mesh.name || '',
         items: [{
           matrix: null,
           x: sph.x,
@@ -866,15 +1087,37 @@ function pushInstancedBatch(THREE, root, parentInv, local, batches, spec) {
     }
     return 0;
   }
+
+  // Same batching as Story. Spatial cells + native frustumCulled were rocks-only
+  // "optimizations" that diverge from the proven ~90 FPS path and hurt under XR ArrayCamera.
+  return pushInstancedBatchCell(
+    THREE,
+    root,
+    parentInv,
+    local,
+    batches,
+    spec,
+    spec.meshes,
+    tmpBox,
+    tmpSize,
+    tmpCenter,
+    false
+  );
+}
+
+function pushInstancedBatchCell(THREE, root, parentInv, local, batches, spec, cellMeshes, tmpBox, tmpSize, tmpCenter, useNativeCull) {
+  const n = cellMeshes.length;
+  if (n < 1) return 0;
+  const geo0 = spec.geo0;
   const geo2 = spec.geo2;
-  const boundGeo = geo0 || geo2;
-  if (boundGeo && boundGeo.computeBoundingSphere) boundGeo.computeBoundingSphere();
   if (geo2 && geo2.computeBoundingSphere) geo2.computeBoundingSphere();
-  const mesh2 = geo2 ? makeInstanced(THREE, geo2, spec.mat, n, `${spec.label}_lod2`, spec.recv) : null;
-  const mesh0 = geo0 ? makeInstanced(THREE, geo0, spec.mat, n, `${spec.label}_lod0`, spec.recv) : null;
+  if (geo0 && geo0.computeBoundingSphere) geo0.computeBoundingSphere();
+  const cullOpts = useNativeCull ? { frustumCulled: true } : null;
+  const mesh2 = geo2 ? makeInstanced(THREE, geo2, spec.mat, n, `${spec.label}_lod2`, spec.recv, cullOpts) : null;
+  const mesh0 = geo0 ? makeInstanced(THREE, geo0, spec.mat, n, `${spec.label}_lod0`, spec.recv, cullOpts) : null;
   const items = [];
   for (let i = 0; i < n; i++) {
-    const mesh = spec.meshes[i];
+    const mesh = cellMeshes[i];
     const src = mesh.isMesh ? mesh : mesh;
     const mw = src.matrixWorld || mesh.matrixWorld;
     local.multiplyMatrices(parentInv, mw);
@@ -906,14 +1149,16 @@ function pushInstancedBatch(THREE, root, parentInv, local, batches, spec) {
   if (mesh2) {
     mesh2.instanceMatrix.needsUpdate = true;
     mesh2.count = n;
+    if (useNativeCull) syncInstancedBoundsFromItems(THREE, mesh2, items);
     root.add(mesh2);
   }
   if (mesh0) {
     mesh0.instanceMatrix.needsUpdate = true;
     mesh0.count = 0;
+    mesh0.visible = false;
     root.add(mesh0);
   }
-  batches.push({ items, mesh0, mesh2 });
+  batches.push({ items, mesh0, mesh2, label: spec.label || '', nativeCull: !!useNativeCull });
   return geo0 ? n : 0;
 }
 
@@ -1061,6 +1306,7 @@ function mergeUniqueByMaterial(THREE, root, batches) {
       mesh,
       mesh0: null,
       mesh2: null,
+      label: (mat && mat.name) || (batches[idxs[0]] && batches[idxs[0]].label) || 'kit-unique-merged',
       items: [{
         matrix: null,
         x: cx,
@@ -1083,6 +1329,56 @@ function mergeUniqueByMaterial(THREE, root, batches) {
   for (let i = batches.length - 1; i >= 0; i--) {
     if (remove.has(i)) batches.splice(i, 1);
   }
+}
+
+/**
+ * `?texpad=N` — attach N tiny 4x4 textures to the kit so the session holds 90 Hz.
+ *
+ * Measured on PCVR with 90 s traces, fresh browser per variant: the same rocks geometry
+ * decays from 90 Hz to 65 Hz at 20 textures (sec 28) and at 64 textures (sec 12), but
+ * SUSTAINS 90 Hz at 88 textures (90/91 s) and 103 textures (91/91 s) — at identical GPU
+ * cost, ~1.16-1.22 ms per frame for all of 20/64/88. So the threshold is the number of
+ * texture objects, not rendering load, and padding to it costs a few KB rather than the
+ * 23 MB of the 88-texture kit subset.
+ *
+ * Each pad texture needs its own material on a rendered mesh, otherwise three never
+ * uploads it and it does not count. The quads are sub-pixel and depth-test off.
+ */
+function applyTexturePadding(THREE, root) {
+  let want = 0;
+  try {
+    const m = /[?&#]texpad=(\d+)/i.exec(`${location.search || ''}${location.hash || ''}`);
+    if (m) want = parseInt(m[1], 10);
+  } catch (_) {
+    return;
+  }
+  if (!want || !root) return;
+  const holder = new THREE.Group();
+  holder.name = 'rts-texpad';
+  holder.frustumCulled = false;
+  const geo = new THREE.PlaneGeometry(0.002, 0.002);
+  for (let i = 0; i < want; i++) {
+    // Unique pixel data per texture so nothing dedupes them into one upload.
+    const data = new Uint8Array(4 * 4 * 4);
+    for (let p = 0; p < data.length; p += 4) {
+      data[p] = (i * 7) & 255;
+      data[p + 1] = (i * 13) & 255;
+      data[p + 2] = (i * 29) & 255;
+      data[p + 3] = 255;
+    }
+    const tex = new THREE.DataTexture(data, 4, 4);
+    tex.needsUpdate = true;
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.002, depthWrite: false, depthTest: false })
+    );
+    mesh.frustumCulled = false;
+    mesh.renderOrder = -2000;
+    mesh.position.set(0, 1.5, -0.5);
+    holder.add(mesh);
+  }
+  root.add(holder);
+  console.log('[RTSVR5] texpad', { added: want });
 }
 
 export function resetKitLodState(root) {
@@ -1146,6 +1442,7 @@ export async function setupStoryKitDistanceLod(root, THREE) {
     if (!geo.attributes || !geo.attributes.position) continue;
     const instName = instanceNodeName(mesh, sceneRoot);
     const det = mesh.matrixWorld.determinant();
+    // Same bucketing as Story — UE rocks export shares BufferGeometry like the full kit.
     const key = `${geo.uuid}|${mat.uuid}|${det < 0 ? 'm' : 'p'}`;
     let b = buckets.get(key);
     if (!b) {
@@ -1175,6 +1472,7 @@ export async function setupStoryKitDistanceLod(root, THREE) {
     withLod0 += pushInstancedBatch(THREE, root, parentInv, local, batches, b);
   }
 
+  // Same unique merge as Story (draw join). Rocks used to skip this.
   mergeUniqueByMaterial(THREE, root, batches);
 
   disposeLod0Unused(lod0.gltf, keepGeo, keepMat);
@@ -1194,32 +1492,94 @@ export async function setupStoryKitDistanceLod(root, THREE) {
   updateStoryKitLodFromView();
 }
 
+const LEAN_ROCKS_KEEP_RE = /SM_Rock|SM_Dirt|SM_Cliff|SM_Mineral|MI_Rock|MI_Cliff|MI_Dirt|Rocks|Cliff|DirtPile|Mineral/i;
+
+let _leanDepthOnlyMat = null;
+
+function ensureLeanDepthOnlyMaterial(THREE) {
+  if (_leanDepthOnlyMat) return _leanDepthOnlyMat;
+  _leanDepthOnlyMat = new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    colorWrite: false,
+    depthWrite: true,
+    depthTest: true,
+    fog: false,
+  });
+  _leanDepthOnlyMat.name = 'rts-lean-depth-occluder';
+  return _leanDepthOnlyMat;
+}
+
+/**
+ * ?leanrocks=1: rocks stay shaded; buildings become depth-only occluders so HDR
+ * sky does not fill the FOV (hiding buildings with visible=false was the PCVR ~65 FPS cliff).
+ * Uses the full Story kit GPU path — same moon / textures as the ~90 FPS build.
+ */
+export function applyLeanRocksHideBuildings(root) {
+  const THREE = window.THREE;
+  if (!THREE || !kitLodState || !kitLodState.batches) return;
+  if (root && kitLodState.root !== root) return;
+  const depthMat = ensureLeanDepthOnlyMaterial(THREE);
+  const batches = kitLodState.batches;
+  let kept = 0;
+  let occluders = 0;
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const mat =
+      (batch.mesh && batch.mesh.material) ||
+      (batch.mesh2 && batch.mesh2.material) ||
+      (batch.mesh0 && batch.mesh0.material) ||
+      null;
+    const matName = mat && !Array.isArray(mat) ? mat.name || '' : '';
+    const label = `${batch.label || ''} ${batch.mesh && batch.mesh.name ? batch.mesh.name : ''} ${
+      batch.mesh2 && batch.mesh2.name ? batch.mesh2.name : ''
+    } ${batch.mesh0 && batch.mesh0.name ? batch.mesh0.name : ''} ${matName}`;
+    if (LEAN_ROCKS_KEEP_RE.test(label)) {
+      kept++;
+      continue;
+    }
+    occluders++;
+    batch.occluder = true;
+    const items = batch.items || [];
+    if (batch.unique && batch.mesh) {
+      batch.mesh.material = depthMat;
+      batch.mesh.visible = true;
+      batch.mesh.castShadow = false;
+      batch.mesh.receiveShadow = false;
+      batch.mesh.frustumCulled = false;
+      if (items[0]) items[0].drawn = true;
+      continue;
+    }
+    if (batch.mesh0) {
+      batch.mesh0.visible = false;
+      batch.mesh0.count = 0;
+    }
+    if (batch.mesh2) {
+      batch.mesh2.material = depthMat;
+      batch.mesh2.castShadow = false;
+      batch.mesh2.receiveShadow = false;
+      batch.mesh2.frustumCulled = false;
+      for (let j = 0; j < items.length; j++) {
+        items[j].drawn = true;
+        if (items[j].matrix) batch.mesh2.setMatrixAt(j, items[j].matrix);
+      }
+      batch.mesh2.count = items.length;
+      batch.mesh2.visible = items.length > 0;
+      batch.mesh2.instanceMatrix.needsUpdate = items.length > 0;
+    }
+  }
+  kitLodState.lastCullKey = '';
+  if (kitLodState.root && kitLodState.root.userData) {
+    kitLodState.root.userData.rtsLeanRocksVisual = true;
+  }
+  updateStoryKitLodFromView();
+  console.log('[RTSVR5] leanrocks: rocks shaded + building depth occluders', {
+    keptBatches: kept,
+    occluderBatches: occluders,
+  });
+}
+
 let _kitCamVec = null;
-let _kitProj = null;
-let _kitProjA = null;
-let _kitEyeLocal = null;
-let _kitEyeWorld = null;
-let _kitEyeInv = null;
-let _kitSphere = null;
-let _kitBox = null;
-let _kitXrPoseKey = '';
-const _kitFrustums = [];
-
-function instanceCullPad(xr, it) {
-  // Headset FOV + timewarp sees wider than the cull frustum; pad must cover
-  // large rock/building extents or they pop off while still on-screen.
-  const span =
-    it && it.maxx != null
-      ? Math.max(it.maxx - it.minx, it.maxy - it.miny, it.maxz - it.minz)
-      : 0;
-  if (xr) return Math.max(48, span * 0.85 + 24);
-  return Math.max(12, span * 0.35 + 6);
-}
-
-function instanceCullRadius(it, xr) {
-  const base = Math.max(it.r || 4, 4);
-  return xr ? base * 4 + 28 : base * 2 + 8;
-}
+let _kitBoundBox = null;
 
 function itemTooSmallOnScreen(it, cx, cy, cz) {
   const dx = it.x - cx;
@@ -1233,146 +1593,11 @@ function itemTooSmallOnScreen(it, cx, cy, cz) {
   return r / d < 0.0025;
 }
 
-function aabbInAnyFrustum(_it, _xr) {
-  // ALWAYS visible. Previous CPU frustum used viewer-pose × cameraRig in a way that
-  // stayed near the *spawn* facing: as you yaw/pitch away, a growing wedge of the
-  // real view was treated as "outside" (~deg-proportional pop-out). Distance LOD
-  // below is enough; InstancedMesh already batches draws.
-  return true;
-}
-
-function xrSessionActive(renderer, sceneEl) {
-  if (typeof window !== 'undefined' && window.__rtsKitCullForceXr) return true;
-  if (renderer && renderer.xr && renderer.xr.isPresenting) return true;
-  if (sceneEl && typeof sceneEl.is === 'function' && sceneEl.is('vr-mode')) return true;
-  return false;
-}
-
-function projectionLooksValid(cam) {
-  const pe = cam && cam.projectionMatrix && cam.projectionMatrix.elements;
-  return !!(pe && Math.abs(pe[0]) > 1e-6 && Math.abs(pe[5]) > 1e-6);
-}
-
-function pushWorldProjFrustum(THREE, n, worldMat, projMat) {
-  if (!_kitEyeInv) _kitEyeInv = new THREE.Matrix4();
-  _kitEyeInv.copy(worldMat).invert();
-  if (!_kitFrustums[n]) _kitFrustums[n] = new THREE.Frustum();
-  _kitProj.multiplyMatrices(projMat, _kitEyeInv);
-  // Widen cull FOV (~22%) so periphery matches what the headset still composites.
-  const e = _kitProj.elements;
-  e[0] *= 0.78;
-  e[5] *= 0.78;
-  _kitFrustums[n].setFromProjectionMatrix(_kitProj);
-}
-
-function xrViewerPose(renderer) {
-  try {
-    const xr = renderer && renderer.xr;
-    if (!xr || typeof xr.getFrame !== 'function' || typeof xr.getReferenceSpace !== 'function') return null;
-    const frame = xr.getFrame();
-    const space = xr.getReferenceSpace();
-    if (!frame || !space || typeof frame.getViewerPose !== 'function') return null;
-    return frame.getViewerPose(space);
-  } catch (_) {
-    return null;
-  }
-}
-
-function refreshKitCullFrustums(THREE, renderCam) {
-  const sceneEl = typeof document !== 'undefined' ? document.querySelector('a-scene') : null;
-  const renderer = sceneEl && sceneEl.renderer;
-  if (!_kitProj) _kitProj = new THREE.Matrix4();
-  if (!_kitProjA) _kitProjA = new THREE.Matrix4();
-  if (!_kitEyeLocal) _kitEyeLocal = new THREE.Matrix4();
-  if (!_kitEyeWorld) _kitEyeWorld = new THREE.Matrix4();
-  if (!_kitSphere) _kitSphere = new THREE.Sphere();
-  if (!_kitBox) _kitBox = new THREE.Box3();
-  let n = 0;
-  _kitXrPoseKey = '';
-  const testCams = typeof window !== 'undefined' ? window.__rtsKitCullTestCameras : null;
-  const addCam = (cam) => {
-    if (!cam || cam.isArrayCamera) return;
-    if (cam.cameras && cam.cameras.length) return;
-    if (!cam.projectionMatrix || !projectionLooksValid(cam)) return;
-    if (!cam.matrixWorldInverse) return;
-    cam.updateMatrixWorld();
-    if (!_kitFrustums[n]) _kitFrustums[n] = new THREE.Frustum();
-    _kitProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
-    const e = _kitProj.elements;
-    e[0] *= 0.85;
-    e[5] *= 0.85;
-    _kitFrustums[n].setFromProjectionMatrix(_kitProj);
-    n++;
-  };
-  if (Array.isArray(testCams) && testCams.length) {
-    for (let i = 0; i < testCams.length; i++) addCam(testCams[i]);
-  } else if (xrSessionActive(renderer, sceneEl)) {
-    // Headset orientation lives on XRViewerPose, NOT on the RTS #camera entity.
-    // Thumbstick yaws cameraRig (parent.matrixWorld). Using Three eye.matrix here
-    // was often identity at cull time → frustum ignored look-up/down.
-    const userCam = renderCam && !renderCam.isArrayCamera ? renderCam : kitCullCamera();
-    const parent = userCam && userCam.parent;
-    if (parent && parent.updateMatrixWorld) parent.updateMatrixWorld(true);
-    const pose = xrViewerPose(renderer);
-    const views = pose && pose.views;
-    if (views && views.length) {
-      _kitXrPoseKey = poseViewKey(views);
-      for (let i = 0; i < views.length; i++) {
-        const view = views[i];
-        const tm = view.transform && view.transform.matrix;
-        const pm = view.projectionMatrix;
-        if (!tm || !pm) continue;
-        _kitEyeLocal.fromArray(tm);
-        if (parent && parent.matrixWorld) {
-          _kitEyeWorld.multiplyMatrices(parent.matrixWorld, _kitEyeLocal);
-        } else {
-          _kitEyeWorld.copy(_kitEyeLocal);
-        }
-        _kitProjA.fromArray(pm);
-        pushWorldProjFrustum(THREE, n, _kitEyeWorld, _kitProjA);
-        n++;
-      }
-    } else {
-      const xrCam = renderer && renderer.xr && typeof renderer.xr.getCamera === 'function' ? renderer.xr.getCamera() : null;
-      const eyes = xrCam && xrCam.cameras;
-      if (eyes && eyes.length) {
-        for (let i = 0; i < eyes.length; i++) {
-          const eye = eyes[i];
-          if (!eye || eye.isArrayCamera || !projectionLooksValid(eye)) continue;
-          if (parent && parent.matrixWorld) {
-            parent.updateMatrixWorld(true);
-            _kitEyeWorld.multiplyMatrices(parent.matrixWorld, eye.matrix);
-          } else if (eye.matrixWorld) {
-            _kitEyeWorld.copy(eye.matrixWorld);
-          } else {
-            continue;
-          }
-          pushWorldProjFrustum(THREE, n, _kitEyeWorld, eye.projectionMatrix);
-          n++;
-        }
-      }
-    }
-  } else {
-    addCam(renderCam || kitCullCamera());
-  }
-  _kitFrustums.length = n;
-}
-
 function kitCullKey(cam) {
   if (!cam || !cam.matrixWorld) return '';
   const e = cam.matrixWorld.elements;
   // e[9]/e[10] capture headset pitch; yaw-only keys skipped look-down recull.
   return `${e[12].toFixed(2)},${e[13].toFixed(2)},${e[14].toFixed(2)},${e[0].toFixed(3)},${e[8].toFixed(3)},${e[9].toFixed(3)},${e[10].toFixed(3)}`;
-}
-
-function poseViewKey(views) {
-  let k = '';
-  for (let i = 0; i < views.length; i++) {
-    const m = views[i].transform && views[i].transform.matrix;
-    if (!m) continue;
-    k += `${m[0].toFixed(3)},${m[8].toFixed(3)},${m[9].toFixed(3)},${m[10].toFixed(3)},${m[12].toFixed(2)},${m[13].toFixed(2)},${m[14].toFixed(2)};`;
-  }
-  return k;
 }
 
 function kitCullCamera() {
@@ -1386,6 +1611,7 @@ function kitCullCamera() {
 }
 
 function showAllKitInstances() {
+  const THREE = window.THREE;
   const batches = kitLodState.batches;
   for (let b = 0; b < batches.length; b++) {
     const batch = batches[b];
@@ -1404,6 +1630,7 @@ function showAllKitInstances() {
       batch.mesh2.count = n;
       batch.mesh2.visible = n > 0;
       batch.mesh2.instanceMatrix.needsUpdate = n > 0;
+      if (THREE && batch.nativeCull) syncInstancedBoundsFromItems(THREE, batch.mesh2, items);
     }
     if (batch.mesh0) {
       batch.mesh0.count = 0;
@@ -1413,24 +1640,23 @@ function showAllKitInstances() {
   kitLodState.uploadedFull = !kitLodState.hasLod0;
 }
 
-/** Re-bucket kit instances by camera distance only (no view frustum). */
+/** Re-bucket kit instances by camera distance only (no CPU view frustum). */
 export function updateStoryKitLodFromView(renderCam) {
   if (!kitLodState || !kitLodState.batches.length) return;
   if (kitLodState.root && kitLodState.root.visible === false) return;
+  // Lobby / pre-match: never pay kit LOD (kit should not be live yet; if it leaked, skip).
+  if (State.gameSession && !State.gameSession.gameStarted) return;
   const THREE = window.THREE;
   if (!THREE) return;
   if (!_kitCamVec) _kitCamVec = new THREE.Vector3();
 
   const hasLod0 = !!kitLodState.hasLod0;
-  // No LOD0 swap → upload every instance once and leave them alone. Frustum cull
-  // was the yaw-proportional pop-out bug; do not bring it back.
-  if (!hasLod0) {
-    if (!kitLodState.uploadedFull) showAllKitInstances();
-    return;
-  }
 
   const cam = renderCam && !renderCam.isArrayCamera ? renderCam : kitCullCamera();
-  if (!cam || !cam.matrixWorld) return;
+  if (!cam || !cam.matrixWorld) {
+    if (!hasLod0 && !kitLodState.uploadedFull) showAllKitInstances();
+    return;
+  }
   cam.updateMatrixWorld();
   if (typeof cam.getWorldPosition === 'function') cam.getWorldPosition(_kitCamVec);
   else {
@@ -1452,6 +1678,8 @@ export function updateStoryKitLodFromView(renderCam) {
     const batch = batches[b];
     const items = batch.items;
     const nItems = items.length;
+    // Depth occluders: leave matrices alone (fully populated at lean setup).
+    if (batch.occluder) continue;
     if (batch.unique && batch.mesh) {
       const it = items[0];
       batch.mesh.frustumCulled = false;
@@ -1490,13 +1718,32 @@ export function updateStoryKitLodFromView(renderCam) {
       batch.mesh0.count = n0;
       batch.mesh0.visible = n0 > 0;
       batch.mesh0.instanceMatrix.needsUpdate = n0 > 0;
-      batch.mesh0.frustumCulled = false;
+      if (batch.nativeCull && n0 > 0) {
+        const subset = [];
+        for (let i = 0; i < nItems; i++) {
+          if (items[i].drawn && items[i].lod === 0) subset.push(items[i]);
+        }
+        syncInstancedBoundsFromItems(THREE, batch.mesh0, subset);
+      } else if (!batch.nativeCull) {
+        batch.mesh0.frustumCulled = false;
+      }
     }
     if (batch.mesh2) {
       batch.mesh2.count = n2;
       batch.mesh2.visible = n2 > 0;
       batch.mesh2.instanceMatrix.needsUpdate = n2 > 0;
-      batch.mesh2.frustumCulled = false;
+      if (batch.nativeCull && n2 > 0) {
+        const subset = [];
+        for (let i = 0; i < nItems; i++) {
+          const it = items[i];
+          if (!it.drawn) continue;
+          if (batch.mesh0 && it.lod === 0) continue;
+          subset.push(it);
+        }
+        syncInstancedBoundsFromItems(THREE, batch.mesh2, subset);
+      } else if (!batch.nativeCull) {
+        batch.mesh2.frustumCulled = false;
+      }
     }
   }
   kitLodState.uploadedFull = false;

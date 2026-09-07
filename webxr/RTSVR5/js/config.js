@@ -72,8 +72,7 @@ function recomputeMapDerived() {
  */
 export function applyMapProfile(profile) {
   MAP_PROFILE = profile === 'story' ? 'story' : 'standard';
-  // Both Story and skirmish use the same sci-fi kit + moon plate (proven ~90 FPS).
-  // Overview dirt/rocks and crater moon were sparse and slower — abandoned as default.
+  // Story always full kit. Skirmish: full kit, or ?leanrocks=1 → rocks GLB.
   MAP_SIZE = MAP_SIZE_STORY;
   MAP_TERRAIN_STYLE = 'kit';
   if (MAP_PROFILE === 'story') {
@@ -93,6 +92,121 @@ export function isKitTerrain() {
 
 export function isStoryMapProfile() {
   return MAP_PROFILE === 'story';
+}
+
+/**
+ * Lean skirmish scenery (`?leanrocks=1`).
+ *
+ * On desktop PCVR the small rocks GLB does NOT buy FPS — Virtual Desktop's frame
+ * cadence follows which kit is resident, not triangle/texture count. Measured:
+ * full kit holds ~11.1 ms (90 Hz) even with buildings hidden; rocks GLB pins
+ * ~15.5 ms (64.5 Hz) at 0.8–1 ms GPU. So desktop `?leanrocks=1` keeps the full
+ * Story kit resident and applies depth occluders (same as `?leanlook=1`).
+ *
+ * Explicit rocks GLB A/B still available: `?leanrocksFile=1` or `?rocksfile=NAME`
+ * (diagnostic only — will not sustain 90 Hz on this stack).
+ * Quest / non-desktop still loads `scifi-rts-rocks.glb` for VRAM.
+ */
+let _leanVisualForce = /** @type {boolean|null} */ (null);
+
+/** @param {boolean|null} on */
+export function forceLeanRocksVisual(on) {
+  if (on === true || on === false) _leanVisualForce = on;
+  else _leanVisualForce = null;
+  return _leanVisualForce;
+}
+
+function searchQuery() {
+  try {
+    return typeof location !== 'undefined' ? location.search || '' : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+/** Desktop PCVR / Immersive Web host (not Quest standalone). */
+export function isDesktopPcvrHost() {
+  try {
+    const plat = typeof navigator !== 'undefined' ? navigator.platform || '' : '';
+    return /Win32|Win64|MacIntel|Linux x86_64|Linux i686/i.test(plat);
+  } catch (_) {
+    return false;
+  }
+}
+
+export function leanRocksVisualRequested() {
+  if (_leanVisualForce === true) return true;
+  if (_leanVisualForce === false) return false;
+  return /(?:^|[?&#])leanrocks=1(?:&|$)/i.test(searchQuery());
+}
+
+/** Explicit A/B: force the rocks GLB file (overrides desktop lean→story remap). */
+export function leanRocksFileRequested() {
+  return /(?:^|[?&#])leanrocksFile=1(?:&|$)/i.test(searchQuery());
+}
+
+/** `?rocksfile=NAME` — pick a specific rocks GLB for texture/tri A/B sweeps. */
+export function rocksFileParamRequested() {
+  return /(?:^|[?&#])rocksfile=[\w.-]+/i.test(searchQuery());
+}
+
+/** True when the rocks GLB must be loaded (Quest, or explicit file A/B). */
+export function rocksGlbLoadRequested() {
+  if (leanRocksFileRequested() || rocksFileParamRequested()) return true;
+  if (_leanVisualForce === true) return false;
+  if (!leanRocksVisualRequested()) return false;
+  // Desktop: remapped to full kit + lean look. Quest: still the small GLB.
+  return !isDesktopPcvrHost();
+}
+
+/** Runtime override for benches — swap kit without leaving the XR session. */
+let _skirmishKitForce = null;
+
+/** @param {'story'|'rocks'|null} kind */
+export function forceSkirmishKitKind(kind) {
+  if (kind === 'story' || kind === 'rocks') _skirmishKitForce = kind;
+  else _skirmishKitForce = null;
+  return _skirmishKitForce;
+}
+
+export function getForcedSkirmishKitKind() {
+  return _skirmishKitForce;
+}
+
+/**
+ * Skirmish kit file:
+ * - default → full Story kit
+ * - desktop ?leanrocks=1 → full Story kit (lean look applied separately)
+ * - Quest ?leanrocks=1 / ?leanrocksFile=1 / ?rocksfile= → rocks GLB
+ * - forceLeanRocksVisual(true) alone does not change the file
+ */
+export function skirmishKitKind() {
+  if (_skirmishKitForce) return _skirmishKitForce;
+  if (rocksGlbLoadRequested()) return 'rocks';
+  return 'story';
+}
+
+/**
+ * Lean rocks LOOK on a resident full Story kit (depth-only building occluders).
+ *
+ * Enabled by `?leanlook=1`, by desktop `?leanrocks=1` (product path), or by
+ * `forceLeanRocksVisual(true)`. Not applied when an explicit rocks GLB A/B is loaded.
+ */
+export function leanRocksStoryLeanRequested() {
+  if (_leanVisualForce === true) return true;
+  if (_leanVisualForce === false) return false;
+  if (/(?:^|[?&#])leanlook=1(?:&|$)/i.test(searchQuery())) return true;
+  // Desktop product leanrocks: same visual contract as leanlook, without loading the
+  // small GLB that pins Virtual Desktop at ~65 Hz.
+  if (
+    leanRocksVisualRequested() &&
+    isDesktopPcvrHost() &&
+    !leanRocksFileRequested() &&
+    !rocksFileParamRequested()
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /** Camera / minimap drag: pan limit (m from origin on XZ). Units/buildings use `MAP_UNIT_NAV_RADIUS` only. */
