@@ -18,9 +18,12 @@ export const MAP_NAV_PLANE_CELL = 2;
 /** Pathfinding: block central-mesh cells steeper than this (°); A* routes around them. */
 export const NAV_MAX_TRAVERSABLE_SLOPE_DEG = 45;
 
-/** Standard skirmish plate (m). Story kit cluster is ~540×630 m — plate covers it. */
+/** Standard skirmish plate (m). */
 export const MAP_SIZE_STANDARD = 200;
-export const MAP_SIZE_STORY = 640;
+/** Story hills plate — match RTSVR4 (400). Larger tris at 640 crushed Quest fill (~50 vs ~100+ FPS). */
+export const MAP_SIZE_STORY = 400;
+/** Opt-in `?kit=1` Story plate — covers the ~540×630 m UE kit cluster. */
+export const MAP_SIZE_STORY_KIT = 640;
 
 /** Live map metrics — reassigned by `applyMapProfile`. Importers see updates (ES live bindings). */
 export let MAP_PROFILE = /** @type {MapProfileId} */ ('standard');
@@ -75,10 +78,11 @@ export function applyMapProfile(profile) {
   MAP_PROFILE = profile === 'story' ? 'story' : 'standard';
   const forceKit = wantKitTerrain();
   if (MAP_PROFILE === 'story') {
-    MAP_SIZE = MAP_SIZE_STORY;
+    MAP_SIZE = forceKit ? MAP_SIZE_STORY_KIT : MAP_SIZE_STORY;
     MAP_TERRAIN_STYLE = forceKit ? 'kit' : 'hills';
     FOG_GRID_SIZE = 48;
-    MAP_NAV_AREA_SCALE = 1;
+    // Hills: RTSVR4 nav scale (×4). Kit: stay on the kit footprint (scale 1).
+    MAP_NAV_AREA_SCALE = forceKit ? 1 : 4;
   } else {
     MAP_SIZE = MAP_SIZE_STANDARD;
     MAP_TERRAIN_STYLE = forceKit ? 'kit' : 'crater';
