@@ -10,11 +10,13 @@ export const STORY_KIT_GLB = 'assets/terrain/scifi-rts-overview.glb';
 export const STORY_KIT_LOD2_GLB = 'assets/terrain/scifi-rts-kit-lod2.glb';
 export const STORY_KIT_LOD0_GLB = 'assets/terrain/scifi-rts-kit-lod0.glb';
 /**
- * Quest standalone base scenery: UE Story kit LOD2 → Draco + KTX2 (ETC1S color,
- * UASTC normals). Built by `scripts/compress-rts-quest.mjs`. Desktop keeps JPEG LOD2.
+ * Quest-90 base scenery: UE rocks/cliffs/dirt (Draco + KTX2).
+ * ~20 shared meshes → ≲40 scenery draws after instancing (envelope ≲140).
+ * Built by `scripts/compress-rts-quest.mjs` from `scifi-rts-rocks.glb`.
+ * Full JPEG Story kit: `?noquest=1` → `scifi-rts-kit-lod2.glb` (PCVR A/B only).
  */
 export const STORY_KIT_QUEST_GLB = 'assets/terrain/scifi-rts-quest.glb';
-/** Skirmish lean A/B: UE rocks/cliffs/dirt only (`export_rts_rocks_glb.py`). */
+/** Skirmish lean A/B: same UE rocks master (uncompressed JPEG twin). */
 export const STORY_ROCKS_GLB = 'assets/terrain/scifi-rts-rocks.glb';
 /** `?rocksx2=1` — same rocks plus a 90°-rotated deep copy: 2430 rocks, 40 textures. */
 export const STORY_ROCKS_X2_GLB = 'assets/terrain/scifi-rts-rocks-x2.glb';
@@ -24,8 +26,8 @@ export const OVERVIEW_KIT_QUEST_GLB = 'assets/terrain/scifi-overview-lods-quest.
 export const OVERVIEW_ROCKS_GLB = 'assets/terrain/scifi-overview-rocks.glb';
 export const OVERVIEW_GROUNDSCAPE_GLB = 'assets/terrain/scifi-overview-groundscape.glb';
 const MIN_BYTES = 8_000_000;
-/** Quest encode can land under the desktop LOD2 size; still a real kit. */
-const MIN_QUEST_KIT_BYTES = 2_000_000;
+/** Quest-90 rocks encode is small (~1–3MB). */
+const MIN_QUEST_KIT_BYTES = 400_000;
 const MIN_OVERVIEW_BYTES = 400_000;
 const MIN_ROCKS_BYTES = 100_000;
 const MIN_STORY_ROCKS_BYTES = 1_000_000;
@@ -82,17 +84,16 @@ function isDesktopOs() {
   return /Win32|Win64|MacIntel|Linux x86_64|Linux i686/i.test(plat);
 }
 
-/** Quest / Oculus Browser asset path (`?quest=1` forces; `?noquest=1` blocks). */
+/**
+ * Prefer Quest KTX2/Draco kit (`scifi-rts-quest.glb`) on PCVR and Quest.
+ * Opt out with `?noquest=1` to force the desktop JPEG `scifi-rts-kit-lod2.glb`.
+ * (`?quest=1` kept as an explicit alias; default is already Quest encode.)
+ */
 function wantQuestAssets() {
-  if (typeof location === 'undefined') return false;
+  if (typeof location === 'undefined') return true;
   const q = `${location.search || ''}${location.hash || ''}`;
   if (/(?:[?&#]noquest=1\b)/.test(q)) return false;
-  if (/(?:[?&#]quest=1\b)/.test(q)) return true;
-  // Desktop (including Immersive Web Emulator spoofing Quest UA) — JPEG/desktop
-  // GLB is the PCVR path. Real Quest is Android.
-  if (isDesktopOs()) return false;
-  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-  return /Quest|OculusBrowser|\bOculus\b/i.test(ua);
+  return true;
 }
 
 function wantQuestOverview() {
@@ -529,6 +530,8 @@ function assembleKitWrap(gltf, opts) {
   wrap.userData.rtsStoryKit = true;
   wrap.userData.rtsKitKind = kind;
   wrap.userData.rtsSkipIndoor = skipIndoor;
+  if (opts.url) wrap.userData.rtsKitUrl = opts.url;
+  if (opts.quest != null) wrap.userData.rtsKitQuest = !!opts.quest;
   if (opts.skipDistanceLod) wrap.userData.rtsSkipDistanceLod = true;
   if (lod0Root) wrap.userData.rtsLod0Root = lod0Root;
   wrap.add(scene);
@@ -658,6 +661,8 @@ export async function tryLoadStoryKit() {
     skipIndoor: true,
     clipRadius: 420,
     bytes: buf.byteLength,
+    url: glbBufUrl || STORY_KIT_LOD2_GLB,
+    quest: !!(glbBufUrl && /scifi-rts-quest\.glb/i.test(glbBufUrl)),
   });
 }
 

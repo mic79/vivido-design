@@ -24,12 +24,23 @@
     }
     let kind = '-';
     let lean = false;
+    let kitFile = '';
     try {
       const ground = document.getElementById('ground');
       const mesh = ground && ground.getObject3D && ground.getObject3D('mesh');
       kind = (mesh && mesh.userData && mesh.userData.rtsKitKind) || (mesh && mesh.name) || '-';
       lean = !!(mesh && mesh.userData && mesh.userData.rtsLeanRocksVisual);
       if (lean && kind === 'story') kind = 'story-lean';
+      const url = mesh && mesh.userData && mesh.userData.rtsKitUrl;
+      if (url) {
+        const base = String(url).split('/').pop() || '';
+        if (/scifi-rts-quest/i.test(base)) kitFile = 'quest90';
+        else if (/kit-lod2/i.test(base)) kitFile = 'lod2';
+        else if (/rocks/i.test(base)) kitFile = 'rocks';
+        else kitFile = base.replace(/\.glb$/i, '').slice(0, 12);
+      } else if (mesh && mesh.userData && mesh.userData.rtsKitQuest) {
+        kitFile = 'quest';
+      }
     } catch (_) {
       /* */
     }
@@ -45,6 +56,7 @@
       xrTag +
       ' kit=' +
       kind +
+      (kitFile ? '/' + kitFile : '') +
       ' d=' +
       calls +
       ' tK=' +
