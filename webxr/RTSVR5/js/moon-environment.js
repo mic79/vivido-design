@@ -8,10 +8,15 @@
  */
 
 import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
-import { bakedMoonAllowed, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps } from './baked-moon.js';
+import { bakedMoonAllowed, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps, setBakedMoonRockShadowsEnabled } from './baked-moon.js';
 import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
 import * as State from './state.js';
+import * as FogVisual from './fog-visual.js';
 
+function installGroundFogVisual(groundEl) {
+  const mesh = groundEl?.getObject3D?.('mesh');
+  if (mesh) FogVisual.installFogVisualUnder(mesh);
+}
 /** Central plate edge length (m) — follows live `MAP_SIZE` (standard 200 / Story 400). */
 function mapPlateM() {
   return MAP_SIZE;
@@ -2302,19 +2307,39 @@ function kitKindOf(obj) {
   return null;
 }
 
+function clearSkirmishLaneRidges(groundEl) {
+  if (!groundEl || typeof groundEl.getObject3D !== 'function') return;
+  const prev = groundEl.getObject3D('laneRidges');
+  if (!prev) return;
+  groundEl.removeObject3D('laneRidges');
+  if (prev.parent) prev.parent.remove(prev);
+}
+
+/** Disabled: prior valley nav stamps created invisible walls with no matching visuals. */
+function attachSkirmishLaneRidges(_groundEl) {
+  return false;
+}
+
 function clearOverviewGroundscapeProps(groundEl) {
   if (!groundEl || typeof groundEl.getObject3D !== 'function') return;
   const prev = groundEl.getObject3D('overviewProps');
-  if (!prev) return;
+  if (!prev) {
+    clearSkirmishLaneRidges(groundEl);
+    if (bakedMoonRoot) setBakedMoonRockShadowsEnabled(bakedMoonRoot, false);
+    return;
+  }
   groundEl.removeObject3D('overviewProps');
   // Seated clones share GPU buffers with the bake template. Disposing them on
   // lobby/rematch nuked the template and forced the separate quest-rocks fallback
   // (and could leave the crater looking like the old JS plate + floating rocks).
   if (prev.userData && (prev.userData.rtsSeatedOnCrater || prev.userData.rtsSeatedClone)) {
     if (prev.parent) prev.parent.remove(prev);
-    return;
+  } else {
+    disposeGroundObject(prev);
   }
-  disposeGroundObject(prev);
+  clearSkirmishLaneRidges(groundEl);
+  // Intro/lobby keeps the moon mesh but must not show rock-only baked shadows.
+  if (bakedMoonRoot) setBakedMoonRockShadowsEnabled(bakedMoonRoot, false);
 }
 
 /**
@@ -2338,9 +2363,27 @@ async function attachSkirmishSceneryProps(groundEl, sceneEl) {
     !!(State.gameSession && (State.gameSession.matchPreparing || State.gameSession.gameStarted));
   const mode = !inMatch ? 'A0' : skirmishSceneryMode();
   if (mode === 'A0') {
+    if (bakedMoonRoot) setBakedMoonRockShadowsEnabled(bakedMoonRoot, false);
+    clearSkirmishLaneRidges(groundEl);
     console.log('[RTSVR5] scenery A0: moon only', { inMatch });
     return false;
   }
+
+  // Rebuild nav after removing experimental valley stamps (invisible walls).
+  import('./pathfinding.js')
+    .then((Pathfinding) => {
+      if (typeof Pathfinding.invalidateStaticTerrainMask === 'function') {
+        Pathfinding.invalidateStaticTerrainMask();
+      }
+      if (typeof Pathfinding.rebuildNavMeshImmediate === 'function') {
+        Pathfinding.rebuildNavMeshImmediate();
+      } else if (typeof Pathfinding.rebuildNavMesh === 'function') {
+        Pathfinding.rebuildNavMesh();
+      }
+    })
+    .catch(() => {});
+
+  attachSkirmishLaneRidges(groundEl);
 
   let props = null;
   if (mode === 'A1') {
@@ -2350,7 +2393,10 @@ async function attachSkirmishSceneryProps(groundEl, sceneEl) {
     props = takeEmbeddedSkirmishProps();
     if (!props) props = await tryLoadQuestRocksProps();
   }
-  if (!props) return false;
+  if (!props) {
+    if (bakedMoonRoot) setBakedMoonRockShadowsEnabled(bakedMoonRoot, false);
+    return false;
+  }
 
   props.name = 'rts-overview-props';
   props.userData.rtsOverviewProps = true;
@@ -2377,6 +2423,10 @@ async function attachSkirmishSceneryProps(groundEl, sceneEl) {
     props.position.y = 0;
   }
   groundEl.setObject3D('overviewProps', props);
+  // Baked rock shadows only when the matching seated Prop_* set is on screen.
+  if (bakedMoonRoot) {
+    setBakedMoonRockShadowsEnabled(bakedMoonRoot, !!(props.userData && props.userData.rtsSeatedOnCrater));
+  }
   try {
     // Instance shared rock meshes (~20 draws). LOD tick is gated on gameStarted.
     await setupStoryKitDistanceLod(props, window.THREE);
@@ -2472,6 +2522,7 @@ async function mountKitTerrain(groundEl, prev, sceneEl, kind) {
   bakedMoonRoot = kitRoot;
   await dressKitGroundPlateWithMoon(kitRoot, sceneEl);
   applyLeanLookIfNeeded(kitRoot);
+  installGroundFogVisual(groundEl);
   configureTerrainPresentation(sceneEl);
   syncTerrainGridHelperSize();
   console.log('[RTSVR5] kit terrain', {
@@ -2598,6 +2649,7 @@ async function applyMoonBattlefieldVisualsInner(sceneEl) {
   if (baked) {
     groundEl.setObject3D('mesh', baked);
     await finishBakedMoonLook(THREE, sceneEl, baked);
+    installGroundFogVisual(groundEl);
     configureTerrainPresentation(sceneEl);
     styleMoonGrid();
     const gridMount = document.getElementById('gridHelper');
@@ -2625,6 +2677,7 @@ async function applyMoonBattlefieldVisualsInner(sceneEl) {
   groundEl.setObject3D('mesh', mesh);
 
   await applyBattleMoon(THREE, sceneEl, mesh);
+  installGroundFogVisual(groundEl);
   configureTerrainPresentation(sceneEl);
   styleMoonGrid();
   const gridMount = document.getElementById('gridHelper');
@@ -2684,6 +2737,7 @@ async function rebuildMoonBattlefieldInner(sceneEl) {
       }
       horizonSkirtAttached = false;
       await finishBakedMoonLook(THREE, sceneEl, restored, { skipHeight: true });
+      installGroundFogVisual(groundEl);
       configureTerrainPresentation(sceneEl);
       syncTerrainGridHelperSize();
       await attachSkirmishSceneryProps(groundEl, sceneEl);
@@ -2708,6 +2762,7 @@ async function rebuildMoonBattlefieldInner(sceneEl) {
       else disposeGroundObject(prev);
     }
     await finishBakedMoonLook(THREE, sceneEl, baked);
+    installGroundFogVisual(groundEl);
     configureTerrainPresentation(sceneEl);
     syncTerrainGridHelperSize();
     await attachSkirmishSceneryProps(groundEl, sceneEl);
@@ -2735,6 +2790,7 @@ async function rebuildMoonBattlefieldInner(sceneEl) {
   }
 
   await applyBattleMoon(THREE, sceneEl, mesh);
+  installGroundFogVisual(groundEl);
   configureTerrainPresentation(sceneEl);
   syncTerrainGridHelperSize();
   await attachSkirmishSceneryProps(groundEl, sceneEl);

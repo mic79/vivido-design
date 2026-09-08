@@ -1,6 +1,6 @@
 // ========================================
 // RTSVR4 — Fog of War
-// Grid-based per-team visibility
+// Grid-based per-team visibility + soft radial falloff for the world overlay
 // ========================================
 
 import {
@@ -14,13 +14,19 @@ import * as State from './state.js';
 // 0 = never seen, 1 = previously seen (grey), 2 = currently visible
 // Live visibility is O(1) grid lookup — `updateFog` + `revealArea` (disk∩cell) bake Euclidean vision.
 const teamGrids = new Map();
+/** Soft live-vision weight 0..1 (feathered disk). Display-only; gameplay stays on Uint8 grid. */
+const teamSoftLive = new Map();
+
+/** Feather ~45% of vision radius — soft readable vision circle with a clear core. */
+const FOG_SOFT_FEATHER_FRAC = 0.45;
 
 export function initFog() {
   teamGrids.clear();
-  // Create a grid for each team
-  const teams = new Set(State.players.map(p => p.team));
-  teams.forEach(team => {
+  teamSoftLive.clear();
+  const teams = new Set(State.players.map((p) => p.team));
+  teams.forEach((team) => {
     teamGrids.set(team, new Uint8Array(FOG_GRID_SIZE * FOG_GRID_SIZE));
+    teamSoftLive.set(team, new Float32Array(FOG_GRID_SIZE * FOG_GRID_SIZE));
   });
 }
 
@@ -46,6 +52,11 @@ function minDistSqPointToRect(px, pz, x0, z0, x1, z1) {
   return dx * dx + dz * dz;
 }
 
+function smoothstep(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / Math.max(1e-6, edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 /**
  * Local human sees the whole map (minimap + world): match ended, or eliminated
  * with no living ally on the same team (FFA / solo team — avoids ghosting in 2v2).
@@ -57,7 +68,7 @@ function localClientHasFullFogVision() {
   const me = State.players[gs.myPlayerId];
   if (!me?.isDefeated) return false;
   const allyAlive = State.players.some(
-    p => p.id !== me.id && p.team === me.team && !p.isDefeated
+    (p) => p.id !== me.id && p.team === me.team && !p.isDefeated
   );
   return !allyAlive;
 }
@@ -76,42 +87,52 @@ export function shouldDrawWorldFogOverlay() {
 
 export function updateFog() {
   // Downgrade currently visible to previously seen
-  teamGrids.forEach(grid => {
+  teamGrids.forEach((grid) => {
     for (let i = 0; i < grid.length; i++) {
       if (grid[i] === 2) grid[i] = 1;
     }
   });
+  teamSoftLive.forEach((soft) => {
+    soft.fill(0);
+  });
 
   // Mark cells visible based on unit + building vision ranges
-  State.units.forEach(unit => {
+  State.units.forEach((unit) => {
     if (unit.hp <= 0) return;
     const team = unit.team;
     const grid = teamGrids.get(team);
+    const soft = teamSoftLive.get(team);
     if (!grid) return;
     const r =
       unit.visionRange != null && Number.isFinite(unit.visionRange)
         ? unit.visionRange
-        : (unit.range != null && Number.isFinite(unit.range) ? unit.range : 18);
-    revealArea(grid, unit.x, unit.z, r);
+        : unit.range != null && Number.isFinite(unit.range)
+          ? unit.range
+          : 18;
+    revealArea(grid, soft, unit.x, unit.z, r);
   });
 
-  State.buildings.forEach(building => {
+  State.buildings.forEach((building) => {
     if (building.hp <= 0) return;
     const player = State.players[building.ownerId];
     if (!player) return;
     const grid = teamGrids.get(player.team);
+    const soft = teamSoftLive.get(player.team);
     if (!grid) return;
     const r =
       building.visionRange != null && Number.isFinite(building.visionRange)
         ? building.visionRange
         : 12;
-    revealArea(grid, building.x, building.z, r);
+    revealArea(grid, soft, building.x, building.z, r);
   });
 }
 
-function revealArea(grid, wx, wz, radius) {
-  const cellRadius = Math.ceil(radius / FOG_CELL_SIZE);
+function revealArea(grid, soft, wx, wz, radius) {
+  const feather = Math.max(FOG_CELL_SIZE * 1.25, radius * FOG_SOFT_FEATHER_FRAC);
+  const outer = radius + feather * 0.15;
+  const cellRadius = Math.ceil(outer / FOG_CELL_SIZE);
   const center = worldToGrid(wx, wz);
+  const r2 = radius * radius;
 
   for (let dx = -cellRadius; dx <= cellRadius; dx++) {
     for (let dz = -cellRadius; dz <= cellRadius; dz++) {
@@ -119,15 +140,24 @@ function revealArea(grid, wx, wz, radius) {
       const gz = center.z + dz;
       if (gx < 0 || gx >= FOG_GRID_SIZE || gz < 0 || gz >= FOG_GRID_SIZE) continue;
 
-      // Any overlap between vision disk and this fog cell (not just cell center).
       const x0 = gx * FOG_CELL_SIZE - MAP_NAV_PLANE_HALF_M;
       const z0 = gz * FOG_CELL_SIZE - MAP_NAV_PLANE_HALF_M;
       const x1 = x0 + FOG_CELL_SIZE;
       const z1 = z0 + FOG_CELL_SIZE;
-      const r2 = radius * radius;
+      const idx = gridIndex(gx, gz);
+
+      // Gameplay: any overlap with hard vision disk.
       if (minDistSqPointToRect(wx, wz, x0, z0, x1, z1) <= r2) {
-        grid[gridIndex(gx, gz)] = 2; // Currently visible
+        grid[idx] = 2;
       }
+
+      if (!soft) continue;
+      // Soft display weight from cell center (smooth circular falloff).
+      const cx = (x0 + x1) * 0.5;
+      const cz = (z0 + z1) * 0.5;
+      const dist = Math.hypot(cx - wx, cz - wz);
+      const w = 1 - smoothstep(radius - feather, radius, dist);
+      if (w > soft[idx]) soft[idx] = w;
     }
   }
 }
@@ -163,6 +193,11 @@ export function getTeamGrid(team) {
   return teamGrids.get(team);
 }
 
+/** Soft live-vision weights (0..1) for world/minimap feather. */
+export function getTeamSoftLive(team) {
+  return teamSoftLive.get(team);
+}
+
 export function isUnitVisibleToPlayer(unitOrBuilding, playerId) {
   if (State.gameSession.debugFog) return true;
   const player = State.players[playerId];
@@ -194,8 +229,8 @@ export function findNearestUnexploredCell(team, startX, startZ) {
   for (let gz = 0; gz < FOG_GRID_SIZE; gz++) {
     for (let gx = 0; gx < FOG_GRID_SIZE; gx++) {
       const idx = gz * FOG_GRID_SIZE + gx;
-      if (grid[idx] === 0) { // Never seen
-        // World coordinates for the center of this cell
+      if (grid[idx] === 0) {
+        // Never seen
         const wx = (gx + 0.5) * FOG_CELL_SIZE - MAP_NAV_PLANE_HALF_M;
         const wz = (gz + 0.5) * FOG_CELL_SIZE - MAP_NAV_PLANE_HALF_M;
 

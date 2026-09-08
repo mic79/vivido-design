@@ -8,7 +8,7 @@ import {
   PLAYER_COLORS, MAX_INSTANCES_PER_TYPE, MAX_BUILDING_INSTANCES,
   MAX_PROJECTILES, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT, HEALTH_BAR_Y_OFFSET,
   getResourceFieldPositions, BUILD_RADIUS_FROM_HQ, BARRACKS_UNITS,
-  MAP_NAV_PLANE_SPAN_M, FOG_GRID_SIZE, MAP_UNIT_NAV_RADIUS,
+  MAP_NAV_PLANE_SPAN_M, MAP_NAV_PLANE_HALF_M, FOG_GRID_SIZE, MAP_UNIT_NAV_RADIUS,
   FOG_OVERLAY_REDRAW_HZ, MAP_TERRAIN_STYLE,
   skirmishKitKind,
 } from './config.js';
@@ -17,10 +17,12 @@ import * as Fog from './fog.js';
 import * as UI from './ui.js';
 import {
   sampleMoonTraversableBaseY,
+  sampleMoonTerrainWorldY,
   sampleGameplayEntityY,
   sampleGameplayEntityYCached,
 } from './moon-environment.js';
 import * as Perf from './perf-profiler.js';
+import * as FogVisual from './fog-visual.js';
 
 let RESOURCE_FIELD_LAYOUT = getResourceFieldPositions();
 
@@ -604,7 +606,7 @@ function createUnitMeshes() {
 
     const material = new THREE.MeshLambertMaterial({
       color: 0xffffff,
-      // We'll use instanceColor for player tinting
+      // instanceColor supplies team tint
     });
 
     const mesh = new THREE.InstancedMesh(geometry, material, MAX_INSTANCES_PER_TYPE);
@@ -1244,7 +1246,6 @@ function replaceUnitInstancedMesh(unitType, geometry, material, THREE_w) {
   mesh.castShadow = true;
   mesh.receiveShadow = false;
   mesh.name = `units_${unitType}`;
-
   for (let i = 0; i < MAX_INSTANCES_PER_TYPE; i++) {
     _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
     mesh.setMatrixAt(i, _mat4);
@@ -1770,52 +1771,62 @@ function createProjectileMesh() {
 }
 
 // --- World fog-of-war tint ---
-// Follows the **navigable** curved bowl only. Lift must clear FBM micro-relief (amp ~2.2 m);
-// 0.15 m left blotchy gaps. Hills/macros are NOT traced — they poke through via depth test.
-const FOG_OVERLAY_ABOVE_NAV_M = 3;
+// Must clear visual+nav peaks *and* coarse-triangle chords (under-ground verts → depthTest
+// hid FoW everywhere except the rim silhouette vs sky).
+const FOG_OVERLAY_ABOVE_M = 1.6;
+/** Upsample fog canvas so LinearFilter feathers a readable circular vision rim. */
+const FOG_OVERLAY_UPSAMPLE = 8;
 
-/** Max navigable-bowl Y near a fog vertex so coarse fog tris clear FBM peaks between verts. */
-function fogNavigableClearanceY(wx, wz, halfCell) {
-  const s = Math.max(6, halfCell * 1.15);
-  let m = sampleMoonTraversableBaseY(wx, wz);
-  m = Math.max(m, sampleMoonTraversableBaseY(wx + s, wz));
-  m = Math.max(m, sampleMoonTraversableBaseY(wx - s, wz));
-  m = Math.max(m, sampleMoonTraversableBaseY(wx, wz + s));
-  m = Math.max(m, sampleMoonTraversableBaseY(wx, wz - s));
-  m = Math.max(m, sampleMoonTraversableBaseY(wx + s, wz + s));
-  m = Math.max(m, sampleMoonTraversableBaseY(wx - s, wz - s));
-  m = Math.max(m, sampleMoonTraversableBaseY(wx + s, wz - s));
-  m = Math.max(m, sampleMoonTraversableBaseY(wx - s, wz + s));
-  if (!Number.isFinite(m)) m = 0;
-  // Kit heightfields used to stamp building roofs; keep fog on the dirt so modules stay visible.
+/** Surface Y under a fog vertex — max(visual, nav) + neighborhood so veil never sinks under ground. */
+function fogSurfaceClearanceY(wx, wz, halfCell) {
+  const s = Math.max(2.5, halfCell);
+  const sample = (x, z) => {
+    const v = sampleMoonTerrainWorldY(x, z);
+    const n = sampleMoonTraversableBaseY(x, z);
+    const a = Number.isFinite(v) ? v : -Infinity;
+    const b = Number.isFinite(n) ? n : -Infinity;
+    const m = Math.max(a, b);
+    return Number.isFinite(m) ? m : 0;
+  };
+  let m = sample(wx, wz);
+  m = Math.max(m, sample(wx + s, wz));
+  m = Math.max(m, sample(wx - s, wz));
+  m = Math.max(m, sample(wx, wz + s));
+  m = Math.max(m, sample(wx, wz - s));
+  m = Math.max(m, sample(wx + s, wz + s));
+  m = Math.max(m, sample(wx - s, wz - s));
+  m = Math.max(m, sample(wx + s, wz - s));
+  m = Math.max(m, sample(wx - s, wz + s));
   if (MAP_TERRAIN_STYLE === 'kit') m = Math.min(m, 5);
   return m;
 }
 
 function buildNavigableFogOverlayGeometry(THREE) {
-  const span = MAP_NAV_PLANE_SPAN_M;
-  const half = span * 0.5;
-  const segs = Math.max(64, Math.min(128, Math.round(span / 12)));
+  // Stay inside the playable rim so depthTest:false cannot paint a shelf into the sky.
+  const half = Math.min(MAP_NAV_PLANE_HALF_M, MAP_UNIT_NAV_RADIUS * 0.88);
+  const span = half * 2;
+  const segs = Math.max(120, Math.min(200, Math.round(span / 2.4)));
   const halfCell = span / segs / 2;
   const vCount = (segs + 1) * (segs + 1);
   const positions = new Float32Array(vCount * 3);
   const uvs = new Float32Array(vCount * 2);
+  const fogHalf = MAP_NAV_PLANE_HALF_M;
+  const fogSpan = MAP_NAV_PLANE_SPAN_M;
   let pi = 0;
   let ui = 0;
 
   for (let iz = 0; iz <= segs; iz++) {
     const tv = iz / segs;
-    const localY = -half + tv * span;
-    const wz = -localY;
+    const wz = -half + tv * span;
     for (let ix = 0; ix <= segs; ix++) {
       const tu = ix / segs;
       const wx = -half + tu * span;
-      const wy = fogNavigableClearanceY(wx, wz, halfCell) + FOG_OVERLAY_ABOVE_NAV_M;
+      const wy = fogSurfaceClearanceY(wx, wz, halfCell) + FOG_OVERLAY_ABOVE_M;
       positions[pi++] = wx;
       positions[pi++] = wy;
       positions[pi++] = wz;
-      uvs[ui++] = tu;
-      uvs[ui++] = tv;
+      uvs[ui++] = (wx + fogHalf) / fogSpan;
+      uvs[ui++] = 1 - (wz + fogHalf) / fogSpan;
     }
   }
 
@@ -1841,19 +1852,26 @@ function buildNavigableFogOverlayGeometry(THREE) {
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   geo.setIndex(new THREE.BufferAttribute(indices, 1));
-  geo.computeVertexNormals();
+  // Force +Y normals so FrontSide always faces the sky camera — never show fog undersides
+  // on ridges (DoubleSide black slabs / wrong winding).
+  const normals = new Float32Array(vCount * 3);
+  for (let i = 0; i < vCount; i++) {
+    normals[i * 3] = 0;
+    normals[i * 3 + 1] = 1;
+    normals[i * 3 + 2] = 0;
+  }
+  geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   return geo;
 }
 
 function setFogOverlayVisible(on) {
-  if (fogOverlayMesh) fogOverlayMesh.visible = on;
-  // Soft veil alone discards α>0.8, so unexplored never covers the moon — Story hills
-  // then shade the whole plate+skirt (fillrate cliff vs RTSVR4 ~120 FPS). Opaque FoW
-  // depth-writes first and z-rejects terrain (RTSVR4 behavior). Keep soft-only for kit
-  // so Overview/kit rocks are not blacked out.
-  if (fogUnexploredMesh) {
-    fogUnexploredMesh.visible = !!(on && MAP_TERRAIN_STYLE !== 'kit');
-  }
+  // Terrain-shader FoW — keep the old overlay mesh hidden (it caused rim sky shelves).
+  if (fogOverlayMesh) fogOverlayMesh.visible = false;
+  if (fogUnexploredMesh) fogUnexploredMesh.visible = false;
+  FogVisual.setFogVisualEnabled(!!on);
+  FogVisual.syncFogVisualExtents();
+  const ground = document.getElementById('ground')?.getObject3D?.('mesh');
+  if (ground) FogVisual.installFogVisualUnder(ground);
 }
 
 function disposeFogOverlayMeshes() {
@@ -1911,72 +1929,68 @@ function createFogPlane() {
 
   disposeFogOverlayMeshes();
 
+  const fogRes = FOG_GRID_SIZE * FOG_OVERLAY_UPSAMPLE;
   fogOverlayCanvas = document.createElement('canvas');
-  fogOverlayCanvas.width = FOG_GRID_SIZE;
-  fogOverlayCanvas.height = FOG_GRID_SIZE;
+  fogOverlayCanvas.width = fogRes;
+  fogOverlayCanvas.height = fogRes;
   fogOverlayCtx = fogOverlayCanvas.getContext('2d', { willReadFrequently: true });
-  fogOverlayImageData = fogOverlayCtx.createImageData(FOG_GRID_SIZE, FOG_GRID_SIZE);
+  fogOverlayImageData = fogOverlayCtx.createImageData(fogRes, fogRes);
 
   fogOverlayTexture = new THREE.CanvasTexture(fogOverlayCanvas);
   fogOverlayTexture.wrapS = THREE.ClampToEdgeWrapping;
   fogOverlayTexture.wrapT = THREE.ClampToEdgeWrapping;
-  fogOverlayTexture.magFilter = THREE.NearestFilter;
-  fogOverlayTexture.minFilter = THREE.NearestFilter;
+  fogOverlayTexture.magFilter = THREE.LinearFilter;
+  fogOverlayTexture.minFilter = THREE.LinearFilter;
+  fogOverlayTexture.generateMipmaps = false;
   fogOverlayTexture.flipY = true;
   fogOverlayTexture.premultiplyAlpha = false;
+  FogVisual.setFogVisualMap(fogOverlayTexture);
+  FogVisual.setFogVisualOutsideAlpha(185 / 255);
+  FogVisual.syncFogVisualExtents();
 
+  // Overlay mesh kept only as a legacy hook / pierce probe — never shown.
   const geo = buildNavigableFogOverlayGeometry(THREE);
   geo.computeBoundingSphere();
   geo.computeBoundingBox();
 
-  // Unexplored: opaque black, writes depth FIRST so PBR terrain/skirts under blackout are z-rejected.
   const matOpaque = new THREE.MeshBasicMaterial({
     map: fogOverlayTexture,
     alphaTest: 0.9,
     transparent: false,
     depthWrite: true,
     depthTest: true,
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
     color: 0xffffff,
   });
   fogUnexploredMesh = new THREE.Mesh(geo, matOpaque);
   fogUnexploredMesh.name = 'rts-world-fog-unexplored';
-  fogUnexploredMesh.renderOrder = -10;
-  fogUnexploredMesh.frustumCulled = false;
   fogUnexploredMesh.visible = false;
   fogUnexploredMesh.raycast = () => {};
   scene3D.add(fogUnexploredMesh);
 
-  // Explored veil only (mid alpha). Live vision (a=0) and unexplored (a=1) are discarded.
   const matVeil = new THREE.MeshBasicMaterial({
     map: fogOverlayTexture,
     transparent: true,
     opacity: 1,
     depthWrite: false,
     depthTest: true,
-    side: THREE.DoubleSide,
-    polygonOffset: true,
-    polygonOffsetFactor: -1,
-    polygonOffsetUnits: -1,
-    alphaTest: 0.12,
+    side: THREE.FrontSide,
+    alphaTest: 0.02,
   });
-  matVeil.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <alphatest_fragment>',
-      `
-#ifdef USE_ALPHATEST
-	if ( diffuseColor.a < 0.12 || diffuseColor.a > 0.80 ) discard;
-#endif
-`
-    );
-  };
   fogOverlayMesh = new THREE.Mesh(geo, matVeil);
   fogOverlayMesh.name = 'rts-world-fog-overlay';
-  fogOverlayMesh.renderOrder = 4;
-  fogOverlayMesh.frustumCulled = false;
   fogOverlayMesh.visible = false;
   fogOverlayMesh.raycast = () => {};
+  fogOverlayMesh.userData.rtsFogBuild = '0.5.59-darken';
+  console.log(
+    '[fog] overlay build',
+    fogOverlayMesh.userData.rtsFogBuild,
+    `(terrain darken, visual half=${FogVisual.fogVisualHalfM()})`
+  );
   scene3D.add(fogOverlayMesh);
+
+  const ground = document.getElementById('ground')?.getObject3D?.('mesh');
+  if (ground) FogVisual.installFogVisualUnder(ground);
 
   // Verify: fog stays above navigable bowl (gaps = terrain FBM punching through).
   {
@@ -1999,9 +2013,9 @@ function createFogPlane() {
       }
     }
     if (pierce > 0) {
-      console.warn(`[fog] navigable pierce at ${pierce} samples (worst ${worst.toFixed(2)} m) — lift=${FOG_OVERLAY_ABOVE_NAV_M}`);
+      console.warn(`[fog] pierce at ${pierce} samples (worst ${worst.toFixed(2)} m) — lift=${FOG_OVERLAY_ABOVE_M}`);
     } else {
-      console.log(`[fog] navigable-bowl overlay @ +${FOG_OVERLAY_ABOVE_NAV_M}m (no FBM gaps)`);
+      console.log(`[fog] visual-terrain overlay @ +${FOG_OVERLAY_ABOVE_M}m half=${MAP_NAV_PLANE_HALF_M}`);
     }
   }
 }
@@ -2134,6 +2148,7 @@ function updateWorldFogOverlay() {
     setFogOverlayVisible(false);
     return;
   }
+  const soft = Fog.getTeamSoftLive(player.team);
 
   setFogOverlayVisible(true);
   const now = performance.now();
@@ -2145,39 +2160,74 @@ function updateWorldFogOverlay() {
   let hash = 2166136261;
   for (let i = 0; i < grid.length; i++) {
     hash = Math.imul(hash ^ grid[i], 16777619);
+    if (soft) hash = Math.imul(hash ^ ((soft[i] * 255) | 0), 16777619);
   }
   if (hash === _fogOverlayGridHash) return;
   _fogOverlayGridHash = hash;
 
+  const up = FOG_OVERLAY_UPSAMPLE;
+  const fogRes = FOG_GRID_SIZE * up;
   const d = fogOverlayImageData.data;
-  const need = FOG_GRID_SIZE * FOG_GRID_SIZE * 4;
+  const need = fogRes * fogRes * 4;
   if (d.length < need) {
     resizeWorldFogOverlay();
     return;
   }
-  // Stronger shroud vs live vision: moon albedo is already dark, so prior alphas (~68/128)
-  // barely read. Keep v===2 fully clear; dim explored; nearly blackout unexplored.
-  for (let gz = 0; gz < FOG_GRID_SIZE; gz++) {
-    for (let gx = 0; gx < FOG_GRID_SIZE; gx++) {
-      const v = grid[gz * FOG_GRID_SIZE + gx];
-      const i = (gz * FOG_GRID_SIZE + gx) * 4;
-      if (v === 2) {
+
+  // Bilinear sample of hard state + soft live weight → soft circular vision edge.
+  // Explored = indigo veil (terrain still readable); unexplored = near-blackout.
+  const sampleCell = (fx, fz) => {
+    const x0 = Math.max(0, Math.min(FOG_GRID_SIZE - 1, Math.floor(fx)));
+    const z0 = Math.max(0, Math.min(FOG_GRID_SIZE - 1, Math.floor(fz)));
+    const x1 = Math.min(FOG_GRID_SIZE - 1, x0 + 1);
+    const z1 = Math.min(FOG_GRID_SIZE - 1, z0 + 1);
+    const tx = fx - x0;
+    const tz = fz - z0;
+    const i00 = z0 * FOG_GRID_SIZE + x0;
+    const i10 = z0 * FOG_GRID_SIZE + x1;
+    const i01 = z1 * FOG_GRID_SIZE + x0;
+    const i11 = z1 * FOG_GRID_SIZE + x1;
+    const s00 = soft ? soft[i00] : grid[i00] === 2 ? 1 : 0;
+    const s10 = soft ? soft[i10] : grid[i10] === 2 ? 1 : 0;
+    const s01 = soft ? soft[i01] : grid[i01] === 2 ? 1 : 0;
+    const s11 = soft ? soft[i11] : grid[i11] === 2 ? 1 : 0;
+    const live = s00 * (1 - tx) * (1 - tz) + s10 * tx * (1 - tz) + s01 * (1 - tx) * tz + s11 * tx * tz;
+    const e00 = grid[i00] > 0 ? 1 : 0;
+    const e10 = grid[i10] > 0 ? 1 : 0;
+    const e01 = grid[i01] > 0 ? 1 : 0;
+    const e11 = grid[i11] > 0 ? 1 : 0;
+    const explored =
+      e00 * (1 - tx) * (1 - tz) + e10 * tx * (1 - tz) + e01 * (1 - tx) * tz + e11 * tx * tz;
+    return { live, explored };
+  };
+
+  for (let py = 0; py < fogRes; py++) {
+    const fz = (py + 0.5) / up - 0.5;
+    for (let px = 0; px < fogRes; px++) {
+      const fx = (px + 0.5) / up - 0.5;
+      const { live, explored } = sampleCell(fx, fz);
+      const i = (py * fogRes + px) * 4;
+      // Darken-only FoW (RGB=0). Soft clear vision disk from soft-live weights.
+      // Do NOT fade at nav radius — visual ground beyond nav is handled in fog-visual.js.
+      if (live > 0.72) {
         d[i] = 0;
         d[i + 1] = 0;
         d[i + 2] = 0;
         d[i + 3] = 0;
-      } else if (v === 1) {
-        // Previously seen — cool dusk veil (still shows terrain silhouette).
-        d[i] = 8;
-        d[i + 1] = 10;
-        d[i + 2] = 28;
-        d[i + 3] = 145;
       } else {
-        // Never seen — opaque blackout (alpha 255 → unexplored mesh, veil discards).
+        const t = 1 - live / 0.72;
+        // Explored dusk vs unexplored — both neutral black alpha, no hue.
+        const base = explored < 0.35 ? 168 : 115;
+        let a = 28 + t * t * base;
+        // Soft circular rim so vision range reads clearly.
+        if (live > 0.05 && live < 0.72) {
+          const u = (live - 0.05) / 0.67;
+          a += Math.sin(u * Math.PI) * 52;
+        }
         d[i] = 0;
         d[i + 1] = 0;
-        d[i + 2] = 6;
-        d[i + 3] = 255;
+        d[i + 2] = 0;
+        d[i + 3] = Math.round(Math.min(185, a));
       }
     }
   }

@@ -1828,16 +1828,20 @@ function drawMinimapToContext(ctx, w, h) {
       _minimapFogImageData = _minimapFogCtx.createImageData(FOG_GRID_SIZE, FOG_GRID_SIZE);
     }
     const d = _minimapFogImageData.data;
+    const soft = Fog.getTeamSoftLive?.(myTeam);
     for (let gz = 0; gz < FOG_GRID_SIZE; gz++) {
       for (let gx = 0; gx < FOG_GRID_SIZE; gx++) {
-        const val = fogGrid[gz * FOG_GRID_SIZE + gx];
-        const i = (gz * FOG_GRID_SIZE + gx) * 4;
-        if (val === 2) {
-          d[i] = 58;
-          d[i + 1] = 58;
-          d[i + 2] = 70;
+        const idx = gz * FOG_GRID_SIZE + gx;
+        const val = fogGrid[idx];
+        const i = idx * 4;
+        const live = soft ? soft[idx] : val === 2 ? 1 : 0;
+        if (live > 0.55 || val === 2) {
+          const k = Math.max(0.35, live);
+          d[i] = Math.round(58 * k);
+          d[i + 1] = Math.round(58 * k);
+          d[i + 2] = Math.round(70 * k);
           d[i + 3] = 255;
-        } else if (val === 1) {
+        } else if (val === 1 || live > 0.05) {
           d[i] = 22;
           d[i + 1] = 22;
           d[i + 2] = 30;
@@ -1854,7 +1858,7 @@ function drawMinimapToContext(ctx, w, h) {
     // Map fog grid → playable plane in minimap space (same transform as cell centers).
     const fogOrigin = (-MAP_NAV_PLANE_HALF_M + span * 0.5) * scaleX;
     const fogSize = FOG_GRID_SIZE * FOG_CELL_SIZE * scaleX;
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true;
     ctx.drawImage(_minimapFogCanvas, fogOrigin, fogOrigin, fogSize, fogSize);
   } else if (isSpyMode) {
     ctx.fillStyle = '#3a3a46';

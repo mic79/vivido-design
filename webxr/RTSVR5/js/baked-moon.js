@@ -8,6 +8,7 @@
  */
 import { MAP_TERRAIN_STYLE } from './config.js';
 import { ensureThreeGltfLoaders } from './three-gltf-umd.js';
+import { installFogVisualOnMaterial } from './fog-visual.js';
 
 /** Moon-only crater (Lambert). Kept as fallback / A0. */
 export const BAKED_SKIRMISH_MOON_GLB = 'assets/terrain/terrain-skirmish-ue-lm.glb';
@@ -281,16 +282,40 @@ export async function tryLoadBakedSkirmishMoon() {
     }
   }
 
+  const rockShadowSpecs = json.extras?.rtsMoonRockShadows || [];
+  const rockShadowByIndex = [];
+  if (rockShadowSpecs.length && gltf.parser) {
+    for (let i = 0; i < rockShadowSpecs.length; i++) {
+      const spec = rockShadowSpecs[i];
+      if (!spec || spec.layout !== 'planar-xz' || !spec.bbox) continue;
+      try {
+        const src = await gltf.parser.getDependency('texture', spec.textureIndex);
+        rockShadowByIndex[i] = {
+          tex: adoptLightmapTexture(src, W),
+          bbox: spec.bbox,
+        };
+      } catch (err) {
+        console.warn('[RTSVR5] rock shadow map', i, err);
+      }
+    }
+  }
+
   const usePlanar = planarOk && lmTexByIndex.every((e) => e && e.tex && e.bbox);
   let look = 'lambert+glb-moon01';
+  let rockShadows = 0;
   for (const src of moonMeshes) {
-    const lm = usePlanar ? lmTexByIndex[lmIndexForName(src.name)] : null;
+    const idx = lmIndexForName(src.name);
+    const lm = usePlanar ? lmTexByIndex[idx] : null;
+    const rs = rockShadowByIndex[idx] || null;
     const mat =
       lm && lm.tex
-        ? makeBakedMoonMaterial(src.material, W, recv, lm.tex, lm.intensity)
-        : makeLitMoonMaterial(src.material, W, recv);
+        ? makeBakedMoonMaterial(src.material, W, recv, lm.tex, lm.intensity, rs)
+        : makeLitMoonMaterial(src.material, W, recv, rs);
     if (mat.userData.bakedRgbLm) look = 'basic+planar-lm';
-    keep.add(adoptMeshForAframe(src, W, recv, mat, lm && lm.bbox));
+    if (rs && rs.tex) rockShadows += 1;
+    // Planar uv1 from rock-shadow bbox (preferred) or unlit RGB LM bbox.
+    const planarBbox = (rs && rs.bbox) || (lm && lm.bbox) || null;
+    keep.add(adoptMeshForAframe(src, W, recv, mat, planarBbox));
   }
   keep.updateMatrixWorld(true);
 
@@ -302,11 +327,12 @@ export async function tryLoadBakedSkirmishMoon() {
     propMeshes: propMeshes.length,
     look,
     planarLm: usePlanar,
+    rockShadows,
   });
   return keep;
 }
 
-function makeBakedMoonMaterial(srcMat, W, recv, lmTex, intensity) {
+function makeBakedMoonMaterial(srcMat, W, recv, lmTex, intensity, rockShadow) {
   const mat = new W.MeshBasicMaterial({
     color: 0xffffff,
     fog: false,
@@ -321,11 +347,101 @@ function makeBakedMoonMaterial(srcMat, W, recv, lmTex, intensity) {
   mat.userData.cheapMoonLook = true;
   mat.userData.bakedRgbLm = true;
   mat.userData.shadowRecv = recv;
+  // Unlit path already uses lightMap for RGB lighting; multiply albedo by rock shadow.
+  if (rockShadow && rockShadow.tex) {
+    const shadowTex = rockShadow.tex;
+    mat.userData.rockShadowMap = shadowTex;
+    mat.userData.rockShadowStrength = 0;
+    const prev = mat.onBeforeCompile;
+    mat.onBeforeCompile = (shader) => {
+      if (typeof prev === 'function') prev(shader);
+      shader.uniforms.rockShadowMap = { value: shadowTex };
+      shader.uniforms.rockShadowStrength = { value: 0 };
+      mat.userData._rockShadowStrengthUniform = shader.uniforms.rockShadowStrength;
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          /* glsl */ `#include <common>
+uniform sampler2D rockShadowMap;
+uniform float rockShadowStrength;`
+        )
+        .replace(
+          '#include <map_fragment>',
+          /* glsl */ `#include <map_fragment>
+	if ( rockShadowStrength > 0.5 ) {
+		diffuseColor.rgb *= texture2D( rockShadowMap, vLightMapUv ).rgb;
+	}`
+        );
+    };
+    mat.customProgramCacheKey = () => `unlitMoonRockShadow|${mat.uuid}`;
+  }
   mat.needsUpdate = true;
+  installFogVisualOnMaterial(mat);
   return mat;
 }
 
-function makeLitMoonMaterial(srcMat, W, recv) {
+/**
+ * Rock shadows are a planar grayscale atlas on uv1. Three's lightMap *adds*
+ * irradiance; we keep lightMapIntensity at 0 and multiply diffuse by the atlas.
+ * `rockShadowStrength` stays 0 until scenery props attach (intro/lobby = clean moon).
+ */
+function attachRockShadowMultiply(mat, shadowTex) {
+  if (!mat || !shadowTex) return;
+  mat.lightMap = shadowTex;
+  mat.lightMapIntensity = 0;
+  mat.userData.rockShadowMap = shadowTex;
+  mat.userData.rockShadowStrength = 0;
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader) => {
+    if (typeof prev === 'function') prev(shader);
+    shader.uniforms.rockShadowStrength = { value: mat.userData.rockShadowStrength ? 1 : 0 };
+    mat.userData._rockShadowStrengthUniform = shader.uniforms.rockShadowStrength;
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        /* glsl */ `#include <common>
+uniform float rockShadowStrength;`
+      )
+      .replace(
+        '#include <aomap_fragment>',
+        /* glsl */ `#include <aomap_fragment>
+#ifdef USE_LIGHTMAP
+	if ( rockShadowStrength > 0.5 ) {
+		float rockShadow = texture2D( lightMap, vLightMapUv ).r;
+		reflectedLight.directDiffuse *= rockShadow;
+		reflectedLight.indirectDiffuse *= rockShadow;
+	}
+#endif
+`
+      );
+  };
+  mat.customProgramCacheKey = () =>
+    `moonRockShadow|${mat.userData.shadowRecv ? 1 : 0}|${mat.uuid}`;
+}
+
+/** Enable/disable baked rock-shadow multiply on a moon root (props on ↔ on). */
+export function setBakedMoonRockShadowsEnabled(root, enabled) {
+  if (!root || typeof root.traverse !== 'function') return;
+  const on = !!enabled;
+  root.traverse((obj) => {
+    const mats = obj.isMesh
+      ? Array.isArray(obj.material)
+        ? obj.material
+        : obj.material
+          ? [obj.material]
+          : []
+      : [];
+    for (const mat of mats) {
+      if (!mat || !mat.userData || !mat.userData.rockShadowMap) continue;
+      mat.userData.rockShadowStrength = on ? 1 : 0;
+      const u = mat.userData._rockShadowStrengthUniform;
+      if (u) u.value = on ? 1 : 0;
+      mat.needsUpdate = true;
+    }
+  });
+}
+
+function makeLitMoonMaterial(srcMat, W, recv, rockShadow) {
   const mat = new W.MeshLambertMaterial({
     color: 0xffffff,
     fog: false,
@@ -344,7 +460,9 @@ function makeLitMoonMaterial(srcMat, W, recv) {
   mat.color.setRGB(1.55, 1.55, 1.55);
   mat.userData.cheapMoonLook = true;
   mat.userData.shadowRecv = recv;
+  if (rockShadow && rockShadow.tex) attachRockShadowMultiply(mat, rockShadow.tex);
   mat.needsUpdate = true;
+  installFogVisualOnMaterial(mat);
   return mat;
 }
 

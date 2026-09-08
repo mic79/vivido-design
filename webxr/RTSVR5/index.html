@@ -6,18 +6,35 @@
   <title>RTS VR V — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.5.40">
+  <meta name="rts-version" content="0.5.59">
 
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/super-three@0.173.4/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/super-three@0.173.4/examples/jsm/"
+  <!-- Versioned import map so Quest/browser cannot keep a stale renderer/fog module. -->
+  <script>
+  (function () {
+    var v = document.querySelector('meta[name="rts-version"]').getAttribute('content');
+    var files = [
+      'main.js','renderer.js','fog.js','fog-visual.js','moon-environment.js','config.js','state.js','ui.js',
+      'pathfinding.js','baked-moon.js','skirmish-lanes.js','perf-profiler.js','input.js',
+      'network.js','audio.js','bot.js','buildings.js','units.js','effects.js','resources.js',
+      'spatial.js','loop.js','story-mode.js','story-kit-terrain.js','story-history.js',
+      'sky-hdr-environment.js','scene-reveal.js','epicLightmaps.js','three-gltf-umd.js',
+      'nav-debug-overlay.js','separation-policy.js','rts-aframe-bootstrap.js','_rts-bust.js'
+    ];
+    var imports = {
+      three: 'https://cdn.jsdelivr.net/npm/super-three@0.173.4/build/three.module.js',
+      'three/addons/': 'https://cdn.jsdelivr.net/npm/super-three@0.173.4/examples/jsm/'
+    };
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      imports['./js/' + f] = './js/' + f + '?v=' + encodeURIComponent(v);
     }
-  }
+    var el = document.createElement('script');
+    el.type = 'importmap';
+    el.textContent = JSON.stringify({ imports: imports });
+    document.head.appendChild(el);
+  })();
   </script>
-  <!-- A-Frame + extras + PeerJS + VR UI scripts (see js/rts-aframe-bootstrap.js). -->
-  <script type="module" src="js/rts-aframe-bootstrap.js"></script>
+  <script type="module" src="js/rts-aframe-bootstrap.js?v=0.5.59"></script>
 
   <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -520,8 +537,8 @@
   <!-- After a-scene so fixed UI stacks above the canvas on desktop; same root is used for WebXR DOM Overlay in-headset. -->
   <div id="xr-dom-overlay"></div>
 
-  <!-- Game Module -->
-  <script type="module" src="js/main.js"></script>
+  <!-- Game Module — ?v= must match meta rts-version (module graph cache). -->
+  <script type="module" src="js/main.js?v=0.5.59"></script>
 
   <script>
     // Create grid helper on scene load
