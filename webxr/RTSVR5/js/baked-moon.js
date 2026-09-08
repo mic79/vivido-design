@@ -21,8 +21,9 @@ export const BAKED_SKIRMISH_GLB = BAKED_SKIRMISH_1V1_GLB;
 const MIN_BAKE_BYTES = 800000;
 const MIN_VERTS = 5000;
 
-/** Props extracted from the combined 1v1 GLB (already surface-seated). */
-let embeddedSkirmishProps = null;
+/** Props extracted from the combined 1v1 GLB (already surface-seated). Kept as a
+ * template — rematch must clone again; a one-shot `take` forced the quest-rocks fallback. */
+let embeddedSkirmishPropsTemplate = null;
 
 function parseGlbJson(buf) {
   const dv = new DataView(buf);
@@ -149,15 +150,24 @@ async function fetchBakeBuffer() {
   return null;
 }
 
-/** Surface-seated Prop_* group from the combined 1v1 GLB, or null. */
+/** Fresh Prop_* group from the combined 1v1 bake (clone of retained template). */
 export function takeEmbeddedSkirmishProps() {
-  const g = embeddedSkirmishProps;
-  embeddedSkirmishProps = null;
-  return g;
+  if (!embeddedSkirmishPropsTemplate) return null;
+  const props = embeddedSkirmishPropsTemplate.clone(true);
+  props.name = 'rts-overview-props';
+  props.userData = {
+    ...embeddedSkirmishPropsTemplate.userData,
+    rtsOverviewProps: true,
+    rtsSceneryMode: 'B0',
+    rtsQuestRocksProps: true,
+    rtsSeatedOnCrater: true,
+    rtsSeatedClone: true,
+  };
+  return props;
 }
 
 export function peekEmbeddedSkirmishProps() {
-  return embeddedSkirmishProps;
+  return embeddedSkirmishPropsTemplate;
 }
 
 export async function tryLoadBakedSkirmishMoon() {
@@ -223,10 +233,11 @@ export async function tryLoadBakedSkirmishMoon() {
   }
 
   // Surface-seated scenery from the combined 1v1 GLB (skip second rocks fetch).
-  embeddedSkirmishProps = null;
+  // Retained as a template so every rematch can clone props again.
+  embeddedSkirmishPropsTemplate = null;
   if (propMeshes.length) {
     const props = new W.Group();
-    props.name = 'rts-overview-props';
+    props.name = 'rts-overview-props-template';
     props.userData.rtsOverviewProps = true;
     props.userData.rtsSceneryMode = 'B0';
     props.userData.rtsQuestRocksProps = true;
@@ -235,14 +246,13 @@ export async function tryLoadBakedSkirmishMoon() {
     for (const src of propMeshes) {
       src.updateMatrixWorld(true);
       const clone = src.clone(true);
-      // Bake world matrix into the clone so parenting under groundEl is stable.
       clone.matrix.copy(src.matrixWorld);
       clone.matrix.decompose(clone.position, clone.quaternion, clone.scale);
       clone.matrixAutoUpdate = true;
       props.add(clone);
     }
     props.updateMatrixWorld(true);
-    embeddedSkirmishProps = props;
+    embeddedSkirmishPropsTemplate = props;
   }
   const recv =
     typeof window._getDynamicShadowsEnabled === 'function'

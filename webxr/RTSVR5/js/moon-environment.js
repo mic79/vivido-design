@@ -2307,6 +2307,13 @@ function clearOverviewGroundscapeProps(groundEl) {
   const prev = groundEl.getObject3D('overviewProps');
   if (!prev) return;
   groundEl.removeObject3D('overviewProps');
+  // Seated clones share GPU buffers with the bake template. Disposing them on
+  // lobby/rematch nuked the template and forced the separate quest-rocks fallback
+  // (and could leave the crater looking like the old JS plate + floating rocks).
+  if (prev.userData && (prev.userData.rtsSeatedOnCrater || prev.userData.rtsSeatedClone)) {
+    if (prev.parent) prev.parent.remove(prev);
+    return;
+  }
   disposeGroundObject(prev);
 }
 
@@ -2767,4 +2774,5 @@ if (typeof window !== 'undefined') {
   window.__rtsSwapSkirmishKit = swapSkirmishKit;
   window.__rtsForceSkirmishKitKind = forceSkirmishKitKind;
   window.__rtsForceLeanRocksVisual = forceLeanRocksVisual;
+  window.__rtsEnsureSkirmishSceneryProps = ensureSkirmishSceneryProps;
 }

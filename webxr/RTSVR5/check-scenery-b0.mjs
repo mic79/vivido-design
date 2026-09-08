@@ -57,14 +57,39 @@ const st = await page.evaluate(() => {
   const g = document.getElementById('ground');
   const mesh = g && g.getObject3D && g.getObject3D('mesh');
   const props = g && g.getObject3D && g.getObject3D('overviewProps');
+  let propMeshes = 0;
+  if (props) props.traverse((o) => { if (o.isMesh) propMeshes++; });
   return {
     bake: !!(mesh && mesh.userData && mesh.userData.rtsSkirmishBake),
     kitKind: mesh && mesh.userData && mesh.userData.rtsKitKind,
     propsMode: props && props.userData && props.userData.rtsSceneryMode,
     propsUrl: props && props.userData && props.userData.rtsKitUrl,
+    seated: !!(props && props.userData && props.userData.rtsSeatedOnCrater),
+    propMeshes,
     diag: window.__rtsHudDiag && window.__rtsHudDiag.diag,
   };
 });
+
+// Rematch path: re-attach B0 twice — must keep combined seated props (not quest GLB).
+const rematch = await page.evaluate(async () => {
+  const g = document.getElementById('ground');
+  const sceneEl = document.querySelector('a-scene');
+  const ensure = window.__rtsEnsureSkirmishSceneryProps;
+  if (typeof ensure !== 'function') return { error: 'no ensure hook' };
+  if (window.State && window.State.gameSession) {
+    window.State.gameSession.matchPreparing = true;
+    window.State.gameSession.gameStarted = true;
+  }
+  await ensure(g, sceneEl);
+  await ensure(g, sceneEl);
+  const props = g.getObject3D('overviewProps');
+  return {
+    propsUrl: props && props.userData && props.userData.rtsKitUrl,
+    seated: !!(props && props.userData && props.userData.rtsSeatedOnCrater),
+    propsMode: props && props.userData && props.userData.rtsSceneryMode,
+  };
+});
+
 await browser.close();
 server.close();
 
@@ -72,22 +97,22 @@ const gotCombined = fetched.some((u) => u.includes('terrain-skirmish-1v1.glb'));
 const gotMoon = fetched.some((u) => u.includes('terrain-skirmish-ue-lm.glb'));
 const gotQuest = fetched.some((u) => u.includes('scifi-rts-quest.glb'));
 const gotKitTerrain = fetched.some((u) => u.includes('scifi-rts-kit-lod2.glb'));
-const propsLog = logs.find((l) => l.includes('skirmish scenery props')) || '';
+const propsLog = logs.filter((l) => l.includes('skirmish scenery props'));
 const bakeLog = logs.find((l) => l.includes('baked moon ready')) || '';
 const seated = !!(st.propsUrl && /terrain-skirmish-1v1/i.test(st.propsUrl));
+const rematchSeated = !!(rematch.propsUrl && /terrain-skirmish-1v1/i.test(rematch.propsUrl) && rematch.seated);
 
 let fail = 0;
 if ((!gotCombined && !gotMoon) || !st.bake) {
   console.error('FAIL moon bake not loaded', { gotCombined, gotMoon, st, bakeLog });
   fail = 1;
 }
-if (st.propsMode !== 'B0') {
-  console.error('FAIL scenery not B0', { st, propsLog });
+if (st.propsMode !== 'B0' || !seated) {
+  console.error('FAIL scenery not seated B0', { st, propsLog });
   fail = 1;
 }
-// Combined 1v1 GLB embeds seated props — quest rocks file is optional fallback only.
-if (!seated && !gotQuest) {
-  console.error('FAIL no seated props and no quest rocks fallback', { gotQuest, st, propsLog });
+if (!rematchSeated) {
+  console.error('FAIL rematch lost combined seated props', { rematch, gotQuest });
   fail = 1;
 }
 if (st.kitKind) {
@@ -102,10 +127,11 @@ if (!fail) {
   console.log('PASS B0 crater+rocks', {
     combined: gotCombined,
     seated,
+    rematchSeated,
+    propMeshes: st.propMeshes,
     propsUrl: st.propsUrl,
     diag: st.diag,
-    propsLog,
-    bakeLog,
+    gotQuest,
   });
 }
 process.exit(fail);

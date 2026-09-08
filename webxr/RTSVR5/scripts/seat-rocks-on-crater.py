@@ -37,6 +37,9 @@ CLEAR_RADIUS_M = 42.0  # sparse / remove inside HQ fight zone
 SINK_M = 0.15  # bury slightly so feet don't float
 MAX_TILT_DEG = 18.0  # blend toward surface normal, keep mostly upright
 RAY_H = 400.0
+# Extra surface copies of each seated rock (1 = original count only).
+DENSITY = max(1, int(os.environ.get("DENSITY", "10")))
+RING_JITTER_M = float(os.environ.get("JITTER", "7.5"))
 
 
 def log(msg: str) -> None:
@@ -255,6 +258,212 @@ def seat_rocks(moon_objs, rock_objs) -> list[dict]:
     return placements
 
 
+def densify_on_surface(moon_objs, density: int) -> list[dict]:
+    """Duplicate each Prop_* with local XZ jitter, re-raycast onto the crater."""
+    if density <= 1:
+        return []
+    moon_meshes = [o for o in mesh_objects(moon_objs) if o.name.startswith("Moon_")]
+    plate = next((o for o in moon_meshes if o.name.startswith("Moon_0")), None)
+    targets = [plate] if plate else moon_meshes
+    for o in list(bpy.data.objects):
+        if o.type == "MESH" and o.name.startswith("Prop_"):
+            o.hide_set(True)
+        elif o.type == "MESH" and o not in targets:
+            o.hide_set(True)
+        elif o.type == "MESH":
+            o.hide_set(False)
+
+    depsgraph = build_depsgraph()
+    base = [o for o in list(bpy.data.objects) if o.type == "MESH" and o.name.startswith("Prop_")]
+    extra = []
+    added = 0
+    missed = 0
+    import random
+
+    rng = random.Random(20260907)
+    half_span = TARGET_SPAN_M * 0.5
+    # Local rings only — long plate jumps mostly miss the crater mesh.
+    jitter_steps = [
+        RING_JITTER_M * 0.45,
+        RING_JITTER_M * 0.75,
+        RING_JITTER_M * 1.1,
+        RING_JITTER_M * 1.6,
+        RING_JITTER_M * 2.2,
+    ]
+
+    for src in base:
+        src_mw = src.matrix_world.copy()
+        src_scale = src_mw.to_scale()
+        for k in range(1, density):
+            placed = False
+            for attempt in range(6):
+                rad = jitter_steps[(k + attempt) % len(jitter_steps)] * (0.7 + 0.6 * rng.random())
+                ang = rng.random() * math.pi * 2
+                x = src_mw.translation.x + math.cos(ang) * rad
+                z = src_mw.translation.z + math.sin(ang) * rad
+                r = math.hypot(x, z)
+                if r > half_span * 0.98 or r < CLEAR_RADIUS_M * 0.9:
+                    continue
+                origin = Vector((x, RAY_H, z))
+                direction = Vector((0.0, -1.0, 0.0))
+                hit, hit_loc, hit_nor, _face, hit_obj, _mat = ray_moon(
+                    depsgraph, origin, direction
+                )
+                if not hit or hit_obj is None or not str(hit_obj.name).startswith("Moon_"):
+                    continue
+                up = Vector((0.0, 1.0, 0.0))
+                n = hit_nor.normalized()
+                if n.dot(up) < 0:
+                    n = -n
+                n_blend = (n * 0.35 + up * 0.65).normalized()
+                forward = src_mw.to_3x3() @ Vector((0.0, 0.0, 1.0))
+                forward.y = 0.0
+                if forward.length < 1e-4:
+                    forward = Vector((1.0, 0.0, 0.0))
+                else:
+                    forward.normalize()
+                yaw = rng.uniform(0, math.pi * 2)
+                c, s = math.cos(yaw), math.sin(yaw)
+                forward = Vector(
+                    (forward.x * c - forward.z * s, 0.0, forward.x * s + forward.z * c)
+                )
+                x_axis = forward.cross(n_blend)
+                if x_axis.length < 1e-4:
+                    x_axis = Vector((1.0, 0.0, 0.0)).cross(n_blend)
+                x_axis.normalize()
+                z_axis = x_axis.cross(n_blend).normalized()
+                rot = Matrix((x_axis, n_blend, z_axis)).transposed().to_4x4()
+                new_loc = hit_loc - n_blend * SINK_M
+                scl_mul = rng.uniform(0.72, 1.18)
+                scale = Vector(
+                    (src_scale.x * scl_mul, src_scale.y * scl_mul, src_scale.z * scl_mul)
+                )
+                scl = Matrix.Diagonal((scale.x, scale.y, scale.z, 1.0))
+
+                obj = src.copy()
+                obj.data = src.data
+                obj.animation_data_clear()
+                bpy.context.collection.objects.link(obj)
+                obj.name = f"{src.name}_d{k}"
+                obj.matrix_world = Matrix.Translation(new_loc) @ rot @ scl
+                obj.hide_set(True)
+                added += 1
+                extra.append(
+                    {
+                        "name": obj.name,
+                        "meshHint": (src.name.split(".")[0]).replace("Prop_", ""),
+                        "translation": [new_loc.x, new_loc.y, new_loc.z],
+                        "scale": [scale.x, scale.y, scale.z],
+                        "basisY": [n_blend.x, n_blend.y, n_blend.z],
+                    }
+                )
+                placed = True
+                break
+            if not placed:
+                missed += 1
+
+    for o in list(bpy.data.objects):
+        if o.type == "MESH":
+            o.hide_set(False)
+    log(f"densify density={density} added={added} missed={missed}")
+    return extra
+
+
+def ray_plate_world(plate, x: float, z: float):
+    """Raycast only the crater plate mesh (ignores prop clutter)."""
+    if plate is None:
+        return None
+    mw = plate.matrix_world
+    inv = mw.inverted()
+    origin_w = Vector((x, RAY_H, z))
+    dest_w = Vector((x, -RAY_H, z))
+    o_loc = inv @ origin_w
+    d_loc = dest_w - origin_w
+    d_loc = inv.to_3x3() @ d_loc
+    if d_loc.length < 1e-8:
+        return None
+    d_loc.normalize()
+    ok, loc, nor, _face = plate.ray_cast(o_loc, d_loc)
+    if not ok:
+        return None
+    hit_w = mw @ loc
+    nor_w = (mw.to_3x3() @ nor).normalized()
+    return hit_w, nor_w
+
+
+def fill_annulus_to_target(moon_objs, target_count: int) -> list[dict]:
+    """Scatter additional props across the playable ring until we hit target_count."""
+    existing = [o for o in list(bpy.data.objects) if o.type == "MESH" and o.name.startswith("Prop_")]
+    if len(existing) >= target_count or not existing:
+        return []
+    moon_meshes = [o for o in mesh_objects(moon_objs) if o.name.startswith("Moon_")]
+    plate = next((o for o in moon_meshes if o.name.startswith("Moon_0")), None)
+    if plate is None and moon_meshes:
+        plate = moon_meshes[0]
+
+    import random
+
+    rng = random.Random(20260908)
+    half_span = TARGET_SPAN_M * 0.5
+    r0 = CLEAR_RADIUS_M * 1.05
+    r1 = half_span * 0.96
+    extra = []
+    added = 0
+    attempts = 0
+    need = target_count - len(existing)
+    max_attempts = need * 12
+    while added < need and attempts < max_attempts:
+        attempts += 1
+        u = rng.random()
+        r = math.sqrt(r0 * r0 + u * (r1 * r1 - r0 * r0))
+        ang = rng.random() * math.pi * 2
+        x = math.cos(ang) * r
+        z = math.sin(ang) * r
+        hit = ray_plate_world(plate, x, z)
+        if not hit:
+            continue
+        hit_loc, hit_nor = hit
+        src = existing[rng.randrange(min(len(existing), 200))]
+        src_scale = src.matrix_world.to_scale()
+        up = Vector((0.0, 1.0, 0.0))
+        n = hit_nor.normalized()
+        if n.dot(up) < 0:
+            n = -n
+        n_blend = (n * 0.35 + up * 0.65).normalized()
+        yaw = rng.uniform(0, math.pi * 2)
+        c, s = math.cos(yaw), math.sin(yaw)
+        forward = Vector((c, 0.0, s))
+        x_axis = forward.cross(n_blend)
+        if x_axis.length < 1e-4:
+            x_axis = Vector((1.0, 0.0, 0.0)).cross(n_blend)
+        x_axis.normalize()
+        z_axis = x_axis.cross(n_blend).normalized()
+        rot = Matrix((x_axis, n_blend, z_axis)).transposed().to_4x4()
+        new_loc = hit_loc - n_blend * SINK_M
+        scl_mul = rng.uniform(0.65, 1.25)
+        scale = Vector((src_scale.x * scl_mul, src_scale.y * scl_mul, src_scale.z * scl_mul))
+        scl = Matrix.Diagonal((scale.x, scale.y, scale.z, 1.0))
+        obj = src.copy()
+        obj.data = src.data
+        obj.animation_data_clear()
+        bpy.context.collection.objects.link(obj)
+        obj.name = f"Prop_fill_{added}"
+        obj.matrix_world = Matrix.Translation(new_loc) @ rot @ scl
+        added += 1
+        extra.append(
+            {
+                "name": obj.name,
+                "meshHint": (src.name.split(".")[0]).replace("Prop_", ""),
+                "translation": [new_loc.x, new_loc.y, new_loc.z],
+                "scale": [scale.x, scale.y, scale.z],
+                "basisY": [n_blend.x, n_blend.y, n_blend.z],
+            }
+        )
+
+    log(f"fill_annulus target={target_count} added={added} attempts={attempts}")
+    return extra
+
+
 def fit_rocks_to_plate(rock_objs) -> None:
     """
     Scale/center from **instance origins** only (not mesh bound boxes).
@@ -375,6 +584,12 @@ def main() -> int:
         if o.type == "MESH" and is_rock_prop(o.name) and not o.name.startswith("Moon_")
     ]
     placements = seat_rocks(moon_now, rock_now)
+    base_n = sum(1 for o in bpy.data.objects if o.type == "MESH" and o.name.startswith("Prop_"))
+    placements.extend(densify_on_surface(moon_now, DENSITY))
+    target = max(base_n * DENSITY, base_n)
+    placements.extend(fill_annulus_to_target(moon_now, target))
+    prop_n = sum(1 for o in bpy.data.objects if o.type == "MESH" and o.name.startswith("Prop_"))
+    log(f"total props after densify={prop_n} target={target}")
 
     export_glb(OUT_GLB)
     os.makedirs(os.path.dirname(OUT_JSON), exist_ok=True)
@@ -385,6 +600,7 @@ def main() -> int:
                 "targetSpanM": TARGET_SPAN_M,
                 "clearRadiusM": CLEAR_RADIUS_M,
                 "sinkM": SINK_M,
+                "density": DENSITY,
                 "count": len(placements),
                 "placements": placements,
                 "glb": os.path.relpath(OUT_GLB, ROOT).replace("\\", "/"),
