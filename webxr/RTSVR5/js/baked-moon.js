@@ -9,9 +9,20 @@
 import { MAP_TERRAIN_STYLE } from './config.js';
 import { ensureThreeGltfLoaders } from './three-gltf-umd.js';
 
-export const BAKED_SKIRMISH_GLB = 'assets/terrain/terrain-skirmish-ue-lm.glb';
+/** Moon-only crater (Lambert). Kept as fallback / A0. */
+export const BAKED_SKIRMISH_MOON_GLB = 'assets/terrain/terrain-skirmish-ue-lm.glb';
+/**
+ * Combined 1v1 scene: Moon_* crater + Prop_* rocks seated on the surface
+ * (Blender `seat-rocks-on-crater.py` / UE Skirmish1v1). Prefer this for B0.
+ */
+export const BAKED_SKIRMISH_1V1_GLB = 'assets/terrain/terrain-skirmish-1v1.glb';
+/** @deprecated use BAKED_SKIRMISH_MOON_GLB or BAKED_SKIRMISH_1V1_GLB */
+export const BAKED_SKIRMISH_GLB = BAKED_SKIRMISH_1V1_GLB;
 const MIN_BAKE_BYTES = 800000;
 const MIN_VERTS = 5000;
+
+/** Props extracted from the combined 1v1 GLB (already surface-seated). */
+let embeddedSkirmishProps = null;
 
 function parseGlbJson(buf) {
   const dv = new DataView(buf);
@@ -109,23 +120,56 @@ export function bakedMoonAllowed() {
 }
 
 let glbBufCache = null;
+let glbBufUrl = null;
+
+function wantCombined1v1() {
+  if (typeof location === 'undefined') return true;
+  const q = `${location.search || ''}${location.hash || ''}`;
+  // Opt out of combined crater+rocks file (moon-only bake).
+  if (/(?:[?&#]moononly=1\b)/i.test(q)) return false;
+  return true;
+}
+
+async function fetchBakeBuffer() {
+  const urls = wantCombined1v1()
+    ? [BAKED_SKIRMISH_1V1_GLB, BAKED_SKIRMISH_MOON_GLB]
+    : [BAKED_SKIRMISH_MOON_GLB];
+  for (const url of urls) {
+    let res;
+    try {
+      res = await fetch(url);
+    } catch {
+      continue;
+    }
+    if (!res.ok) continue;
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength < MIN_BAKE_BYTES) continue;
+    return { buf, url };
+  }
+  return null;
+}
+
+/** Surface-seated Prop_* group from the combined 1v1 GLB, or null. */
+export function takeEmbeddedSkirmishProps() {
+  const g = embeddedSkirmishProps;
+  embeddedSkirmishProps = null;
+  return g;
+}
+
+export function peekEmbeddedSkirmishProps() {
+  return embeddedSkirmishProps;
+}
 
 export async function tryLoadBakedSkirmishMoon() {
   if (!bakedMoonAllowed()) return null;
   if (!glbBufCache) {
-    let res;
-    try {
-      res = await fetch(BAKED_SKIRMISH_GLB);
-    } catch {
+    const got = await fetchBakeBuffer();
+    if (!got) {
+      console.warn('[RTSVR4] skip baked moon: no GLB');
       return null;
     }
-    if (!res.ok) return null;
-    const buf = await res.arrayBuffer();
-    if (buf.byteLength < MIN_BAKE_BYTES) {
-      console.warn('[RTSVR4] skip baked moon: file too small', buf.byteLength);
-      return null;
-    }
-    glbBufCache = buf;
+    glbBufCache = got.buf;
+    glbBufUrl = got.url;
   }
   const buf = glbBufCache;
   let json;
@@ -155,20 +199,50 @@ export async function tryLoadBakedSkirmishMoon() {
 
   const keep = new W.Group();
   keep.userData.rtsSkirmishBake = true;
+  keep.userData.rtsBakeUrl = glbBufUrl || '';
   keep.name = 'rts-ground-mesh';
   const moonMeshes = [];
+  const propMeshes = [];
   gltf.scene.updateMatrixWorld(true);
   gltf.scene.traverse((obj) => {
     if (!obj.isMesh && !obj.isSkinnedMesh) return;
-    if (!/^Moon_\d/i.test(obj.name || '') && !/^rts-moon-/i.test(obj.name || '')) {
-      obj.visible = false;
+    const n = obj.name || '';
+    if (/^Moon_\d/i.test(n) || /^rts-moon-/i.test(n)) {
+      moonMeshes.push(obj);
       return;
     }
-    moonMeshes.push(obj);
+    if (/^Prop_/i.test(n) || /^(?:SM_)?(?:Rock|Cliff|Dirt|Mineral)/i.test(n)) {
+      propMeshes.push(obj);
+      return;
+    }
+    obj.visible = false;
   });
   if (!moonMeshes.length) {
     console.warn('[RTSVR4] skip baked moon: no Moon_* meshes');
     return null;
+  }
+
+  // Surface-seated scenery from the combined 1v1 GLB (skip second rocks fetch).
+  embeddedSkirmishProps = null;
+  if (propMeshes.length) {
+    const props = new W.Group();
+    props.name = 'rts-overview-props';
+    props.userData.rtsOverviewProps = true;
+    props.userData.rtsSceneryMode = 'B0';
+    props.userData.rtsQuestRocksProps = true;
+    props.userData.rtsSeatedOnCrater = true;
+    props.userData.rtsKitUrl = glbBufUrl || BAKED_SKIRMISH_1V1_GLB;
+    for (const src of propMeshes) {
+      src.updateMatrixWorld(true);
+      const clone = src.clone(true);
+      // Bake world matrix into the clone so parenting under groundEl is stable.
+      clone.matrix.copy(src.matrixWorld);
+      clone.matrix.decompose(clone.position, clone.quaternion, clone.scale);
+      clone.matrixAutoUpdate = true;
+      props.add(clone);
+    }
+    props.updateMatrixWorld(true);
+    embeddedSkirmishProps = props;
   }
   const recv =
     typeof window._getDynamicShadowsEnabled === 'function'
@@ -212,8 +286,10 @@ export async function tryLoadBakedSkirmishMoon() {
 
   console.log('[RTSVR4] baked moon ready', {
     bytes: buf.byteLength,
+    url: glbBufUrl,
     verts,
     moonMeshes: moonMeshes.length,
+    propMeshes: propMeshes.length,
     look,
     planarLm: usePlanar,
   });

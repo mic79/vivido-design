@@ -68,18 +68,26 @@ const st = await page.evaluate(() => {
 await browser.close();
 server.close();
 
+const gotCombined = fetched.some((u) => u.includes('terrain-skirmish-1v1.glb'));
 const gotMoon = fetched.some((u) => u.includes('terrain-skirmish-ue-lm.glb'));
 const gotQuest = fetched.some((u) => u.includes('scifi-rts-quest.glb'));
 const gotKitTerrain = fetched.some((u) => u.includes('scifi-rts-kit-lod2.glb'));
 const propsLog = logs.find((l) => l.includes('skirmish scenery props')) || '';
+const bakeLog = logs.find((l) => l.includes('baked moon ready')) || '';
+const seated = !!(st.propsUrl && /terrain-skirmish-1v1/i.test(st.propsUrl));
 
 let fail = 0;
-if (!gotMoon || !st.bake) {
-  console.error('FAIL moon bake not loaded', { gotMoon, st });
+if ((!gotCombined && !gotMoon) || !st.bake) {
+  console.error('FAIL moon bake not loaded', { gotCombined, gotMoon, st, bakeLog });
   fail = 1;
 }
-if (!gotQuest || st.propsMode !== 'B0') {
-  console.error('FAIL quest rocks props not B0', { gotQuest, st, propsLog });
+if (st.propsMode !== 'B0') {
+  console.error('FAIL scenery not B0', { st, propsLog });
+  fail = 1;
+}
+// Combined 1v1 GLB embeds seated props — quest rocks file is optional fallback only.
+if (!seated && !gotQuest) {
+  console.error('FAIL no seated props and no quest rocks fallback', { gotQuest, st, propsLog });
   fail = 1;
 }
 if (st.kitKind) {
@@ -90,5 +98,14 @@ if (gotKitTerrain) {
   console.error('FAIL lod2 kit should not load on B0 default');
   fail = 1;
 }
-if (!fail) console.log('PASS B0 moon + quest rocks props', { propsUrl: st.propsUrl, diag: st.diag, propsLog });
+if (!fail) {
+  console.log('PASS B0 crater+rocks', {
+    combined: gotCombined,
+    seated,
+    propsUrl: st.propsUrl,
+    diag: st.diag,
+    propsLog,
+    bakeLog,
+  });
+}
 process.exit(fail);

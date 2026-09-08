@@ -95,9 +95,11 @@ export function applyMapProfile(profile) {
 
 /**
  * Skirmish 1v1 scenery mode (crater moon base + optional dressing).
- *   B0 (default) — moon + Quest UE rocks props
+ *   B0 (default) — combined crater+rocks GLB (`terrain-skirmish-1v1.glb`) when present;
+ *                 else moon + Quest UE rocks props
  *   A0 — moon only (`?scenery=A0` or `?noprops=1`)
  *   A1 — moon + legacy groundscape (`?scenery=A1` or `?groundscape=1`)
+ *   `?moononly=1` — force moon-only bake file (no embedded props)
  * Full kit-as-terrain remains `?kit=1` (separate from these).
  */
 export function skirmishSceneryMode() {

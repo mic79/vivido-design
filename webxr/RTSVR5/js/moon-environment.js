@@ -8,7 +8,7 @@
  */
 
 import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
-import { bakedMoonAllowed, tryLoadBakedSkirmishMoon } from './baked-moon.js';
+import { bakedMoonAllowed, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps } from './baked-moon.js';
 import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
 import * as State from './state.js';
 
@@ -2339,29 +2339,35 @@ async function attachSkirmishSceneryProps(groundEl, sceneEl) {
   if (mode === 'A1') {
     props = await tryLoadOverviewGroundscape();
   } else {
-    props = await tryLoadQuestRocksProps();
+    // Combined crater+rocks GLB already seated Prop_* on the surface.
+    props = takeEmbeddedSkirmishProps();
+    if (!props) props = await tryLoadQuestRocksProps();
   }
   if (!props) return false;
 
   props.name = 'rts-overview-props';
   props.userData.rtsOverviewProps = true;
   props.userData.rtsSceneryMode = mode;
-  // Seat props on the crater surface (not a flat +0.02 above Y=0).
-  try {
-    const THREE = window.THREE;
-    props.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(props);
-    if (!box.isEmpty()) {
-      const cx = (box.min.x + box.max.x) * 0.5;
-      const cz = (box.min.z + box.max.z) * 0.5;
-      const moonY = sampleMoonTerrainWorldY(cx, cz);
-      const lift = moonY - box.min.y;
-      props.position.y = lift;
-    } else {
+  // Seated props already match the crater heightfield — do not bbox-lift.
+  if (!props.userData.rtsSeatedOnCrater) {
+    try {
+      const THREE = window.THREE;
+      props.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(props);
+      if (!box.isEmpty()) {
+        const cx = (box.min.x + box.max.x) * 0.5;
+        const cz = (box.min.z + box.max.z) * 0.5;
+        const moonY = sampleMoonTerrainWorldY(cx, cz);
+        const lift = moonY - box.min.y;
+        props.position.y = lift;
+      } else {
+        props.position.y = 0.02;
+      }
+    } catch (_) {
       props.position.y = 0.02;
     }
-  } catch (_) {
-    props.position.y = 0.02;
+  } else {
+    props.position.y = 0;
   }
   groundEl.setObject3D('overviewProps', props);
   try {
