@@ -1,9 +1,20 @@
 // Shared FoW visual — darken-only in terrain shaders (no hue, no floating plane).
 // Gameplay fog texture covers the nav plane; visual ground beyond nav is also darkened.
-import { MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_SPAN_M } from './config.js';
+import { MAP_SIZE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_SPAN_M } from './config.js';
 
-/** Visual FoW half-extent (m) — skirts/hills beyond the nav disk stay darkened. */
-export const FOG_VISUAL_HALF_M = 520;
+/**
+ * Visual FoW half-extent (m). Must cover the horizon skirt:
+ * plate half (MAP_SIZE/2) + default skirt depth (~920) ≈ 1020.
+ * Was hard-coded 520 → only half the non-navigable skirt darkened.
+ */
+export function fogVisualHalfM() {
+  const plateHalf = Math.max(100, MAP_SIZE * 0.5);
+  const skirtDepth =
+    typeof window !== 'undefined' && Number.isFinite(window.RTS_HORIZON_SKIRT_DEPTH)
+      ? Math.max(80, Math.min(2800, window.RTS_HORIZON_SKIRT_DEPTH))
+      : 920;
+  return plateHalf + skirtDepth + 40;
+}
 
 /** @type {import('three').Texture | null} */
 let fogMap = null;
@@ -37,10 +48,11 @@ export function setFogVisualOutsideAlpha(a) {
 }
 
 export function syncFogVisualExtents() {
+  const visHalf = fogVisualHalfM();
   for (const u of uniformBags) {
     if (u.uRtsFogHalf) u.uRtsFogHalf.value = MAP_NAV_PLANE_HALF_M;
     if (u.uRtsFogSpan) u.uRtsFogSpan.value = MAP_NAV_PLANE_SPAN_M;
-    if (u.uRtsFogVisHalf) u.uRtsFogVisHalf.value = FOG_VISUAL_HALF_M;
+    if (u.uRtsFogVisHalf) u.uRtsFogVisHalf.value = visHalf;
     if (u.uRtsFogOutsideA) u.uRtsFogOutsideA.value = fogOutsideA;
   }
 }
@@ -65,11 +77,12 @@ export function installFogVisualOnMaterial(mat) {
   mat.onBeforeCompile = (shader) => {
     if (typeof prev === 'function') prev(shader);
 
+    const visHalf = fogVisualHalfM();
     shader.uniforms.uRtsFogMap = { value: fogMap };
     shader.uniforms.uRtsFogOn = { value: fogOn };
     shader.uniforms.uRtsFogHalf = { value: MAP_NAV_PLANE_HALF_M };
     shader.uniforms.uRtsFogSpan = { value: MAP_NAV_PLANE_SPAN_M };
-    shader.uniforms.uRtsFogVisHalf = { value: FOG_VISUAL_HALF_M };
+    shader.uniforms.uRtsFogVisHalf = { value: visHalf };
     shader.uniforms.uRtsFogOutsideA = { value: fogOutsideA };
     uniformBags.add(shader.uniforms);
     mat.userData._rtsFogUniforms = shader.uniforms;
@@ -101,7 +114,7 @@ uniform float uRtsFogVisHalf;
 uniform float uRtsFogOutsideA;`
       );
 
-      // Darken only: rgb *= (1 - a). Never mix toward a tinted color.
+      // Darken only. Outside nav fog tex but on visual skirts: full outside shroud.
       const fogTail = /* glsl */ `
 	if ( uRtsFogOn > 0.5 && uRtsFogSpan > 1.0 ) {
 		float fogA = 0.0;
@@ -111,12 +124,8 @@ uniform float uRtsFogOutsideA;`
 		);
 		if ( fuv.x >= 0.0 && fuv.x <= 1.0 && fuv.y >= 0.0 && fuv.y <= 1.0 ) {
 			fogA = texture2D( uRtsFogMap, fuv ).a;
-		} else {
-			float ax = abs( vRtsFogWorldPos.x );
-			float az = abs( vRtsFogWorldPos.z );
-			if ( ax <= uRtsFogVisHalf && az <= uRtsFogVisHalf ) {
-				fogA = uRtsFogOutsideA;
-			}
+		} else if ( abs( vRtsFogWorldPos.x ) <= uRtsFogVisHalf && abs( vRtsFogWorldPos.z ) <= uRtsFogVisHalf ) {
+			fogA = uRtsFogOutsideA;
 		}
 		diffuseColor.rgb *= ( 1.0 - fogA );
 	}
@@ -138,12 +147,8 @@ uniform float uRtsFogOutsideA;`
 		);
 		if ( fuv.x >= 0.0 && fuv.x <= 1.0 && fuv.y >= 0.0 && fuv.y <= 1.0 ) {
 			fogA = texture2D( uRtsFogMap, fuv ).a;
-		} else {
-			float ax = abs( vRtsFogWorldPos.x );
-			float az = abs( vRtsFogWorldPos.z );
-			if ( ax <= uRtsFogVisHalf && az <= uRtsFogVisHalf ) {
-				fogA = uRtsFogOutsideA;
-			}
+		} else if ( abs( vRtsFogWorldPos.x ) <= uRtsFogVisHalf && abs( vRtsFogWorldPos.z ) <= uRtsFogVisHalf ) {
+			fogA = uRtsFogOutsideA;
 		}
 		gl_FragColor.rgb *= ( 1.0 - fogA );
 	}
@@ -153,11 +158,11 @@ uniform float uRtsFogOutsideA;`
     }
   };
 
-  mat.customProgramCacheKey = () => `${prevKey()}|rtsFogDarken58`;
+  mat.customProgramCacheKey = () => `${prevKey()}|rtsFogDarken59`;
   mat.needsUpdate = true;
 }
 
-/** Install on every mesh material under a root (ground / baked moon). */
+/** Install on every mesh material under a root (ground / baked moon / skirts). */
 export function installFogVisualUnder(root) {
   if (!root || !root.traverse) return;
   root.traverse((obj) => {
@@ -167,4 +172,5 @@ export function installFogVisualUnder(root) {
       if (m) installFogVisualOnMaterial(m);
     }
   });
+  syncFogVisualExtents();
 }
