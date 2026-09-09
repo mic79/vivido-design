@@ -6,7 +6,7 @@
   <title>RTS VR V — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.5.59">
+  <meta name="rts-version" content="0.5.76">
 
   <!-- Versioned import map so Quest/browser cannot keep a stale renderer/fog module. -->
   <script>
@@ -18,7 +18,8 @@
       'network.js','audio.js','bot.js','buildings.js','units.js','effects.js','resources.js',
       'spatial.js','loop.js','story-mode.js','story-kit-terrain.js','story-history.js',
       'sky-hdr-environment.js','scene-reveal.js','epicLightmaps.js','three-gltf-umd.js',
-      'nav-debug-overlay.js','separation-policy.js','rts-aframe-bootstrap.js','_rts-bust.js'
+      'nav-debug-overlay.js','separation-policy.js','rts-aframe-bootstrap.js','_rts-bust.js',
+      'yaw-baked-shadows.js'
     ];
     var imports = {
       three: 'https://cdn.jsdelivr.net/npm/super-three@0.173.4/build/three.module.js',
@@ -34,7 +35,7 @@
     document.head.appendChild(el);
   })();
   </script>
-  <script type="module" src="js/rts-aframe-bootstrap.js?v=0.5.59"></script>
+  <script type="module" src="js/rts-aframe-bootstrap.js?v=0.5.76"></script>
 
   <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -538,7 +539,7 @@
   <div id="xr-dom-overlay"></div>
 
   <!-- Game Module — ?v= must match meta rts-version (module graph cache). -->
-  <script type="module" src="js/main.js?v=0.5.59"></script>
+  <script type="module" src="js/main.js?v=0.5.76"></script>
 
   <script>
     // Create grid helper on scene load

@@ -25,7 +25,7 @@ import {
   MAP_PROFILE,
   MAP_UNIT_NAV_RADIUS,
 } from './config.js';
-import { applyMoonBattlefieldVisuals, rebuildMoonBattlefield, clearStoryBlockingHills, ensureSkirmishSceneryProps } from './moon-environment.js';
+import { applyMoonBattlefieldVisuals, rebuildMoonBattlefield, clearStoryBlockingHills, ensureSkirmishSceneryProps, ensureBakedMoonHeightCoversNav } from './moon-environment.js';
 import {
   generateStoryLayout,
   applyStoryLayoutToWorld,
@@ -198,6 +198,8 @@ async function prepareMapForMode(mode, sceneEl, prevProfile) {
     await rebuildMoonBattlefield(sceneEl);
   } else if (!wantStory) {
     // Lobby already mounted crater moon (no props). Attach B0 rocks now that matchPreparing is set.
+    // Height field may have been adopted at lobby nav scale — expand to match ×4 nav disk.
+    await ensureBakedMoonHeightCoversNav();
     const groundEl = document.getElementById('ground');
     if (groundEl) await ensureSkirmishSceneryProps(groundEl, sceneEl);
   }

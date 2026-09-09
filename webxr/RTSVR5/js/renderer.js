@@ -23,6 +23,7 @@ import {
 } from './moon-environment.js';
 import * as Perf from './perf-profiler.js';
 import * as FogVisual from './fog-visual.js';
+import * as YawShadows from './yaw-baked-shadows.js';
 
 let RESOURCE_FIELD_LAYOUT = getResourceFieldPositions();
 
@@ -336,6 +337,23 @@ export async function initRenderer(sceneEl) {
   await tryReplaceMobileHqWithGltfModel(sceneEl);
   await tryReplaceScoutBikeWithGltfModel(sceneEl);
   await tryReplaceArtilleryWithGltfModel(sceneEl);
+
+  try {
+    const ok = await YawShadows.initYawBakedShadows(scene3D, window.THREE, {
+      maxInstances: Math.max(MAX_INSTANCES_PER_TYPE, MAX_BUILDING_INSTANCES),
+      cacheBust: document.querySelector('meta[name="rts-version"]')?.content || '',
+    });
+    if (ok) {
+      for (const [type, mesh] of Object.entries(unitMeshes)) {
+        YawShadows.installYawSelfShadowOnInstancedMesh(mesh, type, window.THREE);
+        if (YawShadows.getYawBakedShadowsEnabled()) mesh.castShadow = false;
+      }
+      // Re-apply pref onto baked path (and keep PCF off while baked is available).
+      setDynamicShadowsEnabled(_dynamicShadowsOn);
+    }
+  } catch (err) {
+    console.warn('[yaw-shadows] init failed', err);
+  }
 }
 
 /** Upload / compile draw paths so the first visible frame after fade is not still warming shaders. */
@@ -351,10 +369,6 @@ export function warmRendererPrograms(sceneEl) {
   }
 }
 
-export function getDynamicShadowsEnabled() {
-  return _dynamicShadowsOn;
-}
-
 export function setDynamicShadowsEnabled(on) {
   _dynamicShadowsOn = !!on;
   try {
@@ -362,13 +376,28 @@ export function setDynamicShadowsEnabled(on) {
   } catch (_) {
     /* ignore */
   }
-  applyDynamicShadowGpuState();
+  // Prefer yaw-baked cookies/self-shadow when atlases exist — same toggle, far cheaper in XR.
+  if (YawShadows.yawBakedShadowsReady()) {
+    YawShadows.setYawBakedShadowsEnabled(_dynamicShadowsOn);
+    // Keep full-map PCF off while baked path is active (avoid double shadow + GPU cost).
+    const prev = _dynamicShadowsOn;
+    _dynamicShadowsOn = false;
+    applyDynamicShadowGpuState();
+    _dynamicShadowsOn = prev;
+  } else {
+    applyDynamicShadowGpuState();
+  }
   if (typeof UI.syncDynamicShadowToggleUi === 'function') UI.syncDynamicShadowToggleUi();
+  return getDynamicShadowsEnabled();
+}
+
+export function getDynamicShadowsEnabled() {
+  if (YawShadows.yawBakedShadowsReady()) return YawShadows.getYawBakedShadowsEnabled();
   return _dynamicShadowsOn;
 }
 
 export function toggleDynamicShadows() {
-  return setDynamicShadowsEnabled(!_dynamicShadowsOn);
+  return setDynamicShadowsEnabled(!getDynamicShadowsEnabled());
 }
 
 export function getMsaa4xEnabled() {
@@ -430,16 +459,15 @@ function applyMsaa4xGpuState() {
 /**
  * Off = no shadow-map pass, no PCF, maps disposed, moon does not receive.
  * On = 512 PCFSoft + moon/skirts receive so casters blob on the ground.
+ * Pref applies in XR too (toggle must match desktop); idle frames freeze the map
+ * via `syncShadowMapFromCasters` so Quest only rebakes when casters move.
  */
 function applyDynamicShadowGpuState() {
   const sceneEl = sceneElRenderer() || (typeof document !== 'undefined' ? document.querySelector('a-scene') : null);
   const renderer = sceneEl && sceneEl.renderer;
   const THREE = window.THREE;
   if (!renderer || !THREE) return;
-  const xrOn =
-    (renderer.xr && renderer.xr.isPresenting) ||
-    (sceneEl && typeof sceneEl.is === 'function' && sceneEl.is('vr-mode'));
-  const on = _dynamicShadowsOn && !xrOn;
+  const on = !!_dynamicShadowsOn;
   renderer.shadowMap.enabled = on;
   _shadowGpuDirty = true;
   if (on) {
@@ -877,6 +905,7 @@ function syncHqTexturedOne(building, worldMat4, drawVisible, THREE_w) {
   root.matrix.copy(worldMat4);
   root.matrixWorldNeedsUpdate = true;
   root.visible = drawVisible;
+  YawShadows.syncYawSelfShadowOnObject3D(root, 'hq', building.rotation || 0);
 }
 
 function syncRefineryTexturedOne(building, worldMat4, drawVisible, THREE_w) {
@@ -893,6 +922,7 @@ function syncRefineryTexturedOne(building, worldMat4, drawVisible, THREE_w) {
   root.matrix.copy(worldMat4);
   root.matrixWorldNeedsUpdate = true;
   root.visible = drawVisible;
+  YawShadows.syncYawSelfShadowOnObject3D(root, 'refinery', building.rotation || 0);
 }
 
 function syncBarracksTexturedOne(building, worldMat4, drawVisible, THREE_w) {
@@ -909,6 +939,7 @@ function syncBarracksTexturedOne(building, worldMat4, drawVisible, THREE_w) {
   root.matrix.copy(worldMat4);
   root.matrixWorldNeedsUpdate = true;
   root.visible = drawVisible;
+  YawShadows.syncYawSelfShadowOnObject3D(root, 'barracks', building.rotation || 0);
 }
 
 function syncWarFactoryTexturedOne(building, worldMat4, drawVisible, THREE_w) {
@@ -925,6 +956,7 @@ function syncWarFactoryTexturedOne(building, worldMat4, drawVisible, THREE_w) {
   root.matrix.copy(worldMat4);
   root.matrixWorldNeedsUpdate = true;
   root.visible = drawVisible;
+  YawShadows.syncYawSelfShadowOnObject3D(root, 'warFactory', building.rotation || 0);
 }
 
 async function tryReplaceHqWithGltfModel(sceneEl) {
@@ -1254,6 +1286,12 @@ function replaceUnitInstancedMesh(unitType, geometry, material, THREE_w) {
 
   scene3D.add(mesh);
   unitMeshes[unitType] = mesh;
+  try {
+    YawShadows.installYawSelfShadowOnInstancedMesh(mesh, unitType, THREE_w);
+    if (YawShadows.getYawBakedShadowsEnabled()) mesh.castShadow = false;
+  } catch (_) {
+    /* atlases may load later */
+  }
 }
 
 async function tryReplaceInfantryWithGltfModel(sceneEl) {
@@ -2368,9 +2406,7 @@ function shadowCasterHash() {
 }
 
 function syncShadowMapFromCasters() {
-  // XR gets no dynamic shadows (see applyDynamicShadowGpuState). Without the same guard
-  // here, this per-frame sync re-enabled shadowMap one frame after enter-vr re-applied it.
-  if (!_dynamicShadowsOn || xrIsPresenting()) {
+  if (!_dynamicShadowsOn) {
     syncShadowMapAutoUpdate(false);
     const sceneEl = sceneElRenderer();
     const sm = sceneEl && sceneEl.renderer && sceneEl.renderer.shadowMap;
@@ -2383,6 +2419,7 @@ function syncShadowMapFromCasters() {
   const sig = shadowCasterHash();
   const moved = _shadowGpuDirty || _shadowCasterSig === null || sig !== _shadowCasterSig;
   _shadowCasterSig = sig;
+  // Freeze PCF when the army is still — XR especially needs this (stereo × shadow pass).
   syncShadowMapAutoUpdate(moved);
 }
 
@@ -2483,6 +2520,19 @@ export function updateRendering() {
       if (camMoved) {
         refreshCameraFrustum();
         Perf.time('render.units', () => updateUnitInstances());
+        Perf.time('render.buildings', () => updateBuildingInstances());
+        try {
+          const THREE_w = window.THREE;
+          if (THREE_w) {
+            YawShadows.updateYawBakedShadowCookies(
+              State,
+              (x, z) => sampleGameplayEntityY(x, z),
+              THREE_w
+            );
+          }
+        } catch (_) {
+          /* */
+        }
         Perf.time('render.health', () => updateHealthBars());
       }
       if (selChanged) {
@@ -2528,6 +2578,18 @@ export function updateRendering() {
   }
   Perf.time('render.units', () => updateUnitInstances());
   Perf.time('render.buildings', () => updateBuildingInstances());
+  try {
+    const THREE_w = window.THREE;
+    if (THREE_w) {
+      YawShadows.updateYawBakedShadowCookies(
+        State,
+        (x, z) => sampleGameplayEntityY(x, z),
+        THREE_w
+      );
+    }
+  } catch (_) {
+    /* */
+  }
   Perf.time('render.health', () => updateHealthBars());
   Perf.time('render.rings', () => updateSelectionRings());
   Perf.time('render.orders', () => {
@@ -2629,6 +2691,7 @@ function updateUnitInstances() {
 
       const slot = drawn++;
       mesh.setMatrixAt(slot, _mat4);
+      YawShadows.writeUnitInstanceYawFrame(mesh, slot, unit.rotation || 0, unit.type);
 
       if (unit.type === 'harvester') {
         const baseColor = PLAYER_COLORS[unit.ownerId] || 0xffffff;
@@ -2743,6 +2806,8 @@ function updateUnitInstances() {
     mesh.count = counts[type];
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    const fa = mesh.geometry.getAttribute('instanceFrame');
+    if (fa) fa.needsUpdate = true;
   }
 }
 
@@ -2826,6 +2891,7 @@ function updateBuildingInstances() {
 
     building._renderIndex = idx;
     building._renderVisible = currentlyVisible;
+    building._renderDrawn = DRAW_AS_VISIBLE;
     counts[building.type]++;
   });
 

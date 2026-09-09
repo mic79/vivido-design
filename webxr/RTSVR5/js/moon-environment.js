@@ -7,7 +7,7 @@
  * green → yellow → red; **≥45°** solid red. Uses mesh geometric normals (not the tiled normal map).
  */
 
-import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
+import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_CELL, MAP_CAMERA_NAV_AREA_SCALE, MAP_NAV_AREA_SCALE, MAP_UNIT_PLAYABLE_RADIUS, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
 import { bakedMoonAllowed, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps, setBakedMoonRockShadowsEnabled } from './baked-moon.js';
 import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
 import * as State from './state.js';
@@ -573,6 +573,10 @@ export function diagnoseStoryHillBake(opts = {}) {
  * piecewise-linear mesh, not the smooth analytic continuation of the same noise.
  */
 let centralTerrainHeightGrid = null;
+/** Half-extent (m) of `centralTerrainHeightGrid` — plate for procedural, nav-disk for baked moon. */
+let centralTerrainHalf = mapPlateM() * 0.5;
+let centralTerrainSegW = BATTLE_TERRAIN.segmentsWidth;
+let centralTerrainSegD = BATTLE_TERRAIN.segmentsDepth;
 /** Baked skirmish GLB after Y-up bake — height samples raycast this instead of the procedural plate. */
 let bakedMoonRoot = null;
 let bakedMoonPlate = null;
@@ -592,19 +596,109 @@ export function getTerrainHeightGen() {
   return terrainHeightGen;
 }
 
-let _bakedMoonRaycaster = null;
+let _bakedMoonMeshes = null;
 
-function raycastBakedMoonY(wx, wz) {
-  const target = bakedMoonPlate || bakedMoonRoot;
-  if (!target || !window.THREE) return null;
+function collectBakedMoonMeshes() {
+  const meshes = [];
+  const root = bakedMoonRoot;
+  if (!root) {
+    if (bakedMoonPlate && bakedMoonPlate.isMesh) meshes.push(bakedMoonPlate);
+    return meshes;
+  }
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    // Height must come from crater surface only — props (rocks) would pin feet to boulder tops.
+    if (/^Moon_/i.test(o.name || '')) meshes.push(o);
+  });
+  if (!meshes.length && bakedMoonPlate && bakedMoonPlate.isMesh) meshes.push(bakedMoonPlate);
+  return meshes;
+}
+
+/**
+ * Half-extent for baked entity height. Lobby boots with MAP_NAV_AREA_SCALE=1 (half~127);
+ * match applies ×4 (~253) without always rebuilding the moon — so always bake for the
+ * skirmish match nav footprint or units float ~6 m on FBM outside the lobby field.
+ */
+function bakedHeightFieldHalfM() {
+  const plate = mapPlateM() * 0.5;
+  const scale = Math.max(MAP_NAV_AREA_SCALE || 1, MAP_CAMERA_NAV_AREA_SCALE || 4);
+  const navR = MAP_UNIT_PLAYABLE_RADIUS * Math.sqrt(scale);
+  const cols = Math.ceil((2 * navR) / Math.max(1, MAP_NAV_PLANE_CELL || 2));
+  const matchHalf = cols * Math.max(1, MAP_NAV_PLANE_CELL || 2) * 0.5;
+  return Math.max(plate, MAP_NAV_PLANE_HALF_M + 4, matchHalf + 4);
+}
+
+/**
+ * Fast height field from Moon mesh vertices (O(verts)), not tens of thousands of raycasts.
+ * Spawns sit outside the MAP square — field half must cover match nav (×4), not lobby nav.
+ */
+function rasterizeMoonMeshesToHeightGrid(meshes, half, segW, segD) {
   const THREE = window.THREE;
-  if (!_bakedMoonRaycaster) _bakedMoonRaycaster = new THREE.Raycaster();
-  _bakedMoonRaycaster.far = 500;
-  _bakedMoonRaycaster.set(new THREE.Vector3(wx, 80, wz), new THREE.Vector3(0, -1, 0));
-  const hits = _bakedMoonRaycaster.intersectObject(target, false);
-  if (!hits.length) return null;
-  const y = hits[0].point.y;
-  return Number.isFinite(y) ? y : null;
+  const row = segW + 1;
+  const sum = new Float64Array(row * (segD + 1));
+  const cnt = new Uint32Array(sum.length);
+  const span = 2 * half;
+  const v = new THREE.Vector3();
+  for (let mi = 0; mi < meshes.length; mi++) {
+    const mesh = meshes[mi];
+    const pos = mesh?.geometry?.attributes?.position;
+    if (!pos) continue;
+    mesh.updateWorldMatrix(true, false);
+    const m = mesh.matrixWorld;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m);
+      if (Math.abs(v.x) > half + 1e-3 || Math.abs(v.z) > half + 1e-3) continue;
+      const fx = ((v.x + half) / span) * segW;
+      const fz = ((half - v.z) / span) * segD;
+      const ix = Math.round(fx);
+      const iy = Math.round(fz);
+      if (ix < 0 || iy < 0 || ix > segW || iy > segD) continue;
+      const idx = iy * row + ix;
+      sum[idx] += v.y;
+      cnt[idx] += 1;
+    }
+  }
+  const grid = new Float32Array(sum.length);
+  for (let i = 0; i < grid.length; i++) {
+    grid[i] = cnt[i] ? sum[i] / cnt[i] : Number.NaN;
+  }
+  // Fill sparse holes from 4-neighbors (dense moon mesh still skips some 2 m cells).
+  for (let pass = 0; pass < 12; pass++) {
+    let filled = 0;
+    for (let iy = 0; iy <= segD; iy++) {
+      for (let ix = 0; ix <= segW; ix++) {
+        const i = iy * row + ix;
+        if (Number.isFinite(grid[i])) continue;
+        let s = 0;
+        let c = 0;
+        if (ix > 0 && Number.isFinite(grid[i - 1])) {
+          s += grid[i - 1];
+          c++;
+        }
+        if (ix < segW && Number.isFinite(grid[i + 1])) {
+          s += grid[i + 1];
+          c++;
+        }
+        if (iy > 0 && Number.isFinite(grid[i - row])) {
+          s += grid[i - row];
+          c++;
+        }
+        if (iy < segD && Number.isFinite(grid[i + row])) {
+          s += grid[i + row];
+          c++;
+        }
+        if (c) {
+          grid[i] = s / c;
+          filled++;
+        }
+      }
+    }
+    if (!filled) break;
+  }
+  for (let i = 0; i < grid.length; i++) {
+    if (!Number.isFinite(grid[i])) grid[i] = 0;
+  }
+  return grid;
 }
 
 function yieldFrame() {
@@ -639,6 +733,7 @@ function yieldFrame() {
 async function adoptBakedMoonHeightField(root) {
   bakedMoonRoot = root || null;
   bakedMoonPlate = null;
+  _bakedMoonMeshes = null;
   if (!root) {
     centralTerrainHeightGrid = null;
     return;
@@ -647,23 +742,49 @@ async function adoptBakedMoonHeightField(root) {
   root.traverse((o) => {
     if (o.isMesh && /^Moon_0/i.test(o.name)) bakedMoonPlate = o;
   });
-  const segW = BATTLE_TERRAIN.segmentsWidth;
-  const segD = BATTLE_TERRAIN.segmentsDepth;
-  const row = segW + 1;
-  const grid = new Float32Array(row * (segD + 1));
-  const MAP = mapPlateM();
-  const half = MAP * 0.5;
-  for (let iy = 0; iy <= segD; iy++) {
-    const wz = half - (iy / segD) * MAP;
-    for (let ix = 0; ix <= segW; ix++) {
-      const wx = -half + (ix / segW) * MAP;
-      const y = raycastBakedMoonY(wx, wz);
-      grid[iy * row + ix] = y != null ? y : 0;
-    }
-    if ((iy & 15) === 15) await yieldFrame();
-  }
+  _bakedMoonMeshes = collectBakedMoonMeshes();
+  // Spawns sit near ±MAP_UNIT_NAV_RADIUS (~±253), outside the 200×200 plate (±100).
+  // Baking only the plate / lobby nav half left entities on FBM while the mesh is ~−6 m.
+  const half = bakedHeightFieldHalfM();
+  const cell = 2;
+  const segW = Math.max(32, Math.round((2 * half) / cell));
+  const segD = segW;
+  const meshes = _bakedMoonMeshes;
+  // Vertex rasterize (fast). Raycast-per-cell against 100k tris hangs match start.
+  const grid =
+    meshes.length && window.THREE
+      ? rasterizeMoonMeshesToHeightGrid(meshes, half, segW, segD)
+      : new Float32Array((segW + 1) * (segD + 1));
+  await yieldFrame();
   centralTerrainHeightGrid = grid;
+  centralTerrainHalf = half;
+  centralTerrainSegW = segW;
+  centralTerrainSegD = segD;
   rebuildGameplayHeightGrid();
+  const probeY = sampleCentralPlateMeshSurfaceY(148, 138);
+  console.log('[RTSVR5] baked height field', {
+    half: +half.toFixed(1),
+    segW,
+    probe148: probeY != null ? +probeY.toFixed(3) : null,
+  });
+  if (typeof window !== 'undefined') {
+    window.__rtsSampleGameplayEntityY = sampleGameplayEntityY;
+    window.__rtsHeightDebug = () => ({
+      half: centralTerrainHalf,
+      probe148: sampleCentralPlateMeshSurfaceY(148, 138),
+      entity148: sampleGameplayEntityY(148, 138),
+      navHalf: MAP_NAV_PLANE_HALF_M,
+    });
+  }
+}
+
+/** Re-bake if match expanded nav beyond the field adopted at lobby boot. */
+export async function ensureBakedMoonHeightCoversNav() {
+  if (!bakedMoonRoot || MAP_TERRAIN_STYLE === 'hills') return false;
+  const need = bakedHeightFieldHalfM();
+  if (centralTerrainHeightGrid && centralTerrainHalf >= need - 0.5) return false;
+  await adoptBakedMoonHeightField(bakedMoonRoot);
+  return true;
 }
 
 async function finishBakedMoonLook(THREE, sceneEl, root, opts = {}) {
@@ -734,6 +855,8 @@ function rebuildGameplayHeightGrid() {
     const wz = -half + (iz / (n - 1)) * (2 * half);
     for (let ix = 0; ix < n; ix++) {
       const wx = -half + (ix / (n - 1)) * (2 * half);
+      // Baked adopt expands centralTerrain* to the nav disk — that covers unit/building feet.
+      // Horizon skirts stay analytic; do not raycast every skirt cell (would freeze).
       let h = sampleCentralPlateMeshSurfaceY(wx, wz);
       if (h == null) {
         h = MAP_TERRAIN_STYLE === 'kit' ? 0 : sampleMoonTerrainWorldYVisual(wx, wz);
@@ -1058,21 +1181,23 @@ function skirtDecorCratersLift(wx, wz) {
 
 /**
  * Barycentric height on the **same two-triangle split** as `THREE.PlaneGeometry` (triangles a,b,c
- * then b,d,c). Returns null if `(wx,wz)` is outside the 200×200 m plate or grid is missing.
+ * then b,d,c). Returns null if `(wx,wz)` is outside the height-field half or grid is missing.
+ * Baked moon expands this to the nav disk (not just the MAP_SIZE square).
  */
 function sampleCentralPlateMeshSurfaceY(wx, wz) {
   const g = centralTerrainHeightGrid;
   if (!g) return null;
-  const MAP = mapPlateM();
-  const half = MAP * 0.5;
+  const half = centralTerrainHalf;
+  const segW = centralTerrainSegW;
+  const segD = centralTerrainSegD;
+  if (!(half > 0) || segW < 1 || segD < 1) return null;
   if (Math.abs(wx) > half + 1e-4 || Math.abs(wz) > half + 1e-4) return null;
 
-  const segW = BATTLE_TERRAIN.segmentsWidth;
-  const segD = BATTLE_TERRAIN.segmentsDepth;
+  const span = 2 * half;
   const row = segW + 1;
 
-  let fx = ((wx + half) / MAP) * segW;
-  let fz = ((half - wz) / MAP) * segD;
+  let fx = ((wx + half) / span) * segW;
+  let fz = ((half - wz) / span) * segD;
   fx = Math.min(Math.max(fx, 0), segW - 1e-9);
   fz = Math.min(Math.max(fz, 0), segD - 1e-9);
 
@@ -1106,12 +1231,8 @@ export function sampleNavPlateMeshY(wx, wz) {
 export function sampleMoonTerrainWorldY(wx, wz) {
   if (!Number.isFinite(wx) || !Number.isFinite(wz)) return 0;
 
-  const MAP = mapPlateM();
-  const half = MAP * 0.5;
-  if (Math.abs(wx) <= half + 1e-4 && Math.abs(wz) <= half + 1e-4) {
-    const hTri = sampleCentralPlateMeshSurfaceY(wx, wz);
-    if (hTri != null) return hTri;
-  }
+  const hTri = sampleCentralPlateMeshSurfaceY(wx, wz);
+  if (hTri != null) return hTri;
 
   const hGrid = sampleGameplayHeightGrid(wx, wz);
   if (hGrid != null) return hGrid;
@@ -1140,18 +1261,21 @@ export function sampleMoonTerrainWorldYCached(entity, wx, wz) {
 }
 
 /**
- * Navigable surface Y: planet-like bowl (horizon sag) + subtle FBM.
- * Height is “zero-based” relative to this surface — entities sit ON it.
- * Does **not** include Story hills / crater-rim macros (those are non-navigable).
+ * Navigable surface Y — entities sit ON this.
+ * Prefer the plate height grid / mesh (baked Moon_0 raycast or procedural plate) so feet
+ * match the drawn ground. Story hills keep the procedural bowl only (no macro climb).
  */
 export function sampleMoonTraversableBaseY(wx, wz) {
   if (!Number.isFinite(wx) || !Number.isFinite(wz)) return 0;
-  if (MAP_TERRAIN_STYLE === 'kit') {
+
+  // Kit + crater: authored/baked height field matches visuals. Hills macros stay non-navigable.
+  if (MAP_TERRAIN_STYLE !== 'hills') {
     const hTri = sampleCentralPlateMeshSurfaceY(wx, wz);
     if (hTri != null) return hTri;
     const hGrid = sampleGameplayHeightGrid(wx, wz);
-    return hGrid != null ? hGrid : 0;
+    if (hGrid != null) return hGrid;
   }
+
   const planeX = wx;
   const planeY = -wz;
   const noiseVal = battleTerrainFbm(planeX / BATTLE_TERRAIN.scale, 0, planeY / BATTLE_TERRAIN.scale) - 0.5;
@@ -1185,10 +1309,10 @@ function sampleMoonTerrainWorldYVisual(wx, wz) {
 }
 
 /**
- * Gameplay entity / FoW ground Y — always the navigable curved surface (never hill tops).
+ * Gameplay entity ground Y — cheap height-field sample only (no mesh raycasts).
+ * Baked moon adopts a nav-disk field so feet match the crater without per-frame CPU cost.
  */
 export function sampleGameplayEntityY(wx, wz) {
-  if (MAP_TERRAIN_STYLE === 'kit') return sampleMoonTraversableBaseY(wx, wz);
   return sampleMoonTraversableBaseY(wx, wz);
 }
 
@@ -1208,7 +1332,7 @@ export function sampleGameplayEntityYCached(entity, wx, wz) {
   entity._navGen = terrainHeightGen;
   entity._navGx = gx;
   entity._navGz = gz;
-  entity._navY = sampleMoonTraversableBaseY(wx, wz);
+  entity._navY = sampleGameplayEntityY(wx, wz);
   return entity._navY;
 }
 
@@ -1416,6 +1540,9 @@ function buildBattleTerrainGeometry(THREE) {
   const segD = BATTLE_TERRAIN.segmentsDepth;
   const nVerts = (segW + 1) * (segD + 1);
   centralTerrainHeightGrid = new Float32Array(nVerts);
+  centralTerrainHalf = mapPlateM() * 0.5;
+  centralTerrainSegW = segW;
+  centralTerrainSegD = segD;
 
   for (let i = 0; i < vertices.length; i += 3) {
     const x = vertices[i];
@@ -2232,6 +2359,9 @@ function snapshotSkirmishPark(root) {
     root,
     plate: bakedMoonPlate,
     centralGrid: centralTerrainHeightGrid,
+    centralHalf: centralTerrainHalf,
+    centralSegW: centralTerrainSegW,
+    centralSegD: centralTerrainSegD,
     gameplayGrid: gameplayHeightGrid,
     gameplayN: gameplayHeightN,
     gameplayHalf: gameplayHeightHalf,
@@ -2246,7 +2376,11 @@ function restoreSkirmishPark() {
   live.root.visible = true;
   bakedMoonRoot = live.root;
   bakedMoonPlate = live.plate;
+  _bakedMoonMeshes = null;
   centralTerrainHeightGrid = live.centralGrid;
+  if (live.centralHalf != null) centralTerrainHalf = live.centralHalf;
+  if (live.centralSegW != null) centralTerrainSegW = live.centralSegW;
+  if (live.centralSegD != null) centralTerrainSegD = live.centralSegD;
   gameplayHeightGrid = live.gameplayGrid;
   gameplayHeightN = live.gameplayN;
   gameplayHeightHalf = live.gameplayHalf;
@@ -2260,6 +2394,9 @@ function snapshotKitPark(root) {
     root,
     plate: bakedMoonPlate,
     centralGrid: centralTerrainHeightGrid,
+    centralHalf: centralTerrainHalf,
+    centralSegW: centralTerrainSegW,
+    centralSegD: centralTerrainSegD,
     gameplayGrid: gameplayHeightGrid,
     gameplayN: gameplayHeightN,
     gameplayHalf: gameplayHeightHalf,
@@ -2274,7 +2411,11 @@ function restoreKitPark() {
   live.root.visible = true;
   bakedMoonRoot = live.root;
   bakedMoonPlate = live.plate;
+  _bakedMoonMeshes = null;
   centralTerrainHeightGrid = live.centralGrid;
+  if (live.centralHalf != null) centralTerrainHalf = live.centralHalf;
+  if (live.centralSegW != null) centralTerrainSegW = live.centralSegW;
+  if (live.centralSegD != null) centralTerrainSegD = live.centralSegD;
   gameplayHeightGrid = live.gameplayGrid;
   gameplayHeightN = live.gameplayN;
   gameplayHeightHalf = live.gameplayHalf;
@@ -2296,6 +2437,9 @@ async function adoptKitHeightField(root) {
   const grid = await rasterizeKitHeights(root, window.THREE, mapPlateM(), segs, segs, yieldFrame);
   suppressHeightSpikes(grid, segs + 1, segs + 1, mapPlateM() / segs, 34, 4);
   centralTerrainHeightGrid = grid;
+  centralTerrainHalf = mapPlateM() * 0.5;
+  centralTerrainSegW = segs;
+  centralTerrainSegD = segs;
   rebuildGameplayHeightGrid();
   await setupStoryKitDistanceLod(root, window.THREE);
 }

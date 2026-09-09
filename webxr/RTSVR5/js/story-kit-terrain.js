@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Story battlefield: Modular Sci-Fi kit GLB (no landscape). Centered on origin,
  * water planes / giant outlier cliffs hidden, dark fill plate under gaps.
  */
