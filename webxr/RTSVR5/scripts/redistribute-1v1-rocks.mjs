@@ -373,6 +373,7 @@ for (let i = 0; i < pts.length; i++) {
     name: node.name,
     meshHint: mesh.name,
     translation: node.translation,
+    rotation: node.rotation,
     scale: node.scale,
     char_m: +char.toFixed(3),
   });

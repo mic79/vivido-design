@@ -9,6 +9,14 @@
 import { MAP_TERRAIN_STYLE } from './config.js';
 import { ensureThreeGltfLoaders } from './three-gltf-umd.js';
 import { installFogVisualOnMaterial } from './fog-visual.js';
+import {
+  assignPropSelfShadowKeys,
+  buildPropSelfShadowLookup,
+  sceneryNodeKey,
+} from './prop-self-shadows.js';
+import {
+  buildHeroLightmapLookup,
+} from './hero-lightmaps.js';
 
 /** Moon-only crater (Lambert). Kept as fallback / A0. */
 export const BAKED_SKIRMISH_MOON_GLB = 'assets/terrain/terrain-skirmish-ue-lm.glb';
@@ -164,6 +172,20 @@ export function takeEmbeddedSkirmishProps() {
     rtsSeatedOnCrater: true,
     rtsSeatedClone: true,
   };
+  // Re-key after clone so multi-prim order matches the bake.
+  if (props.userData.rtsPropSelfShadows) {
+    assignPropSelfShadowKeys(props);
+    const meshesByKey = new Map();
+    props.traverse((o) => {
+      if (!o.isMesh && !o.isSkinnedMesh) return;
+      const k = o.userData?.rtsSelfShadowKey;
+      if (k) meshesByKey.set(k, o);
+    });
+    props.userData.rtsPropSelfShadows.meshesByKey = meshesByKey;
+  }
+  if (props.userData.rtsHeroRgbLightmaps) {
+    assignPropSelfShadowKeys(props);
+  }
   return props;
 }
 
@@ -222,7 +244,14 @@ export async function tryLoadBakedSkirmishMoon() {
       moonMeshes.push(obj);
       return;
     }
-    if (/^Prop_/i.test(n) || /^(?:SM_)?(?:Rock|Cliff|Dirt|Mineral)/i.test(n)) {
+    if (/^Prop_/i.test(n) || /^(?:SM_)?(?:Rock|Cliff|Dirt|Mineral|Bridge)/i.test(n)) {
+      obj.userData.rtsSourceNode = sceneryNodeKey(obj, gltf.scene);
+      propMeshes.push(obj);
+      return;
+    }
+    // Keep any other authored scenery from the UE GLB (do not silently drop).
+    if (!/^RTS_/i.test(n) && !/light|camera|helper|grid/i.test(n)) {
+      obj.userData.rtsSourceNode = sceneryNodeKey(obj, gltf.scene);
       propMeshes.push(obj);
       return;
     }
@@ -250,9 +279,93 @@ export async function tryLoadBakedSkirmishMoon() {
       clone.matrix.copy(src.matrixWorld);
       clone.matrix.decompose(clone.position, clone.quaternion, clone.scale);
       clone.matrixAutoUpdate = true;
+      clone.userData = {
+        ...clone.userData,
+        rtsSourceNode: src.userData.rtsSourceNode || sceneryNodeKey(src, gltf.scene),
+      };
       props.add(clone);
     }
     props.updateMatrixWorld(true);
+
+    const selfSpec = json.extras?.rtsPropSelfShadows;
+    if (
+      selfSpec &&
+      (selfSpec.layout === 'planar-atlas' || selfSpec.layout === 'uv-atlas') &&
+      Array.isArray(selfSpec.atlases) &&
+      gltf.parser
+    ) {
+      const atlases = [];
+      for (let i = 0; i < selfSpec.atlases.length; i++) {
+        try {
+          const src = await gltf.parser.getDependency('texture', selfSpec.atlases[i]);
+          const tex = adoptLightmapTexture(src, W);
+          if (tex) {
+            if ('channel' in tex) tex.channel = 0;
+            atlases.push(tex);
+          } else {
+            atlases.push(null);
+          }
+        } catch (err) {
+          console.warn('[RTSVR5] prop self-shadow atlas', i, err);
+          atlases.push(null);
+        }
+      }
+      assignPropSelfShadowKeys(props);
+      const byKey = buildPropSelfShadowLookup(selfSpec);
+      const meshesByKey = new Map();
+      props.traverse((o) => {
+        if (!o.isMesh && !o.isSkinnedMesh) return;
+        const k = o.userData?.rtsSelfShadowKey;
+        if (k) meshesByKey.set(k, o);
+      });
+      props.userData.rtsPropSelfShadows = {
+        atlases,
+        byKey,
+        meshesByKey,
+        dark: selfSpec.dark,
+        cell: selfSpec.cell,
+      };
+      console.log('[RTSVR5] prop self-shadows', {
+        atlases: atlases.filter(Boolean).length,
+        cells: byKey ? byKey.size : 0,
+      });
+    }
+
+    // Hero RGB lightmaps (UE Lightmass path / offline soft-PCF UV bake)
+    const heroSpec = json.extras?.rtsHeroRgbLightmaps;
+    if (heroSpec && Array.isArray(heroSpec.maps) && heroSpec.maps.length && gltf.parser) {
+      const maxTi = Math.max(...heroSpec.maps.map((m) => m.textureIndex | 0), -1);
+      const atlases = [];
+      for (let i = 0; i <= maxTi; i++) {
+        atlases.push(null);
+      }
+      for (const m of heroSpec.maps) {
+        const ti = m.textureIndex | 0;
+        if (atlases[ti]) continue;
+        try {
+          const src = await gltf.parser.getDependency('texture', ti);
+          const tex = adoptLightmapTexture(src, W);
+          if (tex) {
+            if ('channel' in tex) tex.channel = 2;
+            atlases[ti] = tex;
+          }
+        } catch (err) {
+          console.warn('[RTSVR5] hero LM', ti, err);
+        }
+      }
+      assignPropSelfShadowKeys(props);
+      props.userData.rtsHeroRgbLightmaps = {
+        atlases,
+        byKey: buildHeroLightmapLookup(heroSpec),
+        dark: heroSpec.dark,
+        amb: heroSpec.amb,
+      };
+      console.log('[RTSVR5] hero RGB lightmaps', {
+        maps: heroSpec.maps.length,
+        atlases: atlases.filter(Boolean).length,
+      });
+    }
+
     embeddedSkirmishPropsTemplate = props;
   }
   const recv =

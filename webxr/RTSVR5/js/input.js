@@ -1128,6 +1128,9 @@ export function cameraRigPose(pose) {
 
 if (typeof window !== 'undefined') {
   window.__rtsCameraRigPose = cameraRigPose;
+  window.__rtsCancelLobbyIntro = () => {
+    lobbyIntroOrbit = null;
+  };
 }
 
 /** RTS camera above a player's base corner, yaw toward map center (matches W forward = −sin(rotY), −cos(rotY)). */

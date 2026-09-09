@@ -5,6 +5,12 @@
 import { MAP_SIZE, MAP_UNIT_NAV_RADIUS } from './config.js';
 import { ensureThreeGltfLoaders } from './three-gltf-umd.js';
 import * as State from './state.js';
+import {
+  applyPropSelfShadowOnUniqueMesh,
+  preparePropSelfShadowInstancedMaterial,
+  fillInstanceSelfRects,
+} from './prop-self-shadows.js';
+import { applyHeroRgbLightmap, isHeroPropName } from './hero-lightmaps.js';
 
 export const STORY_KIT_GLB = 'assets/terrain/scifi-rts-overview.glb';
 export const STORY_KIT_LOD2_GLB = 'assets/terrain/scifi-rts-kit-lod2.glb';
@@ -1128,11 +1134,29 @@ function pushInstancedBatch(THREE, root, parentInv, local, batches, spec) {
   // Keep frustumCulled=false on uniques — XR ArrayCamera + tight unique bounds caused
   // on-screen pop-out before; InstancedMesh cells use native cull instead.
   if (n < 2 && !geo0) {
+    const self = root.userData && root.userData.rtsPropSelfShadows;
+    const hero = root.userData && root.userData.rtsHeroRgbLightmaps;
     for (let i = 0; i < n; i++) {
       const mesh = spec.meshes[i];
       if (!mesh || !mesh.isMesh) continue;
       mesh.frustumCulled = false;
       mesh.castShadow = false;
+      const heroName =
+        mesh.name || mesh.userData?.rtsSourceNode || mesh.userData?.rtsSelfShadowKey || '';
+      let gotHeroLm = false;
+      if (hero?.atlases && hero?.byKey) {
+        gotHeroLm = applyHeroRgbLightmap(mesh, hero.atlases, hero.byKey, THREE);
+      }
+      // Planar stamp is dead for heroes (ink blot). Skip when LM present or hero name.
+      if (!gotHeroLm && !isHeroPropName(heroName) && self?.atlases && self?.byKey) {
+        applyPropSelfShadowOnUniqueMesh(
+          mesh,
+          self.atlases,
+          self.byKey,
+          THREE,
+          self.meshesByKey
+        );
+      }
       const sph = sphereFromObject(mesh, tmpBox, tmpSize, tmpCenter);
       batches.push({
         unique: true,
@@ -1186,8 +1210,13 @@ function pushInstancedBatchCell(THREE, root, parentInv, local, batches, spec, ce
   if (geo2 && geo2.computeBoundingSphere) geo2.computeBoundingSphere();
   if (geo0 && geo0.computeBoundingSphere) geo0.computeBoundingSphere();
   const cullOpts = useNativeCull ? { frustumCulled: true } : null;
-  const mesh2 = geo2 ? makeInstanced(THREE, geo2, spec.mat, n, `${spec.label}_lod2`, spec.recv, cullOpts) : null;
-  const mesh0 = geo0 ? makeInstanced(THREE, geo0, spec.mat, n, `${spec.label}_lod0`, spec.recv, cullOpts) : null;
+  const self = root.userData && root.userData.rtsPropSelfShadows;
+  let mat = spec.mat;
+  if (self?.atlases?.length && self?.byKey) {
+    mat = preparePropSelfShadowInstancedMaterial(mat, self.atlases);
+  }
+  const mesh2 = geo2 ? makeInstanced(THREE, geo2, mat, n, `${spec.label}_lod2`, spec.recv, cullOpts) : null;
+  const mesh0 = geo0 ? makeInstanced(THREE, geo0, mat, n, `${spec.label}_lod0`, spec.recv, cullOpts) : null;
   const items = [];
   for (let i = 0; i < n; i++) {
     const mesh = cellMeshes[i];
@@ -1217,21 +1246,26 @@ function pushInstancedBatchCell(THREE, root, parentInv, local, batches, spec, ce
     });
     if (mesh2) mesh2.setMatrixAt(i, matrix);
     if (mesh0) mesh0.setMatrixAt(i, matrix);
-    if (src.removeFromParent) src.removeFromParent();
   }
   if (mesh2) {
     mesh2.instanceMatrix.needsUpdate = true;
     mesh2.count = n;
     if (useNativeCull) syncInstancedBoundsFromItems(THREE, mesh2, items);
+    if (self?.byKey) fillInstanceSelfRects(mesh2, items, cellMeshes, self.byKey, THREE);
     root.add(mesh2);
   }
   if (mesh0) {
     mesh0.instanceMatrix.needsUpdate = true;
     mesh0.count = 0;
     mesh0.visible = false;
+    if (self?.byKey) fillInstanceSelfRects(mesh0, items, cellMeshes, self.byKey, THREE);
     root.add(mesh0);
   }
   batches.push({ items, mesh0, mesh2, label: spec.label || '', nativeCull: !!useNativeCull });
+  for (let i = 0; i < n; i++) {
+    const mesh = cellMeshes[i];
+    if (mesh && mesh.removeFromParent) mesh.removeFromParent();
+  }
   return geo0 ? n : 0;
 }
 

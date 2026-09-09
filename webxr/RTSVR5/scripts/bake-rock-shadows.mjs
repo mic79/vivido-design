@@ -22,7 +22,7 @@ const PORT = Number(process.env.PORT || 8794);
 const RES_PLATE = Number(process.env.RES_PLATE || 2048);
 const RES_SKIRT = Number(process.env.RES_SKIRT || 1024);
 const SHADOW_MAP = Number(process.env.SHADOW_MAP || 4096);
-const DARK = Math.min(0.95, Math.max(0.05, Number(process.env.DARK || 0.32)));
+const DARK = Math.min(0.95, Math.max(0.05, Number(process.env.DARK || 0.48)));
 /** Game directional fallback (index.html) if HDR peak is unusable. */
 const GAME_SUN = { x: -0.005, y: 55, z: -48.83 };
 
@@ -202,12 +202,17 @@ const baked = await page.evaluate(
     gltf.scene.traverse((obj) => {
       if (!obj.isMesh) return;
       const n = obj.name || '';
-      if (/^Moon_\d/i.test(n) || /^rts-moon-/i.test(n)) moons.push(obj);
-      else if (/^Prop_/i.test(n)) rocks.push(obj);
+      if (/^Moon_\d/i.test(n) || /^rts-moon-/i.test(n)) {
+        moons.push(obj);
+        return;
+      }
+      // Every non-moon scenery mesh casts (new UE pieces may not be named Prop_*).
+      if (/^RTS_/i.test(n) || /light|camera|helper|grid/i.test(n)) return;
+      rocks.push(obj);
     });
     moons.sort((a, b) => String(a.name).localeCompare(String(b.name)));
     if (!moons.length) throw new Error('no moon meshes');
-    if (!rocks.length) throw new Error('no Prop_* rocks');
+    if (!rocks.length) throw new Error('no scenery meshes to cast');
 
     function moonIndex(name) {
       const m = /Moon_(\d)/i.exec(name || '');
