@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Rebake Overview groundscape</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/build/three.module.js",
+      "three/addons/": "/vendor/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <pre id="log">starting…</pre>
+  <script type="module">
+    const logEl = document.getElementById('log');
+    const log = (...a) => {
+      const line = a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+      console.log('[rebake]', line);
+      logEl.textContent += '\n' + line;
+    };
+
+    try {
+      const THREE = await import('three');
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      const { DRACOLoader } = await import('three/addons/loaders/DRACOLoader.js');
+      const { GLTFExporter } = await import('three/addons/exporters/GLTFExporter.js');
+
+      function dequantizeAttr(attr) {
+        if (!attr) return null;
+        const f = new Float32Array(attr.count * attr.itemSize);
+        for (let i = 0; i < attr.count; i++) {
+          for (let c = 0; c < attr.itemSize; c++) {
+            f[i * attr.itemSize + c] = attr.getComponent(i, c);
+          }
+        }
+        return new THREE.BufferAttribute(f, attr.itemSize);
+      }
+
+      const loader = new GLTFLoader();
+      const draco = new DRACOLoader();
+      draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+      loader.setDRACOLoader(draco);
+
+      const src = '../assets/terrain/scifi-overview-lods.glb';
+      log('fetch', src);
+      const buf = await (await fetch(src)).arrayBuffer();
+      log('bytes', buf.byteLength);
+      const gltf = await loader.parseAsync(buf, '');
+      const scene = (gltf.scenes || []).find((s) => /LOD2/i.test(s.name || '')) || gltf.scene;
+      scene.updateMatrixWorld(true);
+
+      const KEEP = /SM_Rock|SM_Dirt/i;
+      const root = new THREE.Group();
+      root.name = 'OverviewGroundscape';
+      const kept = [];
+      const matSeen = new Map();
+
+      scene.traverse((obj) => {
+        if (!obj.isMesh && !obj.isSkinnedMesh) return;
+        let actor = obj;
+        let actorName = obj.name || '';
+        while (actor && actor !== scene) {
+          if (actor.name && /SM_/i.test(actor.name)) {
+            actorName = actor.name;
+            break;
+          }
+          actor = actor.parent;
+        }
+        if (!KEEP.test(actorName)) return;
+
+        // Keep world TRS on a holder; leave local float verts — runtime centering
+        // uses actor.position, not mesh AABB (quantized Overview requirement).
+        const srcGeo = obj.geometry;
+        const geo = new THREE.BufferGeometry();
+        if (srcGeo.index) geo.setIndex(srcGeo.index.clone());
+        if (srcGeo.attributes.position) {
+          geo.setAttribute('position', dequantizeAttr(srcGeo.attributes.position));
+        }
+        if (srcGeo.attributes.normal) {
+          geo.setAttribute('normal', dequantizeAttr(srcGeo.attributes.normal));
+        } else {
+          geo.computeVertexNormals();
+        }
+        if (srcGeo.attributes.uv) {
+          geo.setAttribute('uv', dequantizeAttr(srcGeo.attributes.uv));
+        }
+        geo.computeBoundingSphere();
+        geo.computeBoundingBox();
+
+        let mat;
+        const srcMat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+        const mk = srcMat && (srcMat.uuid || srcMat.name);
+        if (mk && matSeen.has(mk)) mat = matSeen.get(mk);
+        else {
+          mat = srcMat ? srcMat.clone() : new THREE.MeshStandardMaterial({ color: 0x888888 });
+          if (mk) matSeen.set(mk, mat);
+        }
+
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.name = actorName;
+        const wp = new THREE.Vector3();
+        const wq = new THREE.Quaternion();
+        const ws = new THREE.Vector3();
+        obj.getWorldPosition(wp);
+        obj.getWorldQuaternion(wq);
+        obj.getWorldScale(ws);
+        const holder = new THREE.Group();
+        holder.name = actorName;
+        holder.position.copy(wp);
+        holder.quaternion.copy(wq);
+        holder.scale.copy(ws);
+        holder.add(mesh);
+        root.add(holder);
+        kept.push(actorName);
+      });
+
+      log('kept', kept.length, kept);
+      if (!kept.length) throw new Error('no rocks/dirt');
+
+      const exporter = new GLTFExporter();
+      const ab = await exporter.parseAsync(root, {
+        binary: true,
+        onlyVisible: true,
+        truncateDrawRange: true,
+        embedImages: true,
+      });
+      const bytes = ab instanceof ArrayBuffer
+        ? new Uint8Array(ab)
+        : new Uint8Array(ab.buffer, ab.byteOffset, ab.byteLength);
+
+      let s = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        s += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+      }
+      window.__rebakeResult = {
+        b64: btoa(s),
+        kept,
+        bytes: bytes.length,
+        mats: matSeen.size,
+      };
+      log('done', bytes.length, 'mats', matSeen.size);
+    } catch (err) {
+      console.error(err);
+      window.__rebakeError = String(err && err.stack ? err.stack : err);
+      log('ERROR', window.__rebakeError);
+    }
+  </script>
+</body>
+</html>

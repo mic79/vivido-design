@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/build/three.module.js",
+      "three/addons/": "/vendor/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<script type="module">
+try {
+  const THREE = await import('three');
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const loader = new GLTFLoader();
+  const buf = await (await fetch('/assets/terrain/scifi-overview-groundscape.glb')).arrayBuffer();
+  const gltf = await loader.parseAsync(buf, '');
+  const scene = gltf.scene;
+  scene.updateMatrixWorld(true);
+  const nodes = [];
+  scene.traverse((o) => {
+    if (!o.isMesh) return;
+    const wp = new THREE.Vector3();
+    o.getWorldPosition(wp);
+    const box = new THREE.Box3().setFromObject(o);
+    nodes.push({
+      name: o.name,
+      parent: o.parent && o.parent.name,
+      pos: o.position.toArray().map((n) => +n.toFixed(2)),
+      wpos: wp.toArray().map((n) => +n.toFixed(2)),
+      ppos: o.parent ? o.parent.position.toArray().map((n) => +n.toFixed(2)) : null,
+      size: box.getSize(new THREE.Vector3()).toArray().map((n) => +n.toFixed(2)),
+    });
+  });
+  const box = new THREE.Box3().setFromObject(scene);
+  window.__out = {
+    nodes,
+    sceneBox: {
+      min: box.min.toArray().map((n) => +n.toFixed(2)),
+      max: box.max.toArray().map((n) => +n.toFixed(2)),
+      size: box.getSize(new THREE.Vector3()).toArray().map((n) => +n.toFixed(2)),
+    },
+  };
+} catch (e) {
+  window.__err = String(e && e.stack ? e.stack : e);
+}
+</script>
+</body>
+</html>

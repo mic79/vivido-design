@@ -1,0 +1,21 @@
+# Local / regenerated only — do not ship
+.chrome*/
+.iwe-chrome*/
+_quest-work/
+export/
+proof-*/
+bench-*/
+proof-*.png
+proof-*.json
+bisect-*.json
+sample-xr-*.json
+decay-*.json
+entervr-*.json
+
+# Terrain A/B (product keeps quest / lod2 / overview / rocks / groundscape)
+assets/terrain/scifi-overview-lods.glb
+assets/terrain/scifi-overview-lods-quest.glb
+assets/terrain/scifi-overview-rocks.glb
+assets/terrain/scifi-rts-kit-lod0.glb
+assets/terrain/scifi-rts-rocks-*.glb
+!assets/terrain/scifi-rts-rocks.glb

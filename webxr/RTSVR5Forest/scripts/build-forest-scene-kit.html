@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Build forest road-night scene kit</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/build/three.module.js",
+      "three/addons/": "/vendor/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <pre id="log">starting…</pre>
+  <script type="module">
+    const logEl = document.getElementById('log');
+    const log = (...a) => {
+      const line = a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+      console.log('[forest-scene]', line);
+      logEl.textContent += '\n' + line;
+    };
+
+    /** Flip triangle winding after an odd number of mirror axes (negative determinant). */
+    function flipIndexWinding(geo) {
+      const idx = geo.index;
+      if (!idx) return;
+      const a = idx.array;
+      for (let i = 0; i + 2 < a.length; i += 3) {
+        const t = a[i + 1];
+        a[i + 1] = a[i + 2];
+        a[i + 2] = t;
+      }
+      idx.needsUpdate = true;
+    }
+
+    try {
+      const THREE = await import('three');
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      const { GLTFExporter } = await import('three/addons/exporters/GLTFExporter.js');
+      const { mergeGeometries } = await import('three/addons/utils/BufferGeometryUtils.js');
+
+      const params = new URLSearchParams(location.search);
+      const SRC = '../assets/a_forest_3_with_a_road_at_night_for_game.glb';
+      /** Per-tile target max XZ span (m). */
+      const TARGET_SPAN = Number(params.get('span') || 200);
+      /** Odd grid size (3 → 3×3 = 9 tiles). */
+      const GRID = Math.max(1, Number(params.get('grid') || 3) | 0);
+      const GRID_ODD = GRID % 2 === 1 ? GRID : GRID + 1;
+
+      const loader = new GLTFLoader();
+      log('fetch', SRC, { TARGET_SPAN, GRID: GRID_ODD });
+      const buf = await (await fetch(SRC)).arrayBuffer();
+      log('bytes', buf.byteLength);
+      const gltf = await loader.parseAsync(buf, '');
+      const scene = gltf.scene;
+      scene.updateMatrixWorld(true);
+
+      /** @type {Map<string, { mat: THREE.Material, geos: THREE.BufferGeometry[], count: number, transparent: boolean, nameHint: string }>} */
+      const buckets = new Map();
+      let meshN = 0;
+      scene.traverse((obj) => {
+        if (!obj.isMesh || !obj.geometry) return;
+        meshN++;
+        const srcMat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+        const key = srcMat ? srcMat.uuid : 'none';
+        let b = buckets.get(key);
+        if (!b) {
+          const mat = srcMat ? srcMat.clone() : new THREE.MeshStandardMaterial({ color: 0x668866 });
+          if (mat.transparent || mat.opacity < 0.99 || (mat.alphaTest || 0) > 0) {
+            mat.transparent = false;
+            mat.alphaTest = Math.max(mat.alphaTest || 0, 0.4);
+            mat.depthWrite = true;
+          }
+          mat.side = THREE.DoubleSide;
+          mat.fog = false;
+          if ('metalness' in mat) mat.metalness = 0;
+          if ('envMapIntensity' in mat) mat.envMapIntensity = 0.25;
+          b = {
+            mat,
+            geos: [],
+            count: 0,
+            transparent: !!(srcMat && (srcMat.transparent || (srcMat.alphaTest || 0) > 0)),
+            nameHint: (srcMat && srcMat.name) || '',
+          };
+          buckets.set(key, b);
+        }
+        const g = obj.geometry.clone();
+        g.applyMatrix4(obj.matrixWorld);
+        for (const name of Object.keys(g.attributes)) {
+          if (name !== 'position' && name !== 'normal' && name !== 'uv') {
+            g.deleteAttribute(name);
+          }
+        }
+        if (!g.getAttribute('normal')) g.computeVertexNormals();
+        b.geos.push(g);
+        b.count++;
+      });
+      log('sourceMeshes', meshN, 'buckets', buckets.size);
+
+      const cellRoot = new THREE.Group();
+      cellRoot.name = 'ForestCell';
+      const stats = [];
+
+      for (const [, b] of buckets) {
+        const merged = mergeGeometries(b.geos, false);
+        for (const g of b.geos) g.dispose();
+        if (!merged) throw new Error('mergeGeometries failed');
+        merged.computeBoundingBox();
+        merged.computeBoundingSphere();
+        const mesh = new THREE.Mesh(merged, b.mat);
+        mesh.name = b.transparent ? 'Forest_Foliage' : 'Forest_Solid';
+        mesh.userData.bucketKey = b.mat.uuid;
+        mesh.userData.transparent = b.transparent;
+        cellRoot.add(mesh);
+        const bb = merged.boundingBox;
+        stats.push({
+          name: mesh.name,
+          mats: b.nameHint,
+          parts: b.count,
+          size: [
+            +(bb.max.x - bb.min.x).toFixed(2),
+            +(bb.max.y - bb.min.y).toFixed(2),
+            +(bb.max.z - bb.min.z).toFixed(2),
+          ],
+          transparent: b.transparent,
+        });
+      }
+      log('mergedCell', stats);
+
+      const solids = cellRoot.children.filter((m) => m.isMesh && !/Foliage/i.test(m.name));
+      let ground = null;
+      let bestScore = -Infinity;
+      for (const m of solids) {
+        const bb = m.geometry.boundingBox;
+        const sx = bb.max.x - bb.min.x;
+        const sy = Math.max(0.01, bb.max.y - bb.min.y);
+        const sz = bb.max.z - bb.min.z;
+        const footprint = sx * sz;
+        const flat = footprint / sy;
+        const score = Math.log10(flat + 1) * 4 + Math.log10(footprint + 1) - bb.max.y * 0.05;
+        if (score > bestScore) {
+          bestScore = score;
+          ground = m;
+        }
+      }
+      if (!ground && cellRoot.children[0]) ground = cellRoot.children[0];
+      if (ground) {
+        ground.name = 'SM_Ground_Forest';
+        log('groundMesh', ground.name, ground.material && ground.material.name);
+      }
+
+      cellRoot.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(cellRoot);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const spanNow = Math.max(size.x, size.z, 0.01);
+      const s = TARGET_SPAN / spanNow;
+      cellRoot.position.set(-center.x * s, -box.min.y * s, -center.z * s);
+      cellRoot.scale.setScalar(s);
+      cellRoot.updateMatrixWorld(true);
+
+      // Bake one cell to world-space geometries (identity TRS).
+      /** @type {{ name: string, mat: THREE.Material, geo: THREE.BufferGeometry, transparent: boolean }[]} */
+      const cellPieces = [];
+      for (const child of cellRoot.children) {
+        if (!child.isMesh) continue;
+        const g = child.geometry.clone();
+        g.applyMatrix4(child.matrixWorld);
+        g.computeBoundingBox();
+        cellPieces.push({
+          name: child.name,
+          mat: child.material,
+          geo: g,
+          transparent: !!child.userData.transparent || /Foliage/i.test(child.name),
+        });
+      }
+      const cellBox = new THREE.Box3();
+      for (const p of cellPieces) {
+        p.geo.computeBoundingBox();
+        cellBox.union(p.geo.boundingBox);
+      }
+      // Use exact AABB for abutting (no gap/overlap).
+      const cellW = cellBox.max.x - cellBox.min.x;
+      const cellD = cellBox.max.z - cellBox.min.z;
+      const half = (GRID_ODD - 1) / 2;
+      log('cellFit', {
+        scale: +s.toFixed(4),
+        cellW: +cellW.toFixed(3),
+        cellD: +cellD.toFixed(3),
+        grid: GRID_ODD,
+        tiles: GRID_ODD * GRID_ODD,
+      });
+
+      // 3×3 (or NxN) mirror tile: flip X/Z on odd offsets so shared edges meet.
+      /** @type {Map<string, { mat: THREE.Material, geos: THREE.BufferGeometry[], name: string }>} */
+      const outBuckets = new Map();
+      const scratchM = new THREE.Matrix4();
+      let tileN = 0;
+      for (let tz = -half; tz <= half; tz++) {
+        for (let tx = -half; tx <= half; tx++) {
+          const mirrorX = (Math.abs(tx) % 2) === 1;
+          const mirrorZ = (Math.abs(tz) % 2) === 1;
+          const ox = tx * cellW;
+          const oz = tz * cellD;
+          scratchM.makeScale(mirrorX ? -1 : 1, 1, mirrorZ ? -1 : 1);
+          scratchM.setPosition(ox, 0, oz);
+          const oddMirrors = (mirrorX ? 1 : 0) + (mirrorZ ? 1 : 0);
+          for (const piece of cellPieces) {
+            const g = piece.geo.clone();
+            g.applyMatrix4(scratchM);
+            if (oddMirrors % 2 === 1) flipIndexWinding(g);
+            if (g.attributes.normal) g.computeVertexNormals();
+            const key = piece.mat.uuid;
+            let ob = outBuckets.get(key);
+            if (!ob) {
+              ob = {
+                mat: piece.mat,
+                geos: [],
+                name: /Ground/i.test(piece.name)
+                  ? 'SM_Ground_Forest'
+                  : piece.transparent
+                    ? 'Forest_Foliage'
+                    : 'Forest_Solid',
+              };
+              outBuckets.set(key, ob);
+            }
+            ob.geos.push(g);
+          }
+          tileN++;
+        }
+      }
+      log('tiled', { tileN, mirror: 'odd |tx|/|tz|', buckets: outBuckets.size });
+
+      const baked = new THREE.Group();
+      baked.name = 'ForestRoadNightGrid';
+      for (const [, ob] of outBuckets) {
+        const merged = mergeGeometries(ob.geos, false);
+        for (const g of ob.geos) g.dispose();
+        if (!merged) throw new Error('tile merge failed');
+        merged.computeBoundingBox();
+        merged.computeBoundingSphere();
+        const mesh = new THREE.Mesh(merged, ob.mat);
+        mesh.name = ob.name;
+        baked.add(mesh);
+      }
+      for (const p of cellPieces) p.geo.dispose();
+
+      const outBox = new THREE.Box3().setFromObject(baked);
+      const outSize = outBox.getSize(new THREE.Vector3());
+      log('gridBounds', {
+        size: outSize.toArray().map((v) => +v.toFixed(2)),
+        minY: +outBox.min.y.toFixed(3),
+        maxY: +outBox.max.y.toFixed(3),
+        mapSizeHint: Math.ceil(Math.max(outSize.x, outSize.z)),
+      });
+
+      const exporter = new GLTFExporter();
+      const ab = await exporter.parseAsync(baked, {
+        binary: true,
+        onlyVisible: true,
+        truncateDrawRange: true,
+        embedImages: true,
+      });
+      const bytes =
+        ab instanceof ArrayBuffer
+          ? new Uint8Array(ab)
+          : new Uint8Array(ab.buffer, ab.byteOffset, ab.byteLength);
+
+      let s64 = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        s64 += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+      }
+      window.__forestSceneResult = {
+        b64: btoa(s64),
+        bytes: bytes.length,
+        meshes: baked.children.length,
+        stats,
+        targetSpan: TARGET_SPAN,
+        grid: GRID_ODD,
+        tiles: tileN,
+        cellW: cellW,
+        cellD: cellD,
+        mapSizeHint: Math.ceil(Math.max(outSize.x, outSize.z)),
+        outSize: outSize.toArray(),
+      };
+      log('done', bytes.length, 'meshes', baked.children.length);
+    } catch (err) {
+      console.error(err);
+      window.__forestSceneError = String(err && err.stack ? err.stack : err);
+      log('ERROR', window.__forestSceneError);
+    }
+  </script>
+</body>
+</html>
