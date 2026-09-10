@@ -9,7 +9,7 @@
 
 import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_CELL, MAP_CAMERA_NAV_AREA_SCALE, MAP_NAV_AREA_SCALE, MAP_UNIT_PLAYABLE_RADIUS, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
 import { bakedMoonAllowed, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps, setBakedMoonRockShadowsEnabled } from './baked-moon.js';
-import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
+import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, setupForestTileDistanceLod, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
 import * as State from './state.js';
 import * as FogVisual from './fog-visual.js';
 
@@ -2442,6 +2442,7 @@ async function adoptKitHeightField(root) {
   centralTerrainSegD = segs;
   rebuildGameplayHeightGrid();
   await setupStoryKitDistanceLod(root, window.THREE);
+  setupForestTileDistanceLod(root, window.THREE);
 }
 
 function kitKindOf(obj) {

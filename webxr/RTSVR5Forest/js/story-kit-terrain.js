@@ -501,9 +501,14 @@ function assembleKitWrap(gltf, opts) {
     if (!obj.isMesh && !obj.isSkinnedMesh) return;
     obj.castShadow = false;
     obj.receiveShadow = recv;
-    // XR ArrayCamera / pose frustums disagree with what the headset actually shows —
-    // never let Three cull kit meshes (CPU kit LOD owns visibility).
-    obj.frustumCulled = false;
+    // XR ArrayCamera frustums fight unique kit props — keep those unculled.
+    // Forest road-night tiles are large spatial chunks: frustum + distance LOD required on Quest.
+    const forestScene = !!(opts.url && /forest-road-night/i.test(opts.url));
+    obj.frustumCulled = forestScene;
+    if (forestScene && obj.geometry) {
+      obj.geometry.computeBoundingSphere();
+      obj.geometry.computeBoundingBox();
+    }
     if (kind === 'overview' && obj.geometry) {
       obj.geometry.computeBoundingSphere();
       obj.geometry.computeBoundingBox();
@@ -530,7 +535,8 @@ function assembleKitWrap(gltf, opts) {
               /atlas|branch|tree|foliage|leaf|background|Forest_Foliage/i.test(mat.name || '');
             if (foliage) {
               mat.transparent = false;
-              mat.alphaTest = Math.max(mat.alphaTest || 0, 0.4);
+              // Higher cutoff = fewer overdraw fragments on Quest (fill-bound).
+              mat.alphaTest = Math.max(mat.alphaTest || 0, 0.5);
               mat.depthWrite = true;
               if (W.DoubleSide != null) mat.side = W.DoubleSide;
             }
@@ -1558,6 +1564,7 @@ function applyTexturePadding(THREE, root) {
 export function resetKitLodState(root) {
   if (root && kitLodState && kitLodState.root !== root) return;
   kitLodState = null;
+  forestTileLod = null;
 }
 
 /**
@@ -1814,8 +1821,141 @@ function showAllKitInstances() {
   kitLodState.uploadedFull = !kitLodState.hasLod0;
 }
 
+let forestTileLod = null;
+let _forestCamVec = null;
+/** Default foliage/solid draw radius (m). Override with `?forestLodR=160`. Ground stays on. */
+const FOREST_FOLIAGE_LOD_R_DEFAULT = 130;
+
+function forestFoliageLodRadiusM() {
+  try {
+    const m = /[?&#]forestLodR=([\d.]+)/i.exec(`${location.search || ''}${location.hash || ''}`);
+    if (m) return Math.max(40, Number(m[1]) || FOREST_FOLIAGE_LOD_R_DEFAULT);
+  } catch (_) {
+    /* */
+  }
+  return FOREST_FOLIAGE_LOD_R_DEFAULT;
+}
+
+/**
+ * Index per-tile forest groups for distance LOD. Quest cannot shade 1.3M MASK tris stereo.
+ * Ground meshes stay visible; foliage/solid hide beyond forestFoliageLodRadiusM().
+ */
+export function setupForestTileDistanceLod(root, THREE) {
+  forestTileLod = null;
+  if (!root || !THREE) return;
+  if (!(root.userData && root.userData.rtsForestProps)) return;
+  root.updateMatrixWorld(true);
+  const tiles = [];
+  const box = new THREE.Box3();
+  const c = new THREE.Vector3();
+  root.traverse((obj) => {
+    if (!obj.isObject3D) return;
+    const m = /^ForestTile_(-?\d+)_(-?\d+)$/i.exec(obj.name || '');
+    if (!m && !obj.userData?.rtsForestTile) return;
+    // Prefer named tile groups; skip mesh children.
+    if (obj.isMesh) return;
+    const foliage = [];
+    const solid = [];
+    const ground = [];
+    obj.traverse((ch) => {
+      if (!ch.isMesh) return;
+      const n = ch.name || '';
+      if (/Foliage/i.test(n)) foliage.push(ch);
+      else if (/Ground|SM_Ground/i.test(n)) ground.push(ch);
+      else solid.push(ch);
+      ch.frustumCulled = true;
+      if (ch.geometry) {
+        ch.geometry.computeBoundingSphere();
+        ch.geometry.computeBoundingBox();
+      }
+    });
+    box.setFromObject(obj);
+    if (box.isEmpty()) return;
+    box.getCenter(c);
+    tiles.push({
+      group: obj,
+      cx: c.x,
+      cz: c.z,
+      foliage,
+      solid,
+      ground,
+    });
+  });
+  // Fallback: flat mesh list without tile groups (legacy merged bake).
+  if (!tiles.length) {
+    const foliage = [];
+    const solid = [];
+    root.traverse((ch) => {
+      if (!ch.isMesh) return;
+      ch.frustumCulled = true;
+      if (/Foliage/i.test(ch.name || '')) foliage.push(ch);
+      else if (!/Ground|SM_Ground/i.test(ch.name || '')) solid.push(ch);
+    });
+    if (foliage.length || solid.length) {
+      forestTileLod = {
+        tiles: [{ group: root, cx: 0, cz: 0, foliage, solid, ground: [] }],
+        lastKey: '',
+        r: forestFoliageLodRadiusM(),
+      };
+      console.log('[RTSVR5] forest tile LOD (flat)', {
+        foliage: foliage.length,
+        solid: solid.length,
+        r: forestFoliageLodRadiusM(),
+      });
+    }
+    return;
+  }
+  forestTileLod = { tiles, lastKey: '', r: forestFoliageLodRadiusM() };
+  console.log('[RTSVR5] forest tile LOD', {
+    tiles: tiles.length,
+    r: forestFoliageLodRadiusM(),
+    note: 'ground always on; foliage/solid distance-culled',
+  });
+  updateForestTileLodFromView();
+}
+
+export function updateForestTileLodFromView(renderCam) {
+  if (!forestTileLod || !forestTileLod.tiles.length) return;
+  const THREE = window.THREE;
+  if (!THREE) return;
+  if (!_forestCamVec) _forestCamVec = new THREE.Vector3();
+  const cam = renderCam && !renderCam.isArrayCamera ? renderCam : kitCullCamera();
+  if (!cam || !cam.matrixWorld) return;
+  cam.updateMatrixWorld();
+  if (typeof cam.getWorldPosition === 'function') cam.getWorldPosition(_forestCamVec);
+  else {
+    _forestCamVec.set(
+      cam.matrixWorld.elements[12],
+      cam.matrixWorld.elements[13],
+      cam.matrixWorld.elements[14]
+    );
+  }
+  const cx = _forestCamVec.x;
+  const cz = _forestCamVec.z;
+  const key = `${cx.toFixed(1)},${cz.toFixed(1)}`;
+  if (forestTileLod.lastKey === key) return;
+  forestTileLod.lastKey = key;
+  const r = forestTileLod.r;
+  const r2 = r * r;
+  let lit = 0;
+  for (let i = 0; i < forestTileLod.tiles.length; i++) {
+    const t = forestTileLod.tiles[i];
+    const dx = t.cx - cx;
+    const dz = t.cz - cz;
+    const on = dx * dx + dz * dz <= r2;
+    if (on) lit++;
+    for (let j = 0; j < t.foliage.length; j++) t.foliage[j].visible = on;
+    for (let j = 0; j < t.solid.length; j++) t.solid[j].visible = on;
+    for (let j = 0; j < t.ground.length; j++) t.ground[j].visible = true;
+  }
+  if (typeof window !== 'undefined') {
+    window.__rtsForestTileLod = { lit, total: forestTileLod.tiles.length, r };
+  }
+}
+
 /** Re-bucket kit instances by camera distance only (no CPU view frustum). */
 export function updateStoryKitLodFromView(renderCam) {
+  updateForestTileLodFromView(renderCam);
   if (!kitLodState || !kitLodState.batches.length) return;
   if (kitLodState.root && kitLodState.root.visible === false) return;
   // Lobby / pre-match: never pay kit LOD (kit should not be live yet; if it leaked, skip).

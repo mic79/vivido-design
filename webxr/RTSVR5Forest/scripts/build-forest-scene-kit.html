@@ -194,8 +194,10 @@
       });
 
       // 3×3 (or NxN) mirror tile: flip X/Z on odd offsets so shared edges meet.
-      /** @type {Map<string, { mat: THREE.Material, geos: THREE.BufferGeometry[], name: string }>} */
-      const outBuckets = new Map();
+      // Keep PER-TILE meshes (do not merge across tiles) so Quest can distance-cull —
+      // one mega-mesh AABB is always on-screen from an RTS camera and draws 1.3M MASK tris.
+      const baked = new THREE.Group();
+      baked.name = 'ForestRoadNightGrid';
       const scratchM = new THREE.Matrix4();
       let tileN = 0;
       for (let tz = -half; tz <= half; tz++) {
@@ -207,45 +209,40 @@
           scratchM.makeScale(mirrorX ? -1 : 1, 1, mirrorZ ? -1 : 1);
           scratchM.setPosition(ox, 0, oz);
           const oddMirrors = (mirrorX ? 1 : 0) + (mirrorZ ? 1 : 0);
+          const tile = new THREE.Group();
+          tile.name = `ForestTile_${tx}_${tz}`;
+          tile.userData.rtsForestTile = true;
+          tile.userData.tileTx = tx;
+          tile.userData.tileTz = tz;
+          tile.userData.tileCx = ox;
+          tile.userData.tileCz = oz;
           for (const piece of cellPieces) {
             const g = piece.geo.clone();
             g.applyMatrix4(scratchM);
             if (oddMirrors % 2 === 1) flipIndexWinding(g);
             if (g.attributes.normal) g.computeVertexNormals();
-            const key = piece.mat.uuid;
-            let ob = outBuckets.get(key);
-            if (!ob) {
-              ob = {
-                mat: piece.mat,
-                geos: [],
-                name: /Ground/i.test(piece.name)
-                  ? 'SM_Ground_Forest'
-                  : piece.transparent
-                    ? 'Forest_Foliage'
-                    : 'Forest_Solid',
-              };
-              outBuckets.set(key, ob);
-            }
-            ob.geos.push(g);
+            g.computeBoundingBox();
+            g.computeBoundingSphere();
+            const mesh = new THREE.Mesh(g, piece.mat);
+            mesh.name = /Ground/i.test(piece.name)
+              ? 'SM_Ground_Forest'
+              : piece.transparent
+                ? 'Forest_Foliage'
+                : 'Forest_Solid';
+            mesh.frustumCulled = true;
+            tile.add(mesh);
           }
+          baked.add(tile);
           tileN++;
         }
       }
-      log('tiled', { tileN, mirror: 'odd |tx|/|tz|', buckets: outBuckets.size });
-
-      const baked = new THREE.Group();
-      baked.name = 'ForestRoadNightGrid';
-      for (const [, ob] of outBuckets) {
-        const merged = mergeGeometries(ob.geos, false);
-        for (const g of ob.geos) g.dispose();
-        if (!merged) throw new Error('tile merge failed');
-        merged.computeBoundingBox();
-        merged.computeBoundingSphere();
-        const mesh = new THREE.Mesh(merged, ob.mat);
-        mesh.name = ob.name;
-        baked.add(mesh);
-      }
       for (const p of cellPieces) p.geo.dispose();
+      log('tiled', {
+        tileN,
+        mirror: 'odd |tx|/|tz|',
+        drawMeshes: tileN * cellPieces.length,
+        note: 'per-tile (cullable)',
+      });
 
       const outBox = new THREE.Box3().setFromObject(baked);
       const outSize = outBox.getSize(new THREE.Vector3());
@@ -276,17 +273,17 @@
       window.__forestSceneResult = {
         b64: btoa(s64),
         bytes: bytes.length,
-        meshes: baked.children.length,
+        meshes: tileN * cellPieces.length,
+        tiles: tileN,
         stats,
         targetSpan: TARGET_SPAN,
         grid: GRID_ODD,
-        tiles: tileN,
         cellW: cellW,
         cellD: cellD,
         mapSizeHint: Math.ceil(Math.max(outSize.x, outSize.z)),
         outSize: outSize.toArray(),
       };
-      log('done', bytes.length, 'meshes', baked.children.length);
+      log('done', bytes.length, 'meshes', tileN * cellPieces.length);
     } catch (err) {
       console.error(err);
       window.__forestSceneError = String(err && err.stack ? err.stack : err);
