@@ -16,17 +16,16 @@ export const STORY_KIT_GLB = 'assets/terrain/scifi-rts-overview.glb';
 export const STORY_KIT_LOD2_GLB = 'assets/terrain/scifi-rts-kit-lod2.glb';
 export const STORY_KIT_LOD0_GLB = 'assets/terrain/scifi-rts-kit-lod0.glb';
 /**
- * Forest road-night scene (Sketchfab pack): merged kit terrain replacing crater+tree props.
- * Built by `scripts/build-forest-scene-kit.mjs` from
- * `assets/a_forest_3_with_a_road_at_night_for_game.glb`.
- * Opt back to crater+trees with `?crater=1`. UE rocks: `?rocksfile=scifi-rts-quest`.
+ * Forest road-night scene (Sketchfab): experimental full-scene kit terrain.
+ * Opt-in only: `?forestscene=1` or `?rocksfile=forest-road-night-quest`.
+ * Not the product path — duplicated MASK foliage blew Quest fill rate.
  */
 export const FOREST_SCENE_KIT_GLB = 'assets/terrain/forest-road-night.glb';
 export const FOREST_SCENE_QUEST_GLB = 'assets/terrain/forest-road-night-quest.glb';
 /**
- * Forest trees kit: scattered low-poly trees from
- * `assets/low_poly_forest_tree_pack.glb` onto rock/dirt sites (Z→Y upright).
- * Built by `scripts/build-forest-trees-kit.mjs`. Used with `?crater=1` (props on moon).
+ * Forest trees props kit (product path): shared mesh defs scattered onto rock/dirt
+ * sites — same InstancedMesh pipeline as UE rocks on the crater moon.
+ * Built by `scripts/build-forest-trees-kit.mjs`.
  */
 export const FOREST_TREES_KIT_GLB = 'assets/terrain/forest-trees-kit.glb';
 /** Quest encode of the forest trees props kit (Draco + ETC1S KTX2). */
@@ -38,8 +37,8 @@ export const FOREST_TREES_QUEST_GLB = 'assets/terrain/forest-trees-quest.glb';
  * Full JPEG Story kit: `?noquest=1` → `scifi-rts-kit-lod2.glb` (PCVR A/B only).
  */
 export const STORY_KIT_QUEST_GLB = 'assets/terrain/scifi-rts-quest.glb';
-/** Default skirmish kit for this Forest fork = road-night scene (quest encode). */
-export const STORY_ROCKS_GLB = FOREST_SCENE_QUEST_GLB;
+/** Default Forest fork props = instanced trees (moon stays the terrain). */
+export const STORY_ROCKS_GLB = FOREST_TREES_QUEST_GLB;
 /** `?rocksx2=1` — same rocks plus a 90°-rotated deep copy: 2430 rocks, 40 textures. */
 export const STORY_ROCKS_X2_GLB = 'assets/terrain/scifi-rts-rocks-x2.glb';
 /** UE rocks master (A/B via `?rocksfile=scifi-rts-rocks`). */
@@ -251,7 +250,7 @@ function dirtFloorYFromMins(dirtMins, fallbackMinY) {
 
 /**
  * @param {object} gltf
- * @param {{ kind: string, skipIndoor?: boolean, clipRadius?: number, hideScale?: number, bytes?: number, keepNameRe?: RegExp|null, noPlate?: boolean, targetSpanM?: number, skipDistanceLod?: boolean, asProps?: boolean, url?: string, quest?: boolean }} opts
+ * @param {{ kind: string, skipIndoor?: boolean, clipRadius?: number, hideScale?: number, bytes?: number, keepNameRe?: RegExp|null, noPlate?: boolean, targetSpanM?: number, skipDistanceLod?: boolean, asProps?: boolean, url?: string, quest?: boolean, scatterMeters?: boolean }} opts
  */
 function assembleKitWrap(gltf, opts) {
   const W = window.THREE;
@@ -262,7 +261,8 @@ function assembleKitWrap(gltf, opts) {
   const keepNameRe = opts.keepNameRe || null;
   const noPlate = !!opts.noPlate;
   const asProps = !!opts.asProps;
-  const targetSpanM = opts.targetSpanM > 0 ? opts.targetSpanM : 0;
+  const scatterMeters = !!opts.scatterMeters;
+  const targetSpanM = scatterMeters ? 0 : opts.targetSpanM > 0 ? opts.targetSpanM : 0;
 
   const scene = findGltfScene(gltf, 'LOD2') || gltf.scene;
   // Overview / rocks extracts are single-scene. Story may pair LOD0 for distance swap.
@@ -357,7 +357,27 @@ function assembleKitWrap(gltf, opts) {
   let cluster;
   let y0;
   let y0Source = 'dirt';
-  if ((kind === 'overview' || asProps) && (keepNameRe || targetSpanM > 0)) {
+  if (scatterMeters) {
+    // Forest trees: already authored in skirmish metres, feet at Y≈0, full-disk scatter.
+    // Do not recenter/rescale — runtime seats each InstancedMesh onto the moon heightfield.
+    const box = new W.Box3();
+    let any = false;
+    scene.traverse((obj) => {
+      if ((!obj.isMesh && !obj.isSkinnedMesh) || !obj.visible) return;
+      box.expandByObject(obj);
+      any = true;
+    });
+    if (!any || box.isEmpty()) {
+      console.warn('[RTSVR5] skip kit: no visible meshes', kind);
+      return null;
+    }
+    cluster = box;
+    y0 = 0;
+    y0Source = 'scatterMeters';
+    scene.position.set(0, 0, 0);
+    scene.scale.set(1, 1, 1);
+    scene.updateMatrixWorld(true);
+  } else if ((kind === 'overview' || asProps) && (keepNameRe || targetSpanM > 0)) {
     const seeded = expandClusterFromActorNodes(scene, W);
     if (!seeded.any || seeded.cluster.isEmpty()) {
       console.warn('[RTSVR5] skip kit: no visible meshes', kind);
@@ -583,6 +603,10 @@ function assembleKitWrap(gltf, opts) {
   if (asProps) wrap.userData.rtsQuestRocksProps = true;
   if (opts.url) wrap.userData.rtsKitUrl = opts.url;
   if (opts.url && /forest-trees|forest-road-night/i.test(opts.url)) wrap.userData.rtsForestProps = true;
+  if (scatterMeters) {
+    wrap.userData.rtsForestScatterMeters = true;
+    wrap.userData.rtsSeatedOnCrater = true; // per-instance seat; skip rigid bbox lift
+  }
   if (opts.quest != null) wrap.userData.rtsKitQuest = !!opts.quest;
   if (opts.skipDistanceLod) wrap.userData.rtsSkipDistanceLod = true;
   if (lod0Root) wrap.userData.rtsLod0Root = lod0Root;
@@ -735,14 +759,18 @@ export async function tryLoadRocksKit() {
       const m = /(?:^|[?&#])rocksfile=([\w.-]+)/i.exec(q);
       if (m) return [`assets/terrain/${m[1].endsWith('.glb') ? m[1] : `${m[1]}.glb`}`];
       if (/(?:^|[?&#])rocksx2=1(?:&|$)/i.test(q)) return [STORY_ROCKS_X2_GLB];
-      // Crater A/B: tree props kit (not the full road-night scene).
+      // Experimental full-scene forest (not instanced props).
+      if (/(?:[?&#]forestscene=1\b)/i.test(q)) {
+        return [FOREST_SCENE_QUEST_GLB, FOREST_SCENE_KIT_GLB];
+      }
+      // Crater A/B still uses tree props kit when someone forces rocksfile elsewhere.
       if (/(?:[?&#]crater=1\b)|(?:[?&#]moon=1\b)|(?:[?&#]trees=1\b)/i.test(q)) {
         return [FOREST_TREES_QUEST_GLB, FOREST_TREES_KIT_GLB];
       }
     } catch (_) {
       /* no location */
     }
-    return [FOREST_SCENE_QUEST_GLB, FOREST_SCENE_KIT_GLB, STORY_ROCKS_GLB];
+    return [FOREST_TREES_QUEST_GLB, FOREST_TREES_KIT_GLB, STORY_ROCKS_GLB];
   })();
 
   let used = urls[0];
@@ -874,10 +902,14 @@ export async function tryLoadQuestRocksProps() {
           ? [STORY_KIT_QUEST_GLB, STORY_ROCKS_UE_GLB]
           : [STORY_ROCKS_UE_GLB, STORY_KIT_QUEST_GLB];
       }
+      // Opt-in external forest kit (InstancedMesh) when not using embedded Prop_Forest_*.
+      if (/(?:^|[?&#])forestkit=1(?:&|$)/i.test(q)) {
+        return [FOREST_TREES_QUEST_GLB, FOREST_TREES_KIT_GLB];
+      }
     } catch (_) {
       /* no location */
     }
-    // Forest default props (crater path only): quest trees, then PNG kit.
+    // Fallback when embedded props missing from moon GLB.
     return [FOREST_TREES_QUEST_GLB, FOREST_TREES_KIT_GLB];
   })();
 
@@ -913,10 +945,9 @@ export async function tryLoadQuestRocksProps() {
 
   console.log('[RTSVR5] quest rocks props file', { url: used, bytes: buf.byteLength });
   const gltf = await parseKitBuf(buf);
-  const isForest = /forest-trees/i.test(used);
-  // Dressing on crater moon: scale to skirmish nav diameter (UE/forest sites are
-  // authored in export metres — same pivot+span as rocks so they sit on the plate).
-  // Forest: skipDistanceLod — crossed billboards share meshes; distance LOD fights density.
+  const isForestTrees = /forest-trees/i.test(used);
+  // Forest trees: scatter already in skirmish metres (native pack scale/orient). Moon seats.
+  // UE rocks: keep targetSpanM pivot/scale into the nav disk.
   return assembleKitWrap(gltf, {
     kind: 'rocks',
     asProps: true,
@@ -924,8 +955,11 @@ export async function tryLoadQuestRocksProps() {
     clipRadius: 0,
     keepNameRe: null,
     noPlate: true,
-    targetSpanM: Math.max(MAP_SIZE * 0.9, MAP_UNIT_NAV_RADIUS * 2 * 0.92),
-    skipDistanceLod: isForest,
+    scatterMeters: isForestTrees,
+    targetSpanM: isForestTrees
+      ? 0
+      : Math.max(MAP_SIZE * 0.9, MAP_UNIT_NAV_RADIUS * 2 * 0.92),
+    skipDistanceLod: false,
     bytes: buf.byteLength,
     url: used,
     quest: /(?:scifi-rts-quest|forest-trees-quest)\.glb/i.test(used),
@@ -1565,6 +1599,71 @@ export function resetKitLodState(root) {
   if (root && kitLodState && kitLodState.root !== root) return;
   kitLodState = null;
   forestTileLod = null;
+}
+
+/**
+ * Forest scatter kit: feet authored at Y≈0. After InstancedMesh build, snap each
+ * instance onto the live moon heightfield (follows crater undulation / rim).
+ * @param {import('three').Object3D} root
+ * @param {(x: number, z: number) => number} sampleY
+ */
+export function seatForestInstancesOnMoon(root, sampleY) {
+  if (!root || typeof sampleY !== 'function') return 0;
+  if (!(root.userData && root.userData.rtsForestScatterMeters)) return 0;
+  const THREE = window.THREE;
+  if (!THREE || !kitLodState || kitLodState.root !== root) return 0;
+
+  const pos = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
+  const scl = new THREE.Vector3();
+  let n = 0;
+  const batches = kitLodState.batches || [];
+  for (let b = 0; b < batches.length; b++) {
+    const batch = batches[b];
+    const items = batch.items || [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const moonY = sampleY(it.x, it.z);
+      if (!Number.isFinite(moonY)) continue;
+      const dy = moonY - it.miny;
+      if (Math.abs(dy) < 1e-4) continue;
+
+      if (batch.unique && batch.mesh) {
+        batch.mesh.position.y += dy;
+        batch.mesh.updateMatrixWorld(true);
+        it.y += dy;
+        it.miny += dy;
+        it.maxy += dy;
+        n++;
+        continue;
+      }
+
+      if (!it.matrix) continue;
+      it.matrix.decompose(pos, quat, scl);
+      // Foot was at miny; lift so foot sits on moon.
+      pos.y += dy;
+      it.matrix.compose(pos, quat, scl);
+      it.y += dy;
+      it.miny += dy;
+      it.maxy += dy;
+      n++;
+    }
+    if (batch.mesh2 && items.length) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].matrix) batch.mesh2.setMatrixAt(i, items[i].matrix);
+      }
+      batch.mesh2.instanceMatrix.needsUpdate = true;
+      batch.mesh2.count = items.length;
+    }
+    if (batch.mesh0 && items.length) {
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].matrix) batch.mesh0.setMatrixAt(i, items[i].matrix);
+      }
+      batch.mesh0.instanceMatrix.needsUpdate = true;
+    }
+  }
+  console.log('[RTSVR5] forest instances seated on moon', { adjusted: n, batches: batches.length });
+  return n;
 }
 
 /**

@@ -121,8 +121,7 @@ function initializeGame(sceneEl) {
     State.gameSession.sceneContentReady = false;
     UI.setBootLoadingMessage('Loading sky & lighting…');
     primeSceneRevealBlack(sceneEl);
-    // Forest fork: kit terrain is the default — apply profile before first ground mount
-    // so we don't load the crater moon and then skip rebuild on match start.
+    // Proven Forest path: crater moon + profile before first ground mount.
     applyMapProfile('standard');
     if (Perf.shouldLoadCubemap()) {
       await applyHdrSkyEnvironment(sceneEl);

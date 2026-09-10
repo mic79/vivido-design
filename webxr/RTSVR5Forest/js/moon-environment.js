@@ -9,7 +9,7 @@
 
 import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_CELL, MAP_CAMERA_NAV_AREA_SCALE, MAP_NAV_AREA_SCALE, MAP_UNIT_PLAYABLE_RADIUS, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
 import { bakedMoonAllowed, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps, setBakedMoonRockShadowsEnabled } from './baked-moon.js';
-import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, setupForestTileDistanceLod, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
+import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, setupForestTileDistanceLod, seatForestInstancesOnMoon, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
 import * as State from './state.js';
 import * as FogVisual from './fog-visual.js';
 
@@ -2534,9 +2534,19 @@ async function attachSkirmishSceneryProps(groundEl, sceneEl) {
   if (mode === 'A1') {
     props = await tryLoadOverviewGroundscape();
   } else {
-    // Forest fork: prefer scattered trees kit over lunar embedded Prop_* rocks.
-    // Opt into old combined crater+rocks with `?uerocks=1` (embedded) after moon load.
-    const wantUeEmbedded = (() => {
+    // Default = combined skirmish GLB Prop_* (forest seated + cliffs) + moon cookies.
+    // ?forestkit=1 → separate InstancedMesh forest-trees-quest (cookies off — scatter-only).
+    // ?uerocks=1 → force re-fetch path that prefers rocks kit (legacy A/B).
+    const wantForestKit = (() => {
+      try {
+        return /(?:[?&#]forestkit=1\b)/i.test(
+          `${location.search || ''}${location.hash || ''}`
+        );
+      } catch (_) {
+        return false;
+      }
+    })();
+    const wantUeRocksKit = (() => {
       try {
         return /(?:[?&#]uerocks=1\b)/i.test(
           `${location.search || ''}${location.hash || ''}`
@@ -2545,7 +2555,7 @@ async function attachSkirmishSceneryProps(groundEl, sceneEl) {
         return false;
       }
     })();
-    if (wantUeEmbedded) {
+    if (!wantForestKit && !wantUeRocksKit) {
       props = takeEmbeddedSkirmishProps();
     }
     if (!props) props = await tryLoadQuestRocksProps();
@@ -2580,13 +2590,25 @@ async function attachSkirmishSceneryProps(groundEl, sceneEl) {
     props.position.y = 0;
   }
   groundEl.setObject3D('overviewProps', props);
-  // Baked rock shadows only when the matching seated Prop_* set is on screen.
+  // Cookies in the skirmish GLB match embedded Prop_* (forest or rocks-era bake).
+  // External forest-trees kit uses scatterMeters seating — do not show mismatched stamps.
   if (bakedMoonRoot) {
-    setBakedMoonRockShadowsEnabled(bakedMoonRoot, !!(props.userData && props.userData.rtsSeatedOnCrater));
+    const externalForestKit = !!(
+      props.userData &&
+      (props.userData.rtsForestScatterMeters ||
+        (props.userData.rtsForestProps && !props.userData.rtsSeatedOnCrater))
+    );
+    setBakedMoonRockShadowsEnabled(
+      bakedMoonRoot,
+      !externalForestKit && !!(props.userData && props.userData.rtsSeatedOnCrater)
+    );
   }
   try {
-    // Instance shared rock meshes (~20 draws). LOD tick is gated on gameStarted.
+    // Instance shared rock/tree meshes (~20 draws). LOD tick is gated on gameStarted.
     await setupStoryKitDistanceLod(props, window.THREE);
+    if (props.userData && props.userData.rtsForestScatterMeters) {
+      seatForestInstancesOnMoon(props, sampleMoonTerrainWorldY);
+    }
   } catch (err) {
     console.warn('[RTSVR5] props instancing failed', err);
   }

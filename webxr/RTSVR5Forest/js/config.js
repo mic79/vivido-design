@@ -86,10 +86,10 @@ export function applyMapProfile(profile) {
     // Hills: RTSVR4 nav scale (×4). Kit: stay on the kit footprint (scale 1).
     MAP_NAV_AREA_SCALE = forceKit ? 1 : 4;
   } else {
-    // Forest kit = 3×3 road-night grid (~600 m). Crater / props path stays 200 m.
-    MAP_SIZE = forceKit ? MAP_SIZE_FOREST_GRID : MAP_SIZE_STANDARD;
+    MAP_SIZE = MAP_SIZE_STANDARD;
     MAP_TERRAIN_STYLE = forceKit ? 'kit' : 'crater';
     FOG_GRID_SIZE = 40;
+    // Crater + props: ×4 nav disk (Story-scale playable). Kit terrain keeps scale 1.
     MAP_NAV_AREA_SCALE = forceKit ? 1 : 4;
     STORY_RESOURCE_FIELD_POSITIONS = null;
   }
@@ -98,11 +98,13 @@ export function applyMapProfile(profile) {
 
 /**
  * Skirmish 1v1 scenery mode (crater moon base + optional dressing).
- *   B0 (default) — combined crater+rocks GLB (`terrain-skirmish-1v1.glb`) when present;
- *                 else moon + Quest UE rocks props
+ *   B0 (default) — combined crater+forest Prop_* GLB (`terrain-skirmish-1v1.glb`)
+ *                 with baked ground cookies; else moon + forest-trees kit props
  *   A0 — moon only (`?scenery=A0` or `?noprops=1`)
  *   A1 — moon + legacy groundscape (`?scenery=A1` or `?groundscape=1`)
  *   `?moononly=1` — force moon-only bake file (no embedded props)
+ *   `?forestkit=1` — external InstancedMesh trees (cookies off)
+ *   `?uerocks=1` — legacy rocks kit props A/B
  * Full kit-as-terrain remains `?kit=1` (separate from these).
  */
 export function skirmishSceneryMode() {
@@ -113,18 +115,18 @@ export function skirmishSceneryMode() {
   return 'B0';
 }
 
-/** Sci-fi kit GLB as full terrain (`?kit=1`, or rocks-file A/B / Quest leanrocks).
- * Forest fork: road-night scene kit is the default; `?crater=1` / `?moon=1` restores moon+trees. */
+/** Sci-fi kit GLB as full terrain (`?kit=1`, rocks-file A/B, Quest leanrocks).
+ * Forest product default = crater moon + instanced tree props (same as proven rocks path).
+ * Heavy road-night scene is opt-in: `?forestscene=1`. */
 export function wantKitTerrain() {
   const q = searchQuery() + (typeof location !== 'undefined' ? location.hash || '' : '');
-  if (/(?:[?&#]crater=1\b)|(?:[?&#]moon=1\b)/i.test(q)) return false;
+  if (/(?:[?&#]forestscene=1\b)/i.test(q)) return true;
   if (/(?:[?&#]kit=1\b)/i.test(q)) return true;
   if (/(?:[?&#]leanrocksFile=1\b)/i.test(q)) return true;
   if (/(?:[?&#]rocksfile=[\w.-]+)/i.test(q)) return true;
   // Quest leanrocks file path (desktop leanrocks remaps to full-kit look elsewhere).
   if (/(?:[?&#]leanrocks=1\b)/i.test(q) && !isDesktopPcvrHost()) return true;
-  // Forest fork product default: full forest scene as kit terrain (not crater dressing).
-  return true;
+  return false;
 }
 
 export function isKitTerrain() {
@@ -215,16 +217,14 @@ export function getForcedSkirmishKitKind() {
 }
 
 /**
- * Skirmish kit file:
- * - Forest default → rocks kind (forest-road-night scene via STORY_ROCKS_GLB)
- * - desktop ?leanrocks=1 → full Story kit (lean look applied separately)
- * - Quest ?leanrocks=1 / ?leanrocksFile=1 / ?rocksfile= → rocks GLB
- * - forceLeanRocksVisual(true) alone does not change the file
+ * Skirmish kit file (only when wantKitTerrain):
+ * - default / Forest → embedded Prop_Forest_* + cookies (see B0); kit path uses trees GLB
+ * - `?forestscene=1` → forest-road-night via rocksfile remap in tryLoadRocksKit
+ * - Quest ?leanrocks=1 / ?rocksfile= → explicit GLB
  */
 export function skirmishKitKind() {
   if (_skirmishKitForce) return _skirmishKitForce;
   if (rocksGlbLoadRequested()) return 'rocks';
-  // Forest fork: road-night / trees kits load through the rocks path.
   return 'rocks';
 }
 

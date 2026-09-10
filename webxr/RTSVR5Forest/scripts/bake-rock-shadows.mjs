@@ -15,7 +15,10 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const GLB_PATH = path.join(ROOT, 'assets', 'terrain', 'terrain-skirmish-1v1.glb');
+const GLB_PATH = path.resolve(
+  process.env.GLB_PATH || path.join(ROOT, 'assets', 'terrain', 'terrain-skirmish-1v1.glb')
+);
+const OUT_GLB = path.resolve(process.env.OUT_GLB || GLB_PATH);
 const HDR_PATH = 'assets/earthlike_planet.hdr';
 const SHOT = path.join(ROOT, 'bench-poses');
 const PORT = Number(process.env.PORT || 8794);
@@ -108,6 +111,7 @@ await page.goto(`http://127.0.0.1:${PORT}/scripts/bake-rock-shadows-page.html`, 
 });
 await page.waitForFunction(() => window.__bakeReady === true, null, { timeout: 60000 });
 
+const glbRel = path.relative(ROOT, GLB_PATH).split(path.sep).join('/');
 const baked = await page.evaluate(
   async ({ glbUrl, hdrUrl, resPlate, resSkirt, shadowMapRes, dark, gameSun }) => {
     const THREE = window.THREE;
@@ -424,7 +428,7 @@ const baked = await page.evaluate(
     };
   },
   {
-    glbUrl: `http://127.0.0.1:${PORT}/assets/terrain/terrain-skirmish-1v1.glb`,
+    glbUrl: `http://127.0.0.1:${PORT}/${glbRel}`,
     hdrUrl: `http://127.0.0.1:${PORT}/${HDR_PATH}`,
     resPlate: RES_PLATE,
     resSkirt: RES_SKIRT,
@@ -533,5 +537,5 @@ for (const d of baked.maps) {
 
 json.extras.rtsMoonRockShadows = extras;
 const out = writeGlb(json, bin);
-fs.writeFileSync(GLB_PATH, out);
-console.log(JSON.stringify({ out: GLB_PATH, bytes: out.length, extras }, null, 2));
+fs.writeFileSync(OUT_GLB, out);
+console.log(JSON.stringify({ in: GLB_PATH, out: OUT_GLB, bytes: out.length, extras }, null, 2));

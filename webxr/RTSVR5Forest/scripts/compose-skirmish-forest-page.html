@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Compose skirmish forest props</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <pre id="log">starting…</pre>
+  <script type="module">
+    const logEl = document.getElementById('log');
+    const log = (...a) => {
+      const line = a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+      console.log('[compose-forest]', line);
+      logEl.textContent += '\n' + line;
+    };
+
+    try {
+      const THREE = await import('three');
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      const { GLTFExporter } = await import('three/addons/exporters/GLTFExporter.js');
+      const params = new URLSearchParams(location.search);
+      const SKIRMISH = params.get('skirmish') || '../assets/terrain/terrain-skirmish-1v1.glb';
+      const FOREST = params.get('forest') || '../assets/terrain/forest-trees-kit.glb';
+      const KEEP_CLIFFS = params.get('cliffs') !== '0';
+
+      const loader = new GLTFLoader();
+      log('load', SKIRMISH);
+      const sk = await loader.parseAsync(await (await fetch(SKIRMISH)).arrayBuffer(), '');
+      log('load', FOREST);
+      const fr = await loader.parseAsync(await (await fetch(FOREST)).arrayBuffer(), '');
+
+      const root = sk.scene;
+      root.updateMatrixWorld(true);
+
+      const moons = [];
+      root.traverse((o) => {
+        if (o.isMesh && /^Moon_/i.test(o.name || '')) moons.push(o);
+      });
+      if (!moons.length) throw new Error('no Moon_* in skirmish GLB');
+      const ray = new THREE.Raycaster();
+      const down = new THREE.Vector3(0, -1, 0);
+      const origin = new THREE.Vector3();
+      function sampleMoonY(x, z) {
+        origin.set(x, 500, z);
+        ray.set(origin, down);
+        const hits = ray.intersectObjects(moons, false);
+        if (hits.length) return hits[0].point.y;
+        return 0;
+      }
+
+      // Drop UE rock/dirt props (keep cliffs / minerals / heroes).
+      const removeSet = new Set();
+      root.traverse((o) => {
+        const n = o.name || '';
+        if (!/^Prop_/i.test(n)) return;
+        if (/Cliff|Mineral|Platform|Pump|CIrcular|Circular/i.test(n)) {
+          if (!KEEP_CLIFFS && /Cliff/i.test(n)) removeSet.add(o);
+          return;
+        }
+        if (/Rock|DirtPile|Dirt/i.test(n)) removeSet.add(o);
+      });
+      let removed = 0;
+      for (const o of [...removeSet]) {
+        if (o.parent) {
+          o.parent.remove(o);
+          removed++;
+        }
+      }
+      log('removed rock/dirt props', removed);
+
+      // Keep shared geometries: seat each forest mesh via TRS (do not bake into geo).
+      const forestRoot = fr.scene;
+      forestRoot.updateMatrixWorld(true);
+      const plants = [];
+      forestRoot.traverse((o) => {
+        if (!o.isMesh || !o.geometry) return;
+        plants.push(o);
+      });
+      log('forest meshes', plants.length);
+
+      const holder = new THREE.Group();
+      holder.name = 'Prop_Forest_Scatter';
+      const box = new THREE.Box3();
+      const v = new THREE.Vector3();
+      let seated = 0;
+      for (let i = 0; i < plants.length; i++) {
+        const src = plants[i];
+        src.updateMatrixWorld(true);
+        const mesh = src.clone(false);
+        mesh.geometry = src.geometry;
+        mesh.material = src.material;
+        mesh.matrix.copy(src.matrixWorld);
+        mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+        mesh.matrixAutoUpdate = true;
+        mesh.updateMatrixWorld(true);
+        box.setFromObject(mesh);
+        if (box.isEmpty()) continue;
+        const cx = (box.min.x + box.max.x) * 0.5;
+        const cz = (box.min.z + box.max.z) * 0.5;
+        const foot = box.min.y;
+        const moonY = sampleMoonY(cx, cz);
+        mesh.position.y += moonY - foot;
+        mesh.name = `Prop_Forest_${i}_${(src.name || 'tree').replace(/\W+/g, '_').slice(0, 40)}`;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        holder.add(mesh);
+        seated++;
+      }
+      root.add(holder);
+      log('seated Prop_Forest_*', seated);
+
+      const exporter = new GLTFExporter();
+      const ab = await exporter.parseAsync(root, {
+        binary: true,
+        onlyVisible: true,
+        truncateDrawRange: true,
+        embedImages: true,
+      });
+      const bytes =
+        ab instanceof ArrayBuffer
+          ? new Uint8Array(ab)
+          : new Uint8Array(ab.buffer, ab.byteOffset, ab.byteLength);
+      let s64 = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        s64 += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+      }
+      window.__composeForestResult = {
+        b64: btoa(s64),
+        bytes: bytes.length,
+        removed,
+        seated,
+      };
+      log('done', bytes.length);
+    } catch (err) {
+      console.error(err);
+      window.__composeForestError = String(err && err.stack ? err.stack : err);
+      log('ERROR', window.__composeForestError);
+    }
+  </script>
+</body>
+</html>
