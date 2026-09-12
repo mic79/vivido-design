@@ -28,7 +28,7 @@ import {
   getFocusSceneryCullEnabled,
   setFocusSceneryCullEnabled,
 } from './config.js';
-import { applyMoonBattlefieldVisuals, rebuildMoonBattlefield, clearStoryBlockingHills, ensureSkirmishSceneryProps, ensureBakedMoonHeightCoversNav } from './moon-environment.js';
+import { applyMoonBattlefieldVisuals, rebuildMoonBattlefield, clearStoryBlockingHills, ensureSkirmishSceneryProps, ensureBakedMoonHeightCoversNav, ensureFocusCullPipeline } from './moon-environment.js';
 import {
   generateStoryLayout,
   applyStoryLayoutToWorld,
@@ -224,6 +224,12 @@ async function prepareMapForMode(mode, sceneEl, prevProfile) {
   Renderer.configureBattlefieldShadows(sceneEl);
   Renderer.resizeWorldFogOverlay();
   Renderer.refreshPlayableBorderRing();
+
+  // Story hills / kit and Skirmish crater+props all need fade shaders + LOD wired.
+  const groundElFocus = document.getElementById('ground');
+  if (groundElFocus) await ensureFocusCullPipeline(groundElFocus);
+  Renderer.updateCameraFocusRing?.(true);
+  if (typeof window.__rtsUpdateKitLod === 'function') window.__rtsUpdateKitLod();
 
   const plane = document.getElementById('vr-minimap-plane');
   if (plane) {
@@ -467,6 +473,14 @@ async function onStartGame(mode) {
     State.gameSession.myPlayerId = 0;
   }
   State.clearBuildPlacementFlags();
+
+  // Focus fade/cull only arms after gameStarted — kick both modes now.
+  {
+    const g = document.getElementById('ground');
+    if (g) await ensureFocusCullPipeline(g);
+    Renderer.updateCameraFocusRing?.(true);
+    if (typeof window.__rtsUpdateKitLod === 'function') window.__rtsUpdateKitLod();
+  }
 
   if (typeof window !== 'undefined') {
     window.__rtsMinimapWorldSpanM = Pathfinding.getNavGridSpec().planeSpanM;

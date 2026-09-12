@@ -1,7 +1,12 @@
 // Shared FoW visual — darken-only in terrain shaders (no hue, no floating plane).
 // Gameplay fog texture covers the nav plane; visual ground beyond nav is also darkened.
 // Focus-cull fade: same multiply darken outside the blue camera ring (world XZ).
+//
+// IMPORTANT: moon triplanar replaces `#include <map_fragment>`, so shroud must NOT
+// depend on that include — compute + apply immediately before opaque/output.
 import { MAP_SIZE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_SPAN_M } from './config.js';
+
+const FOG_INSTALL_VER = 7;
 
 /**
  * Visual FoW half-extent (m). Must cover the horizon skirt:
@@ -87,10 +92,8 @@ export function setFocusFadeDisk(on, x, z, innerR, outerR) {
   pushAllUniforms();
 }
 
-/** After map_fragment: FoW uses per-vertex XZ; focus uses per-vertex on terrain,
- * instance/object origin on InstancedMesh so whole props black out together. */
-const SHROUD_AFTER_MAP = /* glsl */ `
-	float rtsShroudMul = 1.0;
+/** FoW + focus shroud — applied to final lit color (works with moon triplanar). */
+const SHROUD_BEFORE_OPAQUE = /* glsl */ `
 	{
 		float shroudA = 0.0;
 		if ( uRtsFogOn > 0.5 && uRtsFogSpan > 1.0 ) {
@@ -107,9 +110,6 @@ const SHROUD_AFTER_MAP = /* glsl */ `
 			shroudA = fogA;
 		}
 		if ( uRtsFocusFadeOn > 0.5 ) {
-			// Terrain = large non-instanced mesh: MUST use per-vertex XZ (origin would
-			// black/dim the entire plate when the blue ring leaves map center).
-			// Instanced props = fade from instance origin so the whole rock goes black.
 #ifdef USE_INSTANCING
 			float fd = length( vRtsObjXZ - uRtsFocusXZ );
 #else
@@ -119,31 +119,42 @@ const SHROUD_AFTER_MAP = /* glsl */ `
 			focusA = clamp( focusA / 0.28, 0.0, 1.0 );
 			shroudA = max( shroudA, focusA );
 		}
-		rtsShroudMul = 1.0 - shroudA;
-		diffuseColor.rgb *= rtsShroudMul;
+		outgoingLight *= ( 1.0 - shroudA );
 	}
-`;
-
-/** Kill specular / env / emissive leftovers (props stay lit if only albedo is multiplied). */
-const SHROUD_BEFORE_OPAQUE = /* glsl */ `
-	outgoingLight *= rtsShroudMul;
 `;
 
 /**
  * Darken terrain + scenery by FoW + optional focus-ring fade (black multiply — no hue).
  */
 export function installFogVisualOnMaterial(mat) {
-  if (!mat || installed.has(mat)) {
+  if (!mat) return;
+
+  // Upgrade stale installs (map_fragment path broke under moon triplanar).
+  if (installed.has(mat) && mat.userData && mat.userData._rtsFogInstallVer === FOG_INSTALL_VER) {
     pushAllUniforms();
     return;
   }
+  if (installed.has(mat)) {
+    installed.delete(mat);
+    if (mat.userData && mat.userData._rtsFogPrevCompile !== undefined) {
+      mat.onBeforeCompile = mat.userData._rtsFogPrevCompile;
+    }
+    if (mat.userData && mat.userData._rtsFogPrevKey !== undefined) {
+      mat.customProgramCacheKey = mat.userData._rtsFogPrevKey;
+    }
+  }
+
   installed.add(mat);
+  if (!mat.userData) mat.userData = {};
+  mat.userData._rtsFogInstallVer = FOG_INSTALL_VER;
 
   const prev = mat.onBeforeCompile;
   const prevKey =
     typeof mat.customProgramCacheKey === 'function'
       ? mat.customProgramCacheKey.bind(mat)
       : () => '';
+  mat.userData._rtsFogPrevCompile = prev || null;
+  mat.userData._rtsFogPrevKey = prevKey;
 
   mat.onBeforeCompile = (shader) => {
     if (typeof prev === 'function') prev(shader);
@@ -203,21 +214,10 @@ uniform vec2 uRtsFocusXZ;
 uniform float uRtsFocusInner;
 uniform float uRtsFocusOuter;`
       );
+    }
 
-      if (shader.fragmentShader.includes('#include <map_fragment>')) {
-        shader.fragmentShader = shader.fragmentShader.replace(
-          '#include <map_fragment>',
-          `#include <map_fragment>${SHROUD_AFTER_MAP}`
-        );
-      } else {
-        // No map chunk (rare): declare mul so opaque path still compiles.
-        shader.fragmentShader = shader.fragmentShader.replace(
-          'void main() {',
-          `void main() {\n	float rtsShroudMul = 1.0;`
-        );
-      }
-
-      // Always kill final lit color (specular/env/emissive survive albedo-only mul on props).
+    // Always apply before final color write — survives moon triplanar (no map_fragment).
+    if (!shader.fragmentShader.includes('uRtsFogOn > 0.5 && uRtsFogSpan > 1.0')) {
       if (shader.fragmentShader.includes('#include <opaque_fragment>')) {
         shader.fragmentShader = shader.fragmentShader.replace(
           '#include <opaque_fragment>',
@@ -232,7 +232,7 @@ uniform float uRtsFocusOuter;`
     }
   };
 
-  mat.customProgramCacheKey = () => `${prevKey()}|rtsFogFocusFade6`;
+  mat.customProgramCacheKey = () => `${prevKey()}|rtsFogFocusFade7`;
   mat.needsUpdate = true;
 }
 

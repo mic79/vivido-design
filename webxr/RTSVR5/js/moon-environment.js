@@ -9,7 +9,7 @@
 
 import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_CELL, MAP_CAMERA_NAV_AREA_SCALE, MAP_NAV_AREA_SCALE, MAP_UNIT_PLAYABLE_RADIUS, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
 import { bakedMoonAllowed, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps, setBakedMoonRockShadowsEnabled } from './baked-moon.js';
-import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings } from './story-kit-terrain.js';
+import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings, hasStoryKitLodFor } from './story-kit-terrain.js';
 import * as State from './state.js';
 import * as FogVisual from './fog-visual.js';
 
@@ -18,6 +18,43 @@ function installGroundFogVisual(groundEl) {
   if (mesh) FogVisual.installFogVisualUnder(mesh);
   const props = groundEl?.getObject3D?.('overviewProps');
   if (props) FogVisual.installFogVisualUnder(props);
+}
+
+/**
+ * Story + Skirmish: terrain/prop materials must carry FoW+focus fade, and kit/props
+ * must have distance LOD so focus cull can hide them outside the fade disk.
+ * Call after any map rebuild or scenery attach.
+ */
+export async function ensureFocusCullPipeline(groundEl) {
+  const el = groundEl || (typeof document !== 'undefined' ? document.getElementById('ground') : null);
+  if (!el) return;
+  installGroundFogVisual(el);
+  FogVisual.syncFogVisualExtents();
+  const THREE = window.THREE;
+  if (!THREE) return;
+
+  const mesh = typeof el.getObject3D === 'function' ? el.getObject3D('mesh') : null;
+  const props = typeof el.getObject3D === 'function' ? el.getObject3D('overviewProps') : null;
+
+  // Prefer skirmish overview props when present; else kit-as-terrain (Story/?kit=1).
+  const lodRoot =
+    props ||
+    (mesh && (mesh.userData?.rtsKitKind || mesh.userData?.rtsStoryKit) ? mesh : null);
+  if (!lodRoot) return;
+  if (lodRoot.userData?.rtsSkipDistanceLod) {
+    FogVisual.installFogVisualUnder(lodRoot);
+    return;
+  }
+  if (hasStoryKitLodFor(lodRoot)) {
+    FogVisual.installFogVisualUnder(lodRoot);
+    return;
+  }
+  try {
+    await setupStoryKitDistanceLod(lodRoot, THREE);
+  } catch (err) {
+    console.warn('[RTSVR5] ensureFocusCullPipeline lod failed', err);
+    FogVisual.installFogVisualUnder(lodRoot);
+  }
 }
 /** Central plate edge length (m) — follows live `MAP_SIZE` (standard 200 / Story 400). */
 function mapPlateM() {
@@ -2034,11 +2071,17 @@ function installMoonTriplanarSampling(material) {
   }
   material.userData.moonTriplanarInstalled = true;
   material.userData.moonTriScale = moonTriplanarWorldToUv();
-  // Bump key whenever the GLSL below changes (force recompile).
+  const prev = material.onBeforeCompile;
+  const prevKey =
+    typeof material.customProgramCacheKey === 'function'
+      ? material.customProgramCacheKey.bind(material)
+      : () => '';
+  // Bump key whenever the GLSL below changes (force recompile). Chain fog/other hooks.
   material.customProgramCacheKey = () =>
-    'rts-moon-triplanar-v5|sh' + (material.userData.shadowRecv ? '1' : '0');
+    `${prevKey()}|rts-moon-triplanar-v6|sh${material.userData.shadowRecv ? '1' : '0'}`;
 
   material.onBeforeCompile = (shader) => {
+    if (typeof prev === 'function') prev(shader);
     shader.uniforms.uMoonTriScale = { value: material.userData.moonTriScale };
     material.userData.moonTriShader = shader;
 
@@ -2474,6 +2517,8 @@ function clearOverviewGroundscapeProps(groundEl) {
     if (bakedMoonRoot) setBakedMoonRockShadowsEnabled(bakedMoonRoot, false);
     return;
   }
+  // Drop focus-cull LOD before detaching — seated clones skip disposeGroundObject.
+  resetKitLodState(prev);
   groundEl.removeObject3D('overviewProps');
   // Seated clones share GPU buffers with the bake template. Disposing them on
   // lobby/rematch nuked the template and forced the separate quest-rocks fallback
@@ -2616,6 +2661,7 @@ async function mountKitTerrain(groundEl, prev, sceneEl, kind) {
     if (kind === 'overview' || kind === 'story' || kind === 'rocks') {
       await dressKitGroundPlateWithMoon(prev, sceneEl);
     }
+    await ensureFocusCullPipeline(groundEl);
     console.log('[RTSVR5] kit terrain (already loaded)', kind, { lean: hadLean });
     return true;
   }
@@ -2625,6 +2671,7 @@ async function mountKitTerrain(groundEl, prev, sceneEl, kind) {
     applyLeanLookIfNeeded(prev);
     configureTerrainPresentation(sceneEl);
     syncTerrainGridHelperSize();
+    await ensureFocusCullPipeline(groundEl);
     console.log('[RTSVR5] kit terrain lean applied in-place', kind);
     return true;
   }

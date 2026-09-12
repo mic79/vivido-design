@@ -1602,6 +1602,17 @@ export function resetKitLodState(root) {
   forestTileLod = null;
 }
 
+/** True when distance/focus-cull LOD is live for this scenery root. */
+export function hasStoryKitLodFor(root) {
+  return !!(
+    root &&
+    kitLodState &&
+    kitLodState.root === root &&
+    kitLodState.batches &&
+    kitLodState.batches.length
+  );
+}
+
 /**
  * Forest scatter kit: feet authored at Y≈0. After InstancedMesh build, snap each
  * instance onto the live moon heightfield (follows crater undulation / rim).

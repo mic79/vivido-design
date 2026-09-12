@@ -1494,6 +1494,17 @@ export function resetKitLodState(root) {
   kitLodState = null;
 }
 
+/** True when distance/focus-cull LOD is live for this scenery root. */
+export function hasStoryKitLodFor(root) {
+  return !!(
+    root &&
+    kitLodState &&
+    kitLodState.root === root &&
+    kitLodState.batches &&
+    kitLodState.batches.length
+  );
+}
+
 /**
  * After height rasterize: instance the kit and split each type into LOD0 / LOD2 batches.
  * Nearby copies use the high-detail mesh; far copies stay on the LOD2 export.
