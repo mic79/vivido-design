@@ -11,6 +11,9 @@ import {
   MAP_NAV_PLANE_SPAN_M, MAP_NAV_PLANE_HALF_M, FOG_GRID_SIZE, MAP_UNIT_NAV_RADIUS,
   FOG_OVERLAY_REDRAW_HZ, MAP_TERRAIN_STYLE,
   skirmishKitKind,
+  cameraFocusRadiusM,
+  CAMERA_FOCUS_FADE_BAND_M,
+  getFocusSceneryCullEnabled,
 } from './config.js';
 import * as State from './state.js';
 import * as Fog from './fog.js';
@@ -140,6 +143,12 @@ let _fogOverlayGridHash = null;
 let buildRadiusMesh = null;
 /** Red ribbon on the ground marking `MAP_UNIT_NAV_RADIUS` (traversable disk edge). */
 let playableBorderMesh = null;
+/** Blue ribbon: camera “area of focus” (follows rig XZ; radius scales with zoom). */
+let cameraFocusRingMesh = null;
+let _focusRingLastKey = '';
+const FOCUS_CAM_Y_MIN = 10;
+const FOCUS_RING_SEGMENTS = 96;
+const FOCUS_FADE_OPAQUE_SLACK_M = 6;
 /** Destination rings for selected units that already have a move/attack objective. */
 let orderDestRingMesh = null;
 /** Dashed unit→target lines for selected units with an objective. */
@@ -2058,6 +2067,116 @@ function createFogPlane() {
   }
 }
 
+/** Reasonable ground focus radius — see `cameraFocusRadiusM` in config.js. */
+
+function readCameraRigFocusXZ() {
+  const rig = typeof document !== 'undefined' ? document.getElementById('cameraRig') : null;
+  if (rig && rig.object3D) {
+    const p = rig.object3D.position;
+    return { x: p.x, y: p.y, z: p.z };
+  }
+  if (rig && typeof rig.getAttribute === 'function') {
+    const p = rig.getAttribute('position');
+    if (p && typeof p === 'object') {
+      return {
+        x: Number(p.x) || 0,
+        y: Number(p.y) || FOCUS_CAM_Y_MIN,
+        z: Number(p.z) || 0,
+      };
+    }
+  }
+  return { x: 0, y: FOCUS_CAM_Y_MIN, z: 0 };
+}
+
+/**
+ * Drive focus fade through the same terrain-shader darken path as FoW
+ * (`fog-visual.js` multiply) — world XZ from the blue ring outward.
+ */
+function updateFocusFadeVeil(focus, rInner) {
+  const cullOn = getFocusSceneryCullEnabled() && !!State.gameSession.gameStarted;
+  if (!cullOn) {
+    FogVisual.setFocusFadeDisk(false, 0, 0, 1, 2);
+    return;
+  }
+  const rOuter = rInner + CAMERA_FOCUS_FADE_BAND_M;
+  const fadeEnd = Math.max(rInner + 8, rOuter - FOCUS_FADE_OPAQUE_SLACK_M);
+  FogVisual.setFocusFadeDisk(true, focus.x, focus.z, rInner, fadeEnd);
+}
+
+function disposeCameraFocusRing() {
+  if (cameraFocusRingMesh) {
+    if (scene3D) scene3D.remove(cameraFocusRingMesh);
+    cameraFocusRingMesh.geometry?.dispose();
+    cameraFocusRingMesh.material?.dispose();
+    cameraFocusRingMesh = null;
+    _focusRingLastKey = '';
+  }
+  FogVisual.setFocusFadeDisk(false, 0, 0, 1, 2);
+}
+
+/**
+ * Ensure blue focus ribbon exists (geometry rewritten when camera moves).
+ */
+function ensureCameraFocusRing() {
+  const THREE = window.THREE;
+  if (!THREE || !scene3D) return null;
+  if (cameraFocusRingMesh) return cameraFocusRingMesh;
+
+  const segments = FOCUS_RING_SEGMENTS;
+  const positions = new Float32Array((segments + 1) * 2 * 3);
+  const indices = new Uint32Array(segments * 6);
+  for (let i = 0; i < segments; i++) {
+    const a = i * 2;
+    const b = a + 1;
+    const cIdx = a + 2;
+    const d = a + 3;
+    const o = i * 6;
+    indices[o] = a;
+    indices[o + 1] = b;
+    indices[o + 2] = cIdx;
+    indices[o + 3] = b;
+    indices[o + 4] = d;
+    indices[o + 5] = cIdx;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setIndex(new THREE.BufferAttribute(indices, 1));
+
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x3399ff,
+    transparent: true,
+    opacity: 0.88,
+    side: THREE.DoubleSide,
+    depthTest: false,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+
+  cameraFocusRingMesh = new THREE.Mesh(geo, mat);
+  cameraFocusRingMesh.name = 'rts-camera-focus-ring';
+  cameraFocusRingMesh.frustumCulled = false;
+  cameraFocusRingMesh.renderOrder = 994;
+  cameraFocusRingMesh.raycast = () => {};
+  cameraFocusRingMesh.visible = false;
+  scene3D.add(cameraFocusRingMesh);
+  return cameraFocusRingMesh;
+}
+
+/** Drive focus fade/cull from camera XZ / zoom-scaled radius. Blue ribbon stays hidden. */
+export function updateCameraFocusRing(force) {
+  if (!State.gameSession.gameStarted) {
+    if (cameraFocusRingMesh) cameraFocusRingMesh.visible = false;
+    FogVisual.setFocusFadeDisk(false, 0, 0, 1, 2);
+    return;
+  }
+  const focus = readCameraRigFocusXZ();
+  const R = cameraFocusRadiusM(focus.y);
+  if (cameraFocusRingMesh) cameraFocusRingMesh.visible = false;
+  updateFocusFadeVeil(focus, R);
+}
+
 /**
  * Red surface ribbon at the unit/building traversable disk (`MAP_UNIT_NAV_RADIUS`).
  * Follows the navigable curved bowl.
@@ -2140,6 +2259,7 @@ export function refreshPlayableBorderRing() {
   // Intro / lobby: hide until a match is running
   playableBorderMesh.visible = !!State.gameSession.gameStarted;
   scene3D.add(playableBorderMesh);
+  updateCameraFocusRing(true);
 }
 
 /** Resize fog tint mesh + canvas after map profile / fog grid / terrain changes. */
@@ -2519,6 +2639,7 @@ export function updateRendering() {
       }
       if (camMoved) {
         refreshCameraFrustum();
+        updateCameraFocusRing(false);
         Perf.time('render.units', () => updateUnitInstances());
         Perf.time('render.buildings', () => updateBuildingInstances());
         try {
@@ -2576,6 +2697,7 @@ export function updateRendering() {
   if (playableBorderMesh) {
     playableBorderMesh.visible = !!State.gameSession.gameStarted;
   }
+  updateCameraFocusRing(false);
   Perf.time('render.units', () => updateUnitInstances());
   Perf.time('render.buildings', () => updateBuildingInstances());
   try {
@@ -3734,6 +3856,7 @@ export function disposeRenderer() {
     playableBorderMesh.material?.dispose();
     playableBorderMesh = null;
   }
+  disposeCameraFocusRing();
   fogOverlayCanvas = null;
   fogOverlayCtx = null;
   fogOverlayTexture = null;

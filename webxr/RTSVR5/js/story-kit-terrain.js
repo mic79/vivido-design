@@ -2,7 +2,7 @@
  * Story battlefield: Modular Sci-Fi kit GLB (no landscape). Centered on origin,
  * water planes / giant outlier cliffs hidden, dark fill plate under gaps.
  */
-import { MAP_SIZE, MAP_UNIT_NAV_RADIUS } from './config.js';
+import { MAP_SIZE, MAP_UNIT_NAV_RADIUS, cameraFocusCullRadiusM, wantFocusSceneryCull } from './config.js';
 import { ensureThreeGltfLoaders } from './three-gltf-umd.js';
 import * as State from './state.js';
 import {
@@ -11,6 +11,7 @@ import {
   fillInstanceSelfRects,
 } from './prop-self-shadows.js';
 import { applyHeroRgbLightmap, isHeroPropName } from './hero-lightmaps.js';
+import { installFogVisualUnder } from './fog-visual.js';
 
 export const STORY_KIT_GLB = 'assets/terrain/scifi-rts-overview.glb';
 export const STORY_KIT_LOD2_GLB = 'assets/terrain/scifi-rts-kit-lod2.glb';
@@ -1596,6 +1597,8 @@ export async function setupStoryKitDistanceLod(root, THREE) {
     withLod0,
     lod0Actors: lod0.byNode.size,
   });
+  // Same FoW/focus darken as terrain — props must fade black before focus-cull hides them.
+  installFogVisualUnder(root);
   updateStoryKitLodFromView();
 }
 
@@ -1717,6 +1720,36 @@ function kitCullCamera() {
   );
 }
 
+/** Same disk as the blue focus ribbon (cameraRig XZ + zoom-scaled R). */
+function readFocusCullDisk() {
+  if (!wantFocusSceneryCull()) return null;
+  const rig = typeof document !== 'undefined' ? document.getElementById('cameraRig') : null;
+  let fx = 0;
+  let fy = 40;
+  let fz = 0;
+  if (rig && rig.object3D) {
+    fx = rig.object3D.position.x;
+    fy = rig.object3D.position.y;
+    fz = rig.object3D.position.z;
+  } else if (rig && typeof rig.getAttribute === 'function') {
+    const p = rig.getAttribute('position');
+    if (p && typeof p === 'object') {
+      fx = Number(p.x) || 0;
+      fy = Number(p.y) || 40;
+      fz = Number(p.z) || 0;
+    }
+  }
+  const r = cameraFocusCullRadiusM(fy);
+  return { x: fx, z: fz, r, r2: r * r, key: `${fx.toFixed(1)},${fz.toFixed(1)},${r.toFixed(0)}` };
+}
+
+function outsideFocusCullDisk(it, disk) {
+  if (!disk) return false;
+  const dx = it.x - disk.x;
+  const dz = it.z - disk.z;
+  return dx * dx + dz * dz > disk.r2;
+}
+
 function showAllKitInstances() {
   const THREE = window.THREE;
   const batches = kitLodState.batches;
@@ -1776,7 +1809,8 @@ export function updateStoryKitLodFromView(renderCam) {
   const cx = _kitCamVec.x;
   const cy = _kitCamVec.y;
   const cz = _kitCamVec.z;
-  const key = kitCullKey(cam);
+  const focusDisk = readFocusCullDisk();
+  const key = `${kitCullKey(cam)}|${focusDisk ? focusDisk.key : 'nocull'}`;
   if (kitLodState.lastCullKey === key) return;
   kitLodState.lastCullKey = key;
 
@@ -1790,7 +1824,7 @@ export function updateStoryKitLodFromView(renderCam) {
     if (batch.unique && batch.mesh) {
       const it = items[0];
       batch.mesh.frustumCulled = false;
-      const vis = !itemTooSmallOnScreen(it, cx, cy, cz);
+      const vis = !outsideFocusCullDisk(it, focusDisk) && !itemTooSmallOnScreen(it, cx, cy, cz);
       batch.mesh.visible = vis;
       it.drawn = vis;
       continue;
@@ -1799,7 +1833,7 @@ export function updateStoryKitLodFromView(renderCam) {
     let n2 = 0;
     for (let i = 0; i < nItems; i++) {
       const it = items[i];
-      if (itemTooSmallOnScreen(it, cx, cy, cz)) {
+      if (outsideFocusCullDisk(it, focusDisk) || itemTooSmallOnScreen(it, cx, cy, cz)) {
         it.drawn = false;
         continue;
       }

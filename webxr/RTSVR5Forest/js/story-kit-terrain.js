@@ -2,7 +2,7 @@
  * Story battlefield: Modular Sci-Fi kit GLB (no landscape). Centered on origin,
  * water planes / giant outlier cliffs hidden, dark fill plate under gaps.
  */
-import { MAP_SIZE, MAP_UNIT_NAV_RADIUS } from './config.js';
+import { MAP_SIZE, MAP_UNIT_NAV_RADIUS, cameraFocusCullRadiusM, wantFocusSceneryCull } from './config.js';
 import { ensureThreeGltfLoaders } from './three-gltf-umd.js';
 import * as State from './state.js';
 import {
@@ -11,6 +11,7 @@ import {
   fillInstanceSelfRects,
 } from './prop-self-shadows.js';
 import { applyHeroRgbLightmap, isHeroPropName } from './hero-lightmaps.js';
+import { installFogVisualUnder } from './fog-visual.js';
 
 export const STORY_KIT_GLB = 'assets/terrain/scifi-rts-overview.glb';
 export const STORY_KIT_LOD2_GLB = 'assets/terrain/scifi-rts-kit-lod2.glb';
@@ -1769,6 +1770,8 @@ export async function setupStoryKitDistanceLod(root, THREE) {
     withLod0,
     lod0Actors: lod0.byNode.size,
   });
+  // Same FoW/focus darken as terrain — props must fade black before focus-cull hides them.
+  installFogVisualUnder(root);
   updateStoryKitLodFromView();
 }
 
@@ -1890,6 +1893,36 @@ function kitCullCamera() {
   );
 }
 
+/** Same disk as the blue focus ribbon (cameraRig XZ + zoom-scaled R). */
+function readFocusCullDisk() {
+  if (!wantFocusSceneryCull()) return null;
+  const rig = typeof document !== 'undefined' ? document.getElementById('cameraRig') : null;
+  let fx = 0;
+  let fy = 40;
+  let fz = 0;
+  if (rig && rig.object3D) {
+    fx = rig.object3D.position.x;
+    fy = rig.object3D.position.y;
+    fz = rig.object3D.position.z;
+  } else if (rig && typeof rig.getAttribute === 'function') {
+    const p = rig.getAttribute('position');
+    if (p && typeof p === 'object') {
+      fx = Number(p.x) || 0;
+      fy = Number(p.y) || 40;
+      fz = Number(p.z) || 0;
+    }
+  }
+  const r = cameraFocusCullRadiusM(fy);
+  return { x: fx, z: fz, r, r2: r * r, key: `${fx.toFixed(1)},${fz.toFixed(1)},${r.toFixed(0)}` };
+}
+
+function outsideFocusCullDisk(it, disk) {
+  if (!disk) return false;
+  const dx = it.x - disk.x;
+  const dz = it.z - disk.z;
+  return dx * dx + dz * dz > disk.r2;
+}
+
 function showAllKitInstances() {
   const THREE = window.THREE;
   const batches = kitLodState.batches;
@@ -2001,6 +2034,8 @@ export function setupForestTileDistanceLod(root, THREE) {
         solid: solid.length,
         r: forestFoliageLodRadiusM(),
       });
+      installFogVisualUnder(root);
+      updateForestTileLodFromView();
     }
     return;
   }
@@ -2010,6 +2045,7 @@ export function setupForestTileDistanceLod(root, THREE) {
     r: forestFoliageLodRadiusM(),
     note: 'ground always on; foliage/solid distance-culled',
   });
+  installFogVisualUnder(root);
   updateForestTileLodFromView();
 }
 
@@ -2018,23 +2054,33 @@ export function updateForestTileLodFromView(renderCam) {
   const THREE = window.THREE;
   if (!THREE) return;
   if (!_forestCamVec) _forestCamVec = new THREE.Vector3();
-  const cam = renderCam && !renderCam.isArrayCamera ? renderCam : kitCullCamera();
-  if (!cam || !cam.matrixWorld) return;
-  cam.updateMatrixWorld();
-  if (typeof cam.getWorldPosition === 'function') cam.getWorldPosition(_forestCamVec);
-  else {
-    _forestCamVec.set(
-      cam.matrixWorld.elements[12],
-      cam.matrixWorld.elements[13],
-      cam.matrixWorld.elements[14]
-    );
+  const focusDisk = readFocusCullDisk();
+  let cx;
+  let cz;
+  let r;
+  if (focusDisk) {
+    cx = focusDisk.x;
+    cz = focusDisk.z;
+    r = focusDisk.r;
+  } else {
+    const cam = renderCam && !renderCam.isArrayCamera ? renderCam : kitCullCamera();
+    if (!cam || !cam.matrixWorld) return;
+    cam.updateMatrixWorld();
+    if (typeof cam.getWorldPosition === 'function') cam.getWorldPosition(_forestCamVec);
+    else {
+      _forestCamVec.set(
+        cam.matrixWorld.elements[12],
+        cam.matrixWorld.elements[13],
+        cam.matrixWorld.elements[14]
+      );
+    }
+    cx = _forestCamVec.x;
+    cz = _forestCamVec.z;
+    r = forestTileLod.r;
   }
-  const cx = _forestCamVec.x;
-  const cz = _forestCamVec.z;
-  const key = `${cx.toFixed(1)},${cz.toFixed(1)}`;
+  const key = `${cx.toFixed(1)},${cz.toFixed(1)},${r.toFixed(0)}`;
   if (forestTileLod.lastKey === key) return;
   forestTileLod.lastKey = key;
-  const r = forestTileLod.r;
   const r2 = r * r;
   let lit = 0;
   for (let i = 0; i < forestTileLod.tiles.length; i++) {
@@ -2048,7 +2094,7 @@ export function updateForestTileLodFromView(renderCam) {
     for (let j = 0; j < t.ground.length; j++) t.ground[j].visible = true;
   }
   if (typeof window !== 'undefined') {
-    window.__rtsForestTileLod = { lit, total: forestTileLod.tiles.length, r };
+    window.__rtsForestTileLod = { lit, total: forestTileLod.tiles.length, r, focusCull: !!focusDisk };
   }
 }
 
@@ -2082,7 +2128,8 @@ export function updateStoryKitLodFromView(renderCam) {
   const cx = _kitCamVec.x;
   const cy = _kitCamVec.y;
   const cz = _kitCamVec.z;
-  const key = kitCullKey(cam);
+  const focusDisk = readFocusCullDisk();
+  const key = `${kitCullKey(cam)}|${focusDisk ? focusDisk.key : 'nocull'}`;
   if (kitLodState.lastCullKey === key) return;
   kitLodState.lastCullKey = key;
 
@@ -2096,7 +2143,7 @@ export function updateStoryKitLodFromView(renderCam) {
     if (batch.unique && batch.mesh) {
       const it = items[0];
       batch.mesh.frustumCulled = false;
-      const vis = !itemTooSmallOnScreen(it, cx, cy, cz);
+      const vis = !outsideFocusCullDisk(it, focusDisk) && !itemTooSmallOnScreen(it, cx, cy, cz);
       batch.mesh.visible = vis;
       it.drawn = vis;
       continue;
@@ -2105,7 +2152,7 @@ export function updateStoryKitLodFromView(renderCam) {
     let n2 = 0;
     for (let i = 0; i < nItems; i++) {
       const it = items[i];
-      if (itemTooSmallOnScreen(it, cx, cy, cz)) {
+      if (outsideFocusCullDisk(it, focusDisk) || itemTooSmallOnScreen(it, cx, cy, cz)) {
         it.drawn = false;
         continue;
       }

@@ -25,6 +25,9 @@ import {
   MAP_PROFILE,
   MAP_TERRAIN_STYLE,
   MAP_UNIT_NAV_RADIUS,
+  toggleFocusSceneryCull,
+  getFocusSceneryCullEnabled,
+  setFocusSceneryCullEnabled,
 } from './config.js';
 import { applyMoonBattlefieldVisuals, rebuildMoonBattlefield, clearStoryBlockingHills, ensureSkirmishSceneryProps, ensureBakedMoonHeightCoversNav } from './moon-environment.js';
 import {
@@ -111,8 +114,23 @@ function initializeGame(sceneEl) {
   window._toggleMsaa4x = () => Renderer.toggleMsaa4x();
   window._setMsaa4xEnabled = (on) => Renderer.setMsaa4xEnabled(on);
   window._getMsaa4xEnabled = () => Renderer.getMsaa4xEnabled();
+  window._toggleFocusCull = () => {
+    const on = toggleFocusSceneryCull();
+    UI.syncFocusCullToggleUi();
+    if (typeof window.__rtsUpdateKitLod === 'function') window.__rtsUpdateKitLod();
+    Renderer.updateCameraFocusRing?.(true);
+    return on;
+  };
+  window._getFocusCullEnabled = () => getFocusSceneryCullEnabled();
+  window._setFocusCullEnabled = (on) => {
+    setFocusSceneryCullEnabled(on);
+    UI.syncFocusCullToggleUi();
+    if (typeof window.__rtsUpdateKitLod === 'function') window.__rtsUpdateKitLod();
+    Renderer.updateCameraFocusRing?.(true);
+  };
   UI.syncDynamicShadowToggleUi();
   UI.syncMsaa4xToggleUi();
+  UI.syncFocusCullToggleUi();
   State.initPlayers([0], [1, 2, 3]);
   State.initResourceFields();
   Fog.initFog();

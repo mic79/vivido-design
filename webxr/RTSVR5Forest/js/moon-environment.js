@@ -16,6 +16,8 @@ import * as FogVisual from './fog-visual.js';
 function installGroundFogVisual(groundEl) {
   const mesh = groundEl?.getObject3D?.('mesh');
   if (mesh) FogVisual.installFogVisualUnder(mesh);
+  const props = groundEl?.getObject3D?.('overviewProps');
+  if (props) FogVisual.installFogVisualUnder(props);
 }
 /** Central plate edge length (m) — follows live `MAP_SIZE` (standard 200 / Story 400). */
 function mapPlateM() {

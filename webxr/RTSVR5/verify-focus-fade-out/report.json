@@ -1,0 +1,26 @@
+{
+  "ok": false,
+  "veil": {
+    "found": true,
+    "visible": true,
+    "parentIsCamera": true,
+    "strength": 1,
+    "innerR": 1.6940507828098743,
+    "outerR": 1.875690392063553,
+    "center": [
+      -1.5927966018180984e-16,
+      -0.6909731330315855
+    ],
+    "cullEnabled": true
+  },
+  "luma": {
+    "w": 1280,
+    "h": 720,
+    "ringPts": 46,
+    "pairs": 46,
+    "outsideRing": 14.806208873114475,
+    "insideRing": 13.652558740017746,
+    "mid": 39.636262079999796
+  },
+  "error": "ring-adjacent fail outside=14.8 inside=13.7 mid=39.6"
+}

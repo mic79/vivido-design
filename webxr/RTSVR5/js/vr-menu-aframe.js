@@ -27,6 +27,7 @@
       else if (action === 'lobby_plus' && window._lobbyDelta) window._lobbyDelta(1);
       else if (action === 'shadows' && window._toggleDynamicShadows) window._toggleDynamicShadows();
       else if (action === 'msaa' && window._toggleMsaa4x) window._toggleMsaa4x();
+      else if (action === 'focusCull' && window._toggleFocusCull) window._toggleFocusCull();
     },
     remove: function () {
       this.el.removeEventListener('click', this.onClick);

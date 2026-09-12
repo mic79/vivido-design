@@ -757,6 +757,9 @@ function wireFlatHudActions() {
   document.getElementById('hud-msaa-toggle')?.addEventListener('click', () => {
     window._toggleMsaa4x?.();
   });
+  document.getElementById('hud-focus-cull-toggle')?.addEventListener('click', () => {
+    window._toggleFocusCull?.();
+  });
 }
 
 function createHUD() {
@@ -808,6 +811,9 @@ function createHUD() {
       <button type="button" id="hud-msaa-toggle" style="
         font-size: 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid #3a6a50;
         background: rgba(16,40,28,0.95); color: #d8ffe8;">MSAA 4x: OFF</button>
+      <button type="button" id="hud-focus-cull-toggle" style="
+        font-size: 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid #3a6a50;
+        background: rgba(16,40,28,0.95); color: #d8ffe8;">Focus cull: OFF</button>
     </div>
     <div id="hud-help-panel" class="hud">
       <div id="hud-controls" style="
@@ -1030,6 +1036,7 @@ function createMenu() {
     <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
       <button type="button" id="btn-toggle-shadows" style="${btnStyle('#163')}" onclick="window._toggleDynamicShadows()">Shadows: ON</button>
       <button type="button" id="btn-toggle-msaa" style="${btnStyle('#163')}" onclick="window._toggleMsaa4x()">MSAA 4x: OFF</button>
+      <button type="button" id="btn-toggle-focus-cull" style="${btnStyle('#163')}" onclick="window._toggleFocusCull()">Focus cull: OFF</button>
     </div>
     <p id="menu-status" style="color: #888; font-size: 12px; margin-top: 15px;">Select a game mode</p>
   `;
@@ -1049,6 +1056,7 @@ function createMenu() {
   refreshStoryHistoryPanel();
   syncDynamicShadowToggleUi();
   syncMsaa4xToggleUi();
+  syncFocusCullToggleUi();
 }
 
 function shadowToggleLabel(on) {
@@ -1127,6 +1135,46 @@ export function syncMsaa4xToggleUi() {
     vrHudLabel.setAttribute('color', textColor);
   }
   const vrHudBtn = document.getElementById('vr-hud-msaa-btn');
+  if (vrHudBtn) vrHudBtn.setAttribute('material', `color: ${color}; transparent: true; opacity: 0.95; side: double`);
+  refreshHandRaycasters();
+}
+
+function focusCullToggleLabel(on) {
+  return on ? 'Focus cull: ON' : 'Focus cull: OFF';
+}
+
+export function syncFocusCullToggleUi() {
+  const on = typeof window._getFocusCullEnabled === 'function'
+    ? !!window._getFocusCullEnabled()
+    : false;
+  const label = focusCullToggleLabel(on);
+  const color = on ? '#143328' : '#2a1818';
+  const textColor = on ? '#d8ffe8' : '#ffccbb';
+  const desk = document.getElementById('btn-toggle-focus-cull');
+  if (desk) {
+    desk.textContent = label;
+    desk.style.background = on ? '#163' : '#422';
+  }
+  const hud = document.getElementById('hud-focus-cull-toggle');
+  if (hud) {
+    hud.textContent = label;
+    hud.style.background = on ? 'rgba(16,40,28,0.95)' : 'rgba(48,20,16,0.95)';
+    hud.style.borderColor = on ? '#3a6a50' : '#6a3a30';
+    hud.style.color = textColor;
+  }
+  const vrMenuLabel = document.getElementById('vr-btn-focus-cull-label');
+  if (vrMenuLabel) {
+    vrMenuLabel.setAttribute('value', label);
+    vrMenuLabel.setAttribute('color', textColor);
+  }
+  const vrMenuBtn = document.getElementById('vr-btn-focus-cull');
+  if (vrMenuBtn) vrMenuBtn.setAttribute('material', `color: ${color}; transparent: true; opacity: 0.95; side: double`);
+  const vrHudLabel = document.getElementById('vr-hud-focus-cull-label');
+  if (vrHudLabel) {
+    vrHudLabel.setAttribute('value', label);
+    vrHudLabel.setAttribute('color', textColor);
+  }
+  const vrHudBtn = document.getElementById('vr-hud-focus-cull-btn');
   if (vrHudBtn) vrHudBtn.setAttribute('material', `color: ${color}; transparent: true; opacity: 0.95; side: double`);
   refreshHandRaycasters();
 }

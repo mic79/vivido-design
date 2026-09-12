@@ -1,0 +1,147 @@
+{
+  "when": "2026-09-10T19:23:21.909Z",
+  "sampleMs": 2500,
+  "storySeed": 42,
+  "note": "Headless Chromium FPS is not Quest; use relative deltas + calls/tris.",
+  "RTSVR4": {
+    "label": "RTSVR4",
+    "root": "D:\\backup 2024-04\\Documents\\Backup_MBP_2021-12\\Backup\\Projects\\Apps\\WebXR\\RTSVR4",
+    "port": 8774,
+    "rows": [
+      {
+        "name": "menu",
+        "fps": 223.28168454509336,
+        "fpsMin": 1428.5714284288792,
+        "frameMs": 0.3108540925282647,
+        "fogCpu": 0.00569395017847452,
+        "unitsCpu": 0.04234875444786,
+        "calls": 33.83985765124555,
+        "tris": 404618.6049822064,
+        "skipPct": 8.540925266903916
+      },
+      {
+        "name": "match-look-center",
+        "fps": 76.72125934170845,
+        "fpsMin": 384.61538461882884,
+        "frameMs": 0.9072538860114484,
+        "fogCpu": 0.00984455958440649,
+        "unitsCpu": 0.02746113989420158,
+        "calls": 9.036269430051814,
+        "tris": 215412.0414507772,
+        "skipPct": 47.15025906735752
+      },
+      {
+        "name": "match-look-out",
+        "fps": 72.32267037552157,
+        "fpsMin": 588.2352941337599,
+        "frameMs": 0.7252747252734459,
+        "fogCpu": 0.010439560439688368,
+        "unitsCpu": 0.036813186812930956,
+        "calls": 16.681318681318682,
+        "tris": 167234.1813186813,
+        "skipPct": 51.098901098901095
+      },
+      {
+        "name": "match-look-out-nofog",
+        "fps": 73.88282025819265,
+        "fpsMin": 476.1904761957558,
+        "frameMs": 0.7112903225871544,
+        "fogCpu": 0.004838709676292755,
+        "unitsCpu": 0.038172043008749844,
+        "calls": 15.166666666666666,
+        "tris": 144057.40322580645,
+        "skipPct": 51.075268817204304
+      }
+    ],
+    "terrain": {
+      "mapProfile": "story",
+      "mapSize": 400,
+      "terrainStyle": "hills",
+      "fogGrid": 48,
+      "storySeed": 42,
+      "plateTris": 73728,
+      "skirtTris": 282440,
+      "terrainMeshes": 9,
+      "matKinds": {
+        "MeshLambertMaterial": 9,
+        "cheapMoon": 9
+      },
+      "hasTriplanar": 0,
+      "hasProps": false,
+      "bake": false,
+      "kit": false
+    },
+    "error": null
+  },
+  "RTSVR5": {
+    "label": "RTSVR5",
+    "root": "D:\\backup 2024-04\\Documents\\Backup_MBP_2021-12\\Backup\\Projects\\Apps\\WebXR\\RTSVR5",
+    "port": 8775,
+    "rows": [
+      {
+        "name": "menu",
+        "fps": 214.1601406424864,
+        "fpsMin": 1111.1111110823665,
+        "frameMs": 0.4341417910459924,
+        "fogCpu": 0.031716417910013374,
+        "unitsCpu": 0.05914179104360328,
+        "calls": 44.776119402985074,
+        "tris": 412716.41791044775,
+        "skipPct": 6.7164179104477615
+      },
+      {
+        "name": "match-look-center",
+        "fps": 76.4118279141973,
+        "fpsMin": 416.6666666626245,
+        "frameMs": 0.911458333330908,
+        "fogCpu": 0.05052083333490979,
+        "unitsCpu": 0.03177083333321207,
+        "calls": 9.119791666666666,
+        "tris": 193155.04166666666,
+        "skipPct": 46.35416666666667
+      },
+      {
+        "name": "match-look-out",
+        "fps": 76.28128724672229,
+        "fpsMin": 434.7826086868495,
+        "frameMs": 0.9078125000032742,
+        "fogCpu": 0.04739583333139308,
+        "unitsCpu": 0.04947916666363502,
+        "calls": 17.359375,
+        "tris": 131667.703125,
+        "skipPct": 47.39583333333333
+      },
+      {
+        "name": "match-look-out-nofog",
+        "fps": 75.41777477870698,
+        "fpsMin": 500,
+        "frameMs": 0.834736842106366,
+        "fogCpu": 0.04473684210097417,
+        "unitsCpu": 0.04368421052839901,
+        "calls": 17.542105263157893,
+        "tris": 133053.67894736843,
+        "skipPct": 46.8421052631579
+      }
+    ],
+    "terrain": {
+      "mapProfile": "story",
+      "mapSize": 400,
+      "terrainStyle": "hills",
+      "fogGrid": 48,
+      "navScale": 4,
+      "storySeed": 42,
+      "plateTris": 73728,
+      "skirtTris": 282440,
+      "terrainMeshes": 9,
+      "matKinds": {
+        "MeshLambertMaterial": 9,
+        "cheapMoon": 9
+      },
+      "hasTriplanar": 0,
+      "hasProps": false,
+      "bake": false,
+      "kit": false
+    },
+    "error": null
+  }
+}

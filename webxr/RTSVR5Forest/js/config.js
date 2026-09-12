@@ -273,6 +273,101 @@ export function clampWorldToPlayableDisk(x, z, margin = 0) {
   return { x: x * s, z: z * s };
 }
 
+/**
+ * Ground “area of focus” radius (m) from camera rig height / zoom.
+ * Matches `input.js` CAMERA_Y_MIN/MAX (10…80): ~84m zoomed in → ~200m zoomed out,
+ * capped at 75% of the navigable disk (still inside the red rim).
+ */
+export function cameraFocusRadiusM(camY) {
+  const yMin = 10;
+  const yMax = 80;
+  const rMin = 84;
+  const rMax = 200;
+  const span = yMax - yMin;
+  const t = span > 1e-6 ? (Number(camY) - yMin) / span : 0;
+  const u = Math.max(0, Math.min(1, t));
+  const r = rMin + u * (rMax - rMin);
+  const cap = MAP_UNIT_NAV_RADIUS > 1 ? MAP_UNIT_NAV_RADIUS * 0.75 : r;
+  return Math.max(48, Math.min(r, cap));
+}
+
+/**
+ * Soft black fade band outside the blue ring (m). Scenery culls at ring+band so
+ * pop in/out happens only where the veil is fully opaque.
+ */
+export const CAMERA_FOCUS_FADE_BAND_M = 70;
+
+/** Outer radius where fade reaches full black + scenery is culled. */
+export function cameraFocusCullRadiusM(camY) {
+  return cameraFocusRadiusM(camY) + CAMERA_FOCUS_FADE_BAND_M;
+}
+
+const FOCUS_CULL_LS_KEY = 'rtsvr5-focusCull';
+/** @type {boolean | null} session override; null → resolve from URL / storage / Quest default */
+let _focusCullSession = null;
+
+function focusCullUrlOverride() {
+  try {
+    const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
+      typeof location !== 'undefined' ? location.hash || '' : ''
+    }`;
+    if (/(?:[?&#]focusCull=0\b)/i.test(q)) return false;
+    if (/(?:[?&#]focusCull=1\b)/i.test(q)) return true;
+  } catch (_) {
+    /* */
+  }
+  return null;
+}
+
+function focusCullStorage() {
+  try {
+    const v = localStorage.getItem(FOCUS_CULL_LS_KEY);
+    if (v === '1' || v === 'true') return true;
+    if (v === '0' || v === 'false') return false;
+  } catch (_) {
+    /* */
+  }
+  return null;
+}
+
+function focusCullQuestDefault() {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+  return /Quest|OculusBrowser|\bOculus\b/i.test(ua);
+}
+
+/**
+ * Drop scenery (kit props / forest tiles) outside the blue focus ring.
+ * Default ON for Quest; OFF on desktop/PCVR until toggled.
+ * `?focusCull=0|1` overrides for one load; menu/HUD toggle persists in localStorage.
+ */
+export function getFocusSceneryCullEnabled() {
+  if (_focusCullSession != null) return _focusCullSession;
+  const url = focusCullUrlOverride();
+  if (url != null) return url;
+  const stored = focusCullStorage();
+  if (stored != null) return stored;
+  return focusCullQuestDefault();
+}
+
+export function setFocusSceneryCullEnabled(on) {
+  _focusCullSession = !!on;
+  try {
+    localStorage.setItem(FOCUS_CULL_LS_KEY, _focusCullSession ? '1' : '0');
+  } catch (_) {
+    /* */
+  }
+  return _focusCullSession;
+}
+
+export function toggleFocusSceneryCull() {
+  return setFocusSceneryCullEnabled(!getFocusSceneryCullEnabled());
+}
+
+/** @deprecated use getFocusSceneryCullEnabled — kept for call sites */
+export function wantFocusSceneryCull() {
+  return getFocusSceneryCullEnabled();
+}
+
 /** True if (x,z) lies inside the navigable disk (optional inset `margin` from the rim). */
 export function isWorldInsidePlayableDisk(x, z, margin = 0) {
   const R = MAP_UNIT_NAV_RADIUS - margin;

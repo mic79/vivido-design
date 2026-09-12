@@ -6,7 +6,7 @@
   <title>RTS VR V — Real-Time Strategy in Virtual Reality</title>
   <meta name="description" content="A multiplayer VR real-time strategy game with resource harvesting, unit production, and tactical combat. Built with A-Frame and WebXR.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.5.117">
+  <meta name="rts-version" content="0.5.145">
 
   <!-- Versioned import map so Quest/browser cannot keep a stale renderer/fog module. -->
   <script>
@@ -35,7 +35,7 @@
     document.head.appendChild(el);
   })();
   </script>
-  <script type="module" src="js/rts-aframe-bootstrap.js?v=0.5.117"></script>
+  <script type="module" src="js/rts-aframe-bootstrap.js?v=0.5.145"></script>
 
   <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -252,13 +252,24 @@
             >
               <a-text id="vr-btn-msaa-label" class="no-raycast" value="MSAA 4x: OFF" position="0 0 0.01" align="center" width="0.95" color="#ffccbb"></a-text>
             </a-entity>
-            <a-text class="no-raycast" value="X: close menu" position="0 -0.355 0" align="center" width="0.55" color="#666666"></a-text>
+            <a-entity
+              id="vr-btn-focus-cull"
+              class="clickable"
+              rts-vr-menu-btn="action: focusCull"
+              vr-button-hover="hoverColor: #3a5a4a"
+              position="0 -0.355 0"
+              geometry="primitive: plane; width: 0.52; height: 0.065"
+              material="color: #2a1818; transparent: true; opacity: 0.95; side: double"
+            >
+              <a-text id="vr-btn-focus-cull-label" class="no-raycast" value="Focus cull: OFF" position="0 0 0.01" align="center" width="1.15" color="#ffccbb"></a-text>
+            </a-entity>
+            <a-text class="no-raycast" value="X: close menu" position="0 -0.425 0" align="center" width="0.55" color="#666666"></a-text>
           </a-entity>
 
           <a-entity id="vr-game-hud" position="0 0 0" visible="false">
             <a-text class="no-raycast" id="vr-hud-top" position="0 0.30 0.02" align="center" width="0.78" color="#00ff66" value=""></a-text>
             <a-text class="no-raycast" id="vr-hud-spy" position="0 0.20 0.02" align="center" width="0.62" color="#eeaa88" value="" visible="false"></a-text>
-            <a-text class="no-raycast" id="vr-hud-help" position="0 0.11 0.02" align="center" width="0.52" color="#8899aa" value="Y map · X menu · Shadows / MSAA below"></a-text>
+            <a-text class="no-raycast" id="vr-hud-help" position="0 0.11 0.02" align="center" width="0.52" color="#8899aa" value="Y map · X menu · Shadows / MSAA / Focus below"></a-text>
 
             <a-entity id="vr-minimap-root" position="0 -0.04 0.025" visible="false">
               <a-text class="no-raycast" value="Map" position="0 0.24 0" align="center" width="0.42" color="#668866"></a-text>
@@ -291,8 +302,8 @@
               class="clickable"
               rts-vr-menu-btn="action: shadows"
               vr-button-hover="hoverColor: #3a5a4a"
-              position="-0.22 -0.365 0.02"
-              geometry="primitive: plane; width: 0.26; height: 0.052"
+              position="-0.22 -0.345 0.02"
+              geometry="primitive: plane; width: 0.26; height: 0.048"
               material="color: #143328; transparent: true; opacity: 0.95; side: double"
             >
               <a-text id="vr-hud-shadows-label" class="no-raycast" value="Shadows: ON" position="0 0 0.012" align="center" width="0.72" color="#d8ffe8"></a-text>
@@ -302,11 +313,22 @@
               class="clickable"
               rts-vr-menu-btn="action: msaa"
               vr-button-hover="hoverColor: #3a5a4a"
-              position="0.22 -0.365 0.02"
-              geometry="primitive: plane; width: 0.26; height: 0.052"
+              position="0.22 -0.345 0.02"
+              geometry="primitive: plane; width: 0.26; height: 0.048"
               material="color: #2a1818; transparent: true; opacity: 0.95; side: double"
             >
               <a-text id="vr-hud-msaa-label" class="no-raycast" value="MSAA 4x: OFF" position="0 0 0.012" align="center" width="0.72" color="#ffccbb"></a-text>
+            </a-entity>
+            <a-entity
+              id="vr-hud-focus-cull-btn"
+              class="clickable"
+              rts-vr-menu-btn="action: focusCull"
+              vr-button-hover="hoverColor: #3a5a4a"
+              position="0 -0.405 0.02"
+              geometry="primitive: plane; width: 0.44; height: 0.048"
+              material="color: #2a1818; transparent: true; opacity: 0.95; side: double"
+            >
+              <a-text id="vr-hud-focus-cull-label" class="no-raycast" value="Focus cull: OFF" position="0 0 0.012" align="center" width="0.9" color="#ffccbb"></a-text>
             </a-entity>
 
             <!-- Match end: panel + column layout (updated from ui.js) -->
@@ -539,7 +561,7 @@
   <div id="xr-dom-overlay"></div>
 
   <!-- Game Module — ?v= must match meta rts-version (module graph cache). -->
-  <script type="module" src="js/main.js?v=0.5.117"></script>
+  <script type="module" src="js/main.js?v=0.5.145"></script>
 
   <script>
     // Create grid helper on scene load
