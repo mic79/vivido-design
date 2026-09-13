@@ -23,6 +23,7 @@ import {
   sampleMoonTerrainWorldY,
   sampleGameplayEntityY,
   sampleGameplayEntityYCached,
+  isMesaHeightfieldActive,
 } from './moon-environment.js';
 import * as Perf from './perf-profiler.js';
 import * as FogVisual from './fog-visual.js';
@@ -2095,10 +2096,16 @@ function readCameraRigFocusXZ() {
 /**
  * Drive focus fade through the same terrain-shader darken path as FoW
  * (`fog-visual.js` multiply) — world XZ from the blue ring outward.
+ *
+ * Quest defaults focus-cull ON (to hide prop pop-in). That also enabled this
+ * terrain black veil. Hera / mesa A0 has no props — the veil still ran and
+ * blacked out the whole plate after match start (PCVR defaulted cull OFF so
+ * Link looked fine). Skip the terrain fade whenever mesa heightfield is active.
  */
 function updateFocusFadeVeil(focus, rInner) {
   const cullOn = getFocusSceneryCullEnabled() && !!State.gameSession.gameStarted;
-  if (!cullOn) {
+  // Mesa plate: focus cull cannot hide props; do not darken the heightfield.
+  if (!cullOn || isMesaHeightfieldActive()) {
     FogVisual.setFocusFadeDisk(false, 0, 0, 1, 2);
     return;
   }
