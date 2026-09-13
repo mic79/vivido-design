@@ -28,7 +28,6 @@ import {
 import * as Perf from './perf-profiler.js';
 import * as FogVisual from './fog-visual.js';
 import * as YawShadows from './yaw-baked-shadows.js';
-
 let RESOURCE_FIELD_LAYOUT = getResourceFieldPositions();
 
 let scene3D = null;  // THREE.Scene reference
@@ -139,6 +138,7 @@ let fogUnexploredMesh = null;
 /** RGBA bytes for FoW DataTexture (NOT CanvasTexture — Quest XR samples canvas as opaque black). */
 let fogOverlayPixels = null;
 let fogOverlayRes = 0;
+let _fogOverlayHalfKey = '';
 let _fogOverlayLastDrawMs = 0;
 let _fogOverlayGridHash = null;
 let buildRadiusMesh = null;
@@ -1853,9 +1853,17 @@ function fogSurfaceClearanceY(wx, wz, halfCell) {
   return m;
 }
 
-function buildNavigableFogOverlayGeometry(THREE) {
+function fogOverlayMeshHalfM() {
+  // Quest Hera: drape FoW over the visual plate (nav UVs + clamp outside = unexplored dark).
+  if (isMesaHeightfieldActive() && FogVisual.wantMesaFogOverlay()) {
+    return Math.min(FogVisual.fogVisualHalfM(), 1100);
+  }
   // Stay inside the playable rim so depthTest:false cannot paint a shelf into the sky.
-  const half = Math.min(MAP_NAV_PLANE_HALF_M, MAP_UNIT_NAV_RADIUS * 0.88);
+  return Math.min(MAP_NAV_PLANE_HALF_M, MAP_UNIT_NAV_RADIUS * 0.88);
+}
+
+function buildNavigableFogOverlayGeometry(THREE) {
+  const half = fogOverlayMeshHalfM();
   const span = half * 2;
   const segs = Math.max(120, Math.min(200, Math.round(span / 2.4)));
   const halfCell = span / segs / 2;
@@ -1917,13 +1925,17 @@ function buildNavigableFogOverlayGeometry(THREE) {
 }
 
 function setFogOverlayVisible(on) {
-  // Terrain-shader FoW — keep the old overlay mesh hidden (it caused rim sky shelves).
-  if (fogOverlayMesh) fogOverlayMesh.visible = false;
+  const mesaOverlay =
+    !!on && isMesaHeightfieldActive() && FogVisual.wantMesaFogOverlay();
+  // Quest Hera: show draping FoW mesh; never enable terrain-shader FoW (blacks the plate).
+  // Everyone else: terrain-shader FoW; keep legacy overlay hidden.
+  if (fogOverlayMesh) fogOverlayMesh.visible = !!mesaOverlay;
   if (fogUnexploredMesh) fogUnexploredMesh.visible = false;
-  FogVisual.setFogVisualEnabled(!!on);
+  FogVisual.setFogVisualEnabled(!!(on && !mesaOverlay));
   FogVisual.syncFogVisualExtents();
   const ground = document.getElementById('ground')?.getObject3D?.('mesh');
   if (ground) FogVisual.installFogVisualUnder(ground);
+  if (mesaOverlay) refreshFogOverlayGeometry();
 }
 
 function disposeFogOverlayMeshes() {
@@ -1956,9 +1968,13 @@ function disposeFogOverlayMeshes() {
 }
 
 /** Re-sample fog after terrain / Story hills change (still navigable-bowl only). */
-function refreshFogOverlayGeometry() {
+function refreshFogOverlayGeometry(force) {
   const THREE = window.THREE;
   if (!THREE || !fogOverlayMesh) return;
+  const half = fogOverlayMeshHalfM();
+  const key = `${half.toFixed(1)}|${MAP_NAV_PLANE_HALF_M}|${isMesaHeightfieldActive() ? 1 : 0}`;
+  if (!force && key === _fogOverlayHalfKey) return;
+  _fogOverlayHalfKey = key;
   const old = fogOverlayMesh.geometry;
   const geo = buildNavigableFogOverlayGeometry(THREE);
   geo.computeBoundingSphere();
@@ -2034,12 +2050,15 @@ function createFogPlane() {
   fogOverlayMesh = new THREE.Mesh(geo, matVeil);
   fogOverlayMesh.name = 'rts-world-fog-overlay';
   fogOverlayMesh.visible = false;
+  fogOverlayMesh.frustumCulled = false;
+  fogOverlayMesh.renderOrder = 990;
   fogOverlayMesh.raycast = () => {};
-  fogOverlayMesh.userData.rtsFogBuild = '0.6.45-datatex';
+  fogOverlayMesh.userData.rtsFogBuild = '0.6.46-quest-overlay';
+  _fogOverlayHalfKey = '';
   console.log(
     '[fog] overlay build',
     fogOverlayMesh.userData.rtsFogBuild,
-    `(terrain darken, visual half=${FogVisual.fogVisualHalfM()})`
+    `(terrain darken, visual half=${FogVisual.fogVisualHalfM()}, questMesaOverlay=${FogVisual.wantMesaFogOverlay()})`
   );
   scene3D.add(fogOverlayMesh);
 

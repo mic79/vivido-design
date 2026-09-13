@@ -885,7 +885,7 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     }
     mat.color.setRGB(1, 1, 1);
     if (splat) installMesaSplatDetail(mat, THREE, splat);
-    // FoW last so shroud hooks sit outside splat patches (Quest-safe compile order).
+    // Quest: do NOT inject FoW into mesa shader (black plate). PCVR: terrain-shader FoW.
     installFogVisualOnMaterial(mat);
     mat.needsUpdate = true;
     applied += 1;

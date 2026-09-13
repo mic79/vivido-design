@@ -7,7 +7,7 @@
 // depend on that include — compute + apply immediately before opaque/output.
 import { MAP_SIZE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_SPAN_M } from './config.js';
 
-const FOG_INSTALL_VER = 10;
+const FOG_INSTALL_VER = 11;
 
 /**
  * Visual FoW half-extent (m). Must cover the horizon skirt:
@@ -20,6 +20,39 @@ export function fogVisualHalfM() {
       ? Math.max(80, Math.min(2800, window.RTS_HORIZON_SKIRT_DEPTH))
       : 920;
   return plateHalf + skirtDepth + 40;
+}
+
+/** Quest Browser / standalone — not Chrome+Link on PC. */
+export function isQuestStandaloneBrowser() {
+  try {
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+    return /OculusBrowser|\bQuest\b|Pacific/i.test(ua);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Terrain-shader FoW (onBeforeCompile multiply) on Hera mesa.
+ * Quest Adreno blacks the entire plate when FoW turns on with Lambert+HQ — use mesh overlay instead.
+ * PCVR keeps shader FoW. Override: ?mesaFogShader=1 (force shader) / ?mesaFogOverlay=1 (force overlay).
+ */
+export function wantMesaTerrainShaderFog() {
+  try {
+    const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
+      typeof location !== 'undefined' ? location.hash || '' : ''
+    }`;
+    if (/(?:[?&#]mesaFogShader=1\b)/i.test(q)) return true;
+    if (/(?:[?&#]mesaFogOverlay=1\b)/i.test(q)) return false;
+  } catch (_) {
+    /* */
+  }
+  return !isQuestStandaloneBrowser();
+}
+
+/** Quest Hera: FoW via draping overlay mesh (terrain shader left alone). */
+export function wantMesaFogOverlay() {
+  return !wantMesaTerrainShaderFog();
 }
 
 /** @type {import('three').Texture | null} */
@@ -183,6 +216,12 @@ const SHROUD_BEFORE_OPAQUE = /* glsl */ `
 export function installFogVisualOnMaterial(mat) {
   if (!mat) return;
 
+  // Quest + Hera: never inject FoW into the mesa material (black plate). Overlay path instead.
+  if (mat.userData && mat.userData.rtsMesaHeightfield && wantMesaFogOverlay()) {
+    uninstallFogVisualOnMaterial(mat);
+    return;
+  }
+
   // Upgrade stale installs (map_fragment path broke under moon triplanar).
   if (installed.has(mat) && mat.userData && mat.userData._rtsFogInstallVer === FOG_INSTALL_VER) {
     pushAllUniforms();
@@ -294,13 +333,39 @@ uniform float uRtsFocusOuter;`
     }
   };
 
-  mat.customProgramCacheKey = () => `${prevKey()}|rtsFogNavPaint10`;
+  mat.customProgramCacheKey = () => `${prevKey()}|rtsFogNavPaint11`;
+  mat.needsUpdate = true;
+}
+
+/** Remove FoW onBeforeCompile hooks (restore prior program). */
+export function uninstallFogVisualOnMaterial(mat) {
+  if (!mat) return;
+  if (!installed.has(mat) && !(mat.userData && mat.userData._rtsFogInstallVer)) return;
+  installed.delete(mat);
+  if (mat.userData && mat.userData._rtsFogPrevCompile !== undefined) {
+    mat.onBeforeCompile = mat.userData._rtsFogPrevCompile || undefined;
+  } else if (mat.userData && mat.userData._rtsFogInstallVer) {
+    delete mat.onBeforeCompile;
+  }
+  if (mat.userData && mat.userData._rtsFogPrevKey !== undefined) {
+    mat.customProgramCacheKey = mat.userData._rtsFogPrevKey || undefined;
+  }
+  if (mat.userData) {
+    delete mat.userData._rtsFogInstallVer;
+    delete mat.userData._rtsFogUniforms;
+    delete mat.userData._rtsFogPrevCompile;
+    delete mat.userData._rtsFogPrevKey;
+  }
   mat.needsUpdate = true;
 }
 
 /** Re-chain FoW after mesa splat onBeforeCompile (splat must not clobber fog varyings). */
 export function refreshFogVisualAfterMesaSplat(mat) {
   if (!mat || !(mat.userData && mat.userData.rtsMesaHeightfield)) return;
+  if (wantMesaFogOverlay()) {
+    uninstallFogVisualOnMaterial(mat);
+    return;
+  }
   installed.delete(mat);
   if (mat.userData) mat.userData._rtsFogInstallVer = 0;
   installFogVisualOnMaterial(mat);
