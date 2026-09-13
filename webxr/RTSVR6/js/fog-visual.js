@@ -139,8 +139,7 @@ const SHROUD_BEFORE_OPAQUE = /* glsl */ `
 			);
 			if ( fuv.x >= 0.0 && fuv.x <= 1.0 && fuv.y >= 0.0 && fuv.y <= 1.0 ) {
 				fogA = texture2D( uRtsFogMap, fuv ).a;
-			} else if ( uRtsFogMesaPlate < 0.5 && abs( vRtsFogWorldPos.x ) <= uRtsFogVisHalf && abs( vRtsFogWorldPos.z ) <= uRtsFogVisHalf ) {
-				// Crater skirts: darken outside nav UV. Hera ±1000 m plate skips this (was全 black on Quest).
+			} else if ( abs( vRtsFogWorldPos.x ) <= uRtsFogVisHalf && abs( vRtsFogWorldPos.z ) <= uRtsFogVisHalf ) {
 				fogA = uRtsFogOutsideA;
 			}
 			shroudA = fogA;
@@ -229,9 +228,6 @@ export function installFogVisualOnMaterial(mat) {
     shader.uniforms.uRtsFocusXZ = { value: makeFocusXZ() };
     shader.uniforms.uRtsFocusInner = { value: focusFadeInner };
     shader.uniforms.uRtsFocusOuter = { value: focusFadeOuter };
-    shader.uniforms.uRtsFogMesaPlate = {
-      value: mat.userData && mat.userData.rtsMesaHeightfield ? 1.0 : 0.0,
-    };
     if (shader.uniforms.uRtsFocusXZ.value?.set) {
       shader.uniforms.uRtsFocusXZ.value.set(focusFadeX, focusFadeZ);
     }
@@ -278,8 +274,7 @@ uniform float uRtsNavWalkTint;
 uniform float uRtsFocusFadeOn;
 uniform vec2 uRtsFocusXZ;
 uniform float uRtsFocusInner;
-uniform float uRtsFocusOuter;
-uniform float uRtsFogMesaPlate;`
+uniform float uRtsFocusOuter;`
       );
     }
 
