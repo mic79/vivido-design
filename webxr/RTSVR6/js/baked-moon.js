@@ -8,7 +8,7 @@
  */
 import { MAP_TERRAIN_STYLE } from './config.js';
 import { ensureThreeGltfLoaders, getSharedKtx2Loader } from './three-gltf-umd.js';
-import { installFogVisualOnMaterial, refreshFogVisualAfterMesaSplat } from './fog-visual.js';
+import { installFogVisualOnMaterial } from './fog-visual.js';
 import {
   assignPropSelfShadowKeys,
   buildPropSelfShadowLookup,
@@ -531,8 +531,26 @@ function makeMesaHeightfieldMaterial(srcMat, W, recv) {
   mat.userData.rtsMesaHeightfield = true;
   mat.userData.shadowRecv = recv;
   mat.needsUpdate = true;
-  installFogVisualOnMaterial(mat);
+  // FoW installed after HQ/splat in applyMesaHqTextures — installing here first then
+  // chaining splat caused Quest shader breaks (fog varyings clobbered / double-compile).
   return mat;
+}
+
+function wantMesaSplatDetail() {
+  // Quest Adreno: 5 extra splat samplers + fog on Lambert is fragile; macro HQ is enough.
+  // Desktop / PCVR Link keep full BAR splat.
+  try {
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+    if (/OculusBrowser|Quest|Pacific/i.test(ua)) return false;
+    const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
+      typeof location !== 'undefined' ? location.hash || '' : ''
+    }`;
+    if (/(?:[?&#]nosplat=1\b)/i.test(q)) return false;
+    if (/(?:[?&#]forcesplat=1\b)/i.test(q)) return true;
+  } catch (_) {
+    /* */
+  }
+  return true;
 }
 
 /** @deprecated Detail overlay changed brightness — disabled. Kept so old imports resolve. */
@@ -813,15 +831,23 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     return jpg ? { tex: jpg, kind: 'jpg' } : { tex: null, kind: null };
   };
 
-  const [diffPack, nrmPack, distr, d1, d2, d3, d4] = await Promise.all([
+  const useSplat = wantMesaSplatDetail();
+  const splatLoads = useSplat
+    ? Promise.all([
+        loadJpg(splatBase + 'distr.png', true, false),
+        loadJpg(splatBase + 'dnts1.png', true, true),
+        loadJpg(splatBase + 'dnts2.png', true, true),
+        loadJpg(splatBase + 'dnts3.png', true, true),
+        loadJpg(splatBase + 'dnts4.png', true, true),
+      ])
+    : Promise.resolve([null, null, null, null, null]);
+
+  const [diffPack, nrmPack, splatTexs] = await Promise.all([
     loadPreferKtx2('diffuse-hq', false, false),
     loadPreferKtx2('normal-hq', true, false),
-    loadJpg(splatBase + 'distr.png', true, false),
-    loadJpg(splatBase + 'dnts1.png', true, true),
-    loadJpg(splatBase + 'dnts2.png', true, true),
-    loadJpg(splatBase + 'dnts3.png', true, true),
-    loadJpg(splatBase + 'dnts4.png', true, true),
+    splatLoads,
   ]);
+  const [distr, d1, d2, d3, d4] = splatTexs;
   const diff = diffPack.tex;
   const nrm = nrmPack.tex;
   if (!diff) {
@@ -830,10 +856,10 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
   }
 
   const splat =
-    distr && d1 && d2 && d3 && d4
+    useSplat && distr && d1 && d2 && d3 && d4
       ? { distr, dnts: [d1, d2, d3, d4] }
       : null;
-  if (!splat) {
+  if (useSplat && !splat) {
     console.warn('[RTSVR6] mesa splat DNTS missing — macro HQ only');
   }
 
@@ -859,7 +885,8 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     }
     mat.color.setRGB(1, 1, 1);
     if (splat) installMesaSplatDetail(mat, THREE, splat);
-    refreshFogVisualAfterMesaSplat(mat);
+    // FoW last so shroud hooks sit outside splat patches (Quest-safe compile order).
+    installFogVisualOnMaterial(mat);
     mat.needsUpdate = true;
     applied += 1;
   });
@@ -873,6 +900,7 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     diffuseFmt: diffPack.kind,
     normalFmt: nrmPack.kind,
     splat: !!splat,
+    questNoSplat: !useSplat,
   });
   return { diffuse: [iw, ih], splat: !!splat, fmt: diffPack.kind };
 }

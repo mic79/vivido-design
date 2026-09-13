@@ -131,14 +131,14 @@ let squadLeaderRefRingMesh = null;
 let resourceFieldMesh = null;
 let projectileMesh = null;
 let groundMesh = null;
-let fogOverlayCanvas = null;
-let fogOverlayCtx = null;
 let fogOverlayTexture = null;
 /** Explored shroud (alpha blend). Live vision is discarded in-shader. */
 let fogOverlayMesh = null;
 /** Unexplored blackout — opaque + depth write so terrain/skirts underneath are not shaded. */
 let fogUnexploredMesh = null;
-let fogOverlayImageData = null;
+/** RGBA bytes for FoW DataTexture (NOT CanvasTexture — Quest XR samples canvas as opaque black). */
+let fogOverlayPixels = null;
+let fogOverlayRes = 0;
 let _fogOverlayLastDrawMs = 0;
 let _fogOverlayGridHash = null;
 let buildRadiusMesh = null;
@@ -1949,9 +1949,8 @@ function disposeFogOverlayMeshes() {
     fogOverlayTexture.dispose();
     fogOverlayTexture = null;
   }
-  fogOverlayCanvas = null;
-  fogOverlayCtx = null;
-  fogOverlayImageData = null;
+  fogOverlayPixels = null;
+  fogOverlayRes = 0;
   _fogOverlayGridHash = null;
   _fogOverlayLastDrawMs = 0;
 }
@@ -1982,20 +1981,23 @@ function createFogPlane() {
   disposeFogOverlayMeshes();
 
   const fogRes = FOG_GRID_SIZE * FOG_OVERLAY_UPSAMPLE;
-  fogOverlayCanvas = document.createElement('canvas');
-  fogOverlayCanvas.width = fogRes;
-  fogOverlayCanvas.height = fogRes;
-  fogOverlayCtx = fogOverlayCanvas.getContext('2d', { willReadFrequently: true });
-  fogOverlayImageData = fogOverlayCtx.createImageData(fogRes, fogRes);
-
-  fogOverlayTexture = new THREE.CanvasTexture(fogOverlayCanvas);
+  fogOverlayRes = fogRes;
+  // DataTexture — CanvasTexture often uploads as opaque black under Quest WebXR, which
+  // makes terrain-shader FoW multiply to full black the instant fog turns on.
+  fogOverlayPixels = new Uint8Array(fogRes * fogRes * 4);
+  fogOverlayTexture = new THREE.DataTexture(fogOverlayPixels, fogRes, fogRes, THREE.RGBAFormat);
   fogOverlayTexture.wrapS = THREE.ClampToEdgeWrapping;
   fogOverlayTexture.wrapT = THREE.ClampToEdgeWrapping;
   fogOverlayTexture.magFilter = THREE.LinearFilter;
   fogOverlayTexture.minFilter = THREE.LinearFilter;
   fogOverlayTexture.generateMipmaps = false;
+  // Match prior CanvasTexture flipY=true so fog UV math stays unchanged.
   fogOverlayTexture.flipY = true;
   fogOverlayTexture.premultiplyAlpha = false;
+  if ('colorSpace' in fogOverlayTexture && THREE.NoColorSpace) {
+    fogOverlayTexture.colorSpace = THREE.NoColorSpace;
+  }
+  fogOverlayTexture.needsUpdate = true;
   FogVisual.setFogVisualMap(fogOverlayTexture);
   FogVisual.setFogVisualOutsideAlpha(185 / 255);
   FogVisual.syncFogVisualExtents();
@@ -2033,7 +2035,7 @@ function createFogPlane() {
   fogOverlayMesh.name = 'rts-world-fog-overlay';
   fogOverlayMesh.visible = false;
   fogOverlayMesh.raycast = () => {};
-  fogOverlayMesh.userData.rtsFogBuild = '0.5.59-darken';
+  fogOverlayMesh.userData.rtsFogBuild = '0.6.45-datatex';
   console.log(
     '[fog] overlay build',
     fogOverlayMesh.userData.rtsFogBuild,
@@ -2055,10 +2057,6 @@ function createFogPlane() {
       const wy = pos.getY(i);
       const wz = pos.getZ(i);
       const navY = sampleMoonTraversableBaseY(wx, wz);
-      const dive = navY - wy;
-      if (dive > -0.05) {
-        // allow tiny numerical; real pierce when nav above fog
-      }
       if (navY > wy + 0.05) {
         pierce++;
         if (navY - wy > worst) worst = navY - wy;
@@ -2298,7 +2296,7 @@ export function resetMatchViewState() {
 
 function updateWorldFogOverlay() {
   _fogOverlayWroteThisFrame = false;
-  if (!fogOverlayMesh || !fogOverlayCtx || !fogOverlayTexture || !fogOverlayImageData) return;
+  if (!fogOverlayMesh || !fogOverlayTexture || !fogOverlayPixels) return;
 
   if (!Fog.shouldDrawWorldFogOverlay() || !Perf.getAblation().fogOverlay) {
     setFogOverlayVisible(false);
@@ -2336,12 +2334,11 @@ function updateWorldFogOverlay() {
 
   const up = FOG_OVERLAY_UPSAMPLE;
   const fogRes = FOG_GRID_SIZE * up;
-  const d = fogOverlayImageData.data;
-  const need = fogRes * fogRes * 4;
-  if (d.length < need) {
+  if (fogRes !== fogOverlayRes || fogOverlayPixels.length < fogRes * fogRes * 4) {
     resizeWorldFogOverlay();
     return;
   }
+  const d = fogOverlayPixels;
 
   // Bilinear sample of hard state + soft live weight → soft circular vision edge.
   // Explored = indigo veil (terrain still readable); unexplored = near-blackout.
@@ -2400,7 +2397,6 @@ function updateWorldFogOverlay() {
       }
     }
   }
-  fogOverlayCtx.putImageData(fogOverlayImageData, 0, 0);
   fogOverlayTexture.needsUpdate = true;
   _fogOverlayWroteThisFrame = true;
 }
@@ -3868,10 +3864,9 @@ export function disposeRenderer() {
     playableBorderMesh = null;
   }
   disposeCameraFocusRing();
-  fogOverlayCanvas = null;
-  fogOverlayCtx = null;
   fogOverlayTexture = null;
-  fogOverlayImageData = null;
+  fogOverlayPixels = null;
+  fogOverlayRes = 0;
 }
 
 function updateBuildBoundary() {

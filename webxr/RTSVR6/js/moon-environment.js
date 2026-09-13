@@ -1041,6 +1041,8 @@ async function finishBakedMoonLook(THREE, sceneEl, root, opts = {}) {
     } catch (err) {
       console.warn('[RTSVR6] mesa HQ textures failed', err);
     }
+    // Always ensure FoW shroud is on mesa mats (HQ path installs it; embeds-only still need it).
+    FogVisual.installFogVisualUnder(root);
   }
   // Always re-rasterize Hera/mesa (and whenever skipHeight is false). Skipping height after
   // lobby crater → match Hera left the crater walkability mask in place.
