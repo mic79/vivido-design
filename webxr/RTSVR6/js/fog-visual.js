@@ -7,7 +7,7 @@
 // depend on that include — compute + apply immediately before opaque/output.
 import { MAP_SIZE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_SPAN_M } from './config.js';
 
-const FOG_INSTALL_VER = 9;
+const FOG_INSTALL_VER = 10;
 
 /**
  * Visual FoW half-extent (m). Must cover the horizon skirt:
@@ -139,7 +139,8 @@ const SHROUD_BEFORE_OPAQUE = /* glsl */ `
 			);
 			if ( fuv.x >= 0.0 && fuv.x <= 1.0 && fuv.y >= 0.0 && fuv.y <= 1.0 ) {
 				fogA = texture2D( uRtsFogMap, fuv ).a;
-			} else if ( abs( vRtsFogWorldPos.x ) <= uRtsFogVisHalf && abs( vRtsFogWorldPos.z ) <= uRtsFogVisHalf ) {
+			} else if ( uRtsFogMesaPlate < 0.5 && abs( vRtsFogWorldPos.x ) <= uRtsFogVisHalf && abs( vRtsFogWorldPos.z ) <= uRtsFogVisHalf ) {
+				// Crater skirts: darken outside nav UV. Hera ±1000 m plate skips this (was全 black on Quest).
 				fogA = uRtsFogOutsideA;
 			}
 			shroudA = fogA;
@@ -228,6 +229,9 @@ export function installFogVisualOnMaterial(mat) {
     shader.uniforms.uRtsFocusXZ = { value: makeFocusXZ() };
     shader.uniforms.uRtsFocusInner = { value: focusFadeInner };
     shader.uniforms.uRtsFocusOuter = { value: focusFadeOuter };
+    shader.uniforms.uRtsFogMesaPlate = {
+      value: mat.userData && mat.userData.rtsMesaHeightfield ? 1.0 : 0.0,
+    };
     if (shader.uniforms.uRtsFocusXZ.value?.set) {
       shader.uniforms.uRtsFocusXZ.value.set(focusFadeX, focusFadeZ);
     }
@@ -274,7 +278,8 @@ uniform float uRtsNavWalkTint;
 uniform float uRtsFocusFadeOn;
 uniform vec2 uRtsFocusXZ;
 uniform float uRtsFocusInner;
-uniform float uRtsFocusOuter;`
+uniform float uRtsFocusOuter;
+uniform float uRtsFogMesaPlate;`
       );
     }
 
@@ -294,8 +299,16 @@ uniform float uRtsFocusOuter;`
     }
   };
 
-  mat.customProgramCacheKey = () => `${prevKey()}|rtsFogNavPaint9`;
+  mat.customProgramCacheKey = () => `${prevKey()}|rtsFogNavPaint10`;
   mat.needsUpdate = true;
+}
+
+/** Re-chain FoW after mesa splat onBeforeCompile (splat must not clobber fog varyings). */
+export function refreshFogVisualAfterMesaSplat(mat) {
+  if (!mat || !(mat.userData && mat.userData.rtsMesaHeightfield)) return;
+  installed.delete(mat);
+  if (mat.userData) mat.userData._rtsFogInstallVer = 0;
+  installFogVisualOnMaterial(mat);
 }
 
 /** Install on every mesh material under a root (ground / kit props / forest / skirts). */

@@ -8,7 +8,7 @@
  */
 import { MAP_TERRAIN_STYLE } from './config.js';
 import { ensureThreeGltfLoaders, getSharedKtx2Loader } from './three-gltf-umd.js';
-import { installFogVisualOnMaterial } from './fog-visual.js';
+import { installFogVisualOnMaterial, refreshFogVisualAfterMesaSplat } from './fog-visual.js';
 import {
   assignPropSelfShadowKeys,
   buildPropSelfShadowLookup,
@@ -582,21 +582,55 @@ function installMesaSplatDetail(mat, THREE, splat) {
     mat.userData._mesaSplatUniforms = shader.uniforms;
 
     if (!shader.vertexShader.includes('vMesaWorldPos')) {
-      shader.vertexShader = shader.vertexShader
-        .replace(
-          '#include <common>',
-          /* glsl */ `#include <common>
+      // FoW installs first; splat runs after via onBeforeCompile chain. Do NOT replace
+      // `#include <common>` wholesale — that drops vRtsFogWorldPos on Quest (FoW → black terrain).
+      if (shader.vertexShader.includes('vRtsFogWorldPos')) {
+        if (!shader.vertexShader.includes('varying vec3 vMesaWorldPos')) {
+          shader.vertexShader = shader.vertexShader.replace(
+            'varying vec3 vRtsFogWorldPos;',
+            /* glsl */ `varying vec3 vRtsFogWorldPos;
 varying vec3 vMesaWorldPos;`
-        )
-        .replace(
-          '#include <begin_vertex>',
-          /* glsl */ `#include <begin_vertex>
+          );
+        }
+        const mesaAssign = /* glsl */ `
+	vMesaWorldPos = vRtsFogWorldPos;`;
+        if (!shader.vertexShader.includes('vMesaWorldPos = vRtsFogWorldPos')) {
+          if (shader.vertexShader.includes('vRtsObjXZ = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;')) {
+            shader.vertexShader = shader.vertexShader.replace(
+              'vRtsObjXZ = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;',
+              `vRtsObjXZ = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;${mesaAssign}`
+            );
+          } else if (
+            shader.vertexShader.includes('vRtsObjXZ = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;')
+          ) {
+            shader.vertexShader = shader.vertexShader.replace(
+              'vRtsObjXZ = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;',
+              `vRtsObjXZ = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;${mesaAssign}`
+            );
+          } else if (shader.vertexShader.includes('vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;')) {
+            shader.vertexShader = shader.vertexShader.replace(
+              'vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;',
+              `vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;${mesaAssign}`
+            );
+          }
+        }
+      } else {
+        shader.vertexShader = shader.vertexShader
+          .replace(
+            '#include <common>',
+            /* glsl */ `#include <common>
+varying vec3 vMesaWorldPos;`
+          )
+          .replace(
+            '#include <begin_vertex>',
+            /* glsl */ `#include <begin_vertex>
 #ifdef USE_INSTANCING
 	vMesaWorldPos = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
 #else
 	vMesaWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
 #endif`
-        );
+          );
+      }
     }
 
     if (!shader.fragmentShader.includes('mesaSplatDistr')) {
@@ -825,6 +859,7 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     }
     mat.color.setRGB(1, 1, 1);
     if (splat) installMesaSplatDetail(mat, THREE, splat);
+    refreshFogVisualAfterMesaSplat(mat);
     mat.needsUpdate = true;
     applied += 1;
   });
