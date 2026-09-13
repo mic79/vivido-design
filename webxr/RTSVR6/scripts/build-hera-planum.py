@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Build skirmish Moon_0 from Beyond All Reason 'Hera Planum' maps:
-  height + dry diffuse + detail normal
-  https://www.beyondallreason.info/map/hera-planum
+Build skirmish Hera Planum plate for RTSVR6:
+  - Dense heightfield (default RES=768) over ±HALF (±1000 m)
+  - Split into CELLS×CELLS meshes sharing ONE material + ONE texture pair
+    (frustum cull works; no per-cell texture duplication)
+  - Runtime still swaps diffuse-hq / normal-hq (+ splat DNTS)
 
   WRITE_LIVE=1 CONFIRM_WRITE_LIVE=1 python RTSVR6/scripts/build-hera-planum.py
 """
@@ -19,7 +21,6 @@ from PIL import Image
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 HERA = os.path.join(ROOT, "assets", "mesa", "hera-planum")
 LIVE = os.path.join(ROOT, "assets", "terrain", "terrain-skirmish-1v1.glb")
-BASE = LIVE + ".pre-mesa.bak" if os.path.isfile(LIVE + ".pre-mesa.bak") else LIVE
 HM = os.path.join(HERA, "height.png")
 DIFF_HQ = os.path.join(HERA, "diffuse-hq.jpg")
 DIFF_SRC = os.path.join(HERA, "diffuse.png")
@@ -30,14 +31,15 @@ DIFF = os.path.join(HERA, "diffuse-bake.jpg")
 NORM = os.path.join(HERA, "normal-bake.jpg")
 WRITE_LIVE = os.environ.get("WRITE_LIVE") == "1" and os.environ.get("CONFIRM_WRITE_LIVE") == "1"
 
-# Visual plate only — gameplay spawns/nav stay on MAP_SIZE_STANDARD=200.
 HALF_X = float(os.environ.get("HALF_X", "1000"))
 HALF_Z = float(os.environ.get("HALF_Z", "1000"))
-RES = int(os.environ.get("RES", "512"))
+# Denser than 512 — frustum-culled cells keep per-view cost in check.
+RES = int(os.environ.get("RES", "768"))
+CELLS = int(os.environ.get("CELLS", "8"))
 H_SCALE = float(os.environ.get("H_SCALE", "56"))
 Y_OFFSET = float(os.environ.get("Y_OFFSET", "-25"))
-# Prefer full native HQ extract (10240). Fallback lower maps if present.
-TEX_MAX = int(os.environ.get("TEX_MAX", "10240"))
+# Embed mid-res in GLB (boot); runtime applyMesaHqTextures loads full native HQ.
+TEX_MAX = int(os.environ.get("TEX_MAX", "4096"))
 
 
 def prepare_textures(_hm=None):
@@ -47,14 +49,14 @@ def prepare_textures(_hm=None):
         print("using diffuse-hq.jpg")
     elif os.path.isfile(DIFF_SRC):
         diff = Image.open(DIFF_SRC).convert("RGB")
-        print("using diffuse.png (4K web)")
+        print("using diffuse.png")
     elif os.path.isfile(DIFF_FALLBACK):
         diff = Image.open(DIFF_FALLBACK).convert("RGB")
         print("using diffuse-2k.jpg")
     else:
         raise SystemExit("missing diffuse — run extract-hera-hq-textures.py")
     diff.thumbnail((TEX_MAX, TEX_MAX), Image.Resampling.LANCZOS)
-    diff.save(DIFF, "JPEG", quality=92, optimize=True, progressive=True)
+    diff.save(DIFF, "JPEG", quality=90, optimize=True, progressive=True)
     print("diffuse bake", diff.size, os.path.getsize(DIFF))
 
     if os.path.isfile(NORM_HQ):
@@ -62,11 +64,11 @@ def prepare_textures(_hm=None):
         print("using normal-hq.jpg")
     elif os.path.isfile(NORM_DETAIL_SRC):
         nrm = Image.open(NORM_DETAIL_SRC).convert("RGB")
-        print("using normal.png (web)")
+        print("using normal.png")
     else:
         raise SystemExit("missing normal — run extract-hera-hq-textures.py")
     nrm.thumbnail((TEX_MAX, TEX_MAX), Image.Resampling.LANCZOS)
-    nrm.save(NORM, "JPEG", quality=92, optimize=True, progressive=True)
+    nrm.save(NORM, "JPEG", quality=90, optimize=True, progressive=True)
     print("normal bake", nrm.size, os.path.getsize(NORM))
 
 
@@ -92,47 +94,69 @@ def sample_lum(im, u, v):
     return a * (1 - fy) + b * fy
 
 
-def build_mesh(hm):
+def build_height_grid(hm):
     n = RES
     lum_min, lum_max = 1.0, 0.0
     for iz in range(n):
         for ix in range(n):
-            u = ix / (n - 1)
-            v = iz / (n - 1)
-            lum = sample_lum(hm, u, v)
+            lum = sample_lum(hm, ix / (n - 1), iz / (n - 1))
             lum_min = min(lum_min, lum)
             lum_max = max(lum_max, lum)
     span = max(1e-4, lum_max - lum_min)
     print("luminance", round(lum_min, 3), round(lum_max, 3))
 
-    verts = []
-    uvs = []
+    heights = [0.0] * (n * n)
     h_min, h_max = 1e9, -1e9
     for iz in range(n):
         for ix in range(n):
-            u = ix / (n - 1)
-            v = iz / (n - 1)
-            x = -HALF_X + u * HALF_X * 2
-            z = -HALF_Z + v * HALF_Z * 2
-            lum = sample_lum(hm, u, v)
+            lum = sample_lum(hm, ix / (n - 1), iz / (n - 1))
             h = ((lum - lum_min) / span) * H_SCALE + Y_OFFSET
-            # Keep natural Hera slopes to the plate edge — do NOT zero a circular rim
-            # (that caused the harsh vertical drop-off).
-            verts.extend((x, h, z))
-            uvs.extend((u, v))  # 0..1 for diffuse/normal
+            heights[iz * n + ix] = h
             h_min = min(h_min, h)
             h_max = max(h_max, h)
+    return heights, h_min, h_max
+
+
+def extract_cell(heights, ci, cj):
+    """Inclusive grid patch for cell (ci,cj); shared edges with neighbors (no cracks)."""
+    n = RES
+    # Vertex ranges: n verts → CELLS segments of (n-1)/CELLS quads.
+    step = (n - 1) / CELLS
+    ix0 = int(round(ci * step))
+    ix1 = int(round((ci + 1) * step))
+    iz0 = int(round(cj * step))
+    iz1 = int(round((cj + 1) * step))
+    ix0 = max(0, min(n - 1, ix0))
+    ix1 = max(ix0 + 1, min(n - 1, ix1))
+    iz0 = max(0, min(n - 1, iz0))
+    iz1 = max(iz0 + 1, min(n - 1, iz1))
+    nw = ix1 - ix0 + 1
+    nh = iz1 - iz0 + 1
+
+    verts = []
+    uvs = []
+    for jz in range(nh):
+        iz = iz0 + jz
+        v = iz / (n - 1)
+        z = -HALF_Z + v * HALF_Z * 2
+        for jx in range(nw):
+            ix = ix0 + jx
+            u = ix / (n - 1)
+            x = -HALF_X + u * HALF_X * 2
+            h = heights[iz * n + ix]
+            verts.extend((x, h, z))
+            uvs.extend((u, v))
 
     indices = []
-    for iz in range(n - 1):
-        for ix in range(n - 1):
-            i0 = iz * n + ix
+    for jz in range(nh - 1):
+        for jx in range(nw - 1):
+            i0 = jz * nw + jx
             i1 = i0 + 1
-            i2 = i0 + n
+            i2 = i0 + nw
             i3 = i2 + 1
             indices.extend((i0, i2, i1, i1, i2, i3))
 
-    normals = [0.0] * (n * n * 3)
+    normals = [0.0] * (nw * nh * 3)
 
     def add_n(i, nx, ny, nz):
         normals[i * 3] += nx
@@ -153,20 +177,20 @@ def build_mesh(hm):
         add_n(b, nx, ny, nz)
         add_n(c, nx, ny, nz)
 
-    for i in range(n * n):
+    for i in range(nw * nh):
         nx, ny, nz = normals[i * 3 : i * 3 + 3]
         L = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
         normals[i * 3] = nx / L
         normals[i * 3 + 1] = ny / L
         normals[i * 3 + 2] = nz / L
 
-    return verts, normals, uvs, indices, h_min, h_max
+    return verts, normals, uvs, indices, (ix0, ix1, iz0, iz1)
 
 
-def write_plate_glb(path, verts, normals, uvs, indices, diff_bytes, norm_bytes):
+def write_plate_glb(path, cells, diff_bytes, norm_bytes, h_min, h_max):
+    """cells: list of (name, verts, normals, uvs, indices). Shared material 0."""
     blobs = []
     views = []
-    accessors = []
 
     def add_blob(data, target=None):
         pad = align4(len(data))
@@ -178,52 +202,76 @@ def write_plate_glb(path, verts, normals, uvs, indices, diff_bytes, norm_bytes):
         views.append(bv)
         return len(views) - 1
 
-    v_bytes = struct.pack("<%df" % len(verts), *verts)
-    n_bytes = struct.pack("<%df" % len(normals), *normals)
-    uv_bytes = struct.pack("<%df" % len(uvs), *uvs)
-    i_bytes = struct.pack("<%dI" % len(indices), *indices)
-
-    vc = len(verts) // 3
-    vmin = [min(verts[i::3]) for i in range(3)]
-    vmax = [max(verts[i::3]) for i in range(3)]
-
-    bv_v = add_blob(v_bytes, 34962)
-    bv_n = add_blob(n_bytes, 34962)
-    bv_uv = add_blob(uv_bytes, 34962)
-    bv_i = add_blob(i_bytes, 34963)
     bv_diff = add_blob(diff_bytes)
     bv_norm = add_blob(norm_bytes)
+    accessors = []
+    meshes = []
+    cell_nodes = []
 
-    accessors = [
-        {
-            "bufferView": bv_v,
-            "componentType": 5126,
-            "count": vc,
-            "type": "VEC3",
-            "max": vmax,
-            "min": vmin,
-        },
-        {"bufferView": bv_n, "componentType": 5126, "count": vc, "type": "VEC3"},
-        {"bufferView": bv_uv, "componentType": 5126, "count": vc, "type": "VEC2"},
-        {
-            "bufferView": bv_i,
-            "componentType": 5125,
-            "count": len(indices),
-            "type": "SCALAR",
-            "max": [max(indices)],
-            "min": [0],
-        },
-    ]
+    for name, verts, normals, uvs, indices in cells:
+        v_bytes = struct.pack("<%df" % len(verts), *verts)
+        n_bytes = struct.pack("<%df" % len(normals), *normals)
+        uv_bytes = struct.pack("<%df" % len(uvs), *uvs)
+        i_bytes = struct.pack("<%dI" % len(indices), *indices)
+        vc = len(verts) // 3
+        vmin = [min(verts[i::3]) for i in range(3)]
+        vmax = [max(verts[i::3]) for i in range(3)]
+        bv_v = add_blob(v_bytes, 34962)
+        bv_n = add_blob(n_bytes, 34962)
+        bv_uv = add_blob(uv_bytes, 34962)
+        bv_i = add_blob(i_bytes, 34963)
+        ai = len(accessors)
+        accessors.extend(
+            [
+                {
+                    "bufferView": bv_v,
+                    "componentType": 5126,
+                    "count": vc,
+                    "type": "VEC3",
+                    "max": vmax,
+                    "min": vmin,
+                },
+                {"bufferView": bv_n, "componentType": 5126, "count": vc, "type": "VEC3"},
+                {"bufferView": bv_uv, "componentType": 5126, "count": vc, "type": "VEC2"},
+                {
+                    "bufferView": bv_i,
+                    "componentType": 5125,
+                    "count": len(indices),
+                    "type": "SCALAR",
+                    "max": [max(indices)],
+                    "min": [0],
+                },
+            ]
+        )
+        mi = len(meshes)
+        meshes.append(
+            {
+                "name": name,
+                "primitives": [
+                    {
+                        "attributes": {
+                            "POSITION": ai,
+                            "NORMAL": ai + 1,
+                            "TEXCOORD_0": ai + 2,
+                        },
+                        "indices": ai + 3,
+                        "material": 0,
+                        "mode": 4,
+                    }
+                ],
+            }
+        )
+        cell_nodes.append({"name": name, "mesh": mi})
+
+    # Root Moon_0 groups cells — frustum culls per child; height/HQ match /^Moon_0/.
+    nodes = [{"name": "Moon_0", "children": list(range(1, 1 + len(cell_nodes)))}] + cell_nodes
 
     images = [
         {"mimeType": "image/jpeg", "bufferView": bv_diff},
         {"mimeType": "image/jpeg", "bufferView": bv_norm},
     ]
     samplers = [{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}]
-    textures = [
-        {"sampler": 0, "source": 0},
-        {"sampler": 0, "source": 1},
-    ]
+    textures = [{"sampler": 0, "source": 0}, {"sampler": 0, "source": 1}]
     materials = [
         {
             "name": "M_HeraPlanum",
@@ -236,25 +284,12 @@ def write_plate_glb(path, verts, normals, uvs, indices, diff_bytes, norm_bytes):
             "normalTexture": {"index": 1, "scale": 1.0},
         }
     ]
-    meshes = [
-        {
-            "name": "Moon_0",
-            "primitives": [
-                {
-                    "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
-                    "indices": 3,
-                    "material": 0,
-                    "mode": 4,
-                }
-            ],
-        }
-    ]
     bin_blob = b"".join(blobs)
     doc = {
         "asset": {"version": "2.0", "generator": "build-hera-planum.py"},
         "scenes": [{"nodes": [0]}],
         "scene": 0,
-        "nodes": [{"name": "Moon_0", "mesh": 0}],
+        "nodes": nodes,
         "meshes": meshes,
         "materials": materials,
         "textures": textures,
@@ -265,13 +300,19 @@ def write_plate_glb(path, verts, normals, uvs, indices, diff_bytes, norm_bytes):
         "buffers": [{"byteLength": len(bin_blob)}],
         "extras": {
             "rtsMesaHeightfield": {
-                "method": "hera-planum-bar",
+                "method": "hera-planum-bar-cells",
                 "halfX": HALF_X,
                 "halfZ": HALF_Z,
                 "res": RES,
+                "cells": CELLS,
+                "hMin": h_min,
+                "hMax": h_max,
                 "hScale": H_SCALE,
                 "yOffset": Y_OFFSET,
-                "source": "beyondallreason.info/map/hera-planum",
+                "source": "https://www.beyondallreason.info/map/hera-planum",
+                "hasDiffuse": True,
+                "hasNormal": True,
+                "texMax": TEX_MAX,
             }
         },
     }
@@ -297,7 +338,6 @@ def parse_glb(path):
         data = f.read()
     jlen = struct.unpack_from("<I", data, 12)[0]
     raw = data[20 : 20 + jlen].decode("utf-8").rstrip(" \x00")
-    raw = raw.replace(":inf", ":null").replace(":-inf", ":null")
     doc = json.loads(raw)
     bin_off = 20 + jlen
     blen = struct.unpack_from("<I", data, bin_off)[0]
@@ -323,61 +363,63 @@ def write_glb(path, doc, braw):
 
 
 def write_live_clean(plate_path, h_min, h_max):
-    """Ship Moon_0-only Hera plate — never merge into the old crater+props GLB."""
     plate_doc, plate_bin = parse_glb(plate_path)
-    plate_doc.setdefault("extras", {})
-    plate_doc["extras"]["rtsMesaHeightfield"] = {
-        "method": "hera-planum-bar",
-        "halfX": HALF_X,
-        "halfZ": HALF_Z,
-        "res": RES,
-        "hMin": h_min,
-        "hMax": h_max,
-        "hScale": H_SCALE,
-        "yOffset": Y_OFFSET,
-        "source": "https://www.beyondallreason.info/map/hera-planum",
-        "hasDiffuse": True,
-        "hasNormal": True,
-        "texMax": TEX_MAX,
-    }
     out = LIVE if WRITE_LIVE else os.path.join(HERA, "terrain-hera-planum.glb")
-    if WRITE_LIVE and os.path.isfile(LIVE) and not os.path.isfile(LIVE + ".pre-hera-clean.bak"):
-        open(LIVE + ".pre-hera-clean.bak", "wb").write(open(LIVE, "rb").read())
     write_glb(out, plate_doc, plate_bin)
-    print("wrote", out, os.path.getsize(out), "half", HALF_X, "meshes", len(plate_doc.get("meshes") or []))
+    print(
+        "wrote",
+        out,
+        os.path.getsize(out),
+        "half",
+        HALF_X,
+        "meshes",
+        len(plate_doc.get("meshes") or []),
+        "cells",
+        CELLS,
+    )
     if not WRITE_LIVE:
         print("Dry-run — WRITE_LIVE=1 CONFIRM_WRITE_LIVE=1")
 
 
-def merge_into_live(plate_path, h_min, h_max):
-    # Kept for reference; live ship path is write_live_clean (no leftover UE meshes).
-    write_live_clean(plate_path, h_min, h_max)
-
-
 def main():
+    if CELLS < 1 or CELLS > 32:
+        raise SystemExit("CELLS must be 1..32")
     if not os.path.isfile(HM):
         print("missing", HM)
         sys.exit(1)
     hm = Image.open(HM).convert("RGB")
     prepare_textures(hm)
-    if not os.path.isfile(DIFF) or not os.path.isfile(NORM):
-        print("texture prepare failed")
-        sys.exit(1)
-    print("building Hera Planum RES", RES, "size", HALF_X * 2, "x", HALF_Z * 2, "H", H_SCALE, "Y", Y_OFFSET)
-    verts, normals, uvs, indices, h_min, h_max = build_mesh(hm)
-    print("height", round(h_min, 3), round(h_max, 3), "tris", len(indices) // 3)
+    print(
+        "building Hera Planum RES",
+        RES,
+        "CELLS",
+        CELLS,
+        "size",
+        HALF_X * 2,
+        "x",
+        HALF_Z * 2,
+    )
+    heights, h_min, h_max = build_height_grid(hm)
+    cells = []
+    total_tris = 0
+    for cj in range(CELLS):
+        for ci in range(CELLS):
+            name = f"Moon_0_{ci}_{cj}"
+            verts, normals, uvs, indices, _bb = extract_cell(heights, ci, cj)
+            total_tris += len(indices) // 3
+            cells.append((name, verts, normals, uvs, indices))
+    print("height", round(h_min, 3), round(h_max, 3), "tris", total_tris, "cellMeshes", len(cells))
     plate = os.path.join(HERA, "skirmish-hera-planum.glb")
     write_plate_glb(
         plate,
-        verts,
-        normals,
-        uvs,
-        indices,
+        cells,
         open(DIFF, "rb").read(),
         open(NORM, "rb").read(),
+        h_min,
+        h_max,
     )
     print("wrote", plate, os.path.getsize(plate))
-    merge_into_live(plate, h_min, h_max)
+    write_live_clean(plate, h_min, h_max)
 
 
 if __name__ == "__main__":

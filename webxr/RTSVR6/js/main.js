@@ -211,6 +211,9 @@ async function prepareMapForMode(mode, sceneEl, prevProfile) {
   // Always rebuild: Story↔skirmish profile changes, and lobby crater → match Hera.
   UI.showStatus(wantStory ? 'Generating Story battlefield…' : 'Loading skirmish map…');
   await rebuildMoonBattlefield(sceneEl);
+  // Force walkability from the terrain just loaded (Hera slopes ≠ crater ridges).
+  Pathfinding.invalidateStaticTerrainMask();
+  Pathfinding.rebuildNavMeshImmediate();
   Renderer.configureBattlefieldShadows(sceneEl);
   Renderer.resizeWorldFogOverlay();
   Renderer.refreshPlayableBorderRing();

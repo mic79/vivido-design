@@ -23,6 +23,10 @@ function loadScript(src) {
 
 const THREE_EXAMPLES = 'https://cdn.jsdelivr.net/npm/three@0.173.4/examples/js';
 
+/** One KTX2Loader per page — multiple instances warn and fight over the Basis worker. */
+let sharedKtx2Loader = null;
+let sharedKtx2Renderer = null;
+
 export function ensureThreeGltfLoaders() {
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {
@@ -39,4 +43,27 @@ export function ensureThreeGltfLoaders() {
     }
   })();
   return loadPromise;
+}
+
+/**
+ * Shared Basis/KTX2 loader for kits + mesa HQ. Call after `ensureThreeGltfLoaders()`.
+ * @param {import('three').WebGLRenderer} renderer
+ */
+export async function getSharedKtx2Loader(renderer) {
+  await ensureThreeGltfLoaders();
+  const THREE = window.THREE;
+  if (!renderer || !THREE?.KTX2Loader) return null;
+  if (sharedKtx2Loader && sharedKtx2Renderer === renderer) return sharedKtx2Loader;
+  if (sharedKtx2Loader && typeof sharedKtx2Loader.dispose === 'function') {
+    try {
+      sharedKtx2Loader.dispose();
+    } catch (_) {
+      /* */
+    }
+  }
+  sharedKtx2Loader = new THREE.KTX2Loader()
+    .setTranscoderPath('https://cdn.jsdelivr.net/npm/super-three@0.173.4/examples/jsm/libs/basis/')
+    .detectSupport(renderer);
+  sharedKtx2Renderer = renderer;
+  return sharedKtx2Loader;
 }

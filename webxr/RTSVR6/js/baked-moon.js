@@ -7,7 +7,7 @@
  * `?nobake=1` uses the procedural plate.
  */
 import { MAP_TERRAIN_STYLE } from './config.js';
-import { ensureThreeGltfLoaders } from './three-gltf-umd.js';
+import { ensureThreeGltfLoaders, getSharedKtx2Loader } from './three-gltf-umd.js';
 import { installFogVisualOnMaterial } from './fog-visual.js';
 import {
   assignPropSelfShadowKeys,
@@ -450,18 +450,24 @@ export async function tryLoadBakedSkirmishMoon(opts = {}) {
   const mesaHf = !!(json.extras && json.extras.rtsMesaHeightfield);
   let look = 'lambert+glb-moon01';
   let rockShadows = 0;
-  // Mesa heightfield bake: ONLY exact Moon_0. Legacy crater clones
-  // (Moon_0_YUpM / Moon_1 / Moon_1_YUpM) must not draw — they were still
-  // matching /^Moon_\d/ and completely hid the plate in earlier captures.
+  // Mesa: Moon_0 / Moon_0_ci_cj only (never Moon_1 clones). One shared material.
   const moonsToAdopt = mesaHf
-    ? moonMeshes.filter((m) => /^Moon_0$/i.test(m.name || ''))
+    ? moonMeshes.filter((m) => /^Moon_0(_\d+_\d+)?$/i.test(m.name || ''))
     : moonMeshes;
+  let sharedMesaMat = null;
   for (const src of moonsToAdopt) {
-    const isMesaPlate = mesaHf && /^Moon_0$/i.test(src.name || '');
+    if (mesaHf && !(src.geometry && src.geometry.attributes && src.geometry.attributes.position)) {
+      continue;
+    }
+    const isMesaPlate = mesaHf && /^Moon_0(_\d+_\d+)?$/i.test(src.name || '');
     if (isMesaPlate) {
-      const mat = makeMesaHeightfieldMaterial(src.material, W, recv);
-      look = 'mesa-heightfield+slope-vcol';
-      keep.add(adoptMeshForAframe(src, W, recv, mat, null));
+      if (!sharedMesaMat) {
+        sharedMesaMat = makeMesaHeightfieldMaterial(src.material, W, recv);
+      }
+      look = 'mesa-heightfield+cells';
+      const adopted = adoptMeshForAframe(src, W, recv, sharedMesaMat, null);
+      if (adopted && adopted.isMesh) adopted.frustumCulled = true;
+      keep.add(adopted);
       continue;
     }
     const idx = lmIndexForName(src.name);
@@ -570,6 +576,9 @@ function installMesaSplatDetail(mat, THREE, splat) {
     shader.uniforms.mesaSplatScales = { value: scales };
     shader.uniforms.mesaSplatMults = { value: mults };
     shader.uniforms.mesaSplatStrength = { value: 1.0 };
+    // Fade tiled DNTS beyond playable ~90–180 m (macro SMT carries far field).
+    shader.uniforms.mesaSplatFadeNear = { value: 90.0 };
+    shader.uniforms.mesaSplatFadeFar = { value: 180.0 };
     mat.userData._mesaSplatUniforms = shader.uniforms;
 
     if (!shader.vertexShader.includes('vMesaWorldPos')) {
@@ -604,6 +613,8 @@ uniform sampler2D mesaDnts4;
 uniform vec4 mesaSplatScales;
 uniform vec4 mesaSplatMults;
 uniform float mesaSplatStrength;
+uniform float mesaSplatFadeNear;
+uniform float mesaSplatFadeFar;
 
 vec3 mesaRnmBlend( vec3 n1, vec3 n2 ) {
 	n1 += vec3( 0.0, 0.0, 1.0 );
@@ -619,20 +630,24 @@ vec3 mesaRnmBlend( vec3 n1, vec3 n2 ) {
 		vec2 mesaUv = vMapUv;
 		vec4 sw = texture2D( mesaSplatDistr, mesaUv );
 		vec2 xz = vMesaWorldPos.xz;
-		vec4 d1 = texture2D( mesaDnts1, xz * mesaSplatScales.x );
-		vec4 d2 = texture2D( mesaDnts2, xz * mesaSplatScales.y );
-		vec4 d3 = texture2D( mesaDnts3, xz * mesaSplatScales.z );
-		vec4 d4 = texture2D( mesaDnts4, xz * mesaSplatScales.w );
-		float w1 = sw.r * mesaSplatMults.x;
-		float w2 = sw.g * mesaSplatMults.y;
-		float w3 = sw.b * mesaSplatMults.z;
-		float w4 = sw.a * mesaSplatMults.w;
-		float wSum = w1 + w2 + w3 + w4;
-		if ( wSum > 1e-4 && mesaSplatStrength > 0.0 ) {
-			float detailA = ( d1.a * w1 + d2.a * w2 + d3.a * w3 + d4.a * w4 ) / wSum;
-			// Mean A ≈ 0.5 → 2*A preserves macro brightness (no sand-grit darkening).
-			float damp = clamp( wSum, 0.0, 1.0 ) * mesaSplatStrength;
-			diffuseColor.rgb *= mix( 1.0, 2.0 * detailA, damp );
+		float distFade = 1.0 - smoothstep( mesaSplatFadeNear, mesaSplatFadeFar, length( xz ) );
+		float splatGate = mesaSplatStrength * distFade;
+		if ( splatGate > 1e-4 ) {
+			vec4 d1 = texture2D( mesaDnts1, xz * mesaSplatScales.x );
+			vec4 d2 = texture2D( mesaDnts2, xz * mesaSplatScales.y );
+			vec4 d3 = texture2D( mesaDnts3, xz * mesaSplatScales.z );
+			vec4 d4 = texture2D( mesaDnts4, xz * mesaSplatScales.w );
+			float w1 = sw.r * mesaSplatMults.x;
+			float w2 = sw.g * mesaSplatMults.y;
+			float w3 = sw.b * mesaSplatMults.z;
+			float w4 = sw.a * mesaSplatMults.w;
+			float wSum = w1 + w2 + w3 + w4;
+			if ( wSum > 1e-4 ) {
+				float detailA = ( d1.a * w1 + d2.a * w2 + d3.a * w3 + d4.a * w4 ) / wSum;
+				// Mean A ≈ 0.5 → 2*A preserves macro brightness (no sand-grit darkening).
+				float damp = clamp( wSum, 0.0, 1.0 ) * splatGate;
+				diffuseColor.rgb *= mix( 1.0, 2.0 * detailA, damp );
+			}
 		}
 	}
 `
@@ -644,45 +659,48 @@ vec3 mesaRnmBlend( vec3 n1, vec3 n2 ) {
 		vec2 mesaUv = vMapUv;
 		vec4 sw = texture2D( mesaSplatDistr, mesaUv );
 		vec2 xz = vMesaWorldPos.xz;
-		vec4 d1 = texture2D( mesaDnts1, xz * mesaSplatScales.x );
-		vec4 d2 = texture2D( mesaDnts2, xz * mesaSplatScales.y );
-		vec4 d3 = texture2D( mesaDnts3, xz * mesaSplatScales.z );
-		vec4 d4 = texture2D( mesaDnts4, xz * mesaSplatScales.w );
-		float w1 = sw.r * mesaSplatMults.x;
-		float w2 = sw.g * mesaSplatMults.y;
-		float w3 = sw.b * mesaSplatMults.z;
-		float w4 = sw.a * mesaSplatMults.w;
-		float wSum = w1 + w2 + w3 + w4;
-		if ( wSum > 1e-4 && mesaSplatStrength > 0.0 ) {
-			vec3 dn =
-				normalize( d1.xyz * 2.0 - 1.0 ) * w1 +
-				normalize( d2.xyz * 2.0 - 1.0 ) * w2 +
-				normalize( d3.xyz * 2.0 - 1.0 ) * w3 +
-				normalize( d4.xyz * 2.0 - 1.0 ) * w4;
-			dn = normalize( dn / wSum );
-			float damp = clamp( wSum, 0.0, 1.0 ) * mesaSplatStrength;
-			normal = normalize( mix( normal, mesaRnmBlend( normal, dn ), damp ) );
+		float distFade = 1.0 - smoothstep( mesaSplatFadeNear, mesaSplatFadeFar, length( xz ) );
+		float splatGate = mesaSplatStrength * distFade;
+		if ( splatGate > 1e-4 ) {
+			vec4 d1 = texture2D( mesaDnts1, xz * mesaSplatScales.x );
+			vec4 d2 = texture2D( mesaDnts2, xz * mesaSplatScales.y );
+			vec4 d3 = texture2D( mesaDnts3, xz * mesaSplatScales.z );
+			vec4 d4 = texture2D( mesaDnts4, xz * mesaSplatScales.w );
+			float w1 = sw.r * mesaSplatMults.x;
+			float w2 = sw.g * mesaSplatMults.y;
+			float w3 = sw.b * mesaSplatMults.z;
+			float w4 = sw.a * mesaSplatMults.w;
+			float wSum = w1 + w2 + w3 + w4;
+			if ( wSum > 1e-4 ) {
+				vec3 dn =
+					normalize( d1.xyz * 2.0 - 1.0 ) * w1 +
+					normalize( d2.xyz * 2.0 - 1.0 ) * w2 +
+					normalize( d3.xyz * 2.0 - 1.0 ) * w3 +
+					normalize( d4.xyz * 2.0 - 1.0 ) * w4;
+				dn = normalize( dn / wSum );
+				float damp = clamp( wSum, 0.0, 1.0 ) * splatGate;
+				normal = normalize( mix( normal, mesaRnmBlend( normal, dn ), damp ) );
+			}
 		}
 	}
 `
         );
     }
   };
-  mat.customProgramCacheKey = () => `${prevKey()}|mesaSplatV1`;
+  mat.customProgramCacheKey = () => `${prevKey()}|mesaSplatV2fade`;
   mat.needsUpdate = true;
 }
 
 /**
  * Load native Hera SMT/DDS extracts (full 10240) + BAR splat DNTS for close-up res.
- * Resolution only — white color, mean-preserving splat diffuse.
+ * Prefer KTX2 (GPU-compressed) when present; JPEG fallback. Resolution only — no retints.
  */
 export async function applyMesaHqTextures(root, THREE, sceneEl) {
   if (!root || !THREE) return null;
   if (!(root.userData && root.userData.rtsMesaHeightfield)) return null;
 
-  const diffUrl = 'assets/mesa/hera-planum/diffuse-hq.jpg';
-  const nrmUrl = 'assets/mesa/hera-planum/normal-hq.jpg';
-  const splatBase = 'assets/mesa/hera-planum/splat/';
+  const hqBase = 'assets/mesa/hera-planum/';
+  const splatBase = hqBase + 'splat/';
   const loader = new THREE.TextureLoader();
   loader.setCrossOrigin('anonymous');
 
@@ -698,39 +716,80 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     return 16;
   })();
 
-  const load = (url, linear, wrapRepeat) =>
+  const configureTex = (tex, linear, wrapRepeat) => {
+    if (!tex) return null;
+    tex.wrapS = wrapRepeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+    tex.wrapT = wrapRepeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+    // KTX2 already carries mips — do not ask WebGL to generate more on compressed data.
+    if (tex.isCompressedTexture) {
+      tex.generateMipmaps = false;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+    } else {
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+    }
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = maxAniso;
+    if (linear) {
+      if ('colorSpace' in tex && THREE.NoColorSpace) tex.colorSpace = THREE.NoColorSpace;
+    } else if ('colorSpace' in tex && THREE.SRGBColorSpace) {
+      tex.colorSpace = THREE.SRGBColorSpace;
+    }
+    tex.needsUpdate = true;
+    return tex;
+  };
+
+  const loadJpg = (url, linear, wrapRepeat) =>
     new Promise((resolve) => {
       loader.load(
         url,
-        (tex) => {
-          tex.wrapS = wrapRepeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
-          tex.wrapT = wrapRepeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
-          tex.generateMipmaps = true;
-          tex.minFilter = THREE.LinearMipmapLinearFilter;
-          tex.magFilter = THREE.LinearFilter;
-          tex.anisotropy = maxAniso;
-          if (linear) {
-            if ('colorSpace' in tex && THREE.NoColorSpace) tex.colorSpace = THREE.NoColorSpace;
-          } else if ('colorSpace' in tex && THREE.SRGBColorSpace) {
-            tex.colorSpace = THREE.SRGBColorSpace;
-          }
-          tex.needsUpdate = true;
-          resolve(tex);
-        },
+        (tex) => resolve(configureTex(tex, linear, wrapRepeat)),
         undefined,
         () => resolve(null)
       );
     });
 
-  const [diff, nrm, distr, d1, d2, d3, d4] = await Promise.all([
-    load(diffUrl, false, false),
-    load(nrmUrl, true, false),
-    load(splatBase + 'distr.png', true, false),
-    load(splatBase + 'dnts1.png', true, true),
-    load(splatBase + 'dnts2.png', true, true),
-    load(splatBase + 'dnts3.png', true, true),
-    load(splatBase + 'dnts4.png', true, true),
+  const ensureKtx2 = async () => {
+    try {
+      const renderer = sceneEl && sceneEl.renderer;
+      return await getSharedKtx2Loader(renderer);
+    } catch (err) {
+      console.warn('[RTSVR6] mesa KTX2Loader setup failed', err);
+      return null;
+    }
+  };
+
+  const loadKtx2 = async (url, linear, wrapRepeat) => {
+    const ktx = await ensureKtx2();
+    if (!ktx) return null;
+    return new Promise((resolve) => {
+      ktx.load(
+        url,
+        (tex) => resolve(configureTex(tex, linear, wrapRepeat)),
+        undefined,
+        () => resolve(null)
+      );
+    });
+  };
+
+  const loadPreferKtx2 = async (baseName, linear, wrapRepeat) => {
+    const ktx = await loadKtx2(hqBase + baseName + '.ktx2', linear, wrapRepeat);
+    if (ktx) return { tex: ktx, kind: 'ktx2' };
+    const jpg = await loadJpg(hqBase + baseName + '.jpg', linear, wrapRepeat);
+    return jpg ? { tex: jpg, kind: 'jpg' } : { tex: null, kind: null };
+  };
+
+  const [diffPack, nrmPack, distr, d1, d2, d3, d4] = await Promise.all([
+    loadPreferKtx2('diffuse-hq', false, false),
+    loadPreferKtx2('normal-hq', true, false),
+    loadJpg(splatBase + 'distr.png', true, false),
+    loadJpg(splatBase + 'dnts1.png', true, true),
+    loadJpg(splatBase + 'dnts2.png', true, true),
+    loadJpg(splatBase + 'dnts3.png', true, true),
+    loadJpg(splatBase + 'dnts4.png', true, true),
   ]);
+  const diff = diffPack.tex;
+  const nrm = nrmPack.tex;
   if (!diff) {
     console.warn('[RTSVR6] mesa HQ diffuse missing — using GLB embeds');
     return null;
@@ -744,16 +803,23 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     console.warn('[RTSVR6] mesa splat DNTS missing — macro HQ only');
   }
 
+  // Shared material across cells — apply textures once.
+  const seen = new Set();
   let applied = 0;
   root.traverse((obj) => {
     if (!obj.isMesh || !obj.material || !obj.material.userData?.rtsMesaHeightfield) return;
     const mat = obj.material;
+    if (seen.has(mat)) {
+      applied += 1;
+      return;
+    }
+    seen.add(mat);
     if (diff) {
-      if (mat.map && mat.map.dispose) mat.map.dispose();
+      if (mat.map && mat.map.dispose && mat.map !== diff) mat.map.dispose();
       mat.map = diff;
     }
     if (nrm) {
-      if (mat.normalMap && mat.normalMap.dispose) mat.normalMap.dispose();
+      if (mat.normalMap && mat.normalMap.dispose && mat.normalMap !== nrm) mat.normalMap.dispose();
       mat.normalMap = nrm;
       mat.normalScale = new THREE.Vector2(1.15, 1.15);
     }
@@ -767,11 +833,13 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
   const ih = diff.image ? diff.image.height || diff.image.videoHeight || 0 : 0;
   console.log('[RTSVR6] mesa HQ textures applied', {
     meshes: applied,
+    materials: seen.size,
     diffuse: iw && ih ? `${iw}x${ih}` : null,
+    diffuseFmt: diffPack.kind,
+    normalFmt: nrmPack.kind,
     splat: !!splat,
-    url: diffUrl,
   });
-  return { diffuse: [iw, ih], splat: !!splat };
+  return { diffuse: [iw, ih], splat: !!splat, fmt: diffPack.kind };
 }
 
 function makeBakedMoonMaterial(srcMat, W, recv, lmTex, intensity, rockShadow) {

@@ -3,7 +3,7 @@
  * water planes / giant outlier cliffs hidden, dark fill plate under gaps.
  */
 import { MAP_SIZE, MAP_UNIT_NAV_RADIUS, cameraFocusCullRadiusM, wantFocusSceneryCull } from './config.js';
-import { ensureThreeGltfLoaders } from './three-gltf-umd.js';
+import { ensureThreeGltfLoaders, getSharedKtx2Loader } from './three-gltf-umd.js';
 import * as State from './state.js';
 import {
   applyPropSelfShadowOnUniqueMesh,
@@ -112,7 +112,7 @@ function sceneRenderer() {
   return el && el.renderer ? el.renderer : null;
 }
 
-function getKitGltfLoader() {
+async function getKitGltfLoader() {
   const THREE = window.THREE;
   if (!THREE || !THREE.GLTFLoader) return null;
   if (!kitGltfLoader) {
@@ -132,11 +132,11 @@ function getKitGltfLoader() {
     const renderer = sceneRenderer();
     if (renderer && THREE.KTX2Loader) {
       try {
-        const ktx2 = new THREE.KTX2Loader()
-          .setTranscoderPath('https://cdn.jsdelivr.net/npm/super-three@0.173.4/examples/jsm/libs/basis/')
-          .detectSupport(renderer);
-        kitGltfLoader.setKTX2Loader(ktx2);
-        kitKtx2Ready = true;
+        const ktx2 = await getSharedKtx2Loader(renderer);
+        if (ktx2) {
+          kitGltfLoader.setKTX2Loader(ktx2);
+          kitKtx2Ready = true;
+        }
       } catch (err) {
         console.warn('[RTSVR6] KTX2Loader setup failed', err);
       }
@@ -590,7 +590,7 @@ function assembleKitWrap(gltf, opts) {
 
 async function parseKitBuf(buf) {
   await ensureThreeGltfLoaders();
-  const loader = getKitGltfLoader();
+  const loader = await getKitGltfLoader();
   if (!loader) throw new Error('GLTFLoader missing');
   return new Promise((resolve, reject) => {
     loader.parse(buf, '', resolve, reject);

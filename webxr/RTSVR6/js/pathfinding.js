@@ -18,6 +18,7 @@ import {
   getCraterRimNavLift,
   sampleNavPlateMeshY,
   sampleMoonTerrainWorldY,
+  isMesaHeightfieldActive,
 } from './moon-environment.js';
 import * as State from './state.js';
 
@@ -203,6 +204,7 @@ function maxCellSlopeDeg(c, r) {
       maxDeg,
       navPlateSlopeDegFromCache(cc, rr, idx, 1),
       navPlateSlopeDegFromCache(cc, rr, idx, 2),
+      navPlateSlopeDegFromCache(cc, rr, idx, 3),
     );
   }
   return maxDeg;
@@ -269,9 +271,12 @@ function buildStaticTerrainMask() {
 
   fillNavPlateHeightCache();
 
-  const slopeLimit = NAV_MAX_TRAVERSABLE_SLOPE_DEG - 0.35;
-  const rimSlopeLimit = NAV_MAX_TRAVERSABLE_SLOPE_DEG - 8;
+  // Hera cliffs: slightly stricter than crater bowls (smoothed crater verts needed 45°).
+  const mesa = typeof isMesaHeightfieldActive === 'function' && isMesaHeightfieldActive();
+  const slopeLimit = (mesa ? 34 : NAV_MAX_TRAVERSABLE_SLOPE_DEG) - 0.35;
+  const rimSlopeLimit = slopeLimit - 8;
   const rimLiftBlock = 2.25;
+  let slopeBlocked = 0;
   for (let c = 0; c < COLS; c++) {
     for (let r = 0; r < ROWS; r++) {
       const idx = r * COLS + c;
@@ -286,11 +291,14 @@ function buildStaticTerrainMask() {
       if (!Number.isFinite(navPlateHeightCache[idx])) continue;
       const deg = maxCellSlopeDeg(c, r);
       const limit = rimLift > 0.75 ? rimSlopeLimit : slopeLimit;
-      if (deg > limit) grid[idx] = 1;
+      if (deg > limit) {
+        grid[idx] = 1;
+        slopeBlocked++;
+      }
     }
   }
 
-  dilateBlockedCells(2);
+  dilateBlockedCells(mesa ? 3 : 2);
 
   for (let c = 0; c < COLS; c++) {
     for (let r = 0; r < ROWS; r++) {
@@ -307,6 +315,15 @@ function buildStaticTerrainMask() {
   }
 
   staticTerrainMask = grid.slice();
+  let walkable = 0;
+  for (let i = 0; i < grid.length; i++) if (grid[i] === 0) walkable++;
+  console.log('[RTSVR6] nav terrain mask', {
+    mesa,
+    slopeLimit: +slopeLimit.toFixed(1),
+    slopeBlocked,
+    walkable,
+    cells: grid.length,
+  });
 }
 
 function finishNavRebuild() {
@@ -854,16 +871,17 @@ export function fillNavWalkabilityToCanvas2D(canvas, ctx) {
     for (let c = 0; c < COLS; c++) {
       const walk = grid[r * COLS + c] === 0;
       const o = (r * COLS + c) * 4;
+      // Classic overlay: bright blue walkable, fully clear blocked.
       if (walk) {
-        d[o] = 52;
+        d[o] = 48;
         d[o + 1] = 148;
         d[o + 2] = 255;
         d[o + 3] = 210;
       } else {
-        d[o] = 18;
-        d[o + 1] = 16;
-        d[o + 2] = 22;
-        d[o + 3] = 120;
+        d[o] = 0;
+        d[o + 1] = 0;
+        d[o + 2] = 0;
+        d[o + 3] = 0;
       }
     }
   }

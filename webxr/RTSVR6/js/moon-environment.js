@@ -646,8 +646,10 @@ function collectBakedMoonMeshes() {
   }
   root.traverse((o) => {
     if (!o.isMesh) return;
-    // Height must come from crater surface only — props (rocks) would pin feet to boulder tops.
-    if (/^Moon_/i.test(o.name || '')) meshes.push(o);
+    // Height must come from crater/mesa surface only — props (rocks) would pin feet to boulder tops.
+    if (/^Moon_0(_\d+_\d+)?$/i.test(o.name || '') || (!bakedMoonRoot?.userData?.rtsMesaHeightfield && /^Moon_/i.test(o.name || ''))) {
+      meshes.push(o);
+    }
   });
   if (!meshes.length && bakedMoonPlate && bakedMoonPlate.isMesh) meshes.push(bakedMoonPlate);
   return meshes;
@@ -670,8 +672,97 @@ function bakedHeightFieldHalfM() {
 /**
  * Fast height field from Moon mesh vertices (O(verts)), not tens of thousands of raycasts.
  * Spawns sit outside the MAP square — field half must cover match nav (×4), not lobby nav.
+ *
+ * Hera / regular heightfield meshes: bilinear-resample the authored grid (no NaN flood-fill).
+ * Point-splat + neighbor fill was averaging cliff tops with floors → fake gentle slopes → units
+ * climbed vertical faces.
  */
-function rasterizeMoonMeshesToHeightGrid(meshes, half, segW, segD) {
+function rasterizeRegularHeightfieldMeshes(meshes, half, segW, segD, meta) {
+  const THREE = window.THREE;
+  if (!THREE || !meta || !(Number(meta.res) > 1) || !meshes?.length) return null;
+  const n = Math.round(Number(meta.res));
+  const halfX = Number(meta.halfX) > 0 ? Number(meta.halfX) : 1000;
+  const halfZ = Number(meta.halfZ) > 0 ? Number(meta.halfZ) : halfX;
+  const srcY = new Float32Array(n * n);
+  const hit = new Uint8Array(n * n);
+  const v = new THREE.Vector3();
+
+  for (let mi = 0; mi < meshes.length; mi++) {
+    const mesh = meshes[mi];
+    const pos = mesh?.geometry?.attributes?.position;
+    if (!pos) continue;
+    mesh.updateWorldMatrix(true, false);
+    const mw = mesh.matrixWorld;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+      const u = (v.x + halfX) / (2 * halfX);
+      const vv = (v.z + halfZ) / (2 * halfZ);
+      if (u < -0.002 || u > 1.002 || vv < -0.002 || vv > 1.002) continue;
+      const ix = Math.round(Math.min(1, Math.max(0, u)) * (n - 1));
+      const iy = Math.round(Math.min(1, Math.max(0, vv)) * (n - 1));
+      const idx = iy * n + ix;
+      srcY[idx] = v.y;
+      hit[idx] = 1;
+    }
+  }
+
+  let filled = 0;
+  for (let i = 0; i < hit.length; i++) if (hit[i]) filled += 1;
+  // Need most of the authored grid — otherwise fall back to cliff-aware splat.
+  if (filled < n * n * 0.92) return null;
+
+  const sampleSrc = (wx, wz) => {
+    const u = (wx + halfX) / (2 * halfX);
+    const vv = (wz + halfZ) / (2 * halfZ);
+    if (u < -0.001 || u > 1.001 || vv < -0.001 || vv > 1.001) return Number.NaN;
+    const uc = Math.min(1, Math.max(0, u));
+    const vc = Math.min(1, Math.max(0, vv));
+    const fx = uc * (n - 1);
+    const fy = vc * (n - 1);
+    const ix = Math.min(n - 2, Math.max(0, Math.floor(fx)));
+    const iy = Math.min(n - 2, Math.max(0, Math.floor(fy)));
+    const tx = fx - ix;
+    const ty = fy - iy;
+    const i00 = iy * n + ix;
+    return (
+      (1 - tx) * (1 - ty) * srcY[i00] +
+      tx * (1 - ty) * srcY[i00 + 1] +
+      (1 - tx) * ty * srcY[i00 + n] +
+      tx * ty * srcY[i00 + n + 1]
+    );
+  };
+
+  const row = segW + 1;
+  const span = 2 * half;
+  const grid = new Float32Array(row * (segD + 1));
+  for (let iy = 0; iy <= segD; iy++) {
+    const wz = half - (iy / segD) * span;
+    for (let ix = 0; ix <= segW; ix++) {
+      const wx = -half + (ix / segW) * span;
+      const h = sampleSrc(wx, wz);
+      grid[iy * row + ix] = Number.isFinite(h) ? h : 0;
+    }
+  }
+  return grid;
+}
+
+function rasterizeMoonMeshesToHeightGrid(meshes, half, segW, segD, mesaMeta) {
+  // Prefer authored regular heightfield (single Moon_0 or multi-cell Moon_0_*).
+  if (mesaMeta && meshes.length) {
+    if (mesaMeta.cells) {
+      const multi = rasterizeRegularHeightfieldMeshes(meshes, half, segW, segD, mesaMeta);
+      if (multi) {
+        multi._rtsHeightMethod = 'mesa-cells-regular';
+        return multi;
+      }
+    } else {
+      const reg = rasterizeRegularHeightfieldMesh(meshes[0], half, segW, segD, mesaMeta);
+      if (reg) {
+        reg._rtsHeightMethod = 'mesa-single-regular';
+        return reg;
+      }
+    }
+  }
   const THREE = window.THREE;
   const row = segW + 1;
   const sum = new Float64Array(row * (segD + 1));
@@ -701,42 +792,102 @@ function rasterizeMoonMeshesToHeightGrid(meshes, half, segW, segD) {
   for (let i = 0; i < grid.length; i++) {
     grid[i] = cnt[i] ? sum[i] / cnt[i] : Number.NaN;
   }
+  // Cliff-aware fill: never average a high rim with a low floor across a steep step.
+  const cellM = span / Math.max(1, segW);
+  const maxFillDy = cellM * Math.tan((38 * Math.PI) / 180);
   for (let pass = 0; pass < 24; pass++) {
     let filled = 0;
     for (let iy = 0; iy <= segD; iy++) {
       for (let ix = 0; ix <= segW; ix++) {
         const i = iy * row + ix;
         if (Number.isFinite(grid[i])) continue;
-        let s = 0;
-        let c = 0;
-        if (ix > 0 && Number.isFinite(grid[i - 1])) {
-          s += grid[i - 1];
-          c++;
-        }
-        if (ix < segW && Number.isFinite(grid[i + 1])) {
-          s += grid[i + 1];
-          c++;
-        }
-        if (iy > 0 && Number.isFinite(grid[i - row])) {
-          s += grid[i - row];
-          c++;
-        }
-        if (iy < segD && Number.isFinite(grid[i + row])) {
-          s += grid[i + row];
-          c++;
-        }
-        if (c) {
-          grid[i] = s / c;
+        let best = Number.NaN;
+        let bestN = 0;
+        const tryN = (j) => {
+          if (!Number.isFinite(grid[j])) return;
+          if (!Number.isFinite(best)) {
+            best = grid[j];
+            bestN = 1;
+            return;
+          }
+          if (Math.abs(grid[j] - best) > maxFillDy) return;
+          best += grid[j];
+          bestN++;
+        };
+        if (ix > 0) tryN(i - 1);
+        if (ix < segW) tryN(i + 1);
+        if (iy > 0) tryN(i - row);
+        if (iy < segD) tryN(i + row);
+        if (bestN) {
+          grid[i] = best / bestN;
           filled++;
         }
       }
     }
     if (!filled) break;
   }
-  // Prefer nearest finite neighbor average over hard 0 — avoids seating entities in a
-  // flat pit just outside the authored plate when nav half > mesh half.
   for (let i = 0; i < grid.length; i++) {
     if (!Number.isFinite(grid[i])) grid[i] = 0;
+  }
+  grid._rtsHeightMethod = mesaMeta ? 'mesa-splat-fallback' : 'moon-splat';
+  return grid;
+}
+
+/**
+ * Hera-style regular grid plate: verts = iz * n + ix over ±halfX/Z.
+ * Resample with bilinear so nav/slope see real cliffs (no splat/fill blur).
+ */
+function rasterizeRegularHeightfieldMesh(mesh, half, segW, segD, meta) {
+  const THREE = window.THREE;
+  const pos = mesh?.geometry?.attributes?.position;
+  if (!pos || !THREE) return null;
+  const nMeta = meta && Number(meta.res) > 1 ? Math.round(Number(meta.res)) : 0;
+  const n = nMeta > 1 ? nMeta : Math.round(Math.sqrt(pos.count));
+  if (n < 2 || n * n !== pos.count) return null;
+
+  const halfX = Number(meta.halfX) > 0 ? Number(meta.halfX) : 1000;
+  const halfZ = Number(meta.halfZ) > 0 ? Number(meta.halfZ) : halfX;
+  mesh.updateWorldMatrix(true, false);
+  const mw = mesh.matrixWorld;
+  const v = new THREE.Vector3();
+
+  const srcY = new Float32Array(n * n);
+  for (let i = 0; i < n * n; i++) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(mw);
+    srcY[i] = v.y;
+  }
+
+  const sampleSrc = (wx, wz) => {
+    const u = (wx + halfX) / (2 * halfX);
+    const vv = (wz + halfZ) / (2 * halfZ);
+    if (u < -0.001 || u > 1.001 || vv < -0.001 || vv > 1.001) return Number.NaN;
+    const uc = Math.min(1, Math.max(0, u));
+    const vc = Math.min(1, Math.max(0, vv));
+    const fx = uc * (n - 1);
+    const fy = vc * (n - 1);
+    const ix = Math.min(n - 2, Math.max(0, Math.floor(fx)));
+    const iy = Math.min(n - 2, Math.max(0, Math.floor(fy)));
+    const tx = fx - ix;
+    const ty = fy - iy;
+    const i00 = iy * n + ix;
+    const h00 = srcY[i00];
+    const h10 = srcY[i00 + 1];
+    const h01 = srcY[i00 + n];
+    const h11 = srcY[i00 + n + 1];
+    return (1 - tx) * (1 - ty) * h00 + tx * (1 - ty) * h10 + (1 - tx) * ty * h01 + tx * ty * h11;
+  };
+
+  const row = segW + 1;
+  const span = 2 * half;
+  const grid = new Float32Array(row * (segD + 1));
+  for (let iy = 0; iy <= segD; iy++) {
+    // Match sampleCentralPlateMeshSurfaceY: fz = ((half - wz) / span) * segD
+    const wz = half - (iy / segD) * span;
+    for (let ix = 0; ix <= segW; ix++) {
+      const wx = -half + (ix / segW) * span;
+      const h = sampleSrc(wx, wz);
+      grid[iy * row + ix] = Number.isFinite(h) ? h : 0;
+    }
   }
   return grid;
 }
@@ -780,20 +931,23 @@ async function adoptBakedMoonHeightField(root) {
   }
   root.updateMatrixWorld(true);
   root.traverse((o) => {
-    if (o.isMesh && /^Moon_0/i.test(o.name)) bakedMoonPlate = o;
+    // Prefer any cell mesh; used as fallback plate when collecting heights.
+    if (o.isMesh && /^Moon_0(_\d+_\d+)?$/i.test(o.name || '')) bakedMoonPlate = o;
   });
   _bakedMoonMeshes = collectBakedMoonMeshes();
   // Spawns sit near ±MAP_UNIT_NAV_RADIUS (~±253), outside the 200×200 plate (±100).
   // Baking only the plate / lobby nav half left entities on FBM while the mesh is ~−6 m.
   const half = bakedHeightFieldHalfM();
-  const cell = 2;
+  // Hera cliffs need denser height samples than crater bowls (2 m → 1.25 m).
+  const mesaMeta = root.userData && root.userData.rtsMesaHeightfield;
+  const cell = mesaMeta ? 1.25 : 2;
   const segW = Math.max(32, Math.round((2 * half) / cell));
   const segD = segW;
   const meshes = _bakedMoonMeshes;
-  // Vertex rasterize (fast). Raycast-per-cell against 100k tris hangs match start.
+  // Vertex rasterize (fast). Regular Hera grid uses bilinear resample (preserves cliffs).
   const grid =
     meshes.length && window.THREE
-      ? rasterizeMoonMeshesToHeightGrid(meshes, half, segW, segD)
+      ? rasterizeMoonMeshesToHeightGrid(meshes, half, segW, segD, mesaMeta || null)
       : new Float32Array((segW + 1) * (segD + 1));
   await yieldFrame();
   centralTerrainHeightGrid = grid;
@@ -803,12 +957,24 @@ async function adoptBakedMoonHeightField(root) {
   terrainHeightGen += 1;
   rebuildGameplayHeightGrid();
   const probeY = sampleCentralPlateMeshSurfaceY(148, 138);
+  // Slope probe near a typical canyon — helps confirm cliffs are not smoothed flat.
+  const yA = sampleCentralPlateMeshSurfaceY(120, 120);
+  const yB = sampleCentralPlateMeshSurfaceY(128, 120);
+  const probeSlope =
+    yA != null && yB != null ? Math.atan(Math.abs(yB - yA) / 8) * (180 / Math.PI) : null;
   console.log('[RTSVR6] baked height field', {
     half: +half.toFixed(1),
     segW,
+    cell,
     probe148: probeY != null ? +probeY.toFixed(3) : null,
-    mesa: !!(root.userData && root.userData.rtsMesaHeightfield),
+    probeSlope8m: probeSlope != null ? +probeSlope.toFixed(1) : null,
+    mesa: !!mesaMeta,
+    method: (grid && grid._rtsHeightMethod) || (mesaMeta ? 'mesa-splat-fallback' : 'moon-splat'),
+    cells: mesaMeta && mesaMeta.cells ? mesaMeta.cells : null,
+    res: mesaMeta && mesaMeta.res ? mesaMeta.res : null,
   });
+  // Walkability must re-sample slopes from this field (never keep lobby crater mask).
+  invalidateNavAfterTerrainHeightChange();
   if (typeof window !== 'undefined') {
     window.__rtsSampleGameplayEntityY = sampleGameplayEntityY;
     window.__rtsHeightDebug = () => ({
@@ -816,8 +982,20 @@ async function adoptBakedMoonHeightField(root) {
       probe148: sampleCentralPlateMeshSurfaceY(148, 138),
       entity148: sampleGameplayEntityY(148, 138),
       navHalf: MAP_NAV_PLANE_HALF_M,
+      mesa: isMesaHeightfieldActive(),
     });
   }
+}
+
+/** Drop cached crater/story walkability so the next rebuild uses current height slopes. */
+function invalidateNavAfterTerrainHeightChange() {
+  import('./pathfinding.js')
+    .then((Pathfinding) => {
+      if (typeof Pathfinding.invalidateStaticTerrainMask === 'function') {
+        Pathfinding.invalidateStaticTerrainMask();
+      }
+    })
+    .catch(() => {});
 }
 
 /** Re-bake if match expanded nav beyond the field adopted at lobby boot. */
@@ -864,7 +1042,12 @@ async function finishBakedMoonLook(THREE, sceneEl, root, opts = {}) {
       console.warn('[RTSVR6] mesa HQ textures failed', err);
     }
   }
-  if (!opts.skipHeight) await adoptBakedMoonHeightField(root);
+  // Always re-rasterize Hera/mesa (and whenever skipHeight is false). Skipping height after
+  // lobby crater → match Hera left the crater walkability mask in place.
+  const mustHeight =
+    !opts.skipHeight || mesaHf || !centralTerrainHeightGrid || isMesaHeightfieldActive();
+  if (mustHeight) await adoptBakedMoonHeightField(root);
+  else invalidateNavAfterTerrainHeightChange();
 }
 
 /**
@@ -1057,8 +1240,14 @@ function craterRimPassageRelief(wx, wz) {
   return angP * radP;
 }
 
-/** Raised ring at the playable disk edge (crater rim). Meters of extra world Y. Disabled in Story (hills). */
+/** True when match ground is Hera / mesa heightfield (not crater ridges). */
+export function isMesaHeightfieldActive() {
+  return !!(bakedMoonRoot && bakedMoonRoot.userData && bakedMoonRoot.userData.rtsMesaHeightfield);
+}
+
+/** Raised ring at the playable disk edge (crater rim). Meters of extra world Y. Disabled in Story (hills) and Hera mesa. */
 export function getCraterRimNavLift(wx, wz) {
+  if (isMesaHeightfieldActive()) return 0;
   if (MAP_TERRAIN_STYLE === 'hills' || MAP_TERRAIN_STYLE === 'kit') {
     return storyBlockingHillsLift(wx, wz);
   }
@@ -1066,6 +1255,7 @@ export function getCraterRimNavLift(wx, wz) {
 }
 
 function craterRimLift(wx, wz) {
+  if (isMesaHeightfieldActive()) return 0;
   if (MAP_TERRAIN_STYLE === 'hills' || MAP_TERRAIN_STYLE === 'kit') return 0;
   const R = MAP_PLAYABLE_RADIUS;
   /** Wider radial bands + double-smoothstep keep the wall smooth; cardinal `passage` carves crossings. */
@@ -1345,6 +1535,7 @@ export function sampleMoonTraversableBaseY(wx, wz) {
 /** Non-navigable raised macros only (hills / crater décor). */
 function sampleNonNavigableMacroLift(wx, wz) {
   if (MAP_TERRAIN_STYLE === 'kit') return 0;
+  if (isMesaHeightfieldActive()) return 0;
   if (MAP_TERRAIN_STYLE === 'hills') return storyBlockingHillsLift(wx, wz);
   return (
     craterRimLift(wx, wz) +
@@ -2590,16 +2781,16 @@ async function attachSkirmishSceneryProps(groundEl, sceneEl) {
   if (mode === 'A0') {
     if (bakedMoonRoot) setBakedMoonRockShadowsEnabled(bakedMoonRoot, false);
     clearSkirmishLaneRidges(groundEl);
+    // Hera / moon-only still needs a fresh slope mask (do not keep lobby crater nav).
+    invalidateNavAfterTerrainHeightChange();
     console.log('[RTSVR6] scenery A0: moon only', { inMatch, mesaHf });
     return false;
   }
 
   // Rebuild nav after removing experimental valley stamps (invisible walls).
+  invalidateNavAfterTerrainHeightChange();
   import('./pathfinding.js')
     .then((Pathfinding) => {
-      if (typeof Pathfinding.invalidateStaticTerrainMask === 'function') {
-        Pathfinding.invalidateStaticTerrainMask();
-      }
       if (typeof Pathfinding.rebuildNavMeshImmediate === 'function') {
         Pathfinding.rebuildNavMeshImmediate();
       } else if (typeof Pathfinding.rebuildNavMesh === 'function') {

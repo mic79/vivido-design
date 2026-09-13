@@ -706,7 +706,7 @@ export function initUI() {
 function getHudControlsHelpHtml() {
   if (Input.getIsVR()) {
     return `VR: <b>Right trigger</b> — select / move / attack (only that controller's laser is shown while the trigger is held). With units selected, tap another friendly to <b>add to selection</b>; hold <b>grip + trigger on the same hand</b> and aim at a friendly to <b>follow</b> (engineers repair nearby damaged vehicles). <b>Left X</b> — cancel build placement or open menu. <b>Y</b> map · <b>B</b> deselect & cancel build · <b>A</b> select all · grips pan · Shadows / MSAA 4x on wrist HUD.<br>
-      <span style="opacity:0.85">Flat screen (if you peek at the mirror): WASD pan · Q/E rotate · scroll zoom · left / right click · <b>N</b> nav map (blue walkable).</span>`;
+      <span style="opacity:0.85">Flat screen (if you peek at the mirror): WASD pan · Q/E rotate · scroll zoom · left / right click · <b>N</b> nav map (blue walkable on terrain).</span>`;
   }
   if (Input.getInputPlatform() === 'touch') {
     return `<div style="font-weight:bold;color:#8cf;margin-bottom:6px;">Touch</div>
@@ -720,7 +720,7 @@ function getHudControlsHelpHtml() {
       <p style="margin:10px 0 0 0;opacity:0.85;font-size:11px;">Zoom in (pinch) for easier taps on single units; zoomed out is best for overview and orders.</p>`;
   }
   return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left: Select · Left on open ground: Deselect · Right: Move / attack / follow (engineers repair nearby friendly vehicles; right-click follow a vehicle to stay with it)<br>
-    HQ click: Build · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, 3D plane + minimap) · Esc: Menu · Shadows / MSAA 4x: menu / HUD toggles (MSAA reloads the page to recreate the GL context)<br>
+    HQ click: Build · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, draped on terrain height) · Esc: Menu · Shadows / MSAA 4x: menu / HUD toggles (MSAA reloads the page to recreate the GL context)<br>
     <span style="opacity:0.85">VR: Laser + trigger on menu & map · grip+trigger on one hand for follow · X menu · Y map · B deselect · A select all · grips pan · Shadows and MSAA 4x on wrist menu and match HUD</span>`;
 }
 
