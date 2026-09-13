@@ -503,15 +503,27 @@ export async function tryLoadBakedSkirmishMoon(opts = {}) {
 /** Hera Planum / heightfield plate: diffuse + normal from bake (no moon albedo wipe). */
 function makeMesaHeightfieldMaterial(srcMat, W, recv) {
   const hasMap = !!(srcMat && srcMat.map);
-  const mat = new W.MeshLambertMaterial({
-    color: 0xffffff,
-    vertexColors: !hasMap,
-    fog: false,
-  });
+  // Quest: MeshBasic + albedo only + FoW (same class of shader as crater unlit bake).
+  // Lambert+normalMap+KTX2+FoW is what blacks the plate when the round starts.
+  const questSimple = isQuestMesaSimple();
+  const mat = questSimple
+    ? new W.MeshBasicMaterial({
+        color: 0xffffff,
+        vertexColors: !hasMap,
+        fog: false,
+        toneMapped: true,
+      })
+    : new W.MeshLambertMaterial({
+        color: 0xffffff,
+        vertexColors: !hasMap,
+        fog: false,
+      });
   mat.map = adoptTexture(srcMat && srcMat.map, W, false);
-  mat.normalMap = adoptTexture(srcMat && srcMat.normalMap, W, true);
+  if (!questSimple) {
+    mat.normalMap = adoptTexture(srcMat && srcMat.normalMap, W, true);
+  }
   // Resolution only: sharper filtering — do not retint or re-light the plate.
-  const aniso = 16;
+  const aniso = questSimple ? 8 : 16;
   for (const tex of [mat.map, mat.normalMap]) {
     if (!tex) continue;
     tex.wrapS = W.ClampToEdgeWrapping;
@@ -529,19 +541,33 @@ function makeMesaHeightfieldMaterial(srcMat, W, recv) {
   // cheapMoonLook: finishBakedMoonLook must NOT replace with moon_01 albedo
   mat.userData.cheapMoonLook = true;
   mat.userData.rtsMesaHeightfield = true;
+  mat.userData.rtsMesaQuestSimple = questSimple;
   mat.userData.shadowRecv = recv;
   mat.needsUpdate = true;
-  // FoW installed after HQ/splat in applyMesaHqTextures — installing here first then
-  // chaining splat caused Quest shader breaks (fog varyings clobbered / double-compile).
+  // FoW at create — same as pre-optimization (before HQ/splat re-chained it).
+  installFogVisualOnMaterial(mat);
   return mat;
 }
 
-function wantMesaSplatDetail() {
-  // Quest Adreno: 5 extra splat samplers + fog on Lambert is fragile; macro HQ is enough.
-  // Desktop / PCVR Link keep full BAR splat.
+function isQuestMesaSimple() {
   try {
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-    if (/OculusBrowser|Quest|Pacific/i.test(ua)) return false;
+    if (/OculusBrowser|\bQuest\b|Pacific/i.test(ua)) return true;
+    const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
+      typeof location !== 'undefined' ? location.hash || '' : ''
+    }`;
+    if (/(?:[?&#]mesaSimple=1\b)/i.test(q)) return true;
+    if (/(?:[?&#]mesaFull=1\b)/i.test(q)) return false;
+  } catch (_) {
+    /* */
+  }
+  return false;
+}
+
+function wantMesaSplatDetail() {
+  // Never on Quest simple path; desktop/PCVR keep BAR splat.
+  if (isQuestMesaSimple()) return false;
+  try {
     const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
       typeof location !== 'undefined' ? location.hash || '' : ''
     }`;
@@ -746,10 +772,18 @@ vec3 mesaRnmBlend( vec3 n1, vec3 n2 ) {
 /**
  * Load native Hera SMT/DDS extracts (full 10240) + BAR splat DNTS for close-up res.
  * Prefer KTX2 (GPU-compressed) when present; JPEG fallback. Resolution only — no retints.
+ * Quest simple path: skip (keep GLB embeds + FoW already on the material — pre-optimization).
  */
 export async function applyMesaHqTextures(root, THREE, sceneEl) {
   if (!root || !THREE) return null;
   if (!(root.userData && root.userData.rtsMesaHeightfield)) return null;
+
+  // Standalone Quest: do not swap KTX2/normal/splat after load — that recompile + FoW
+  // blacks the plate when the round starts. Embeds already look correct during load.
+  if (isQuestMesaSimple()) {
+    console.log('[RTSVR6] mesa HQ skipped (Quest simple: embeds + terrain FoW)');
+    return { skipped: true, questSimple: true };
+  }
 
   const hqBase = 'assets/mesa/hera-planum/';
   const splatBase = hqBase + 'splat/';
@@ -885,7 +919,6 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     }
     mat.color.setRGB(1, 1, 1);
     if (splat) installMesaSplatDetail(mat, THREE, splat);
-    // Quest: do NOT inject FoW into mesa shader (black plate). PCVR: terrain-shader FoW.
     installFogVisualOnMaterial(mat);
     mat.needsUpdate = true;
     applied += 1;

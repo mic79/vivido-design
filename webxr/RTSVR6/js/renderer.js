@@ -1854,10 +1854,6 @@ function fogSurfaceClearanceY(wx, wz, halfCell) {
 }
 
 function fogOverlayMeshHalfM() {
-  // Quest Hera: drape FoW over the visual plate (nav UVs + clamp outside = unexplored dark).
-  if (isMesaHeightfieldActive() && FogVisual.wantMesaFogOverlay()) {
-    return Math.min(FogVisual.fogVisualHalfM(), 1100);
-  }
   // Stay inside the playable rim so depthTest:false cannot paint a shelf into the sky.
   return Math.min(MAP_NAV_PLANE_HALF_M, MAP_UNIT_NAV_RADIUS * 0.88);
 }
@@ -1925,17 +1921,13 @@ function buildNavigableFogOverlayGeometry(THREE) {
 }
 
 function setFogOverlayVisible(on) {
-  const mesaOverlay =
-    !!on && isMesaHeightfieldActive() && FogVisual.wantMesaFogOverlay();
-  // Quest Hera: show draping FoW mesh; never enable terrain-shader FoW (blacks the plate).
-  // Everyone else: terrain-shader FoW; keep legacy overlay hidden.
-  if (fogOverlayMesh) fogOverlayMesh.visible = !!mesaOverlay;
+  // Terrain-shader FoW — keep the old overlay mesh hidden (rim sky shelves + Quest black veil).
+  if (fogOverlayMesh) fogOverlayMesh.visible = false;
   if (fogUnexploredMesh) fogUnexploredMesh.visible = false;
-  FogVisual.setFogVisualEnabled(!!(on && !mesaOverlay));
+  FogVisual.setFogVisualEnabled(!!on);
   FogVisual.syncFogVisualExtents();
   const ground = document.getElementById('ground')?.getObject3D?.('mesh');
   if (ground) FogVisual.installFogVisualUnder(ground);
-  if (mesaOverlay) refreshFogOverlayGeometry();
 }
 
 function disposeFogOverlayMeshes() {
@@ -2053,12 +2045,12 @@ function createFogPlane() {
   fogOverlayMesh.frustumCulled = false;
   fogOverlayMesh.renderOrder = 990;
   fogOverlayMesh.raycast = () => {};
-  fogOverlayMesh.userData.rtsFogBuild = '0.6.46-quest-overlay';
+  fogOverlayMesh.userData.rtsFogBuild = '0.6.47-shader-fow';
   _fogOverlayHalfKey = '';
   console.log(
     '[fog] overlay build',
     fogOverlayMesh.userData.rtsFogBuild,
-    `(terrain darken, visual half=${FogVisual.fogVisualHalfM()}, questMesaOverlay=${FogVisual.wantMesaFogOverlay()})`
+    `(terrain-shader FoW, visual half=${FogVisual.fogVisualHalfM()})`
   );
   scene3D.add(fogOverlayMesh);
 
