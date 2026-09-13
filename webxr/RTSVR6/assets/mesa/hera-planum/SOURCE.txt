@@ -1,0 +1,14 @@
+Beyond All Reason — Hera Planum
+https://www.beyondallreason.info/map/hera-planum
+
+Runtime (ship these only):
+  diffuse-hq.jpg / normal-hq.jpg — full native SMT 10240×8192
+  splat/distr.png + splat/dnts1..4.png — BAR splat DNTS close-up
+  height.png — mesh rebuild input for build-hera-planum.py
+
+Re-extract (optional, not shipped): download hera_planum_0.91.sd7 →
+  unpack to _sd7/ → python scripts/extract-hera-hq-textures.py
+  → python scripts/prepare-hera-splat-detail.py
+
+Splat: TexScales {0.003,0.004,0.0032,0.0025} TexMults {0.85,0.5,0.43,0.36}
+  RGB=normal, A=diffuse detail (mean-preserving ×2 blend)

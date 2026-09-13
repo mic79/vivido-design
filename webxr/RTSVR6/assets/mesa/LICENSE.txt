@@ -1,0 +1,5 @@
+Poly Haven assets in this folder (Namaqualand cliffs / rocks / boulder, rocky_terrain_02 textures)
+are licensed CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+
+Source: https://polyhaven.com/
+Downloaded for RTSVR6 skirmish mesa barriers (WebXR). Simplified locally for performance.
