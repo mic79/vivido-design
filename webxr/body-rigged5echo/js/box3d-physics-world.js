@@ -13,6 +13,7 @@
       this.world = null;
       this.queries = null;
       this.meshHandles = [];
+      this.envMeshBodies = [];
       this.playerBody = null;
       this.playerShapeIds = [];
       this.playerPosition = { x: 0, y: 0, z: 0 };
@@ -160,7 +161,25 @@
       bodyDef.position = { x: 0, y: 0, z: 0 };
       const body = this.b3.b3CreateBody(this.world, bodyDef);
       this.b3.b3CreateMeshShape(body, this._shapeDef({ friction: 0.7 }), meshData, { x: 1, y: 1, z: 1 });
+      if (!this.envMeshBodies) this.envMeshBodies = [];
+      this.envMeshBodies.push(body);
       return body;
+    }
+
+    /** Remove environment trimeshes only (keeps player / ragdoll). Used for map hot-swap in VR. */
+    clearEnvironmentTrimeshes() {
+      if (!this.b3 || !this.world) return;
+      const bodies = this.envMeshBodies || [];
+      for (let i = 0; i < bodies.length; i++) {
+        try {
+          if (typeof this.b3.b3DestroyBody === 'function') this.b3.b3DestroyBody(bodies[i]);
+        } catch (_) { /* ignore */ }
+      }
+      this.envMeshBodies = [];
+      for (let i = 0; i < this.meshHandles.length; i++) {
+        try { this.meshHandles[i].delete(); } catch (_) { /* ignore */ }
+      }
+      this.meshHandles = [];
     }
 
     initPlayerAt(x, y, z) {

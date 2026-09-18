@@ -4,9 +4,20 @@
 (function () {
   'use strict';
 
-  /** Bump when Problem_*.glb or zdm2_baked.glb changes — avoids stale browser cache. */
-  const OBSTACLE_GLB_VERSION = '15';
+  /** Bump when Problem_*.glb or zdm2_baked.glb / maps change — avoids stale browser cache. */
+  const OBSTACLE_GLB_VERSION = '16';
   const BAKED_SCENE_GLB = 'zdm2_baked.glb';
+  /**
+   * Echo Combat Surge (Demo-Viewer `Surge_Minimap.fbx`).
+   * Unity scene `Surge.unity` sets root localScale = 56 after FBX import.
+   * three.js FBXLoader leaves UnitScaleFactor=1 meshes in cm-like units (same as Echo FBX),
+   * so full size = 56 × 0.01 m/unit. Yaw matches Demo-Viewer root (−90° Y).
+   */
+  const SURGE_MAP_FBX = 'maps/Surge_Minimap.fbx';
+  const SURGE_UNITY_SCALE = 56;
+  const SURGE_FBX_TO_METERS = 0.01;
+  const SURGE_WORLD_SCALE = SURGE_UNITY_SCALE * SURGE_FBX_TO_METERS;
+  const SURGE_YAW_RAD = -Math.PI / 2;
   /**
    * Nudge the bake in player-start right.
    * Start camera looks down −Z → forward = −Z, right = +X.
@@ -34,6 +45,47 @@
       return false;
     }
   }
+
+  /** Active environment map: `zdm2` (default) | `surge`. `?demo=1` still wins. */
+  function readEnvironmentMapId() {
+    try {
+      const q = new URLSearchParams(window.location.search).get('map');
+      if (q && /^surge$/i.test(q)) return 'surge';
+      if (q && /^zdm2$/i.test(q)) return 'zdm2';
+    } catch (_) {}
+    return 'zdm2';
+  }
+
+  window.BodyRiggedEnvironmentMap = {
+    current: readEnvironmentMapId(),
+    ids: ['zdm2', 'surge'],
+    get() {
+      const live = document.querySelector('a-scene')?.legIkWorld?.environmentMap;
+      if (live === 'surge' || live === 'zdm2') return live;
+      return readEnvironmentMapId();
+    },
+    set(id) {
+      const next = String(id || '').toLowerCase() === 'surge' ? 'surge' : 'zdm2';
+      const legIk = document.querySelector('a-scene')?.components?.['leg-ik-world'];
+      // Prefer in-session hot-swap so WebXR is not torn down by a full reload.
+      if (legIk?.switchEnvironmentMap) {
+        legIk.switchEnvironmentMap(next);
+        return next;
+      }
+      try {
+        const url = new URL(location.href);
+        url.searchParams.set('map', next);
+        url.searchParams.delete('demo');
+        location.href = url.toString();
+      } catch (_) {
+        location.search = '?map=' + next;
+      }
+      return next;
+    },
+    toggle() {
+      return this.set(this.get() === 'surge' ? 'zdm2' : 'surge');
+    }
+  };
 
   /** Unit vector from scene toward the sun (light sits along this from the target). */
   function bakedSceneSunDirection() {
@@ -1369,10 +1421,11 @@
     _initBox3D: async function () {
       try {
         const demo = useDemoPlayground();
+        const mapId = demo ? 'demo' : readEnvironmentMapId();
         const physics = new window.Box3DPhysicsWorld();
         await physics.init({
           skipSceneColliders: !demo,
-          // Baked zdm2 uses the GLB trimesh as the only floor — no invisible plane.
+          // Baked / Surge use the mesh trimesh as the only floor — no invisible plane.
           addGround: demo,
           groundHalfExtent: 20
         });
@@ -1385,18 +1438,22 @@
           queries: this.queries,
           groundY: 0,
           // Prefer near-player casts; roofs above must not become "ground".
-          rayOriginY: demo ? 30 : 2.5
+          // Surge is ~100 m tall after full-size scale — raise the probe origin.
+          rayOriginY: demo ? 30 : mapId === 'surge' ? 40 : 2.5
         });
 
         if (demo) {
           await this._loadReferenceObstacles();
+        } else if (mapId === 'surge') {
+          await this._loadSurgeEnvironment();
         } else {
           await this._loadBakedEnvironment(BAKED_SCENE_GLB);
         }
 
         const rig = document.getElementById('rig');
         const start = rig ? rig.object3D.position : { x: 0, y: 0, z: 0 };
-        const groundY = this.terrain.getHeightAtWorld(start.x, start.z, 2.5);
+        const groundProbe = mapId === 'surge' ? 40 : 2.5;
+        const groundY = this.terrain.getHeightAtWorld(start.x, start.z, groundProbe);
         this.physics.initPlayerAt(start.x, groundY, start.z);
         this.playerBody = this.physics;
         if (rig) rig.object3D.position.set(start.x, groundY, start.z);
@@ -1434,7 +1491,8 @@
           maxCrouchAmount: 0.62,
           maxCrouchDropM: 0.38,
           mantleCrouchAmount: 0,
-          bakedScene: !demo
+          bakedScene: !demo,
+          environmentMap: mapId
         });
         this._applyCameraFloorOffset();
         this._updateVRHeightPanel();
@@ -1443,10 +1501,15 @@
         if (status && status.textContent === 'Loading...') {
           status.textContent = demo
             ? 'Box3D physics ready (demo)'
-            : 'Box3D + zdm2_baked scene ready';
+            : mapId === 'surge'
+              ? 'Box3D + Surge (full size) ready'
+              : 'Box3D + zdm2_baked scene ready';
           status.style.color = '#4CAF50';
         }
-        console.log('[Leg IK World] Box3D physics initialized', demo ? '(demo)' : '(zdm2_baked)');
+        console.log(
+          '[Leg IK World] Box3D physics initialized',
+          demo ? '(demo)' : mapId === 'surge' ? '(surge full-size)' : '(zdm2_baked)'
+        );
       } catch (err) {
         console.warn('[Leg IK World] Box3D unavailable:', err);
         this.scene.legIkWorld.ready = true;
@@ -1571,6 +1634,240 @@
           }
         );
       });
+    },
+
+    /**
+     * Echo Combat Surge at Demo-Viewer full size (Unity root scale 56 × FBX cm→m).
+     */
+    _loadSurgeEnvironment: async function () {
+      await this._waitForGltfLoader();
+      if (!this.physics) return;
+      if (!window.BodyRiggedLoaders?.FBXLoader) {
+        console.warn('[Leg IK World] FBXLoader missing — cannot load Surge');
+        return;
+      }
+      const url = obstacleGlbUrl(SURGE_MAP_FBX);
+      const loader = this._createSurgeFbxLoader();
+      await new Promise((resolve) => {
+        loader.load(
+          url,
+          (fbx) => {
+            const model = fbx;
+            model.name = 'surge-combat-environment';
+            model.scale.setScalar(SURGE_WORLD_SCALE);
+            model.rotation.set(0, SURGE_YAW_RAD, 0);
+            model.position.set(0, 0, 0);
+
+            model.traverse((child) => {
+              if (!child.isMesh) return;
+              if (child.material) {
+                const mats = Array.isArray(child.material) ? child.material : [child.material];
+                for (const mat of mats) {
+                  if (mat.map) {
+                    mat.map.colorSpace = THREE.SRGBColorSpace;
+                    mat.map.anisotropy = Math.min(
+                      8,
+                      this.el.renderer?.capabilities?.getMaxAnisotropy?.() || 8
+                    );
+                    mat.map.needsUpdate = true;
+                  }
+                  mat.side = THREE.DoubleSide;
+                  mat.needsUpdate = true;
+                }
+              }
+              child.castShadow = true;
+              child.receiveShadow = true;
+              child.frustumCulled = true;
+            });
+
+            const threeScene = this.el.object3D;
+            threeScene.add(model);
+            model.updateWorldMatrix(true, true);
+
+            const groundY = this._estimateBakedGroundY(model);
+            model.position.y -= groundY;
+            model.updateWorldMatrix(true, true);
+
+            const worldBox = new THREE.Box3().setFromObject(model);
+            const spawn = this._pickBakedSpawn(model, worldBox);
+
+            this.physics.addTrimeshFromObject(model);
+            this._bakedEnvironment = model;
+            this._bakedEnvironmentBox = worldBox;
+            this._addBakedShadowCatcher(model);
+
+            const rig = document.getElementById('rig');
+            if (rig && spawn) {
+              rig.object3D.position.set(spawn.x, 0, spawn.z);
+            }
+            this._placeBakedSpawnProps(spawn);
+            this._fitSunShadowToBox(worldBox);
+
+            const size = new THREE.Vector3();
+            worldBox.getSize(size);
+            console.log(
+              '[Leg IK World] Loaded Surge full-size:',
+              SURGE_MAP_FBX,
+              'unityScale',
+              SURGE_UNITY_SCALE,
+              'worldScale',
+              SURGE_WORLD_SCALE,
+              'groundY',
+              groundY.toFixed(2),
+              'spawn',
+              spawn ? `${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}` : 'origin',
+              'size',
+              size.x.toFixed(1) + '×' + size.y.toFixed(1) + '×' + size.z.toFixed(1) + ' m'
+            );
+            resolve();
+          },
+          undefined,
+          (err) => {
+            console.warn('[Leg IK World] Failed to load Surge', SURGE_MAP_FBX, err);
+            resolve();
+          }
+        );
+      });
+    },
+
+    /**
+     * Rewrite absolute Windows texture paths embedded in Demo-Viewer FBX
+     * (e.g. C:/Users/Joshua…/kneonBOT_albedo.jpg) to project-local files.
+     */
+    _createSurgeFbxLoader: function () {
+      const FBXLoader = window.BodyRiggedLoaders.FBXLoader;
+      const manager = new THREE.LoadingManager();
+      manager.setURLModifier((url) => {
+        let decoded = url;
+        try { decoded = decodeURIComponent(url); } catch (_) {}
+        if (/kneonBOT_albedo/i.test(decoded)) {
+          return new URL('kneonBOT_albedo.jpg', window.location.href).href;
+        }
+        // Absolute drive path leaked into a relative request under the app origin.
+        if (/[A-Za-z]:[\\/]/.test(decoded) || /\/[A-Za-z]:\//.test(decoded)) {
+          const base = decoded.split(/[/\\]/).pop() || '';
+          if (base) return new URL(base, window.location.href).href;
+        }
+        return url;
+      });
+      return new FBXLoader(manager);
+    },
+
+    _disposeBakedEnvironment: function () {
+      const model = this._bakedEnvironment;
+      if (!model) return;
+      if (model.parent) model.parent.remove(model);
+      model.traverse((obj) => {
+        if (obj.geometry) {
+          try { obj.geometry.dispose(); } catch (_) {}
+        }
+        if (obj.material) {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          for (const mat of mats) {
+            try {
+              if (mat.map) mat.map.dispose();
+              mat.dispose();
+            } catch (_) {}
+          }
+        }
+      });
+      this._bakedEnvironment = null;
+      this._bakedEnvironmentBox = null;
+      this._bakedShadowMaterial = null;
+    },
+
+    /**
+     * Hot-swap zdm2 ↔ Surge without reloading the page (keeps WebXR session alive).
+     */
+    switchEnvironmentMap: async function (id) {
+      const next = String(id || '').toLowerCase() === 'surge' ? 'surge' : 'zdm2';
+      const cur = this.scene?.legIkWorld?.environmentMap || readEnvironmentMapId();
+      if (next === cur && this._bakedEnvironment) {
+        this._syncEnvironmentMapUrl(next);
+        this.el.sceneEl?.emit('environment-map-changed', { id: next });
+        return next;
+      }
+      if (!this.physics || !this.ready) {
+        console.warn('[Leg IK World] Map switch deferred — physics not ready');
+        this._syncEnvironmentMapUrl(next);
+        return next;
+      }
+      if (this._mapSwitchPromise) return this._mapSwitchPromise;
+
+      const status = document.querySelector('#status');
+      const prevStatus = status?.textContent;
+      if (status) {
+        status.textContent = next === 'surge' ? 'Loading Surge map…' : 'Loading zdm2 map…';
+        status.style.color = '#FFC107';
+      }
+
+      this._mapSwitchPromise = (async () => {
+        try {
+          this._disposeBakedEnvironment();
+          if (this.physics.clearEnvironmentTrimeshes) {
+            this.physics.clearEnvironmentTrimeshes();
+          }
+
+          if (this.terrain) {
+            this.terrain.rayOriginY = next === 'surge' ? 40 : 2.5;
+          }
+
+          if (next === 'surge') await this._loadSurgeEnvironment();
+          else await this._loadBakedEnvironment(BAKED_SCENE_GLB);
+
+          if (this.scene?.legIkWorld) {
+            this.scene.legIkWorld.environmentMap = next;
+            this.scene.legIkWorld.bakedScene = true;
+          }
+          window.BodyRiggedEnvironmentMap.current = next;
+          this._syncEnvironmentMapUrl(next);
+
+          const rig = document.getElementById('rig');
+          if (rig && this.physics?.setPlayerTranslation) {
+            const p = rig.object3D.position;
+            const probe = next === 'surge' ? 40 : 2.5;
+            const gy = this.terrain?.getHeightAtWorld?.(p.x, p.z, probe) ?? 0;
+            this.physics.setPlayerTranslation(p.x, gy, p.z);
+            rig.object3D.position.set(p.x, gy, p.z);
+          }
+
+          if (status) {
+            status.textContent = next === 'surge'
+              ? 'Box3D + Surge (full size) ready'
+              : 'Box3D + zdm2_baked scene ready';
+            status.style.color = '#4CAF50';
+            setTimeout(() => {
+              if (status.textContent.includes('ready')) {
+                status.textContent = prevStatus && prevStatus !== 'Loading...' ? 'Active' : 'Active';
+              }
+            }, 1200);
+          }
+
+          this.el.sceneEl?.emit('environment-map-changed', { id: next });
+          console.log('[Leg IK World] Hot-swapped environment map →', next, '(XR session kept)');
+          return next;
+        } catch (err) {
+          console.warn('[Leg IK World] Map hot-swap failed:', err);
+          if (status) {
+            status.textContent = 'Map switch failed';
+            status.style.color = '#f44336';
+          }
+          return cur;
+        } finally {
+          this._mapSwitchPromise = null;
+        }
+      })();
+
+      return this._mapSwitchPromise;
+    },
+
+    _syncEnvironmentMapUrl: function (id) {
+      try {
+        const url = new URL(location.href);
+        url.searchParams.set('map', id);
+        url.searchParams.delete('demo');
+        history.replaceState(null, '', url);
+      } catch (_) {}
     },
 
     /**

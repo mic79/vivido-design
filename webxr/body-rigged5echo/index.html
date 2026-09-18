@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>WebXR - VR Body Foundation (body-rigged5echo · zdm2)</title>
+    <title>WebXR - VR Body Foundation (body-rigged5echo · zdm2 / Surge)</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.6.0/dist/aframe-extras.min.js"></script>
@@ -79,7 +79,12 @@
     <div id="ui">
       <h3>🦴 VR Body Foundation (body-rigged5echo)</h3>
       <div class="info">
-        <strong>Scene:</strong> zdm2_baked.glb (Godot unlit bake) · <code>?demo=1</code> = old playground<br>
+        <strong>Scene:</strong>
+        <button type="button" id="btn-map-zdm2" style="margin:0 4px;padding:2px 8px;cursor:pointer;">zdm2</button>
+        <button type="button" id="btn-map-surge" style="margin:0 4px;padding:2px 8px;cursor:pointer;">Surge</button>
+        · <span id="environment-map-label" style="color:#9cf;">zdm2</span>
+        · key <kbd>N</kbd> · <code>?map=zdm2</code> / <code>?map=surge</code> (Surge @ Demo-Viewer full size ×56; hot-swap keeps VR)
+        · <code>?demo=1</code> = old playground<br>
         <strong>Character:</strong>
         <button type="button" id="btn-model-ybot" style="margin:0 4px;padding:2px 8px;cursor:pointer;">YBot</button>
         <button type="button" id="btn-model-echo" style="margin:0 4px;padding:2px 8px;cursor:pointer;">Lone Echo</button>
@@ -149,7 +154,7 @@
 
       <!-- Laser-clickable VR calibration panel (in front of mirror) -->
       <a-entity id="vr-height-panel" position="0 1.5 -1.55">
-        <a-plane width="0.92" height="1.70" rotation="0 0 0" color="#1a1a1a" opacity="0.88" material="shader: standard; side: double; transparent: true; roughness: 0.9; metalness: 0; receiveShadow: true"></a-plane>
+        <a-plane width="0.92" height="1.92" rotation="0 0 0" color="#1a1a1a" opacity="0.88" material="shader: standard; side: double; transparent: true; roughness: 0.9; metalness: 0; receiveShadow: true"></a-plane>
         <a-text value="VR Calibration" align="center" position="0 0.54 0.01" width="1.1" color="#ffffff"></a-text>
         <a-text value="Stand straight · laser + trigger" align="center" position="0 0.46 0.01" width="0.85" color="#888888"></a-text>
 
@@ -242,7 +247,14 @@
           <a-text id="vr-character-btn-label" value="Switch to YBot" align="center" position="0 0 0.01" width="0.9" color="#ffffff"></a-text>
         </a-plane>
 
-        <a-plane class="clickable" vr-height-btn="target: calibrate; direction: 0" vr-height-btn-hover="hoverColor: #2e7d32" rotation="0 0 0" position="0 -1.02 0.015"
+        <a-text value="Map" align="right" position="-0.38 -1.02 0.01" width="0.62" color="#cccccc"></a-text>
+        <a-text id="vr-val-map" value="zdm2" align="center" position="0 -1.02 0.01" width="0.55" color="#ffffff"></a-text>
+        <a-plane class="clickable" vr-map-toggle vr-height-btn-hover="hoverColor: #FF9800" rotation="0 0 0" position="0 -1.12 0.015"
+          width="0.72" height="0.09" color="#555555" material="shader: flat; side: double">
+          <a-text id="vr-map-btn-label" value="Switch to Surge" align="center" position="0 0 0.01" width="0.9" color="#ffffff"></a-text>
+        </a-plane>
+
+        <a-plane class="clickable" vr-height-btn="target: calibrate; direction: 0" vr-height-btn-hover="hoverColor: #2e7d32" rotation="0 0 0" position="0 -1.24 0.015"
           width="0.72" height="0.09" color="#388E3C" material="shader: flat; side: double">
           <a-text value="Snap posture + scale to tracked" align="center" position="0 0 0.01" width="0.9" color="#ffffff"></a-text>
         </a-plane>
@@ -588,6 +600,43 @@
         remove: function () {
           this.el.removeEventListener('click', this.onClick);
           this.el.sceneEl.removeEventListener('character-model-changed', this.onChanged);
+        }
+      });
+
+      AFRAME.registerComponent('vr-map-toggle', {
+        init: function () {
+          this.btnLabel = this.el.querySelector('#vr-map-btn-label');
+          this.valLabel = document.querySelector('#vr-val-map');
+          this.onClick = this.onClick.bind(this);
+          this.onChanged = this.onChanged.bind(this);
+          this.el.addEventListener('click', this.onClick);
+          this.el.sceneEl.addEventListener('environment-map-changed', this.onChanged);
+          this.el.sceneEl.addEventListener('loaded', () => {
+            this._refresh(window.BodyRiggedEnvironmentMap?.get?.() || 'zdm2');
+          });
+          this._refresh(window.BodyRiggedEnvironmentMap?.get?.() || 'zdm2');
+        },
+        onClick: function () {
+          window.BodyRiggedEnvironmentMap?.toggle?.();
+        },
+        onChanged: function (evt) {
+          this._refresh(evt?.detail?.id);
+        },
+        _refresh: function (id) {
+          const isSurge = id === 'surge';
+          if (this.btnLabel) {
+            this.btnLabel.setAttribute('value', isSurge ? 'Switch to zdm2' : 'Switch to Surge');
+          }
+          if (this.valLabel) {
+            this.valLabel.setAttribute('value', isSurge ? 'Surge' : 'zdm2');
+          }
+          this.el.setAttribute('material', 'color', isSurge ? '#E65100' : '#555555');
+          const hover = this.el.components['vr-height-btn-hover'];
+          if (hover) hover.baseColor = isSurge ? '#E65100' : '#555555';
+        },
+        remove: function () {
+          this.el.removeEventListener('click', this.onClick);
+          this.el.sceneEl.removeEventListener('environment-map-changed', this.onChanged);
         }
       });
 
@@ -1131,6 +1180,10 @@
               if (e.code === 'KeyV') {
                 e.preventDefault();
                 window.BodyRiggedCharacter?.toggle?.();
+              }
+              if (e.code === 'KeyN') {
+                e.preventDefault();
+                window.BodyRiggedEnvironmentMap?.toggle?.();
               }
             };
             const onKeyUp = (e) => {
@@ -8384,6 +8437,51 @@
         const scene = document.querySelector('a-scene');
         if (scene?.hasLoaded) syncInitial();
         else scene?.addEventListener('loaded', syncInitial);
+      })();
+
+      // zdm2_baked ↔ Echo Combat Surge (Demo-Viewer full size). Reload rebuilds trimesh physics.
+      (function setupEnvironmentMapToggle() {
+        const MAPS = {
+          zdm2: { id: 'zdm2', label: 'zdm2' },
+          surge: { id: 'surge', label: 'Surge' }
+        };
+
+        function readId() {
+          return window.BodyRiggedEnvironmentMap?.get?.() || 'zdm2';
+        }
+
+        function paint(id) {
+          const map = MAPS[id] || MAPS.zdm2;
+          const label = document.getElementById('environment-map-label');
+          const btnZ = document.getElementById('btn-map-zdm2');
+          const btnS = document.getElementById('btn-map-surge');
+          const vrVal = document.getElementById('vr-val-map');
+          const vrBtn = document.getElementById('vr-map-btn-label');
+          if (label) label.textContent = map.id;
+          if (btnZ) btnZ.style.outline = map.id === 'zdm2' ? '2px solid #4CAF50' : 'none';
+          if (btnS) btnS.style.outline = map.id === 'surge' ? '2px solid #FF9800' : 'none';
+          if (vrVal) vrVal.setAttribute('value', map.label);
+          if (vrBtn) {
+            vrBtn.setAttribute('value', map.id === 'surge' ? 'Switch to zdm2' : 'Switch to Surge');
+          }
+        }
+
+        const api = window.BodyRiggedEnvironmentMap || {
+          get: () => 'zdm2',
+          set() {},
+          toggle() {}
+        };
+        paint(readId());
+
+        const btnZ = document.getElementById('btn-map-zdm2');
+        const btnS = document.getElementById('btn-map-surge');
+        if (btnZ) btnZ.addEventListener('click', () => api.set('zdm2'));
+        if (btnS) btnS.addEventListener('click', () => api.set('surge'));
+
+        document.querySelector('a-scene')?.addEventListener('loaded', () => paint(readId()));
+        document.querySelector('a-scene')?.addEventListener('environment-map-changed', (e) => {
+          paint(e.detail?.id || readId());
+        });
       })();
     </script>
   </body>
