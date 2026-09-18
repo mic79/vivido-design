@@ -9,7 +9,8 @@
  *   Right stick X     — yaw the player rig (vr-locomotion, grounded + zero-g)
  *
  * Surface grab pull + release fling still come from mixamo-body / leg-ik-world;
- * this module consumes 3D release momentum via applyPushImpulse().
+ * this module applies 3D release momentum via setVelocity() (pre-grab float vel is
+ * cleared on latch so a passive release does not revive thruster momentum).
  */
 (function () {
   'use strict';
@@ -120,6 +121,11 @@
     setVelocity: function (wx, wy, wz) {
       this.velocity.set(wx || 0, wy || 0, wz || 0);
       this._clampSpeed();
+    },
+
+    /** Cancel thruster / float momentum when latching onto a static grab. */
+    clearVelocityOnGrab: function () {
+      this.velocity.set(0, 0, 0);
     },
 
     resetForEnterZeroG: function (legIk) {
@@ -248,7 +254,9 @@
       }
 
       if (grabPullActive) {
-        // Grab pull path already moved the capsule; keep our float vel for release.
+        // Static latch cancels prior float/thruster momentum. Release fling comes only
+        // from grab-pull deltas via transferGrabPullMomentum → setVelocity.
+        this.velocity.set(0, 0, 0);
         this._publishState(legIkComp, dt, true);
         return;
       }

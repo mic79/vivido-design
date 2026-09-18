@@ -2666,9 +2666,10 @@
       }
 
       // In zero-g, hand the full 3D fling to thruster locomotion instead of walk momentum.
+      // Replace (do not add onto) float velocity — pre-grab motion was cleared on latch.
       const zc = document.getElementById('rig')?.components?.['zerog-locomotion'];
-      if (window.BodyRiggedGravity?.isZeroG?.() && zc?.applyPushImpulse) {
-        zc.applyPushImpulse(this._grabMomentum.x, this.playerVelY, this._grabMomentum.z);
+      if (window.BodyRiggedGravity?.isZeroG?.() && zc?.setVelocity) {
+        zc.setVelocity(this._grabMomentum.x, this.playerVelY, this._grabMomentum.z);
         this._grabMomentum.set(0, 0, 0);
         this._grabMomentumActive = false;
         this.playerVelY = 0;
