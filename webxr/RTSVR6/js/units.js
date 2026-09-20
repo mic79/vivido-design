@@ -294,6 +294,9 @@ function clearSquadFollowerLink(unit) {
 /**
  * Each frame before movement: followers mirror the leader's orders (move/attack/idle),
  * using a fixed world offset captured at follow time — no per-frame chase toward the leader.
+ *
+ * Exception: engineers / zero-damage units never inherit attack targets (they cannot fight).
+ * While the lead fights they escort the lead's body, not the enemy.
  */
 export function syncSquadFollowersFromLeaders() {
   State.units.forEach(f => {
@@ -311,13 +314,17 @@ export function syncSquadFollowersFromLeaders() {
 
     const ox = f.squadOffsetX ?? 0;
     const oz = f.squadOffsetZ ?? 0;
+    const nonCombatFollower = f.type === 'engineer' || !(f.damage > 0);
 
     const sig = [
       L.state,
-      L.targetUnitId ?? '',
-      L.targetBuildingId ?? '',
+      nonCombatFollower ? '' : (L.targetUnitId ?? ''),
+      nonCombatFollower ? '' : (L.targetBuildingId ?? ''),
       L.targetPos ? `${L.targetPos.x},${L.targetPos.z}` : '',
+      // Non-combat escorts also re-sync on lead motion while fighting.
+      nonCombatFollower && L.state === 'attacking' ? `${L.x.toFixed(1)},${L.z.toFixed(1)}` : '',
       L.playerCommanded ? 1 : 0,
+      nonCombatFollower ? 'nc' : 'c',
     ].join('|');
 
     if (f._squadSyncSig === sig) return;
@@ -326,6 +333,17 @@ export function syncSquadFollowersFromLeaders() {
     f.playerCommanded = L.playerCommanded;
 
     if (L.state === 'attacking') {
+      if (nonCombatFollower) {
+        // Stay with the lead — never chase the enemy the lead is shooting.
+        f.state = 'moving';
+        f.targetUnitId = null;
+        f.targetBuildingId = null;
+        const c = clampWorldToPlayableDisk(L.x + ox, L.z + oz, 0);
+        f.targetPos = { x: c.x, z: c.z };
+        f.path = null;
+        f.pathIndex = 0;
+        return;
+      }
       f.state = 'attacking';
       f.targetUnitId = L.targetUnitId;
       f.targetBuildingId = L.targetBuildingId;
@@ -372,7 +390,8 @@ export function syncSquadFollowersFromLeaders() {
 export function syncEngineerRepairApproach() {
   State.units.forEach(f => {
     if (f.type !== 'engineer' || f.hp <= 0 || !f.followLeadId) return;
-    if (f.state === 'attacking' && (f.targetBuildingId || f.targetUnitId)) return;
+    // Only skip for a real capture/repair-building order — not mirrored combat.
+    if (f.state === 'attacking' && f.targetBuildingId && !f.targetUnitId) return;
     const lead = State.units.get(f.followLeadId);
     if (!lead || lead.hp <= 0 || lead.team !== f.team) return;
     if (lead.category !== 'vehicle' || !isVehicleNeedingRepair(lead)) return;
@@ -959,7 +978,8 @@ export function updateEngineerRepair(dt) {
 
   State.units.forEach(unit => {
     if (unit.type !== 'engineer' || unit.hp <= 0) return;
-    if (unit.state === 'attacking' && (unit.targetBuildingId || unit.targetUnitId)) return;
+    // Capture-building orders only — mirrored combat no longer puts engineers in attacking+unit.
+    if (unit.state === 'attacking' && unit.targetBuildingId && !unit.targetUnitId) return;
 
     let patient = null;
 
@@ -1796,6 +1816,8 @@ export function commandAttackUnit(unitIds, targetUnitId) {
   allIds.forEach(id => {
     const unit = State.units.get(id);
     if (!unit || unit.hp <= 0) return;
+    // Escorting engineers / non-combatants must not inherit a unit-attack order.
+    if (!original.has(unit.id) && (unit.type === 'engineer' || !(unit.damage > 0))) return;
     unit.state = 'attacking';
     unit.targetUnitId = targetUnitId;
     unit.targetBuildingId = null;
