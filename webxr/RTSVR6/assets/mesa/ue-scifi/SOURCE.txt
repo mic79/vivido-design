@@ -1,0 +1,8 @@
+UE 5.8 Lit top-down of LandscapePreview (UE58_scifi).
+
+Source map: /Game/ModularSciFi/Levels/LandscapePreview
+Kept: Landscape2 + rocks/cliffs/dirt (1220 actors)
+Hidden in editor only (level NOT saved): 1270 buildings/fences/etc.
+
+2048² PNG from Unreal HighResShot, look-down over the main rock cluster.
+Scripts: D:\UE5\UE58_scifi\Scripts\capture_landscape_topdown*.py

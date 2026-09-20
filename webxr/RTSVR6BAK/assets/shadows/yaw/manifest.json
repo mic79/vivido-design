@@ -1,0 +1,165 @@
+{
+  "version": 2,
+  "framesDefault": 24,
+  "cell": 128,
+  "dark": 0.32,
+  "sunDir": {
+    "x": 0.00009781689771546639,
+    "y": 0.5282341801646664,
+    "z": -0.8490987229631295
+  },
+  "sunSource": "terrain-glb",
+  "sun": {
+    "x": 0.009781689771546639,
+    "y": 52.82341801646664,
+    "z": -84.90987229631295
+  },
+  "entries": [
+    {
+      "id": "infantry",
+      "types": [
+        "rifleman",
+        "rocketSoldier",
+        "sniper",
+        "engineer"
+      ],
+      "frames": 24,
+      "cell": 128,
+      "ground": "infantry-ground.png",
+      "self": "infantry-self.png",
+      "groundHalfM": 3.573929924663134,
+      "dark": 0.32,
+      "meshYawY": 0
+    },
+    {
+      "id": "harvester",
+      "types": [
+        "harvester"
+      ],
+      "frames": 24,
+      "cell": 128,
+      "ground": "harvester-ground.png",
+      "self": "harvester-self.png",
+      "groundHalfM": 5.254250546262365,
+      "dark": 0.32,
+      "meshYawY": -1.5707963267948966
+    },
+    {
+      "id": "lightTank",
+      "types": [
+        "lightTank"
+      ],
+      "frames": 24,
+      "cell": 128,
+      "ground": "lightTank-ground.png",
+      "self": "lightTank-self.png",
+      "groundHalfM": 4.712773011855786,
+      "dark": 0.32,
+      "meshYawY": 1.5707963267948966
+    },
+    {
+      "id": "heavyTank",
+      "types": [
+        "heavyTank"
+      ],
+      "frames": 24,
+      "cell": 128,
+      "ground": "heavyTank-ground.png",
+      "self": "heavyTank-self.png",
+      "groundHalfM": 7.7750736531500415,
+      "dark": 0.32,
+      "meshYawY": 1.5707963267948966
+    },
+    {
+      "id": "mobileHq",
+      "types": [
+        "mobileHq"
+      ],
+      "frames": 24,
+      "cell": 128,
+      "ground": "mobileHq-ground.png",
+      "self": "mobileHq-self.png",
+      "groundHalfM": 10.665713484291503,
+      "dark": 0.32,
+      "meshYawY": 1.5707963267948966
+    },
+    {
+      "id": "scoutBike",
+      "types": [
+        "scoutBike"
+      ],
+      "frames": 24,
+      "cell": 128,
+      "ground": "scoutBike-ground.png",
+      "self": "scoutBike-self.png",
+      "groundHalfM": 5.867639789553147,
+      "dark": 0.32,
+      "meshYawY": 1.5707963267948966
+    },
+    {
+      "id": "artillery",
+      "types": [
+        "artillery"
+      ],
+      "frames": 24,
+      "cell": 128,
+      "ground": "artillery-ground.png",
+      "self": "artillery-self.png",
+      "groundHalfM": 7.254341249148797,
+      "dark": 0.32,
+      "meshYawY": 1.5707963267948966
+    },
+    {
+      "id": "hq",
+      "types": [
+        "hq"
+      ],
+      "frames": 24,
+      "cell": 256,
+      "ground": "hq-ground.png",
+      "self": "hq-self.png",
+      "groundHalfM": 33.352879649190406,
+      "dark": 0.32,
+      "meshYawY": 0
+    },
+    {
+      "id": "barracks",
+      "types": [
+        "barracks"
+      ],
+      "frames": 16,
+      "cell": 128,
+      "ground": "barracks-ground.png",
+      "self": "barracks-self.png",
+      "groundHalfM": 10.185952661378904,
+      "dark": 0.32,
+      "meshYawY": 0
+    },
+    {
+      "id": "warFactory",
+      "types": [
+        "warFactory"
+      ],
+      "frames": 16,
+      "cell": 128,
+      "ground": "warFactory-ground.png",
+      "self": "warFactory-self.png",
+      "groundHalfM": 15.441185955832552,
+      "dark": 0.32,
+      "meshYawY": 0
+    },
+    {
+      "id": "refinery",
+      "types": [
+        "refinery"
+      ],
+      "frames": 16,
+      "cell": 128,
+      "ground": "refinery-ground.png",
+      "self": "refinery-self.png",
+      "groundHalfM": 9.080726103370997,
+      "dark": 0.32,
+      "meshYawY": 0
+    }
+  ]
+}

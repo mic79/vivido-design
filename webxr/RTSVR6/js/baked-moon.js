@@ -6,7 +6,7 @@
  * grid, and the planar bake is still too flat vs Lambert. `?livepbr=1` /
  * `?nobake=1` uses the procedural plate.
  */
-import { MAP_TERRAIN_STYLE } from './config.js';
+import { MAP_TERRAIN_STYLE, isDesktopPcvrHost } from './config.js';
 import { ensureThreeGltfLoaders, getSharedKtx2Loader } from './three-gltf-umd.js';
 import { installFogVisualOnMaterial } from './fog-visual.js';
 import {
@@ -27,6 +27,8 @@ export const BAKED_SKIRMISH_INTRO_GLB = BAKED_SKIRMISH_MOON_GLB;
  * Prop_* rocks are not embedded here — B0 falls back to quest rocks when needed.
  */
 export const BAKED_SKIRMISH_1V1_GLB = 'assets/terrain/terrain-skirmish-1v1.glb';
+/** Desktop PCVR denser heightfield (~10× tris vs Quest plate). Falls back if missing. */
+export const BAKED_SKIRMISH_1V1_PCVR_GLB = 'assets/terrain/terrain-skirmish-1v1-pcvr.glb';
 export const BAKED_SKIRMISH_MATCH_GLB = BAKED_SKIRMISH_1V1_GLB;
 /** @deprecated use BAKED_SKIRMISH_MOON_GLB or BAKED_SKIRMISH_1V1_GLB */
 export const BAKED_SKIRMISH_GLB = BAKED_SKIRMISH_1V1_GLB;
@@ -149,6 +151,17 @@ function wantCombined1v1() {
  */
 export function preferredSkirmishBakeUrl(mode = 'match') {
   if (mode === 'intro' || !wantCombined1v1()) return BAKED_SKIRMISH_INTRO_GLB;
+  try {
+    const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
+      typeof location !== 'undefined' ? location.hash || '' : ''
+    }`;
+    if (/(?:[?&#]mesaQuest=1\b)/i.test(q)) return BAKED_SKIRMISH_1V1_GLB;
+    // Dense 13M-tri plate is OPT-IN only. Close-up grit does not need it — and defaulting
+    // it on desktop was the main FPS cliff mistaken for “texture cost”.
+    if (/(?:[?&#]mesaPcvr=1\b)/i.test(q)) return BAKED_SKIRMISH_1V1_PCVR_GLB;
+  } catch (_) {
+    /* */
+  }
   return BAKED_SKIRMISH_MATCH_GLB;
 }
 
@@ -160,7 +173,8 @@ export function clearBakedMoonGlbCache() {
 async function fetchBakeBuffer(preferUrl) {
   const urls = [];
   if (preferUrl) urls.push(preferUrl);
-  // Always allow crater moon as fallback (lobby file / missing match bake).
+  // PCVR prefer may 404 — always allow standard Hera, then crater moon.
+  if (!urls.includes(BAKED_SKIRMISH_1V1_GLB)) urls.push(BAKED_SKIRMISH_1V1_GLB);
   if (!urls.includes(BAKED_SKIRMISH_MOON_GLB)) urls.push(BAKED_SKIRMISH_MOON_GLB);
   for (const url of urls) {
     let res;
@@ -253,6 +267,15 @@ export async function tryLoadBakedSkirmishMoon(opts = {}) {
 
   await ensureThreeGltfLoaders();
   const loader = new W.GLTFLoader();
+  try {
+    if (W.DRACOLoader) {
+      const draco = new W.DRACOLoader();
+      draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+      loader.setDRACOLoader(draco);
+    }
+  } catch (err) {
+    console.warn('[RTSVR6] baked moon DRACOLoader setup failed', err);
+  }
   const gltf = await new Promise((resolve, reject) => {
     loader.parse(buf, '', resolve, reject);
   });
@@ -565,18 +588,440 @@ function isQuestMesaSimple() {
 }
 
 function wantMesaSplatDetail() {
-  // Never on Quest simple path; desktop/PCVR keep BAR splat.
+  // BAR splatDistr paints large rectangular patches at headset distance — opt-in only.
+  // PCVR close-up detail uses world-XZ Poly Haven / moon_01 overlays instead.
   if (isQuestMesaSimple()) return false;
   try {
     const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
       typeof location !== 'undefined' ? location.hash || '' : ''
     }`;
-    if (/(?:[?&#]nosplat=1\b)/i.test(q)) return false;
     if (/(?:[?&#]forcesplat=1\b)/i.test(q)) return true;
+    if (/(?:[?&#]nosplat=1\b)/i.test(q)) return false;
   } catch (_) {
     /* */
   }
-  return true;
+  return false;
+}
+
+/**
+ * Close-up grit: Poly Haven 4K world-XZ overlay (not BAR splatDistr blocks).
+ * Preserves Hera macro hue; injects high-frequency albedo contrast + normals.
+ *
+ * Fade is CAMERA distance — never world-origin.
+ *
+ * Cost budget (do not regress):
+ * - 2 albedo + 1 normal sample (not 3+3)
+ * - no negative LOD bias (that forced full-res mips across the plate → bandwidth cliff)
+ * - fadeFar short so far hills stay on macro HQ only
+ */
+function installMesaCloseupDetail(mat, THREE, detail) {
+  if (!mat || !detail || !detail.diff || !detail.nor) return;
+  if (mat.userData && mat.userData._mesaCloseupInstalled) return;
+  mat.userData._mesaCloseupInstalled = true;
+
+  // Readable at RTS cam height without needing sub-metre tiles.
+  const scaleA = 0.1; // ~10 m
+  const scaleB = 0.28; // ~3.6 m
+  const strength = 0.95;
+  const fadeNear = 5.0;
+  const fadeFar = 72.0;
+
+  const prev = mat.onBeforeCompile;
+  const prevKey =
+    typeof mat.customProgramCacheKey === 'function'
+      ? mat.customProgramCacheKey.bind(mat)
+      : () => '';
+
+  mat.onBeforeCompile = (shader) => {
+    if (typeof prev === 'function') prev(shader);
+    shader.uniforms.mesaDetailDiff = { value: detail.diff };
+    shader.uniforms.mesaDetailNor = { value: detail.nor };
+    shader.uniforms.mesaDetailScaleA = { value: scaleA };
+    shader.uniforms.mesaDetailScaleB = { value: scaleB };
+    shader.uniforms.mesaDetailStrength = { value: strength };
+    shader.uniforms.mesaDetailFadeNear = { value: fadeNear };
+    shader.uniforms.mesaDetailFadeFar = { value: fadeFar };
+    mat.userData._mesaCloseupUniforms = shader.uniforms;
+
+    if (!shader.vertexShader.includes('vMesaWorldPos')) {
+      if (shader.vertexShader.includes('vRtsFogWorldPos')) {
+        if (!shader.vertexShader.includes('varying vec3 vMesaWorldPos')) {
+          shader.vertexShader = shader.vertexShader.replace(
+            'varying vec3 vRtsFogWorldPos;',
+            /* glsl */ `varying vec3 vRtsFogWorldPos;
+varying vec3 vMesaWorldPos;`
+          );
+        }
+        const mesaAssign = /* glsl */ `
+	vMesaWorldPos = vRtsFogWorldPos;`;
+        if (shader.vertexShader.includes('USE_INSTANCING')) {
+          shader.vertexShader = shader.vertexShader.replace(
+            'vRtsObjXZ = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;',
+            `vRtsObjXZ = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;${mesaAssign}`
+          );
+        }
+        if (shader.vertexShader.includes('vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;')) {
+          shader.vertexShader = shader.vertexShader.replace(
+            'vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;',
+            `vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;${mesaAssign}`
+          );
+        }
+      } else {
+        shader.vertexShader = shader.vertexShader
+          .replace(
+            '#include <common>',
+            /* glsl */ `#include <common>
+varying vec3 vMesaWorldPos;`
+          )
+          .replace(
+            '#include <begin_vertex>',
+            /* glsl */ `#include <begin_vertex>
+#ifdef USE_INSTANCING
+	vMesaWorldPos = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
+#else
+	vMesaWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
+#endif`
+          );
+      }
+    }
+
+    if (!shader.fragmentShader.includes('mesaDetailDiff')) {
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          /* glsl */ `#include <common>
+varying vec3 vMesaWorldPos;
+uniform sampler2D mesaDetailDiff;
+uniform sampler2D mesaDetailNor;
+uniform float mesaDetailScaleA;
+uniform float mesaDetailScaleB;
+uniform float mesaDetailStrength;
+uniform float mesaDetailFadeNear;
+uniform float mesaDetailFadeFar;
+
+vec3 mesaRnmBlend( vec3 n1, vec3 n2 ) {
+	n1 += vec3( 0.0, 0.0, 1.0 );
+	n2 *= vec3( -1.0, -1.0, 1.0 );
+	return normalize( n1 * dot( n1, n2 ) / max( n1.z, 1e-4 ) - n2 );
+}
+`
+        )
+        .replace(
+          '#include <map_fragment>',
+          /* glsl */ `#include <map_fragment>
+	{
+		vec2 xz = vMesaWorldPos.xz;
+		float camDist = length( vMesaWorldPos - cameraPosition );
+		float distFade = 1.0 - smoothstep( mesaDetailFadeNear, mesaDetailFadeFar, camDist );
+		float gate = mesaDetailStrength * distFade;
+		if ( gate > 1e-4 ) {
+			vec3 dA = texture2D( mesaDetailDiff, xz * mesaDetailScaleA ).rgb;
+			vec3 dB = texture2D( mesaDetailDiff, xz * mesaDetailScaleB + vec2( 0.37, 0.19 ) ).rgb;
+			vec3 detail = mix( dA, dB, 0.5 );
+			float luma = max( 1e-3, dot( detail, vec3( 0.2126, 0.7152, 0.0722 ) ) );
+			vec3 grit = diffuseColor.rgb * ( detail / luma );
+			float punch = ( luma - 0.42 ) * 2.0;
+			diffuseColor.rgb = mix( diffuseColor.rgb, grit, gate * 0.9 );
+			diffuseColor.rgb *= 1.0 + punch * gate * 0.65;
+			diffuseColor.rgb = mix( diffuseColor.rgb, detail * vec3( 1.05, 0.92, 0.82 ), gate * 0.25 );
+		}
+	}
+`
+        )
+        .replace(
+          '#include <normal_fragment_maps>',
+          /* glsl */ `#include <normal_fragment_maps>
+	{
+		vec2 xz = vMesaWorldPos.xz;
+		float camDist = length( vMesaWorldPos - cameraPosition );
+		float distFade = 1.0 - smoothstep( mesaDetailFadeNear, mesaDetailFadeFar, camDist );
+		float gate = mesaDetailStrength * distFade;
+		if ( gate > 1e-4 ) {
+			// One normal tap — dual albedo already carries most of the grit read.
+			vec3 dn = texture2D( mesaDetailNor, xz * mesaDetailScaleA ).xyz * 2.0 - 1.0;
+			normal = normalize( mix( normal, mesaRnmBlend( normal, dn ), gate * 0.9 ) );
+		}
+	}
+`
+        );
+    }
+  };
+  mat.customProgramCacheKey = () => `${prevKey()}|mesaCloseupV5cheap`;
+  mat.needsUpdate = true;
+}
+
+/** Materials with animated wind-dust uniforms (time updated once per frame). */
+const _mesaWindMats = new Set();
+let _mesaWindRaf = 0;
+
+function ensureMesaWindTick() {
+  if (_mesaWindRaf) return;
+  const step = () => {
+    _mesaWindRaf = requestAnimationFrame(step);
+    if (_mesaWindMats.size === 0) return;
+    const t = performance.now() * 0.001;
+    for (const mat of _mesaWindMats) {
+      const u = mat.userData && mat.userData._mesaWindUniforms;
+      if (u && u.mesaWindTime) u.mesaWindTime.value = t;
+    }
+  };
+  _mesaWindRaf = requestAnimationFrame(step);
+}
+
+function wantMesaWindDust() {
+  try {
+    const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
+      typeof location !== 'undefined' ? location.hash || '' : ''
+    }`;
+    if (/(?:[?&#]nodust=1\b)/i.test(q)) return false;
+    if (/(?:[?&#]dust=1\b)/i.test(q)) return true;
+  } catch (_) {
+    /* */
+  }
+  // Default on for desktop; Quest simple HQ path skips this whole apply.
+  return isDesktopPcvrHost();
+}
+
+/**
+ * Ensure world-pos varying exists (shared by closeup / wind / splat).
+ * Idempotent — safe if closeup already injected it.
+ */
+function ensureMesaWorldPosVarying(shader) {
+  if (shader.vertexShader.includes('vMesaWorldPos =')) return;
+  if (shader.vertexShader.includes('vRtsFogWorldPos')) {
+    if (!shader.vertexShader.includes('varying vec3 vMesaWorldPos')) {
+      shader.vertexShader = shader.vertexShader.replace(
+        'varying vec3 vRtsFogWorldPos;',
+        /* glsl */ `varying vec3 vRtsFogWorldPos;
+varying vec3 vMesaWorldPos;`
+      );
+    }
+    const mesaAssign = /* glsl */ `
+	vMesaWorldPos = vRtsFogWorldPos;`;
+    if (shader.vertexShader.includes('USE_INSTANCING')) {
+      shader.vertexShader = shader.vertexShader.replace(
+        'vRtsObjXZ = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;',
+        `vRtsObjXZ = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;${mesaAssign}`
+      );
+    }
+    if (shader.vertexShader.includes('vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;')) {
+      shader.vertexShader = shader.vertexShader.replace(
+        'vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;',
+        `vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;${mesaAssign}`
+      );
+    }
+  } else if (!shader.vertexShader.includes('varying vec3 vMesaWorldPos')) {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        /* glsl */ `#include <common>
+varying vec3 vMesaWorldPos;`
+      )
+      .replace(
+        '#include <begin_vertex>',
+        /* glsl */ `#include <begin_vertex>
+#ifdef USE_INSTANCING
+	vMesaWorldPos = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
+#else
+	vMesaWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
+#endif`
+      );
+  }
+}
+
+/**
+ * Subtle wind-blown sand/dust skim — procedural (0 texture taps).
+ * Scrolls soft noise streaks across world XZ; camera-distance gated.
+ */
+function installMesaWindDust(mat, THREE) {
+  if (!mat || !wantMesaWindDust()) return;
+  if (mat.userData && mat.userData._mesaWindInstalled) return;
+  mat.userData._mesaWindInstalled = true;
+
+  // Wind along +X/+Z — no cell-hash (that read as blocky pixels up close).
+  const windDirX = 0.85;
+  const windDirZ = 0.35;
+  const speed = 0.52;
+  const scale = 0.42;
+  const strength = 0.48;
+  const fadeNear = 5.0;
+  const fadeFar = 110.0;
+
+  const prev = mat.onBeforeCompile;
+  const prevKey =
+    typeof mat.customProgramCacheKey === 'function'
+      ? mat.customProgramCacheKey.bind(mat)
+      : () => '';
+
+  mat.onBeforeCompile = (shader) => {
+    if (typeof prev === 'function') prev(shader);
+    shader.uniforms.mesaWindTime = { value: 0 };
+    shader.uniforms.mesaWindDir = {
+      value: THREE && THREE.Vector2 ? new THREE.Vector2(windDirX, windDirZ) : { x: windDirX, y: windDirZ },
+    };
+    shader.uniforms.mesaWindSpeed = { value: speed };
+    shader.uniforms.mesaWindScale = { value: scale };
+    shader.uniforms.mesaWindStrength = { value: strength };
+    shader.uniforms.mesaWindFadeNear = { value: fadeNear };
+    shader.uniforms.mesaWindFadeFar = { value: fadeFar };
+    mat.userData._mesaWindUniforms = shader.uniforms;
+
+    ensureMesaWorldPosVarying(shader);
+
+    if (!shader.fragmentShader.includes('mesaWindTime')) {
+      const windHelpers = /* glsl */ `
+uniform float mesaWindTime;
+uniform vec2 mesaWindDir;
+uniform float mesaWindSpeed;
+uniform float mesaWindScale;
+uniform float mesaWindStrength;
+uniform float mesaWindFadeNear;
+uniform float mesaWindFadeFar;
+
+float mesaWindHash( vec2 p ) {
+	return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 );
+}
+float mesaWindNoise( vec2 p ) {
+	vec2 i = floor( p );
+	vec2 f = fract( p );
+	f = f * f * ( 3.0 - 2.0 * f );
+	float a = mesaWindHash( i );
+	float b = mesaWindHash( i + vec2( 1.0, 0.0 ) );
+	float c = mesaWindHash( i + vec2( 0.0, 1.0 ) );
+	float d = mesaWindHash( i + vec2( 1.0, 1.0 ) );
+	return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );
+}
+`;
+      if (shader.fragmentShader.includes('varying vec3 vMesaWorldPos')) {
+        // Closeup/splat already declared the varying — append uniforms only.
+        shader.fragmentShader = shader.fragmentShader.replace(
+          'varying vec3 vMesaWorldPos;',
+          /* glsl */ `varying vec3 vMesaWorldPos;
+${windHelpers}`
+        );
+      } else {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <common>',
+          /* glsl */ `#include <common>
+varying vec3 vMesaWorldPos;
+${windHelpers}`
+        );
+      }
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <map_fragment>',
+        /* glsl */ `#include <map_fragment>
+	{
+		float camDist = length( vMesaWorldPos - cameraPosition );
+		float distFade = 1.0 - smoothstep( mesaWindFadeNear, mesaWindFadeFar, camDist );
+		float gate = mesaWindStrength * distFade;
+		if ( gate > 1e-4 ) {
+			vec2 xz = vMesaWorldPos.xz;
+			vec2 windN = normalize( mesaWindDir );
+			vec2 drift = windN * ( mesaWindTime * mesaWindSpeed );
+			vec2 along = vec2( dot( xz, windN ), dot( xz, vec2( -windN.y, windN.x ) ) * 2.5 );
+			// Multi-octave soft noise only — no floor/step cells (those looked like pixels).
+			float n1 = mesaWindNoise( along * mesaWindScale + drift );
+			float n2 = mesaWindNoise( xz * ( mesaWindScale * 3.8 ) + drift * 1.55 + vec2( 11.3, 4.7 ) );
+			float n3 = mesaWindNoise( xz * ( mesaWindScale * 9.5 ) + drift * 2.1 + vec2( 3.1, 17.9 ) );
+			float streak = smoothstep( 0.45, 0.7, n1 );
+			float grit = smoothstep( 0.52, 0.78, n2 ) * 0.65 + smoothstep( 0.6, 0.88, n3 ) * 0.5;
+			float dust = clamp( streak * 0.55 + grit * 0.8, 0.0, 1.0 );
+			// Several sand hues (not a single flat tint).
+			vec3 sandA = vec3( 0.58, 0.44, 0.30 );
+			vec3 sandB = vec3( 0.74, 0.60, 0.42 );
+			vec3 sandC = vec3( 0.40, 0.33, 0.26 );
+			vec3 sand = mix( mix( sandA, sandB, n2 ), sandC, n3 * 0.65 );
+			vec3 base = diffuseColor.rgb;
+			float luma = max( 1e-3, dot( base, vec3( 0.2126, 0.7152, 0.0722 ) ) );
+			vec3 tinted = sand * ( luma * 1.25 ) + vec3( 0.025, 0.018, 0.01 );
+			vec3 shade = base * 0.78;
+			vec3 blown = mix( shade, tinted, 0.62 + grit * 0.28 );
+			diffuseColor.rgb = mix( base, blown, dust * gate );
+		}
+	}
+`
+      );
+    }
+  };
+  mat.customProgramCacheKey = () => `${prevKey()}|mesaWindDustV5`;
+  mat.needsUpdate = true;
+  _mesaWindMats.add(mat);
+  ensureMesaWindTick();
+}
+
+function wantMesaCloseupDetail() {
+  try {
+    const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
+      typeof location !== 'undefined' ? location.hash || '' : ''
+    }`;
+    if (/(?:[?&#]nodetail=1\b)/i.test(q)) return false;
+    if (/(?:[?&#]mesaPcvr=1\b)/i.test(q)) return true;
+  } catch (_) {
+    /* */
+  }
+  return isDesktopPcvrHost();
+}
+
+async function loadMesaCloseupDetailTextures(THREE, sceneEl) {
+  if (!wantMesaCloseupDetail()) return null;
+  try {
+    const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
+      typeof location !== 'undefined' ? location.hash || '' : ''
+    }`;
+    if (/(?:[?&#]nodetail=1\b)/i.test(q)) return null;
+  } catch (_) {
+    /* */
+  }
+  const base = 'assets/mesa/hera-planum/detail/';
+  // Prefer reddish rocky_terrain; fall back to aerial_rocks.
+  const pairs = [
+    ['rocky_terrain_02_diff_4k.jpg', 'rocky_terrain_02_nor_gl_4k.jpg'],
+    ['aerial_rocks_02_diff_4k.jpg', 'aerial_rocks_02_nor_gl_4k.jpg'],
+  ];
+  const loader = new THREE.TextureLoader();
+  loader.setCrossOrigin('anonymous');
+  const maxAniso = (() => {
+    try {
+      const r = sceneEl && sceneEl.renderer;
+      if (r && r.capabilities && r.capabilities.getMaxAnisotropy) {
+        return Math.min(16, r.capabilities.getMaxAnisotropy());
+      }
+    } catch (_) {
+      /* */
+    }
+    return 16;
+  })();
+  const loadOne = (url, linear) =>
+    new Promise((resolve) => {
+      loader.load(
+        url,
+        (tex) => {
+          tex.wrapS = THREE.RepeatWrapping;
+          tex.wrapT = THREE.RepeatWrapping;
+          tex.generateMipmaps = true;
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          tex.anisotropy = maxAniso;
+          if (linear) {
+            if ('colorSpace' in tex && THREE.NoColorSpace) tex.colorSpace = THREE.NoColorSpace;
+          } else if ('colorSpace' in tex && THREE.SRGBColorSpace) {
+            tex.colorSpace = THREE.SRGBColorSpace;
+          }
+          tex.needsUpdate = true;
+          resolve(tex);
+        },
+        undefined,
+        () => resolve(null)
+      );
+    });
+  for (const [dName, nName] of pairs) {
+    const [diff, nor] = await Promise.all([
+      loadOne(base + dName, false),
+      loadOne(base + nName, true),
+    ]);
+    if (diff && nor) return { diff, nor, name: dName };
+  }
+  return null;
 }
 
 /** @deprecated Detail overlay changed brightness — disabled. Kept so old imports resolve. */
@@ -876,10 +1321,11 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
       ])
     : Promise.resolve([null, null, null, null, null]);
 
-  const [diffPack, nrmPack, splatTexs] = await Promise.all([
+  const [diffPack, nrmPack, splatTexs, closeup] = await Promise.all([
     loadPreferKtx2('diffuse-hq', false, false),
     loadPreferKtx2('normal-hq', true, false),
     splatLoads,
+    loadMesaCloseupDetailTextures(THREE, sceneEl),
   ]);
   const [distr, d1, d2, d3, d4] = splatTexs;
   const diff = diffPack.tex;
@@ -895,6 +1341,9 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
       : null;
   if (useSplat && !splat) {
     console.warn('[RTSVR6] mesa splat DNTS missing — macro HQ only');
+  }
+  if (!closeup && isDesktopPcvrHost()) {
+    console.warn('[RTSVR6] mesa close-up detail textures missing');
   }
 
   // Shared material across cells — apply textures once.
@@ -915,10 +1364,12 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     if (nrm) {
       if (mat.normalMap && mat.normalMap.dispose && mat.normalMap !== nrm) mat.normalMap.dispose();
       mat.normalMap = nrm;
-      mat.normalScale = new THREE.Vector2(1.15, 1.15);
+      mat.normalScale = new THREE.Vector2(1.55, 1.55);
     }
     mat.color.setRGB(1, 1, 1);
     if (splat) installMesaSplatDetail(mat, THREE, splat);
+    if (closeup) installMesaCloseupDetail(mat, THREE, closeup);
+    if (wantMesaWindDust()) installMesaWindDust(mat, THREE);
     installFogVisualOnMaterial(mat);
     mat.needsUpdate = true;
     applied += 1;
@@ -933,9 +1384,17 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     diffuseFmt: diffPack.kind,
     normalFmt: nrmPack.kind,
     splat: !!splat,
+    closeup: closeup ? closeup.name : null,
+    windDust: wantMesaWindDust(),
     questNoSplat: !useSplat,
   });
-  return { diffuse: [iw, ih], splat: !!splat, fmt: diffPack.kind };
+  return {
+    diffuse: [iw, ih],
+    splat: !!splat,
+    closeup: !!(closeup && closeup.name),
+    windDust: wantMesaWindDust(),
+    fmt: diffPack.kind,
+  };
 }
 
 function makeBakedMoonMaterial(srcMat, W, recv, lmTex, intensity, rockShadow) {

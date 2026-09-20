@@ -7,8 +7,16 @@ Runtime (ship these only):
   splat/distr.png + splat/dnts1..4.png — BAR splat DNTS close-up
   height.png — mesh rebuild input for build-hera-planum.py
 
-Bake: RES=768, CELLS=8×8, shared material, frustum-culled Moon_0_ci_cj
+Bake: RES=768, CELLS=8×8 (Quest / default live)
   WRITE_LIVE=1 CONFIRM_WRITE_LIVE=1 python scripts/build-hera-planum.py
+
+PCVR denser plate (~11× tris vs Quest, Draco ~13 MB) — OPT-IN only (`?mesaPcvr=1`):
+  RES=2560 CELLS=8 HEIGHT_SMOOTH=4 OUT_GLB=assets/terrain/terrain-skirmish-1v1-pcvr.glb python scripts/build-hera-planum.py
+  then: npx @gltf-transform/cli draco terrain-skirmish-1v1-pcvr.glb terrain-skirmish-1v1-pcvr.glb
+  HEIGHT_SMOOTH kills 8-bit height.png terrace banding after upsample (default 3).
+  Default desktop/Quest match uses terrain-skirmish-1v1.glb (~1.2M tris) + Poly Haven close-up grit.
+  Dense mesh does NOT buy the texture look — it was the FPS cliff. Force dense: ?mesaPcvr=1
+  Close-up grit: detail/ overlays (camera-distance fade; 2 albedo + 1 normal tap).
 
 KTX2 (optional):
   toktx --t2 --encode etc1s --clevel 4 --qlevel 255 --genmipmap diffuse-hq.ktx2 diffuse-hq.jpg

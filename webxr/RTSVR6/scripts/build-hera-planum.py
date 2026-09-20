@@ -30,10 +30,13 @@ NORM_DETAIL_SRC = os.path.join(HERA, "normal.png")
 DIFF = os.path.join(HERA, "diffuse-bake.jpg")
 NORM = os.path.join(HERA, "normal-bake.jpg")
 WRITE_LIVE = os.environ.get("WRITE_LIVE") == "1" and os.environ.get("CONFIRM_WRITE_LIVE") == "1"
+# Optional override (PCVR denser plate without clobbering Quest live GLB).
+OUT_GLB = os.environ.get("OUT_GLB") or ""
 
 HALF_X = float(os.environ.get("HALF_X", "1000"))
 HALF_Z = float(os.environ.get("HALF_Z", "1000"))
 # Denser than 512 — frustum-culled cells keep per-view cost in check.
+# PCVR ~10× tris: RES=2560 CELLS=16 OUT_GLB=.../terrain-skirmish-1v1-pcvr.glb
 RES = int(os.environ.get("RES", "768"))
 CELLS = int(os.environ.get("CELLS", "8"))
 H_SCALE = float(os.environ.get("H_SCALE", "56"))
@@ -95,32 +98,119 @@ def sample_lum(im, u, v):
 
 
 def build_height_grid(hm):
+    """Resize height once, then sample — O(n²) PIL getpixel is too slow for RES≥2k."""
     n = RES
-    lum_min, lum_max = 1.0, 0.0
-    for iz in range(n):
-        for ix in range(n):
-            lum = sample_lum(hm, ix / (n - 1), iz / (n - 1))
-            lum_min = min(lum_min, lum)
-            lum_max = max(lum_max, lum)
+    # height.png is ~1281×1025 8-bit; bicubic upsample alone keeps terrace steps.
+    # Float-smooth after upsample kills 8-bit banding without inventing new ridges.
+    grid = hm.convert("L").resize((n, n), Image.Resampling.BICUBIC)
+    pix = list(grid.getdata())
+    lum_min = min(pix) / 255.0
+    lum_max = max(pix) / 255.0
     span = max(1e-4, lum_max - lum_min)
-    print("luminance", round(lum_min, 3), round(lum_max, 3))
+    print("luminance", round(lum_min, 3), round(lum_max, 3), "from", hm.size, "->", (n, n))
 
     heights = [0.0] * (n * n)
     h_min, h_max = 1e9, -1e9
-    for iz in range(n):
-        for ix in range(n):
-            lum = sample_lum(hm, ix / (n - 1), iz / (n - 1))
-            h = ((lum - lum_min) / span) * H_SCALE + Y_OFFSET
-            heights[iz * n + ix] = h
-            h_min = min(h_min, h)
-            h_max = max(h_max, h)
+    for i, v in enumerate(pix):
+        # PIL resize is top-left origin; mesh iz=0 is -Z (south) matching old sample_lum v.
+        # getdata is row-major top→bottom; our mesh iz=0 should be bottom of image (v=0).
+        ix = i % n
+        iy_top = i // n
+        iz = (n - 1) - iy_top
+        lum = v / 255.0
+        h = ((lum - lum_min) / span) * H_SCALE + Y_OFFSET
+        heights[iz * n + ix] = h
+        h_min = min(h_min, h)
+        h_max = max(h_max, h)
+
+    smooth_passes = int(os.environ.get("HEIGHT_SMOOTH", "3"))
+    if smooth_passes > 0:
+        heights = smooth_height_grid(heights, n, smooth_passes)
+        h_min = min(heights)
+        h_max = max(heights)
+        print("height smooth passes", smooth_passes, "->", round(h_min, 3), round(h_max, 3))
     return heights, h_min, h_max
 
 
-def extract_cell(heights, ci, cj):
-    """Inclusive grid patch for cell (ci,cj); shared edges with neighbors (no cracks)."""
+def smooth_height_grid(heights, n, passes):
+    """3×3 box blur on float heights — removes 8-bit stair-steps after upsample."""
+    cur = heights
+    for _ in range(passes):
+        nxt = [0.0] * (n * n)
+        for iz in range(n):
+            z0 = max(0, iz - 1)
+            z1 = min(n - 1, iz + 1)
+            for ix in range(n):
+                x0 = max(0, ix - 1)
+                x1 = min(n - 1, ix + 1)
+                s = 0.0
+                c = 0
+                for zz in range(z0, z1 + 1):
+                    row = zz * n
+                    for xx in range(x0, x1 + 1):
+                        s += cur[row + xx]
+                        c += 1
+                nxt[iz * n + ix] = s / c
+        cur = nxt
+    return cur
+
+
+def compute_global_normals(heights):
+    """One normal field for the whole RES grid so cell seams do not light as a grid."""
     n = RES
-    # Vertex ranges: n verts → CELLS segments of (n-1)/CELLS quads.
+    normals = [0.0] * (n * n * 3)
+
+    def add_n(ix, iz, nx, ny, nz):
+        i = (iz * n + ix) * 3
+        normals[i] += nx
+        normals[i + 1] += ny
+        normals[i + 2] += nz
+
+    def pos(ix, iz):
+        u = ix / (n - 1)
+        v = iz / (n - 1)
+        x = -HALF_X + u * HALF_X * 2
+        z = -HALF_Z + v * HALF_Z * 2
+        return x, heights[iz * n + ix], z
+
+    for iz in range(n - 1):
+        for ix in range(n - 1):
+            ax, ay, az = pos(ix, iz)
+            bx, by, bz = pos(ix + 1, iz)
+            cx, cy, cz = pos(ix, iz + 1)
+            dx, dy, dz = pos(ix + 1, iz + 1)
+            # tri0 a(ix,iz) c(ix,iz+1) b(ix+1,iz)
+            e1x, e1y, e1z = cx - ax, cy - ay, cz - az
+            e2x, e2y, e2z = bx - ax, by - ay, bz - az
+            nx = e1y * e2z - e1z * e2y
+            ny = e1z * e2x - e1x * e2z
+            nz = e1x * e2y - e1y * e2x
+            add_n(ix, iz, nx, ny, nz)
+            add_n(ix, iz + 1, nx, ny, nz)
+            add_n(ix + 1, iz, nx, ny, nz)
+            # tri1 b(ix+1,iz) c(ix,iz+1) d(ix+1,iz+1)
+            e1x, e1y, e1z = cx - bx, cy - by, cz - bz
+            e2x, e2y, e2z = dx - bx, dy - by, dz - bz
+            nx = e1y * e2z - e1z * e2y
+            ny = e1z * e2x - e1x * e2z
+            nz = e1x * e2y - e1y * e2x
+            add_n(ix + 1, iz, nx, ny, nz)
+            add_n(ix, iz + 1, nx, ny, nz)
+            add_n(ix + 1, iz + 1, nx, ny, nz)
+
+    out = [0.0] * (n * n * 3)
+    for i in range(n * n):
+        nx, ny, nz = normals[i * 3 : i * 3 + 3]
+        L = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
+        out[i * 3] = nx / L
+        out[i * 3 + 1] = ny / L
+        out[i * 3 + 2] = nz / L
+    return out
+
+
+def extract_cell(heights, global_normals, ci, cj):
+    """Inclusive grid patch for cell (ci,cj); shared edges + global normals (no light grid)."""
+    n = RES
     step = (n - 1) / CELLS
     ix0 = int(round(ci * step))
     ix1 = int(round((ci + 1) * step))
@@ -135,6 +225,7 @@ def extract_cell(heights, ci, cj):
 
     verts = []
     uvs = []
+    normals = []
     for jz in range(nh):
         iz = iz0 + jz
         v = iz / (n - 1)
@@ -146,6 +237,8 @@ def extract_cell(heights, ci, cj):
             h = heights[iz * n + ix]
             verts.extend((x, h, z))
             uvs.extend((u, v))
+            gi = (iz * n + ix) * 3
+            normals.extend(global_normals[gi : gi + 3])
 
     indices = []
     for jz in range(nh - 1):
@@ -155,34 +248,6 @@ def extract_cell(heights, ci, cj):
             i2 = i0 + nw
             i3 = i2 + 1
             indices.extend((i0, i2, i1, i1, i2, i3))
-
-    normals = [0.0] * (nw * nh * 3)
-
-    def add_n(i, nx, ny, nz):
-        normals[i * 3] += nx
-        normals[i * 3 + 1] += ny
-        normals[i * 3 + 2] += nz
-
-    for t in range(0, len(indices), 3):
-        a, b, c = indices[t], indices[t + 1], indices[t + 2]
-        ax, ay, az = verts[a * 3 : a * 3 + 3]
-        bx, by, bz = verts[b * 3 : b * 3 + 3]
-        cx, cy, cz = verts[c * 3 : c * 3 + 3]
-        e1x, e1y, e1z = bx - ax, by - ay, bz - az
-        e2x, e2y, e2z = cx - ax, cy - ay, cz - az
-        nx = e1y * e2z - e1z * e2y
-        ny = e1z * e2x - e1x * e2z
-        nz = e1x * e2y - e1y * e2x
-        add_n(a, nx, ny, nz)
-        add_n(b, nx, ny, nz)
-        add_n(c, nx, ny, nz)
-
-    for i in range(nw * nh):
-        nx, ny, nz = normals[i * 3 : i * 3 + 3]
-        L = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
-        normals[i * 3] = nx / L
-        normals[i * 3 + 1] = ny / L
-        normals[i * 3 + 2] = nz / L
 
     return verts, normals, uvs, indices, (ix0, ix1, iz0, iz1)
 
@@ -364,7 +429,12 @@ def write_glb(path, doc, braw):
 
 def write_live_clean(plate_path, h_min, h_max):
     plate_doc, plate_bin = parse_glb(plate_path)
-    out = LIVE if WRITE_LIVE else os.path.join(HERA, "terrain-hera-planum.glb")
+    if OUT_GLB:
+        out = OUT_GLB
+    elif WRITE_LIVE:
+        out = LIVE
+    else:
+        out = os.path.join(HERA, "terrain-hera-planum.glb")
     write_glb(out, plate_doc, plate_bin)
     print(
         "wrote",
@@ -377,8 +447,10 @@ def write_live_clean(plate_path, h_min, h_max):
         "cells",
         CELLS,
     )
-    if not WRITE_LIVE:
-        print("Dry-run — WRITE_LIVE=1 CONFIRM_WRITE_LIVE=1")
+    if not WRITE_LIVE and not OUT_GLB:
+        print("Dry-run — WRITE_LIVE=1 CONFIRM_WRITE_LIVE=1  (or set OUT_GLB=...)")
+    elif OUT_GLB:
+        print("OUT_GLB override (Quest live untouched)")
 
 
 def main():
@@ -400,12 +472,13 @@ def main():
         HALF_Z * 2,
     )
     heights, h_min, h_max = build_height_grid(hm)
+    global_normals = compute_global_normals(heights)
     cells = []
     total_tris = 0
     for cj in range(CELLS):
         for ci in range(CELLS):
             name = f"Moon_0_{ci}_{cj}"
-            verts, normals, uvs, indices, _bb = extract_cell(heights, ci, cj)
+            verts, normals, uvs, indices, _bb = extract_cell(heights, global_normals, ci, cj)
             total_tris += len(indices) // 3
             cells.append((name, verts, normals, uvs, indices))
     print("height", round(h_min, 3), round(h_max, 3), "tris", total_tris, "cellMeshes", len(cells))
