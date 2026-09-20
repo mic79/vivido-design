@@ -26,6 +26,7 @@ import * as Audio from './audio.js';
 import * as Fog from './fog.js';
 import * as Effects from './effects.js';
 import * as Resources from './resources.js';
+import { sampleGameplayEntityY } from './moon-environment.js';
 import { unitGrid, buildingGrid } from './spatial.js';
 import { getSeparationCandidateKind, separationIdBucket, unitSkipsCrowdSeparation } from './separation-policy.js';
 
@@ -33,6 +34,14 @@ export { getSeparationCandidateKind } from './separation-policy.js';
 
 function unitSkipsAllyClearance(unit) {
   return unitSkipsCrowdSeparation(unit);
+}
+
+function combatFxY(x, z, lift = 0.55) {
+  try {
+    return sampleGameplayEntityY(x, z) + lift;
+  } catch (_) {
+    return lift;
+  }
 }
 
 /** Round-robin cursor for idle/moving auto-acquire. */
@@ -442,12 +451,12 @@ export function updateMovement(dt) {
 
   if (sepMoved) rebuildUnitSpatialIndex();
 
-  // Ally hard-clearance (movers only): break same-team stacks without full soft-body vs friends.
+  // Ally hard-clearance: movers + idle/attack stacks (same-team overlap used to stick forever).
   let allyMoved = false;
   const clearR = UNIT_CLEARANCE_MIN;
   const clearR2 = clearR * clearR;
-  for (const unit of movers) {
-    if (unit.hp <= 0 || unitSkipsAllyClearance(unit)) continue;
+  State.units.forEach((unit) => {
+    if (unit.hp <= 0 || unitSkipsAllyClearance(unit)) return;
     const nearby = unitGrid.queryRadiusFiltered(
       unit.x,
       unit.z,
@@ -473,14 +482,14 @@ export function updateMovement(dt) {
       ax += (dx / d) * push;
       az += (dz / d) * push;
     }
-    if (Math.abs(ax) < 1e-8 && Math.abs(az) < 1e-8) continue;
+    if (Math.abs(ax) < 1e-8 && Math.abs(az) < 1e-8) return;
     const res = Pathfinding.resolveNavMotion(unit.x, unit.z, unit.x + ax, unit.z + az);
     if ((res.x - unit.x) ** 2 + (res.z - unit.z) ** 2 > 1e-10) {
       unit.x = res.x;
       unit.z = res.z;
       allyMoved = true;
     }
-  }
+  });
   if (allyMoved) rebuildUnitSpatialIndex();
 
   State.units.forEach(unit => {
@@ -1209,17 +1218,28 @@ function fireAtTarget(unit, target, time) {
       });
     }
     
-    // Impact visual/sound could go here too
+    // Impact visual — seat on terrain (Hera hills bury y=0.5 under the mesh).
+    const hitX = currentTarget ? currentTarget.x : target.x;
+    const hitZ = currentTarget ? currentTarget.z : target.z;
+    const hitY = combatFxY(hitX, hitZ, target.category ? 0.7 : 1.1);
     if (unit.aoe > 0) {
       const cnt = Math.max(4, Math.round(unit.aoe / 2));
-      Effects.spawnExplosion(target.x, 0.5, target.z, cnt);
-      Audio.playExplosionSound(0.22, target.x, target.z);
-      State.pushHostFx({ kind: 'aoe_impact', x: target.x, z: target.z, count: cnt, volume: 0.22 });
+      Effects.spawnExplosion(hitX, hitY, hitZ, cnt);
+      Audio.playExplosionSound(0.22, hitX, hitZ);
+      State.pushHostFx({ kind: 'aoe_impact', x: hitX, y: hitY, z: hitZ, count: cnt, volume: 0.22 });
+    } else {
+      Effects.spawnExplosion(hitX, hitY, hitZ, 3);
+      State.pushHostFx({ kind: 'hit_spark', x: hitX, y: hitY, z: hitZ, count: 3 });
     }
   };
 
   // Spawn projectile visual with the callback
-  const targetY = target.category ? 0.8 : (target.type ? 2 : 0.8);
+  const fromY = combatFxY(unit.x, unit.z, 1.15);
+  const targetY = combatFxY(
+    target.x,
+    target.z,
+    target.category ? 0.85 : (target.type ? 1.6 : 0.85)
+  );
   const distance = Pathfinding.getDistance(unit.x, unit.z, target.x, target.z);
   const duration = Math.min(500, distance * 30);
 
@@ -1227,7 +1247,7 @@ function fireAtTarget(unit, target, time) {
 
   if (!isMpClient) {
     Renderer.spawnProjectile(
-      unit.x, 1.2, unit.z,
+      unit.x, fromY, unit.z,
       target.x, targetY, target.z,
       PLAYER_COLORS[unit.ownerId],
       duration,
@@ -1240,6 +1260,7 @@ function fireAtTarget(unit, target, time) {
     kind: 'shot',
     unitType: unit.type,
     x: unit.x,
+    y: fromY,
     z: unit.z,
     tx: target.x,
     ty: targetY,
@@ -1493,8 +1514,9 @@ export function destroyUnit(unit, attacker = null, opts = {}) {
   State.selectedUnits.delete(unit.id);
   if (!sold) {
     Audio.playExplosionSound(0.3, dx, dz);
-    Effects.spawnExplosion(dx, 0.5, dz, 8);
-    State.pushHostFx({ kind: 'unit_death', x: dx, z: dz, volume: 0.3, particles: 8 });
+    const dy = combatFxY(dx, dz, 0.7);
+    Effects.spawnExplosion(dx, dy, dz, 8);
+    State.pushHostFx({ kind: 'unit_death', x: dx, y: dy, z: dz, volume: 0.3, particles: 8 });
   }
 
   checkWinCondition();
@@ -1511,8 +1533,9 @@ function destroyBuilding(building) {
 
   State.removeBuilding(building.id);
   Audio.playExplosionSound(0.5, bx, bz);
-  Effects.spawnExplosion(bx, 0.5, bz, 12);
-  State.pushHostFx({ kind: 'building_death', x: bx, z: bz, volume: 0.5 });
+  const by = combatFxY(bx, bz, 1.2);
+  Effects.spawnExplosion(bx, by, bz, 12);
+  State.pushHostFx({ kind: 'building_death', x: bx, y: by, z: bz, volume: 0.5 });
 
   // Rebuild nav mesh since building is gone
   Pathfinding.rebuildNavMeshImmediate();

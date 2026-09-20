@@ -6,17 +6,15 @@
 import { UNIT_SEPARATION_CONTACT_STAGGER } from './config.js';
 
 export function unitSkipsCrowdSeparation(unit) {
+  // Only park harvesters mid-job — standing attackers used to skip too, which
+  // froze melee piles in place (cheap ≠ “never resolve overlap”).
   if (
     unit.type === 'harvester' &&
     (unit.state === 'harvesting' || unit.state === 'depositing')
   ) {
     return true;
   }
-  return (
-    unit.state === 'attacking' &&
-    !unit.targetPos &&
-    (!unit.path || unit.path.length === 0)
-  );
+  return false;
 }
 
 export function unitIsSeparationMover(unit) {
@@ -31,7 +29,7 @@ export function separationIdBucket(unitId) {
 }
 
 /**
- * Movers every tick; idle only while `_sepInContact` (staggered).
+ * Movers every tick; standing attackers + idle-in-contact staggered.
  * @returns {'mover'|'contact'|null}
  */
 export function getSeparationCandidateKind(
@@ -41,8 +39,11 @@ export function getSeparationCandidateKind(
 ) {
   if (!unit || unit.hp <= 0 || unitSkipsCrowdSeparation(unit)) return null;
   if (unitIsSeparationMover(unit)) return 'mover';
-  if (!unit._sepInContact) return null;
   const n = Math.max(1, stagger | 0);
-  if ((separationIdBucket(unit.id) + frameIndex) % n !== 0) return null;
+  const due = (separationIdBucket(unit.id) + frameIndex) % n === 0;
+  if (!due) return null;
+  // Melee / hold-fire: keep soft-pushing while overlapping enemies.
+  if (unit.state === 'attacking') return 'contact';
+  if (!unit._sepInContact) return null;
   return 'contact';
 }

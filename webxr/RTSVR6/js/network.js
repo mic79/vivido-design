@@ -1578,14 +1578,17 @@ export function updateNetwork(time) {
 
 /** Multiplayer client: replay host-authored visuals/sfx (no gameplay side effects). */
 function applyHostFxEventsForClient(fxList) {
+  const fxY = (ev, lift) =>
+    typeof ev.y === 'number' && Number.isFinite(ev.y) ? ev.y : Effects.fxWorldY(ev.x, ev.z, lift);
   for (const ev of fxList) {
     if (!ev || !ev.kind) continue;
     switch (ev.kind) {
       case 'shot': {
         const dur = typeof ev.duration === 'number' ? ev.duration : 200;
-        const ty = typeof ev.ty === 'number' ? ev.ty : 0.8;
+        const fromY = typeof ev.y === 'number' ? ev.y : Effects.fxWorldY(ev.x, ev.z, 1.15);
+        const ty = typeof ev.ty === 'number' ? ev.ty : Effects.fxWorldY(ev.tx, ev.tz, 0.85);
         Renderer.spawnProjectile(
-          ev.x, 1.2, ev.z,
+          ev.x, fromY, ev.z,
           ev.tx, ty, ev.tz,
           typeof ev.color === 'number' ? ev.color : 0xffffff,
           dur
@@ -1595,22 +1598,26 @@ function applyHostFxEventsForClient(fxList) {
       }
       case 'unit_death': {
         const n = typeof ev.particles === 'number' ? ev.particles : 8;
-        Effects.spawnExplosion(ev.x, 0.5, ev.z, n);
+        Effects.spawnExplosion(ev.x, fxY(ev, 0.7), ev.z, n);
         Audio.playExplosionSound(typeof ev.volume === 'number' ? ev.volume : 0.3, ev.x, ev.z);
         break;
       }
       case 'building_death': {
-        Effects.spawnExplosion(ev.x, 0.5, ev.z, 12);
+        Effects.spawnExplosion(ev.x, fxY(ev, 1.2), ev.z, 12);
         Audio.playExplosionSound(typeof ev.volume === 'number' ? ev.volume : 0.5, ev.x, ev.z);
         break;
       }
       case 'aoe_impact': {
-        Effects.spawnExplosion(ev.x, 0.5, ev.z, typeof ev.count === 'number' ? ev.count : 8);
+        Effects.spawnExplosion(ev.x, fxY(ev, 0.7), ev.z, typeof ev.count === 'number' ? ev.count : 8);
         Audio.playExplosionSound(
           typeof ev.volume === 'number' ? ev.volume : 0.22,
           ev.x,
           ev.z,
         );
+        break;
+      }
+      case 'hit_spark': {
+        Effects.spawnExplosion(ev.x, fxY(ev, 0.7), ev.z, typeof ev.count === 'number' ? ev.count : 3);
         break;
       }
       case 'build_complete':

@@ -869,11 +869,12 @@ function installMesaWindDust(mat, THREE) {
   const quest = isQuestStandaloneUa() || isQuestMesaSimple();
   const windDirX = 0.85;
   const windDirZ = 0.35;
-  const speed = quest ? 0.65 : 0.52;
+  const speed = quest ? 0.72 : 0.52;
   const scale = 0.42;
-  const strength = quest ? 0.78 : 0.48;
+  // Quest needs a stronger skim — subtle desktop values read as “no dust” in headset.
+  const strength = quest ? 0.95 : 0.48;
   const fadeNear = 3.0;
-  const fadeFar = quest ? 140.0 : 110.0;
+  const fadeFar = quest ? 160.0 : 110.0;
 
   const prev = mat.onBeforeCompile;
   const prevKey =

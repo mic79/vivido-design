@@ -36,9 +36,16 @@ assert.equal(
 
 assert.equal(
   getSeparationCandidateKind(unit({ state: 'attacking', targetPos: null, path: [] }), 0, 4),
-  null,
-  'stationary firing unit skips separation'
+  'contact',
+  'stationary firing unit still soft-separates (staggered) so melee piles do not freeze'
 );
+
+const standingAtk = unit({ id: 'atk_stand', state: 'attacking', targetPos: null, path: [] });
+let atkHits = 0;
+for (let f = 0; f < 16; f++) {
+  if (getSeparationCandidateKind(standingAtk, f, 4) === 'contact') atkHits++;
+}
+assert.ok(atkHits >= 3 && atkHits <= 5, `attacker stagger ~1/4 over 16 frames, got ${atkHits}`);
 
 assert.equal(
   getSeparationCandidateKind(unit({ type: 'harvester', state: 'harvesting' }), 0, 4),
