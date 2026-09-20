@@ -778,8 +778,8 @@ function wantMesaWindDust() {
   } catch (_) {
     /* */
   }
-  // Default on for desktop; Quest simple HQ path skips this whole apply.
-  return isDesktopPcvrHost();
+  // Procedural (0 extra textures) — fine on Quest standalone too.
+  return true;
 }
 
 /**
@@ -956,10 +956,12 @@ function wantMesaCloseupDetail() {
     }`;
     if (/(?:[?&#]nodetail=1\b)/i.test(q)) return false;
     if (/(?:[?&#]mesaPcvr=1\b)/i.test(q)) return true;
+    if (/(?:[?&#]detail=1\b)/i.test(q)) return true;
   } catch (_) {
     /* */
   }
-  return isDesktopPcvrHost();
+  // 2×4K overlays — acceptable on Quest; full 10k HQ swap stays desktop-only.
+  return true;
 }
 
 async function loadMesaCloseupDetailTextures(THREE, sceneEl) {
@@ -1217,18 +1219,14 @@ vec3 mesaRnmBlend( vec3 n1, vec3 n2 ) {
 /**
  * Load native Hera SMT/DDS extracts (full 10240) + BAR splat DNTS for close-up res.
  * Prefer KTX2 (GPU-compressed) when present; JPEG fallback. Resolution only — no retints.
- * Quest simple path: skip (keep GLB embeds + FoW already on the material — pre-optimization).
+ * Quest: skip 10k diffuse/normal swap (VRAM + FoW recompile blacks the plate), but still
+ * apply Poly Haven close-up grit + wind dust on the GLB embeds.
  */
 export async function applyMesaHqTextures(root, THREE, sceneEl) {
   if (!root || !THREE) return null;
   if (!(root.userData && root.userData.rtsMesaHeightfield)) return null;
 
-  // Standalone Quest: do not swap KTX2/normal/splat after load — that recompile + FoW
-  // blacks the plate when the round starts. Embeds already look correct during load.
-  if (isQuestMesaSimple()) {
-    console.log('[RTSVR6] mesa HQ skipped (Quest simple: embeds + terrain FoW)');
-    return { skipped: true, questSimple: true };
-  }
+  const questLite = isQuestMesaSimple();
 
   const hqBase = 'assets/mesa/hera-planum/';
   const splatBase = hqBase + 'splat/';
@@ -1239,12 +1237,12 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     try {
       const r = sceneEl && sceneEl.renderer;
       if (r && r.capabilities && r.capabilities.getMaxAnisotropy) {
-        return Math.min(16, r.capabilities.getMaxAnisotropy());
+        return Math.min(questLite ? 8 : 16, r.capabilities.getMaxAnisotropy());
       }
     } catch (_) {
       /* */
     }
-    return 16;
+    return questLite ? 8 : 16;
   })();
 
   const configureTex = (tex, linear, wrapRepeat) => {
@@ -1309,6 +1307,39 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     const jpg = await loadJpg(hqBase + baseName + '.jpg', linear, wrapRepeat);
     return jpg ? { tex: jpg, kind: 'jpg' } : { tex: null, kind: null };
   };
+
+  // Quest lite: grit + wind on embeds only (no 10k HQ / normal swap).
+  if (questLite) {
+    const closeup = await loadMesaCloseupDetailTextures(THREE, sceneEl);
+    const useWind = wantMesaWindDust();
+    const seen = new Set();
+    let applied = 0;
+    root.traverse((obj) => {
+      if (!obj.isMesh || !obj.material || !obj.material.userData?.rtsMesaHeightfield) return;
+      const mat = obj.material;
+      if (seen.has(mat)) {
+        applied += 1;
+        return;
+      }
+      seen.add(mat);
+      if (closeup) installMesaCloseupDetail(mat, THREE, closeup);
+      if (useWind) installMesaWindDust(mat, THREE);
+      installFogVisualOnMaterial(mat);
+      mat.needsUpdate = true;
+      applied += 1;
+    });
+    console.log('[RTSVR6] mesa Quest lite (embeds + grit/wind, no 10k HQ swap)', {
+      meshes: applied,
+      closeup: closeup ? closeup.name : null,
+      windDust: useWind,
+    });
+    return {
+      skippedHq: true,
+      questLite: true,
+      closeup: !!(closeup && closeup.name),
+      windDust: useWind,
+    };
+  }
 
   const useSplat = wantMesaSplatDetail();
   const splatLoads = useSplat
