@@ -542,8 +542,9 @@ export async function tryLoadBakedSkirmishMoon(opts = {}) {
 /** Hera Planum / heightfield plate: diffuse + normal from bake (no moon albedo wipe). */
 function makeMesaHeightfieldMaterial(srcMat, W, recv) {
   const hasMap = !!(srcMat && srcMat.map);
-  // Quest: MeshBasic + albedo only + FoW (same class of shader as crater unlit bake).
-  // Lambert+normalMap+KTX2+FoW is what blacks the plate when the round starts.
+  // Default: Lambert + normals on ALL hosts (Quest included). Ridge micro-relief in the
+  // user's PCVR shots is normal-lit — MeshBasic can never show it. Opt-in cheap path:
+  // ?mesaSimple=1 → MeshBasic albedo-only (emergency if FoW+Lambert blacks the plate).
   const questSimple = isQuestMesaSimple();
   const mat = questSimple
     ? new W.MeshBasicMaterial({
@@ -561,7 +562,6 @@ function makeMesaHeightfieldMaterial(srcMat, W, recv) {
   if (!questSimple) {
     mat.normalMap = adoptTexture(srcMat && srcMat.normalMap, W, true);
   }
-  // Resolution only: sharper filtering — do not retint or re-light the plate.
   const aniso = questSimple ? 8 : 16;
   for (const tex of [mat.map, mat.normalMap]) {
     if (!tex) continue;
@@ -573,31 +573,31 @@ function makeMesaHeightfieldMaterial(srcMat, W, recv) {
     tex.magFilter = W.LinearFilter;
     tex.needsUpdate = true;
   }
-  if (mat.normalMap) mat.normalScale = new W.Vector2(1.15, 1.15);
+  if (mat.normalMap) mat.normalScale = new W.Vector2(1.55, 1.55);
   mat.lightMap = null;
   mat.envMap = null;
   if ('envMapIntensity' in mat) mat.envMapIntensity = 0;
-  // cheapMoonLook: finishBakedMoonLook must NOT replace with moon_01 albedo
   mat.userData.cheapMoonLook = true;
   mat.userData.rtsMesaHeightfield = true;
   mat.userData.rtsMesaQuestSimple = questSimple;
   mat.userData.shadowRecv = recv;
   mat.needsUpdate = true;
-  // FoW at create — same as pre-optimization (before HQ/splat re-chained it).
   installFogVisualOnMaterial(mat);
   return mat;
 }
 
+/**
+ * Cheap Quest path — ONLY when ?mesaSimple=1.
+ * Default Quest must match PCVR lighting/normals or ridge detail is structurally impossible.
+ */
 function isQuestMesaSimple() {
   try {
     const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
       typeof location !== 'undefined' ? location.hash || '' : ''
     }`;
-    // Opt-in full desktop path on Quest (10k HQ + Lambert/normals) — must win over UA.
-    if (/(?:[?&#]mesaFull=1\b)/i.test(q)) return false;
     if (/(?:[?&#]mesaSimple=1\b)/i.test(q)) return true;
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-    if (/OculusBrowser|\bQuest\b|Pacific/i.test(ua)) return true;
+    // mesaFull kept as alias for "not simple" (historical).
+    if (/(?:[?&#]mesaFull=1\b)/i.test(q)) return false;
   } catch (_) {
     /* */
   }
@@ -1310,10 +1310,10 @@ vec3 mesaRnmBlend( vec3 n1, vec3 n2 ) {
 }
 
 /**
- * Load native Hera SMT/DDS extracts (full 10240) + BAR splat DNTS for close-up res.
- * Prefer KTX2 (GPU-compressed) when present; JPEG fallback. Resolution only — no retints.
- * Quest: skip 10k diffuse/normal swap (VRAM + FoW recompile blacks the plate), but still
- * apply Poly Haven close-up grit + wind dust on the GLB embeds.
+ * Load native Hera SMT/DDS extracts (full 10240) + close-up grit + wind.
+ * Prefer KTX2 when present; JPEG fallback.
+ * ?mesaSimple=1: MeshBasic + HQ albedo only (no normals) — emergency cheap path.
+ * Default (incl. Quest): full Lambert + diffuse/normal HQ — required for ridge relief.
  */
 export async function applyMesaHqTextures(root, THREE, sceneEl) {
   if (!root || !THREE) return null;

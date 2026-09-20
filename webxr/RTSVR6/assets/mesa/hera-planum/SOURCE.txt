@@ -14,11 +14,11 @@ PCVR denser plate (~11× tris vs Quest, Draco ~13 MB) — OPT-IN only (`?mesaPcv
   RES=2560 CELLS=8 HEIGHT_SMOOTH=4 OUT_GLB=assets/terrain/terrain-skirmish-1v1-pcvr.glb python scripts/build-hera-planum.py
   then: npx @gltf-transform/cli draco terrain-skirmish-1v1-pcvr.glb terrain-skirmish-1v1-pcvr.glb
   HEIGHT_SMOOTH kills 8-bit height.png terrace banding after upsample (default 3).
-  Default desktop/Quest match uses terrain-skirmish-1v1.glb (~1.2M tris) + Poly Haven close-up grit.
-  Quest lite (default): HQ albedo on MeshBasic + grit + wind (no Lambert normals — black-plate risk).
-  mesaFull=1: desktop Lambert+normal path on Quest (A/B only; can black the plate).
-  mesaPcvr=1: dense 13M plate — desktop only; ignored on Quest unless mesaPcvrForce=1 (no visual gain).
-  Close-up grit: detail/ overlays. Wind dust edits outgoingLight (required for Quest MeshBasic).
+  Default (desktop + Quest): Lambert + 10k HQ diffuse/normal + grit + wind on terrain-skirmish-1v1.glb
+  Ridge detail in PCVR shots = lit normal maps — MeshBasic can never show it.
+  ?mesaSimple=1 — emergency MeshBasic albedo-only (if FoW+Lambert blacks the plate).
+  ?mesaPcvr=1 — dense 13M plate (desktop); ignored on Quest unless mesaPcvrForce=1 (no visual gain).
+  Wind dust: map_fragment on Lambert; outgoingLight on MeshBasic.
 
 KTX2 (optional):
   toktx --t2 --encode etc1s --clevel 4 --qlevel 255 --genmipmap diffuse-hq.ktx2 diffuse-hq.jpg
