@@ -149,6 +149,15 @@ function wantCombined1v1() {
  * @param {'intro'|'match'} [mode='match']
  *   intro = crater ridges lobby; match = Hera (or moon-only if `?moononly=1`).
  */
+function isQuestStandaloneUa() {
+  try {
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+    return /OculusBrowser|\bQuest\b|Pacific/i.test(ua);
+  } catch (_) {
+    return false;
+  }
+}
+
 export function preferredSkirmishBakeUrl(mode = 'match') {
   if (mode === 'intro' || !wantCombined1v1()) return BAKED_SKIRMISH_INTRO_GLB;
   try {
@@ -156,9 +165,16 @@ export function preferredSkirmishBakeUrl(mode = 'match') {
       typeof location !== 'undefined' ? location.hash || '' : ''
     }`;
     if (/(?:[?&#]mesaQuest=1\b)/i.test(q)) return BAKED_SKIRMISH_1V1_GLB;
-    // Dense 13M-tri plate is OPT-IN only. Close-up grit does not need it — and defaulting
-    // it on desktop was the main FPS cliff mistaken for “texture cost”.
-    if (/(?:[?&#]mesaPcvr=1\b)/i.test(q)) return BAKED_SKIRMISH_1V1_PCVR_GLB;
+    // Dense 13M plate: same 8-bit height → no ridge detail, huge GPU cost. Opt-in on
+    // desktop; on Quest require mesaPcvrForce=1 (mesaPcvr alone is a footgun).
+    if (/(?:[?&#]mesaPcvr=1\b)/i.test(q)) {
+      if (!isQuestStandaloneUa() || /(?:[?&#]mesaPcvrForce=1\b)/i.test(q)) {
+        return BAKED_SKIRMISH_1V1_PCVR_GLB;
+      }
+      console.warn(
+        '[RTSVR6] mesaPcvr=1 ignored on Quest (13M tris, no visible gain). Use mesaPcvrForce=1 to override.'
+      );
+    }
   } catch (_) {
     /* */
   }
@@ -837,23 +853,28 @@ varying vec3 vMesaWorldPos;`
  */
 function installMesaWindDust(mat, THREE) {
   if (!mat || !wantMesaWindDust()) return;
-  // Allow reinstall after FoW upgrade wiped the compile chain but left the flag.
-  if (mat.userData && mat.userData._mesaWindInstalled && mat.userData._mesaWindUniforms) {
+  // Stale flag after FoW wiped the hook — must reinstall.
+  const keyStr = String(mat.customProgramCacheKey?.() || '');
+  if (
+    mat.userData &&
+    mat.userData._mesaWindInstalled &&
+    mat.userData._mesaWindUniforms &&
+    keyStr.includes('mesaWindDust')
+  ) {
     _mesaWindMats.add(mat);
     ensureMesaWindTick();
     return;
   }
   mat.userData._mesaWindInstalled = true;
 
-  const quest = isQuestMesaSimple();
-  // Wind along +X/+Z — Quest MeshBasic needs a bit more contrast to read.
+  const quest = isQuestStandaloneUa() || isQuestMesaSimple();
   const windDirX = 0.85;
   const windDirZ = 0.35;
-  const speed = quest ? 0.58 : 0.52;
+  const speed = quest ? 0.65 : 0.52;
   const scale = 0.42;
-  const strength = quest ? 0.62 : 0.48;
-  const fadeNear = 4.0;
-  const fadeFar = quest ? 120.0 : 110.0;
+  const strength = quest ? 0.78 : 0.48;
+  const fadeNear = 3.0;
+  const fadeFar = quest ? 140.0 : 110.0;
 
   const prev = mat.onBeforeCompile;
   const prevKey =
@@ -875,7 +896,6 @@ function installMesaWindDust(mat, THREE) {
     mat.userData._mesaWindUniforms = shader.uniforms;
 
     ensureMesaWorldPosVarying(shader);
-    // Prefer FoW world pos when present (installed after first pass / on reinstall).
     if (
       shader.vertexShader.includes('vRtsFogWorldPos') &&
       !shader.vertexShader.includes('vMesaWorldPos = vRtsFogWorldPos')
@@ -914,6 +934,31 @@ float mesaWindNoise( vec2 p ) {
 	float d = mesaWindHash( i + vec2( 1.0, 1.0 ) );
 	return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );
 }
+vec3 mesaWindBlown( vec3 base ) {
+	float camDist = length( vMesaWorldPos - cameraPosition );
+	float distFade = 1.0 - smoothstep( mesaWindFadeNear, mesaWindFadeFar, camDist );
+	float gate = mesaWindStrength * distFade;
+	if ( gate < 1e-4 ) return base;
+	vec2 xz = vMesaWorldPos.xz;
+	vec2 windN = normalize( mesaWindDir );
+	vec2 drift = windN * ( mesaWindTime * mesaWindSpeed );
+	vec2 along = vec2( dot( xz, windN ), dot( xz, vec2( -windN.y, windN.x ) ) * 2.5 );
+	float n1 = mesaWindNoise( along * mesaWindScale + drift );
+	float n2 = mesaWindNoise( xz * ( mesaWindScale * 3.8 ) + drift * 1.55 + vec2( 11.3, 4.7 ) );
+	float n3 = mesaWindNoise( xz * ( mesaWindScale * 9.5 ) + drift * 2.1 + vec2( 3.1, 17.9 ) );
+	float streak = smoothstep( 0.4, 0.66, n1 );
+	float grit = smoothstep( 0.45, 0.72, n2 ) * 0.7 + smoothstep( 0.52, 0.84, n3 ) * 0.55;
+	float dust = clamp( streak * 0.55 + grit * 0.9, 0.0, 1.0 );
+	vec3 sand = mix(
+		mix( vec3( 0.58, 0.44, 0.30 ), vec3( 0.74, 0.60, 0.42 ), n2 ),
+		vec3( 0.40, 0.33, 0.26 ),
+		n3 * 0.65
+	);
+	float luma = max( 1e-3, dot( base, vec3( 0.2126, 0.7152, 0.0722 ) ) );
+	vec3 tinted = sand * ( luma * 1.35 ) + vec3( 0.035, 0.025, 0.014 );
+	vec3 blown = mix( base * 0.74, tinted, 0.68 + grit * 0.28 );
+	return mix( base, blown, dust * gate );
+}
 #endif
 `;
       if (!shader.fragmentShader.includes('varying vec3 vMesaWorldPos')) {
@@ -931,56 +976,41 @@ ${windHelpers}`
         );
       }
 
-      const windApply = /* glsl */ `
-	{
-		float camDist = length( vMesaWorldPos - cameraPosition );
-		float distFade = 1.0 - smoothstep( mesaWindFadeNear, mesaWindFadeFar, camDist );
-		float gate = mesaWindStrength * distFade;
-		if ( gate > 1e-4 ) {
-			vec2 xz = vMesaWorldPos.xz;
-			vec2 windN = normalize( mesaWindDir );
-			vec2 drift = windN * ( mesaWindTime * mesaWindSpeed );
-			vec2 along = vec2( dot( xz, windN ), dot( xz, vec2( -windN.y, windN.x ) ) * 2.5 );
-			float n1 = mesaWindNoise( along * mesaWindScale + drift );
-			float n2 = mesaWindNoise( xz * ( mesaWindScale * 3.8 ) + drift * 1.55 + vec2( 11.3, 4.7 ) );
-			float n3 = mesaWindNoise( xz * ( mesaWindScale * 9.5 ) + drift * 2.1 + vec2( 3.1, 17.9 ) );
-			float streak = smoothstep( 0.42, 0.68, n1 );
-			float grit = smoothstep( 0.48, 0.75, n2 ) * 0.7 + smoothstep( 0.55, 0.85, n3 ) * 0.55;
-			float dust = clamp( streak * 0.55 + grit * 0.85, 0.0, 1.0 );
-			vec3 sandA = vec3( 0.58, 0.44, 0.30 );
-			vec3 sandB = vec3( 0.74, 0.60, 0.42 );
-			vec3 sandC = vec3( 0.40, 0.33, 0.26 );
-			vec3 sand = mix( mix( sandA, sandB, n2 ), sandC, n3 * 0.65 );
-			vec3 base = diffuseColor.rgb;
-			float luma = max( 1e-3, dot( base, vec3( 0.2126, 0.7152, 0.0722 ) ) );
-			vec3 tinted = sand * ( luma * 1.3 ) + vec3( 0.03, 0.022, 0.012 );
-			vec3 shade = base * 0.76;
-			vec3 blown = mix( shade, tinted, 0.65 + grit * 0.3 );
-			diffuseColor.rgb = mix( base, blown, dust * gate );
-		}
-	}
-`;
-      // opaque_fragment first — works on MeshBasic / Quest and survives map_fragment loss.
-      if (shader.fragmentShader.includes('#include <opaque_fragment>')) {
-        shader.fragmentShader = shader.fragmentShader.replace(
-          '#include <opaque_fragment>',
-          `${windApply}\n	#include <opaque_fragment>`
-        );
-      } else if (shader.fragmentShader.includes('#include <output_fragment>')) {
-        shader.fragmentShader = shader.fragmentShader.replace(
-          '#include <output_fragment>',
-          `${windApply}\n	#include <output_fragment>`
-        );
-      } else if (shader.fragmentShader.includes('#include <map_fragment>')) {
+      // MeshBasic (Quest): outgoingLight is already set before opaque — must edit it.
+      // Lambert (PCVR): edit diffuseColor in map_fragment so lighting picks it up.
+      // Doing both double-applies on Basic; pick one.
+      const basic =
+        !!(mat.isMeshBasicMaterial || (mat.type && String(mat.type).includes('Basic')));
+      if (!basic && shader.fragmentShader.includes('#include <map_fragment>')) {
         shader.fragmentShader = shader.fragmentShader.replace(
           '#include <map_fragment>',
           /* glsl */ `#include <map_fragment>
-${windApply}`
+	diffuseColor.rgb = mesaWindBlown( diffuseColor.rgb );
+`
         );
+      }
+      if (basic || !shader.fragmentShader.includes('mesaWindBlown( diffuseColor')) {
+        if (shader.fragmentShader.includes('#include <opaque_fragment>')) {
+          shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <opaque_fragment>',
+            /* glsl */ `
+	outgoingLight = mesaWindBlown( outgoingLight );
+	#include <opaque_fragment>
+`
+          );
+        } else if (shader.fragmentShader.includes('#include <output_fragment>')) {
+          shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <output_fragment>',
+            /* glsl */ `
+	outgoingLight = mesaWindBlown( outgoingLight );
+	#include <output_fragment>
+`
+          );
+        }
       }
     }
   };
-  mat.customProgramCacheKey = () => `${prevKey()}|mesaWindDustV6quest`;
+  mat.customProgramCacheKey = () => `${prevKey()}|mesaWindDustV7out`;
   mat.needsUpdate = true;
   _mesaWindMats.add(mat);
   ensureMesaWindTick();
@@ -1371,9 +1401,14 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     return jpg ? { tex: jpg, kind: 'jpg' } : { tex: null, kind: null };
   };
 
-  // Quest lite: grit + wind on embeds only (no 10k HQ / normal swap).
+  // Quest lite: MeshBasic stays (avoids Lambert+normal black-plate), but swap 10k
+  // albedo + grit + wind — that is the ridge detail PCVR has. Skip normal maps.
   if (questLite) {
-    const closeup = await loadMesaCloseupDetailTextures(THREE, sceneEl);
+    const [diffPack, closeup] = await Promise.all([
+      loadPreferKtx2('diffuse-hq', false, false),
+      loadMesaCloseupDetailTextures(THREE, sceneEl),
+    ]);
+    const diff = diffPack.tex;
     const useWind = wantMesaWindDust();
     const seen = new Set();
     let applied = 0;
@@ -1385,23 +1420,31 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
         return;
       }
       seen.add(mat);
+      if (diff) {
+        if (mat.map && mat.map.dispose && mat.map !== diff) mat.map.dispose();
+        mat.map = diff;
+        mat.color.setRGB(1, 1, 1);
+      }
       if (closeup) installMesaCloseupDetail(mat, THREE, closeup);
       installFogVisualOnMaterial(mat);
-      // Wind last so FoW cannot drop it from the compile chain.
       if (useWind) installMesaWindDust(mat, THREE);
       mat.needsUpdate = true;
       applied += 1;
     });
-    console.log('[RTSVR6] mesa Quest lite (embeds + grit/wind, no 10k HQ swap)', {
+    const iw = diff?.image ? diff.image.width || diff.image.videoWidth || 0 : 0;
+    console.log('[RTSVR6] mesa Quest lite (HQ albedo on MeshBasic + grit/wind, no normals)', {
       meshes: applied,
+      diffuse: iw || null,
+      diffuseFmt: diffPack.kind,
       closeup: closeup ? closeup.name : null,
       windDust: useWind,
     });
     return {
-      skippedHq: true,
       questLite: true,
+      diffuse: iw ? [iw, iw] : null,
       closeup: !!(closeup && closeup.name),
       windDust: useWind,
+      fmt: diffPack.kind,
     };
   }
 
