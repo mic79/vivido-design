@@ -7,7 +7,7 @@
 // depend on that include — compute + apply immediately before opaque/output.
 import { MAP_SIZE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_SPAN_M } from './config.js';
 
-const FOG_INSTALL_VER = 12;
+const FOG_INSTALL_VER = 13;
 
 /**
  * Visual FoW half-extent (m). Must cover the horizon skirt:
@@ -209,13 +209,12 @@ export function installFogVisualOnMaterial(mat) {
     return;
   }
   if (installed.has(mat)) {
-    installed.delete(mat);
-    if (mat.userData && mat.userData._rtsFogPrevCompile !== undefined) {
-      mat.onBeforeCompile = mat.userData._rtsFogPrevCompile;
-    }
-    if (mat.userData && mat.userData._rtsFogPrevKey !== undefined) {
-      mat.customProgramCacheKey = mat.userData._rtsFogPrevKey;
-    }
+    // Soft upgrade: keep the live compile chain (closeup/wind may wrap FoW).
+    // Never restore _rtsFogPrevCompile — that wiped grit/dust and blacked Quest plates.
+    mat.userData._rtsFogInstallVer = FOG_INSTALL_VER;
+    mat.needsUpdate = true;
+    pushAllUniforms();
+    return;
   }
 
   installed.add(mat);
@@ -261,18 +260,29 @@ export function installFogVisualOnMaterial(mat) {
           /* glsl */ `#include <common>
 varying vec3 vRtsFogWorldPos;
 varying vec2 vRtsObjXZ;`
-        )
-        .replace(
-          '#include <begin_vertex>',
-          /* glsl */ `#include <begin_vertex>
+        );
+      // Prefer project_vertex (after morph/skin) so world pos is real. Fallback begin_vertex.
+      const fogAssign = /* glsl */ `
 #ifdef USE_INSTANCING
 	vRtsFogWorldPos = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
 	vRtsObjXZ = ( modelMatrix * instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;
 #else
 	vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
 	vRtsObjXZ = ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xz;
-#endif`
+#endif`;
+      if (shader.vertexShader.includes('#include <project_vertex>')) {
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <project_vertex>',
+          /* glsl */ `#include <project_vertex>
+${fogAssign}`
         );
+      } else {
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <begin_vertex>',
+          /* glsl */ `#include <begin_vertex>
+${fogAssign}`
+        );
+      }
     }
 
     if (!shader.fragmentShader.includes('uRtsNavPaintOn')) {
@@ -314,7 +324,7 @@ uniform float uRtsFocusOuter;`
     }
   };
 
-  mat.customProgramCacheKey = () => `${prevKey()}|rtsFogNavPaint12`;
+  mat.customProgramCacheKey = () => `${prevKey()}|rtsFogNavPaint13`;
   mat.needsUpdate = true;
 }
 

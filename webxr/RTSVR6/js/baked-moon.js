@@ -542,9 +542,8 @@ export async function tryLoadBakedSkirmishMoon(opts = {}) {
 /** Hera Planum / heightfield plate: diffuse + normal from bake (no moon albedo wipe). */
 function makeMesaHeightfieldMaterial(srcMat, W, recv) {
   const hasMap = !!(srcMat && srcMat.map);
-  // Default: Lambert + normals on ALL hosts (Quest included). Ridge micro-relief in the
-  // user's PCVR shots is normal-lit — MeshBasic can never show it. Opt-in cheap path:
-  // ?mesaSimple=1 → MeshBasic albedo-only (emergency if FoW+Lambert blacks the plate).
+  // Default: Lambert + normals on ALL hosts (Quest included). Ridge micro-relief is
+  // normal-lit — MeshBasic can never show it. Opt-in: ?mesaSimple=1 → MeshBasic.
   const questSimple = isQuestMesaSimple();
   const mat = questSimple
     ? new W.MeshBasicMaterial({
@@ -1310,16 +1309,36 @@ vec3 mesaRnmBlend( vec3 n1, vec3 n2 ) {
 }
 
 /**
- * Load native Hera SMT/DDS extracts (full 10240) + close-up grit + wind.
- * Prefer KTX2 when present; JPEG fallback.
- * ?mesaSimple=1: MeshBasic + HQ albedo only (no normals) — emergency cheap path.
- * Default (incl. Quest): full Lambert + diffuse/normal HQ — required for ridge relief.
+ * Force full 10k SMT HQ on Quest (`?mesaHq=1`). Default Quest uses bake-res maps —
+ * 10k diffuse+normal (~300MB+ VRAM each decoded) blacks the plate after load.
+ */
+function wantQuestFullMesaHq() {
+  try {
+    const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
+      typeof location !== 'undefined' ? location.hash || '' : ''
+    }`;
+    return /(?:[?&#]mesaHq=1\b)/i.test(q);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Load Hera maps + close-up grit + wind onto Lambert mesa mats.
+ *
+ * Desktop / PCVR: full 10240 SMT (KTX2 preferred, JPEG fallback).
+ * Quest standalone: bake-res JPEG (~0.4MB) + grit + wind — keeps Lambert normals
+ * (ridge relief) without the post-load VRAM blackout from 10k HQ.
+ * ?mesaSimple=1: MeshBasic albedo-only emergency.
+ * ?mesaHq=1: force 10k HQ even on Quest (debug / high-end only).
  */
 export async function applyMesaHqTextures(root, THREE, sceneEl) {
   if (!root || !THREE) return null;
   if (!(root.userData && root.userData.rtsMesaHeightfield)) return null;
 
   const questLite = isQuestMesaSimple();
+  const questStandalone = isQuestStandaloneUa();
+  const questSafe = questStandalone && !wantQuestFullMesaHq() && !questLite;
 
   const hqBase = 'assets/mesa/hera-planum/';
   const splatBase = hqBase + 'splat/';
@@ -1330,12 +1349,12 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     try {
       const r = sceneEl && sceneEl.renderer;
       if (r && r.capabilities && r.capabilities.getMaxAnisotropy) {
-        return Math.min(questLite ? 8 : 16, r.capabilities.getMaxAnisotropy());
+        return Math.min(questLite || questSafe ? 8 : 16, r.capabilities.getMaxAnisotropy());
       }
     } catch (_) {
       /* */
     }
-    return questLite ? 8 : 16;
+    return questLite || questSafe ? 8 : 16;
   })();
 
   const configureTex = (tex, linear, wrapRepeat) => {
@@ -1395,21 +1414,18 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
   };
 
   const loadPreferKtx2 = async (baseName, linear, wrapRepeat) => {
+    // Quest: never pull the 53MB UASTC normal / 10k sheets — JPEG bake path instead.
+    if (questSafe) {
+      return { tex: null, kind: null };
+    }
     const ktx = await loadKtx2(hqBase + baseName + '.ktx2', linear, wrapRepeat);
     if (ktx) return { tex: ktx, kind: 'ktx2' };
     const jpg = await loadJpg(hqBase + baseName + '.jpg', linear, wrapRepeat);
     return jpg ? { tex: jpg, kind: 'jpg' } : { tex: null, kind: null };
   };
 
-  // Quest lite: MeshBasic stays (avoids Lambert+normal black-plate), but swap 10k
-  // albedo + grit + wind — that is the ridge detail PCVR has. Skip normal maps.
-  if (questLite) {
-    const [diffPack, closeup] = await Promise.all([
-      loadPreferKtx2('diffuse-hq', false, false),
-      loadMesaCloseupDetailTextures(THREE, sceneEl),
-    ]);
-    const diff = diffPack.tex;
-    const useWind = wantMesaWindDust();
+  /** Apply diffuse/normal (+ optional closeup/wind/FoW) to shared mesa mats. */
+  const applyToMesaMats = (diff, nrm, closeup, useWind, splat) => {
     const seen = new Set();
     let applied = 0;
     root.traverse((obj) => {
@@ -1423,19 +1439,37 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
       if (diff) {
         if (mat.map && mat.map.dispose && mat.map !== diff) mat.map.dispose();
         mat.map = diff;
-        mat.color.setRGB(1, 1, 1);
       }
+      if (nrm && !mat.isMeshBasicMaterial) {
+        if (mat.normalMap && mat.normalMap.dispose && mat.normalMap !== nrm) mat.normalMap.dispose();
+        mat.normalMap = nrm;
+        mat.normalScale = new THREE.Vector2(1.55, 1.55);
+      }
+      mat.color.setRGB(1, 1, 1);
+      if (splat) installMesaSplatDetail(mat, THREE, splat);
       if (closeup) installMesaCloseupDetail(mat, THREE, closeup);
       installFogVisualOnMaterial(mat);
       if (useWind) installMesaWindDust(mat, THREE);
       mat.needsUpdate = true;
       applied += 1;
     });
+    return { applied, materials: seen.size };
+  };
+
+  // Emergency: MeshBasic + bake/HQ albedo, no normals.
+  if (questLite) {
+    const [diff, closeup] = await Promise.all([
+      loadJpg(hqBase + 'diffuse-bake.jpg', false, false).then(
+        (t) => t || loadJpg(hqBase + 'diffuse-hq.jpg', false, false)
+      ),
+      loadMesaCloseupDetailTextures(THREE, sceneEl),
+    ]);
+    const useWind = wantMesaWindDust();
+    const { applied } = applyToMesaMats(diff, null, closeup, useWind, null);
     const iw = diff?.image ? diff.image.width || diff.image.videoWidth || 0 : 0;
-    console.log('[RTSVR6] mesa Quest lite (HQ albedo on MeshBasic + grit/wind, no normals)', {
+    console.log('[RTSVR6] mesa Quest lite (MeshBasic albedo + grit/wind, no normals)', {
       meshes: applied,
       diffuse: iw || null,
-      diffuseFmt: diffPack.kind,
       closeup: closeup ? closeup.name : null,
       windDust: useWind,
     });
@@ -1444,7 +1478,52 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
       diffuse: iw ? [iw, iw] : null,
       closeup: !!(closeup && closeup.name),
       windDust: useWind,
-      fmt: diffPack.kind,
+      fmt: 'jpg',
+    };
+  }
+
+  // Quest default: Lambert + bake-res maps (ridge normals) + grit + wind.
+  // Do NOT load 10k HQ — decoded VRAM blacks the plate the instant swap finishes.
+  if (questSafe) {
+    const [diff, nrm, closeup] = await Promise.all([
+      loadJpg(hqBase + 'diffuse-bake.jpg', false, false),
+      loadJpg(hqBase + 'normal-bake.jpg', true, false),
+      loadMesaCloseupDetailTextures(THREE, sceneEl),
+    ]);
+    const useWind = wantMesaWindDust();
+    if (!diff && !nrm) {
+      // Keep GLB embeds; still install grit/wind/FoW.
+      const { applied } = applyToMesaMats(null, null, closeup, useWind, null);
+      console.warn('[RTSVR6] mesa Quest bake maps missing — embeds + grit/wind', {
+        meshes: applied,
+        closeup: closeup ? closeup.name : null,
+        windDust: useWind,
+      });
+      return {
+        questSafe: true,
+        embeds: true,
+        closeup: !!(closeup && closeup.name),
+        windDust: useWind,
+        fmt: 'embed',
+      };
+    }
+    const { applied, materials } = applyToMesaMats(diff, nrm, closeup, useWind, null);
+    const iw = diff?.image ? diff.image.width || diff.image.videoWidth || 0 : 0;
+    const ih = diff?.image ? diff.image.height || diff.image.videoHeight || 0 : 0;
+    console.log('[RTSVR6] mesa Quest safe (Lambert + bake maps + grit/wind)', {
+      meshes: applied,
+      materials,
+      diffuse: iw && ih ? `${iw}x${ih}` : null,
+      normals: !!nrm,
+      closeup: closeup ? closeup.name : null,
+      windDust: useWind,
+    });
+    return {
+      questSafe: true,
+      diffuse: iw && ih ? [iw, ih] : null,
+      closeup: !!(closeup && closeup.name),
+      windDust: useWind,
+      fmt: 'bake-jpg',
     };
   }
 
@@ -1484,53 +1563,27 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     console.warn('[RTSVR6] mesa close-up detail textures missing');
   }
 
-  // Shared material across cells — apply textures once.
-  const seen = new Set();
-  let applied = 0;
-  root.traverse((obj) => {
-    if (!obj.isMesh || !obj.material || !obj.material.userData?.rtsMesaHeightfield) return;
-    const mat = obj.material;
-    if (seen.has(mat)) {
-      applied += 1;
-      return;
-    }
-    seen.add(mat);
-    if (diff) {
-      if (mat.map && mat.map.dispose && mat.map !== diff) mat.map.dispose();
-      mat.map = diff;
-    }
-    if (nrm) {
-      if (mat.normalMap && mat.normalMap.dispose && mat.normalMap !== nrm) mat.normalMap.dispose();
-      mat.normalMap = nrm;
-      mat.normalScale = new THREE.Vector2(1.55, 1.55);
-    }
-    mat.color.setRGB(1, 1, 1);
-    if (splat) installMesaSplatDetail(mat, THREE, splat);
-    if (closeup) installMesaCloseupDetail(mat, THREE, closeup);
-    installFogVisualOnMaterial(mat);
-    if (wantMesaWindDust()) installMesaWindDust(mat, THREE);
-    mat.needsUpdate = true;
-    applied += 1;
-  });
+  const useWind = wantMesaWindDust();
+  const { applied, materials } = applyToMesaMats(diff, nrm, closeup, useWind, splat);
 
   const iw = diff.image ? diff.image.width || diff.image.videoWidth || 0 : 0;
   const ih = diff.image ? diff.image.height || diff.image.videoHeight || 0 : 0;
   console.log('[RTSVR6] mesa HQ textures applied', {
     meshes: applied,
-    materials: seen.size,
+    materials,
     diffuse: iw && ih ? `${iw}x${ih}` : null,
     diffuseFmt: diffPack.kind,
     normalFmt: nrmPack.kind,
     splat: !!splat,
     closeup: closeup ? closeup.name : null,
-    windDust: wantMesaWindDust(),
+    windDust: useWind,
     questNoSplat: !useSplat,
   });
   return {
     diffuse: [iw, ih],
     splat: !!splat,
     closeup: !!(closeup && closeup.name),
-    windDust: wantMesaWindDust(),
+    windDust: useWind,
     fmt: diffPack.kind,
   };
 }

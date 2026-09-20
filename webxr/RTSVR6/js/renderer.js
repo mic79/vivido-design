@@ -1922,12 +1922,11 @@ function buildNavigableFogOverlayGeometry(THREE) {
 
 function setFogOverlayVisible(on) {
   // Terrain-shader FoW — keep the old overlay mesh hidden (rim sky shelves + Quest black veil).
+  // Do NOT reinstall FoW hooks here — that can wipe closeup/wind compile chains mid-match.
   if (fogOverlayMesh) fogOverlayMesh.visible = false;
   if (fogUnexploredMesh) fogUnexploredMesh.visible = false;
   FogVisual.setFogVisualEnabled(!!on);
   FogVisual.syncFogVisualExtents();
-  const ground = document.getElementById('ground')?.getObject3D?.('mesh');
-  if (ground) FogVisual.installFogVisualUnder(ground);
 }
 
 function disposeFogOverlayMeshes() {
@@ -1953,6 +1952,8 @@ function disposeFogOverlayMeshes() {
     fogOverlayTexture.dispose();
     fogOverlayTexture = null;
   }
+  // Drop disposed GPU tex from FoW uniforms immediately (Quest can sample as opaque black).
+  FogVisual.setFogVisualMap(null);
   fogOverlayPixels = null;
   fogOverlayRes = 0;
   _fogOverlayGridHash = null;
