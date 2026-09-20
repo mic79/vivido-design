@@ -8,7 +8,7 @@
  */
 
 import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_CELL, MAP_CAMERA_NAV_AREA_SCALE, MAP_NAV_AREA_SCALE, MAP_UNIT_PLAYABLE_RADIUS, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
-import { bakedMoonAllowed, preferredSkirmishBakeUrl, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps, setBakedMoonRockShadowsEnabled, applyMesaHqTextures } from './baked-moon.js';
+import { bakedMoonAllowed, preferredSkirmishBakeUrl, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps, setBakedMoonRockShadowsEnabled, applyMesaHqTextures, ensureMesaWindDustOnRoot } from './baked-moon.js';
 import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings, hasStoryKitLodFor } from './story-kit-terrain.js';
 import * as State from './state.js';
 import * as FogVisual from './fog-visual.js';
@@ -1043,6 +1043,12 @@ async function finishBakedMoonLook(THREE, sceneEl, root, opts = {}) {
     }
     // Always ensure FoW shroud is on mesa mats (HQ path installs it; embeds-only still need it).
     FogVisual.installFogVisualUnder(root);
+    // FoW install/upgrade can drop wind from the compile chain — re-assert after.
+    try {
+      if (window.THREE) ensureMesaWindDustOnRoot(root, window.THREE);
+    } catch (err) {
+      console.warn('[RTSVR6] mesa wind re-assert failed', err);
+    }
   }
   // Always re-rasterize Hera/mesa (and whenever skipHeight is false). Skipping height after
   // lobby crater → match Hera left the crater walkability mask in place.

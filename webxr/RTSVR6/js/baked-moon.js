@@ -574,13 +574,14 @@ function makeMesaHeightfieldMaterial(srcMat, W, recv) {
 
 function isQuestMesaSimple() {
   try {
-    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
-    if (/OculusBrowser|\bQuest\b|Pacific/i.test(ua)) return true;
     const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
       typeof location !== 'undefined' ? location.hash || '' : ''
     }`;
-    if (/(?:[?&#]mesaSimple=1\b)/i.test(q)) return true;
+    // Opt-in full desktop path on Quest (10k HQ + Lambert/normals) — must win over UA.
     if (/(?:[?&#]mesaFull=1\b)/i.test(q)) return false;
+    if (/(?:[?&#]mesaSimple=1\b)/i.test(q)) return true;
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+    if (/OculusBrowser|\bQuest\b|Pacific/i.test(ua)) return true;
   } catch (_) {
     /* */
   }
@@ -831,21 +832,28 @@ varying vec3 vMesaWorldPos;`
 
 /**
  * Subtle wind-blown sand/dust skim — procedural (0 texture taps).
- * Scrolls soft noise streaks across world XZ; camera-distance gated.
+ * Injects before opaque_fragment (same survival strategy as FoW) so Quest MeshBasic
+ * and post-FoW reinstalls keep it. map_fragment alone was easy to lose on Quest.
  */
 function installMesaWindDust(mat, THREE) {
   if (!mat || !wantMesaWindDust()) return;
-  if (mat.userData && mat.userData._mesaWindInstalled) return;
+  // Allow reinstall after FoW upgrade wiped the compile chain but left the flag.
+  if (mat.userData && mat.userData._mesaWindInstalled && mat.userData._mesaWindUniforms) {
+    _mesaWindMats.add(mat);
+    ensureMesaWindTick();
+    return;
+  }
   mat.userData._mesaWindInstalled = true;
 
-  // Wind along +X/+Z — no cell-hash (that read as blocky pixels up close).
+  const quest = isQuestMesaSimple();
+  // Wind along +X/+Z — Quest MeshBasic needs a bit more contrast to read.
   const windDirX = 0.85;
   const windDirZ = 0.35;
-  const speed = 0.52;
+  const speed = quest ? 0.58 : 0.52;
   const scale = 0.42;
-  const strength = 0.48;
-  const fadeNear = 5.0;
-  const fadeFar = 110.0;
+  const strength = quest ? 0.62 : 0.48;
+  const fadeNear = 4.0;
+  const fadeFar = quest ? 120.0 : 110.0;
 
   const prev = mat.onBeforeCompile;
   const prevKey =
@@ -867,9 +875,24 @@ function installMesaWindDust(mat, THREE) {
     mat.userData._mesaWindUniforms = shader.uniforms;
 
     ensureMesaWorldPosVarying(shader);
+    // Prefer FoW world pos when present (installed after first pass / on reinstall).
+    if (
+      shader.vertexShader.includes('vRtsFogWorldPos') &&
+      !shader.vertexShader.includes('vMesaWorldPos = vRtsFogWorldPos')
+    ) {
+      if (shader.vertexShader.includes('vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;')) {
+        shader.vertexShader = shader.vertexShader.replace(
+          'vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;',
+          /* glsl */ `vRtsFogWorldPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
+	vMesaWorldPos = vRtsFogWorldPos;`
+        );
+      }
+    }
 
-    if (!shader.fragmentShader.includes('mesaWindTime')) {
+    if (!shader.fragmentShader.includes('mesaWindNoise')) {
       const windHelpers = /* glsl */ `
+#ifndef MESA_WIND_HELPERS
+#define MESA_WIND_HELPERS
 uniform float mesaWindTime;
 uniform vec2 mesaWindDir;
 uniform float mesaWindSpeed;
@@ -891,25 +914,24 @@ float mesaWindNoise( vec2 p ) {
 	float d = mesaWindHash( i + vec2( 1.0, 1.0 ) );
 	return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );
 }
+#endif
 `;
-      if (shader.fragmentShader.includes('varying vec3 vMesaWorldPos')) {
-        // Closeup/splat already declared the varying — append uniforms only.
-        shader.fragmentShader = shader.fragmentShader.replace(
-          'varying vec3 vMesaWorldPos;',
-          /* glsl */ `varying vec3 vMesaWorldPos;
-${windHelpers}`
-        );
-      } else {
+      if (!shader.fragmentShader.includes('varying vec3 vMesaWorldPos')) {
         shader.fragmentShader = shader.fragmentShader.replace(
           '#include <common>',
           /* glsl */ `#include <common>
 varying vec3 vMesaWorldPos;
 ${windHelpers}`
         );
+      } else {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          'varying vec3 vMesaWorldPos;',
+          /* glsl */ `varying vec3 vMesaWorldPos;
+${windHelpers}`
+        );
       }
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <map_fragment>',
-        /* glsl */ `#include <map_fragment>
+
+      const windApply = /* glsl */ `
 	{
 		float camDist = length( vMesaWorldPos - cameraPosition );
 		float distFade = 1.0 - smoothstep( mesaWindFadeNear, mesaWindFadeFar, camDist );
@@ -919,34 +941,75 @@ ${windHelpers}`
 			vec2 windN = normalize( mesaWindDir );
 			vec2 drift = windN * ( mesaWindTime * mesaWindSpeed );
 			vec2 along = vec2( dot( xz, windN ), dot( xz, vec2( -windN.y, windN.x ) ) * 2.5 );
-			// Multi-octave soft noise only — no floor/step cells (those looked like pixels).
 			float n1 = mesaWindNoise( along * mesaWindScale + drift );
 			float n2 = mesaWindNoise( xz * ( mesaWindScale * 3.8 ) + drift * 1.55 + vec2( 11.3, 4.7 ) );
 			float n3 = mesaWindNoise( xz * ( mesaWindScale * 9.5 ) + drift * 2.1 + vec2( 3.1, 17.9 ) );
-			float streak = smoothstep( 0.45, 0.7, n1 );
-			float grit = smoothstep( 0.52, 0.78, n2 ) * 0.65 + smoothstep( 0.6, 0.88, n3 ) * 0.5;
-			float dust = clamp( streak * 0.55 + grit * 0.8, 0.0, 1.0 );
-			// Several sand hues (not a single flat tint).
+			float streak = smoothstep( 0.42, 0.68, n1 );
+			float grit = smoothstep( 0.48, 0.75, n2 ) * 0.7 + smoothstep( 0.55, 0.85, n3 ) * 0.55;
+			float dust = clamp( streak * 0.55 + grit * 0.85, 0.0, 1.0 );
 			vec3 sandA = vec3( 0.58, 0.44, 0.30 );
 			vec3 sandB = vec3( 0.74, 0.60, 0.42 );
 			vec3 sandC = vec3( 0.40, 0.33, 0.26 );
 			vec3 sand = mix( mix( sandA, sandB, n2 ), sandC, n3 * 0.65 );
 			vec3 base = diffuseColor.rgb;
 			float luma = max( 1e-3, dot( base, vec3( 0.2126, 0.7152, 0.0722 ) ) );
-			vec3 tinted = sand * ( luma * 1.25 ) + vec3( 0.025, 0.018, 0.01 );
-			vec3 shade = base * 0.78;
-			vec3 blown = mix( shade, tinted, 0.62 + grit * 0.28 );
+			vec3 tinted = sand * ( luma * 1.3 ) + vec3( 0.03, 0.022, 0.012 );
+			vec3 shade = base * 0.76;
+			vec3 blown = mix( shade, tinted, 0.65 + grit * 0.3 );
 			diffuseColor.rgb = mix( base, blown, dust * gate );
 		}
 	}
-`
-      );
+`;
+      // opaque_fragment first — works on MeshBasic / Quest and survives map_fragment loss.
+      if (shader.fragmentShader.includes('#include <opaque_fragment>')) {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <opaque_fragment>',
+          `${windApply}\n	#include <opaque_fragment>`
+        );
+      } else if (shader.fragmentShader.includes('#include <output_fragment>')) {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <output_fragment>',
+          `${windApply}\n	#include <output_fragment>`
+        );
+      } else if (shader.fragmentShader.includes('#include <map_fragment>')) {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <map_fragment>',
+          /* glsl */ `#include <map_fragment>
+${windApply}`
+        );
+      }
     }
   };
-  mat.customProgramCacheKey = () => `${prevKey()}|mesaWindDustV5`;
+  mat.customProgramCacheKey = () => `${prevKey()}|mesaWindDustV6quest`;
   mat.needsUpdate = true;
   _mesaWindMats.add(mat);
   ensureMesaWindTick();
+}
+
+/** Re-apply wind after FoW install (FoW upgrade can drop later compile hooks). */
+export function ensureMesaWindDustOnRoot(root, THREE) {
+  if (!root || !THREE || !wantMesaWindDust()) return 0;
+  let n = 0;
+  root.traverse((obj) => {
+    if (!obj.isMesh || !obj.material) return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const mat of mats) {
+      if (!mat?.userData?.rtsMesaHeightfield) continue;
+      // Force reinstall if FoW wiped the hook.
+      if (mat.userData._mesaWindInstalled && !String(mat.customProgramCacheKey?.() || '').includes('mesaWindDust')) {
+        mat.userData._mesaWindInstalled = false;
+        mat.userData._mesaWindUniforms = null;
+      }
+      if (!mat.userData._mesaWindInstalled) {
+        installMesaWindDust(mat, THREE);
+        n += 1;
+      } else {
+        _mesaWindMats.add(mat);
+        ensureMesaWindTick();
+      }
+    }
+  });
+  return n;
 }
 
 function wantMesaCloseupDetail() {
@@ -1323,8 +1386,9 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
       }
       seen.add(mat);
       if (closeup) installMesaCloseupDetail(mat, THREE, closeup);
-      if (useWind) installMesaWindDust(mat, THREE);
       installFogVisualOnMaterial(mat);
+      // Wind last so FoW cannot drop it from the compile chain.
+      if (useWind) installMesaWindDust(mat, THREE);
       mat.needsUpdate = true;
       applied += 1;
     });
@@ -1400,8 +1464,8 @@ export async function applyMesaHqTextures(root, THREE, sceneEl) {
     mat.color.setRGB(1, 1, 1);
     if (splat) installMesaSplatDetail(mat, THREE, splat);
     if (closeup) installMesaCloseupDetail(mat, THREE, closeup);
-    if (wantMesaWindDust()) installMesaWindDust(mat, THREE);
     installFogVisualOnMaterial(mat);
+    if (wantMesaWindDust()) installMesaWindDust(mat, THREE);
     mat.needsUpdate = true;
     applied += 1;
   });
