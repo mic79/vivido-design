@@ -1,71 +1,46 @@
 #!/usr/bin/env node
 /**
- * Separation candidate / stagger regression tests.
- * Run: node RTSVR4/test-separation.mjs
+ * Soft-body unit separation must stay OFF (user directive).
+ * Run: node RTSVR6/test-separation.mjs
  */
 import assert from 'node:assert/strict';
-import { UNIT_SEPARATION_CONTACT_STAGGER } from './js/config.js';
+import {
+  UNIT_SEPARATION_RADIUS,
+  UNIT_SEPARATION_ACCEL,
+  UNIT_CLEARANCE_MIN,
+} from './js/config.js';
 import { getSeparationCandidateKind } from './js/separation-policy.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-function unit(partial) {
-  return {
-    id: 'u1',
-    hp: 100,
-    type: 'rifleman',
-    state: 'idle',
-    targetPos: null,
-    path: null,
-    _sepInContact: false,
-    ...partial,
-  };
-}
+const root = path.dirname(fileURLToPath(import.meta.url));
+const unitsSrc = fs.readFileSync(path.join(root, 'js/units.js'), 'utf8');
 
-console.log('--- separation candidates ---');
+console.log('--- soft separation must be disabled ---');
+
+assert.equal(UNIT_SEPARATION_RADIUS, 0);
+assert.equal(UNIT_SEPARATION_ACCEL, 0);
+assert.equal(UNIT_CLEARANCE_MIN, 0);
 
 assert.equal(
-  getSeparationCandidateKind(unit({ state: 'moving' }), 0, 4),
-  'mover',
-  'moving unit is always a mover candidate'
-);
-
-assert.equal(
-  getSeparationCandidateKind(unit({ state: 'attacking', targetPos: { x: 1, z: 1 } }), 0, 4),
-  'mover',
-  'chasing attacker is a mover candidate'
-);
-
-assert.equal(
-  getSeparationCandidateKind(unit({ state: 'attacking', targetPos: null, path: [] }), 0, 4),
-  'contact',
-  'stationary firing unit still soft-separates (staggered) so melee piles do not freeze'
-);
-
-const standingAtk = unit({ id: 'atk_stand', state: 'attacking', targetPos: null, path: [] });
-let atkHits = 0;
-for (let f = 0; f < 16; f++) {
-  if (getSeparationCandidateKind(standingAtk, f, 4) === 'contact') atkHits++;
-}
-assert.ok(atkHits >= 3 && atkHits <= 5, `attacker stagger ~1/4 over 16 frames, got ${atkHits}`);
-
-assert.equal(
-  getSeparationCandidateKind(unit({ type: 'harvester', state: 'harvesting' }), 0, 4),
+  getSeparationCandidateKind({ id: 'u', hp: 100, state: 'moving' }, 0, 4),
   null,
-  'harvesting harvester skips'
+  'policy never nominates units'
 );
 
-assert.equal(
-  getSeparationCandidateKind(unit({ state: 'idle', _sepInContact: false }), 0, 4),
-  null,
-  'idle with no contact is skipped'
+assert.ok(
+  !unitsSrc.includes('applySeparation('),
+  'units.js must not call applySeparation'
+);
+assert.ok(
+  !unitsSrc.includes('UNIT_CLEARANCE_MIN'),
+  'units.js must not run ally hard-clearance'
+);
+assert.ok(
+  unitsSrc.includes('no unit↔unit soft-body push') ||
+    unitsSrc.includes('no unit') && unitsSrc.includes('soft-body'),
+  'updateMovement documents that soft-body push is gone'
 );
 
-const idleContact = unit({ id: 'idle_a', state: 'idle', _sepInContact: true });
-let contactHits = 0;
-for (let f = 0; f < 16; f++) {
-  if (getSeparationCandidateKind(idleContact, f, 4) === 'contact') contactHits++;
-}
-assert.ok(contactHits >= 3 && contactHits <= 5, `stagger ~1/4 over 16 frames, got ${contactHits}`);
-
-assert.ok(UNIT_SEPARATION_CONTACT_STAGGER >= 2 && UNIT_SEPARATION_CONTACT_STAGGER <= 8);
-
-console.log('✅ test-separation passed');
+console.log('✅ test-separation passed (soft-body off)');

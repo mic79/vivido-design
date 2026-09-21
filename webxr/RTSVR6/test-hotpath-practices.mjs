@@ -32,7 +32,7 @@ assert.ok(MINIMAP_REDRAW_HZ >= 4 && MINIMAP_REDRAW_HZ <= 30);
 assert.ok(FOG_OVERLAY_REDRAW_HZ >= 4 && FOG_OVERLAY_REDRAW_HZ <= 30);
 assert.ok(PATHFIND_SIM_PER_TICK >= 4 && PATHFIND_SIM_PER_TICK <= 32);
 assert.ok(PATHFIND_PLAYER_PER_TICK >= PATHFIND_SIM_PER_TICK);
-assert.ok(UNIT_CLEARANCE_MIN > 1);
+assert.ok(UNIT_CLEARANCE_MIN === 0, 'unit soft-clearance must stay off');
 const ordersPerTick = BOT_TARGET_APM / 60 / BOT_TICK_RATE;
 assert.ok(ordersPerTick > 0 && ordersPerTick <= 2, `orders/tick=${ordersPerTick}`);
 console.log(`APM ${BOT_TARGET_APM} → ~${ordersPerTick.toFixed(3)} orders/bot-tick`);

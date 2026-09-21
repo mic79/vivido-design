@@ -1,0 +1,4 @@
+﻿CC0 explosion spritesheet (boom3.png)
+Source: https://opengameart.org/content/explosion-sheet
+Author: StumpyStrust
+License: CC0 (public domain) — no attribution required

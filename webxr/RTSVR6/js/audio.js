@@ -294,6 +294,8 @@ export function playShotSound(unitType, x, z) {
     case 'lightTank': playSpatial('tankShot', x, z, 0.3); break;
     case 'heavyTank': playSpatial('tankShot', x, z, 0.4); break;
     case 'artillery': playSpatial('artilleryShot', x, z, 0.35); break;
+    case 'artilleryTurret': playSpatial('artilleryShot', x, z, 0.32); break;
+    case 'turret': playSpatial('tankShot', x, z, 0.22); break;
     case 'harvester': playSpatial('rifleShot', x, z, 0.07); break;
     case 'mobileHq': playSpatial('uiTick', x, z, 0.05); break;
     default: playSpatial('rifleShot', x, z, 0.15); break;

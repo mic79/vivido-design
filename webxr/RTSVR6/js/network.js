@@ -191,6 +191,8 @@ export function commandFailureMessage(code) {
     unknown_building: 'Unknown building type.',
     no_player: 'Invalid player.',
     no_credits: 'Not enough credits.',
+    tech_locked: 'Build the required structure first (Solar → Refinery → Barracks).',
+    no_power: 'Not enough power — build more Solar Panels.',
     no_hq: 'You need an HQ before placing structures.',
     too_far_from_hq: 'Too far from your HQ — build closer to base.',
     overlap_building: 'Overlaps another structure.',
@@ -1465,6 +1467,7 @@ export function updateNetwork(time) {
       team: b.team,
       x: rnd1(b.x),
       z: rnd1(b.z),
+      rotation: rnd2(b.rotation || 0),
       hp: b.hp,
       maxHp: b.maxHp,
     };
@@ -1591,24 +1594,27 @@ function applyHostFxEventsForClient(fxList) {
           ev.x, fromY, ev.z,
           ev.tx, ty, ev.tz,
           typeof ev.color === 'number' ? ev.color : 0xffffff,
-          dur
+          dur,
+          null,
+          !!ev.heavy
         );
         if (ev.unitType) Audio.playShotSound(ev.unitType, ev.x, ev.z);
         break;
       }
       case 'unit_death': {
-        const n = typeof ev.particles === 'number' ? ev.particles : 8;
-        Effects.spawnExplosion(ev.x, fxY(ev, 0.7), ev.z, n);
+        const n = typeof ev.particles === 'number' ? ev.particles : 16;
+        Effects.spawnExplosion(ev.x, fxY(ev, 0.7), ev.z, n, 'death');
         Audio.playExplosionSound(typeof ev.volume === 'number' ? ev.volume : 0.3, ev.x, ev.z);
         break;
       }
       case 'building_death': {
-        Effects.spawnExplosion(ev.x, fxY(ev, 1.2), ev.z, 12);
+        const n = typeof ev.particles === 'number' ? ev.particles : 22;
+        Effects.spawnExplosion(ev.x, fxY(ev, 1.2), ev.z, n, 'death');
         Audio.playExplosionSound(typeof ev.volume === 'number' ? ev.volume : 0.5, ev.x, ev.z);
         break;
       }
       case 'aoe_impact': {
-        Effects.spawnExplosion(ev.x, fxY(ev, 0.7), ev.z, typeof ev.count === 'number' ? ev.count : 8);
+        Effects.spawnExplosion(ev.x, fxY(ev, 0.7), ev.z, typeof ev.count === 'number' ? ev.count : 12, 'burst');
         Audio.playExplosionSound(
           typeof ev.volume === 'number' ? ev.volume : 0.22,
           ev.x,
@@ -1617,7 +1623,7 @@ function applyHostFxEventsForClient(fxList) {
         break;
       }
       case 'hit_spark': {
-        Effects.spawnExplosion(ev.x, fxY(ev, 0.7), ev.z, typeof ev.count === 'number' ? ev.count : 3);
+        Effects.spawnImpact(ev.x, fxY(ev, 0.7), ev.z, false);
         break;
       }
       case 'build_complete':
@@ -1869,6 +1875,7 @@ function applySnapshot(snapshot) {
         id: bData.id,
         skipNavRebuild: true,
         team: bData.team,
+        rotation: typeof bData.rotation === 'number' ? bData.rotation : undefined,
       });
       navDirty = true;
       building = State.buildings.get(bData.id);
@@ -1882,6 +1889,9 @@ function applySnapshot(snapshot) {
           building.x = bData.x;
           building.z = bData.z;
         }
+      }
+      if (typeof bData.rotation === 'number' && Number.isFinite(bData.rotation)) {
+        building.rotation = bData.rotation;
       }
       if (bData.ownerId !== undefined && building.ownerId !== bData.ownerId) {
         const oldSet = State.buildingsByPlayer.get(building.ownerId);

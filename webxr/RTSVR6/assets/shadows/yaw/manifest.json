@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "framesDefault": 24,
+  "framesDefault": 16,
   "cell": 128,
   "dark": 0.32,
   "sunDir": {
@@ -158,6 +158,45 @@
       "ground": "refinery-ground.png",
       "self": "refinery-self.png",
       "groundHalfM": 9.080726103370997,
+      "dark": 0.32,
+      "meshYawY": 0
+    },
+    {
+      "id": "solarPanel",
+      "types": [
+        "solarPanel"
+      ],
+      "frames": 16,
+      "cell": 128,
+      "ground": "solarPanel-ground.png",
+      "self": "solarPanel-self.png",
+      "groundHalfM": 5.518263579771538,
+      "dark": 0.32,
+      "meshYawY": 0
+    },
+    {
+      "id": "turret",
+      "types": [
+        "turret"
+      ],
+      "frames": 16,
+      "cell": 128,
+      "ground": "turret-ground.png",
+      "self": "turret-self.png",
+      "groundHalfM": 5.197267493130616,
+      "dark": 0.32,
+      "meshYawY": 0
+    },
+    {
+      "id": "artilleryTurret",
+      "types": [
+        "artilleryTurret"
+      ],
+      "frames": 16,
+      "cell": 128,
+      "ground": "artilleryTurret-ground.png",
+      "self": "artilleryTurret-self.png",
+      "groundHalfM": 5.324987218411784,
       "dark": 0.32,
       "meshYawY": 0
     }

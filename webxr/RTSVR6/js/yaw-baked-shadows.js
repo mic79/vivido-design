@@ -371,7 +371,7 @@ export function applyYawShadowCasterPolicy(root, preferBaked) {
   root.traverse((o) => {
     if (!o.isMesh && !o.isInstancedMesh) return;
     if (/^yawCookie_/.test(o.name || '')) return;
-    if (/^units_|^buildings_|^hq_|^barracks_|^warFactory_|^refinery_/.test(o.name || '')) {
+    if (/^units_|^buildings_|^hq_|^barracks_|^warFactory_|^refinery_|^solar_|^turret_|^artillery_/.test(o.name || '')) {
       o.castShadow = false;
     }
   });

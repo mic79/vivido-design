@@ -1,7 +1,9 @@
 // ========================================
 // RTSVR4 — Pathfinding
 // 1. `grid` walkability mask (debug overlay, slope, buildings) — source of truth.
-// 2. `findPath` uses grid A* only (`findPathNavMesh` / three-pathfinding zone is not used at runtime).
+// 2. Runtime: 8-connected grid A* + LOS string-pull (not three-pathfinding zone).
+//    4-connected Manhattan A* forced staircase detours; diagonals + pull fix that.
+//    Scale-up later (hundreds+ movers): flow fields / HPA* over this same grid — not a blind swap.
 // 3. Terrain slope + rim blocking is baked once into `staticTerrainMask`; building place/destroy only reapplies footprints.
 // ========================================
 
@@ -236,8 +238,26 @@ export function invalidateStaticTerrainMask() {
 function applyBuildingObstaclesToGrid() {
   State.buildings.forEach(building => {
     if (building.hp <= 0) return;
-    const half = (building.size || 4) / 2 + OBSTACLE_BUFFER;
+    // Extra pad: textured GLBs (HQ lander, factory, refinery) overhang the gameplay size.
+    // Keep this ≥ visual shell or units path into the mesh and scrape forever.
+    const visualPad =
+      building.type === 'hq' ? 3.0
+      : building.type === 'warFactory' ? 2.5
+      : building.type === 'barracks' ? 2.0
+      : building.type === 'refinery' ? 2.25
+      : building.type === 'artilleryTurret' ? 1.5
+      : building.type === 'turret' ? 1.25
+      : building.type === 'solarPanel' ? 1.0
+      : 1.25;
+    const half = (building.size || 4) / 2 + OBSTACLE_BUFFER + visualPad;
     markRect(building.x, building.z, half, half);
+  });
+  // Parked Mobile HQ reads as a structure. Skip while relocating so the HQ can path
+  // through its own footprint; rebuild when it stops (see units.js).
+  State.units.forEach((u) => {
+    if (!u || u.hp <= 0 || u.type !== 'mobileHq') return;
+    if (u.state === 'moving' || (u.path && u.path.length > 0)) return;
+    markRect(u.x, u.z, 3.6, 3.6);
   });
 }
 
@@ -504,7 +524,14 @@ function findPathGridAStar(startX, startZ, endX, endZ) {
   const open = [[heuristic(sc, sr, ec, er), startKey]];
 
   const dirs = [
-    [-1, 0, 1], [1, 0, 1], [0, -1, 1], [0, 1, 1],
+    [-1, 0, 1],
+    [1, 0, 1],
+    [0, -1, 1],
+    [0, 1, 1],
+    [-1, -1, Math.SQRT2],
+    [-1, 1, Math.SQRT2],
+    [1, -1, Math.SQRT2],
+    [1, 1, Math.SQRT2],
   ];
 
   let iterations = 0;
@@ -535,6 +562,10 @@ function findPathGridAStar(startX, startZ, endX, endZ) {
       const nr = cr + dr;
 
       if (!isWalkable(nc, nr)) continue;
+      // No corner-cutting through blocked diagonals.
+      if (dc !== 0 && dr !== 0) {
+        if (!isWalkable(cc + dc, cr) || !isWalkable(cc, cr + dr)) continue;
+      }
 
       const nKey = nr * COLS + nc;
       if (astarClosed[nKey] === stamp) continue;
@@ -584,8 +615,9 @@ function findPathNavMesh(startX, startZ, endX, endZ) {
 
 /**
  * Find a path from (startX,startZ) to (endX,endZ) on the nav `grid` (same cells as debug overlay).
+ * 8-connected A* + LOS string-pull (classic staircase Manhattan paths were the detour source).
  */
-export function findPath(startX, startZ, endX, endZ) {
+export function findPath(startX, startZ, endX, endZ, smooth = true) {
   const path = findPathGridAStar(startX, startZ, endX, endZ);
   if (!path || path.length === 0) return null;
   if (!isPathValidOnGrid(path)) return null;
@@ -599,13 +631,42 @@ export function findPath(startX, startZ, endX, endZ) {
     return null;
   }
 
-  return path;
+  if (!smooth) return path;
+
+  const smoothed = smoothPathLos(path);
+  if (!smoothed || smoothed.length === 0) return null;
+  if (!isPathValidOnGrid(smoothed)) return path;
+  return smoothed;
 }
 
+/** Octile distance — admissible for 8-connected grid with √2 diagonals. */
 function heuristic(c1, r1, c2, r2) {
   const dc = Math.abs(c2 - c1);
   const dr = Math.abs(r2 - r1);
-  return dc + dr;
+  const m = dc < dr ? dc : dr;
+  return dc + dr + (Math.SQRT2 - 2) * m;
+}
+
+/**
+ * Greedy string-pull: from each waypoint jump as far ahead as a clear grid LOS allows.
+ * Keeps paths near the geometric short chord without a risky full replan.
+ */
+function smoothPathLos(path) {
+  if (!path || path.length < 3) return path;
+  const out = [{ x: path[0].x, z: path[0].z }];
+  let i = 0;
+  while (i < path.length - 1) {
+    let best = i + 1;
+    for (let j = path.length - 1; j > i + 1; j--) {
+      if (isWorldMovementSegmentWalkable(path[i].x, path[i].z, path[j].x, path[j].z)) {
+        best = j;
+        break;
+      }
+    }
+    out.push({ x: path[best].x, z: path[best].z });
+    i = best;
+  }
+  return out;
 }
 
 /** Bresenham line on grid indices — visits every cell the segment crosses (no diagonal gaps). */
@@ -664,48 +725,119 @@ export function isWorldMovementSegmentWalkable(x0, z0, x1, z1) {
   return isGridSegmentWalkable(c0, r0, c1, r1);
 }
 
-export function resolveNavMotion(x0, z0, x1, z1) {
+/**
+ * Can the unit step from (x0,z0) → (x1,z1) on the nav grid?
+ * Same rules as movement (diagonal corner block, Bresenham for longer legs).
+ */
+function canTraverseWorldStep(x0, z0, x1, z1) {
   if (!Number.isFinite(x0) || !Number.isFinite(z0) || !Number.isFinite(x1) || !Number.isFinite(z1)) {
-    return { x: x0, z: z0, blocked: true };
+    return false;
   }
   const c0 = worldToCol(x0);
   const r0 = worldToRow(z0);
   const c1 = worldToCol(x1);
   const r1 = worldToRow(z1);
 
-  if (c0 === c1 && r0 === r1) {
-    if (isWalkable(c0, r0)) return { x: x1, z: z1, blocked: false };
+  if (!isWalkable(c0, r0)) {
+    // Already inside obstacle: only allow egress into a free cell.
+    return isWalkable(c1, r1);
+  }
+  if (c0 === c1 && r0 === r1) return true;
+  if (!isWalkable(c1, r1)) return false;
+
+  if (Math.abs(c1 - c0) <= 1 && Math.abs(r1 - r0) <= 1) {
+    if (c0 !== c1 && r0 !== r1) {
+      if (!isWalkable(c1, r0) || !isWalkable(c0, r1)) return false;
+    }
+    return true;
+  }
+  return isGridSegmentWalkable(c0, r0, c1, r1);
+}
+
+/**
+ * Resolve continuous motion against the nav grid.
+ * On hit: **axis slide** (X then Z / Z then X) — never fractional binary-search into a wall.
+ * That old partial-t move was the “stuck scraping the building edge forever” bug.
+ */
+export function resolveNavMotion(x0, z0, x1, z1) {
+  if (!Number.isFinite(x0) || !Number.isFinite(z0) || !Number.isFinite(x1) || !Number.isFinite(z1)) {
     return { x: x0, z: z0, blocked: true };
   }
 
-  if (Math.abs(c1 - c0) <= 1 && Math.abs(r1 - r0) <= 1) {
-    if (isGridSegmentWalkable(c0, r0, c1, r1)) {
+  const c0 = worldToCol(x0);
+  const r0 = worldToRow(z0);
+
+  // Wedged inside a blocked cell → ease toward free ground (never snap a full cell).
+  if (!isWalkable(c0, r0)) {
+    const c1 = worldToCol(x1);
+    const r1 = worldToRow(z1);
+    if (isWalkable(c1, r1)) {
       return { x: x1, z: z1, blocked: false };
+    }
+    const nearest = findNearestWalkable(c0, r0, 24);
+    if (nearest) {
+      const tx = colToWorld(nearest.c);
+      const tz = rowToWorld(nearest.r);
+      const dx = tx - x0;
+      const dz = tz - z0;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 1e-6) return { x: x0, z: z0, blocked: true };
+      const intended = Math.hypot(x1 - x0, z1 - z0);
+      // Cap eject to the attempted step (or a small crawl) so we never jump a whole cell.
+      const step = Math.max(0.15, Math.min(dist, Math.max(intended, 0.35)));
+      const t = step / dist;
+      return { x: x0 + dx * t, z: z0 + dz * t, blocked: false };
     }
     return { x: x0, z: z0, blocked: true };
   }
 
-  if (isGridSegmentWalkable(c0, r0, c1, r1)) {
+  if (canTraverseWorldStep(x0, z0, x1, z1)) {
     return { x: x1, z: z1, blocked: false };
   }
 
-  let lo = 0;
-  let hi = 1;
-  for (let k = 0; k < 8; k++) {
-    const m = (lo + hi) * 0.5;
-    const xm = x0 + (x1 - x0) * m;
-    const zm = z0 + (z1 - z0) * m;
-    const cm = worldToCol(xm);
-    const rm = worldToRow(zm);
-    if (isGridSegmentWalkable(c0, r0, cm, rm)) lo = m;
-    else hi = m;
-  }
-  const t = lo <= 1e-5 ? 0 : lo - 1e-5;
-  return {
-    x: x0 + (x1 - x0) * t,
-    z: z0 + (z1 - z0) * t,
-    blocked: t < 1e-4,
+  const dx = x1 - x0;
+  const dz = z1 - z0;
+  const tryX = Math.abs(dx) > 1e-8;
+  const tryZ = Math.abs(dz) > 1e-8;
+
+  // Prefer the longer axis first so grazes along long façades release along the wall.
+  const xFirst = Math.abs(dx) >= Math.abs(dz);
+
+  const slide = (axFirst) => {
+    if (axFirst) {
+      if (tryX && canTraverseWorldStep(x0, z0, x1, z0)) {
+        if (tryZ && canTraverseWorldStep(x1, z0, x1, z1)) {
+          return { x: x1, z: z1, blocked: false };
+        }
+        return { x: x1, z: z0, blocked: false };
+      }
+      if (tryZ && canTraverseWorldStep(x0, z0, x0, z1)) {
+        if (tryX && canTraverseWorldStep(x0, z1, x1, z1)) {
+          return { x: x1, z: z1, blocked: false };
+        }
+        return { x: x0, z: z1, blocked: false };
+      }
+    } else {
+      if (tryZ && canTraverseWorldStep(x0, z0, x0, z1)) {
+        if (tryX && canTraverseWorldStep(x0, z1, x1, z1)) {
+          return { x: x1, z: z1, blocked: false };
+        }
+        return { x: x0, z: z1, blocked: false };
+      }
+      if (tryX && canTraverseWorldStep(x0, z0, x1, z0)) {
+        if (tryZ && canTraverseWorldStep(x1, z0, x1, z1)) {
+          return { x: x1, z: z1, blocked: false };
+        }
+        return { x: x1, z: z0, blocked: false };
+      }
+    }
+    return null;
   };
+
+  const slid = slide(xFirst) || slide(!xFirst);
+  if (slid) return slid;
+
+  return { x: x0, z: z0, blocked: true };
 }
 
 export function snapWorldXZToWalkable(wx, wz) {
@@ -940,9 +1072,89 @@ export function pushOutOfObstacle(wx, wz) {
 
   const nearest = findNearestWalkable(c, r);
   if (nearest) {
+    const tx = colToWorld(nearest.c);
+    const tz = rowToWorld(nearest.r);
+    const dx = tx - wx;
+    const dz = tz - wz;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1e-6) return { x: tx, z: tz };
+    // Soft eject toward free cell — callers that need a full snap can loop / call repeatedly.
+    const step = Math.min(dist, Math.max(CELL * 0.35, dist * 0.35));
+    return { x: wx + (dx / dist) * step, z: wz + (dz / dist) * step };
+  }
+  return { x: wx, z: wz };
+}
+
+/** Full snap to nearest walkable cell center (spawn / placement only — not per-frame movement). */
+export function snapOutOfObstacle(wx, wz) {
+  const c = worldToCol(wx);
+  const r = worldToRow(wz);
+  if (isWalkable(c, r)) return { x: wx, z: wz };
+  const nearest = findNearestWalkable(c, r);
+  if (nearest) {
     return { x: colToWorld(nearest.c), z: rowToWorld(nearest.r) };
   }
   return { x: wx, z: wz };
+}
+
+const ESCAPE_DIRS = [
+  [1, 0], [-1, 0], [0, 1], [0, -1],
+  [1, 1], [1, -1], [-1, 1], [-1, -1],
+];
+
+/** Walkable neighbor that gets closer to the goal, or any open neighbor if boxed in.
+ * Prefers orthogonal slides when the closest cell is diagonally corner-blocked.
+ */
+export function bestEscapeStep(x, z, gx, gz) {
+  const c = worldToCol(x);
+  const r = worldToRow(z);
+  const here = Math.hypot(gx - x, gz - z);
+  let closer = null;
+  let closerD = here - 0.05;
+  let any = null;
+  let anyD = Infinity;
+  let lateral = null;
+  let lateralScore = -Infinity;
+  const goalDx = gx - x;
+  const goalDz = gz - z;
+  const goalLen = Math.hypot(goalDx, goalDz) || 1;
+  const gnx = goalDx / goalLen;
+  const gnz = goalDz / goalLen;
+
+  for (let i = 0; i < ESCAPE_DIRS.length; i++) {
+    const dc = ESCAPE_DIRS[i][0];
+    const dr = ESCAPE_DIRS[i][1];
+    const nc = c + dc;
+    const nr = r + dr;
+    if (!isWalkable(nc, nr)) continue;
+    if (dc !== 0 && dr !== 0) {
+      if (!isWalkable(c + dc, r) || !isWalkable(c, r + dr)) continue;
+    }
+    const wx = colToWorld(nc);
+    const wz = rowToWorld(nr);
+    if (!canTraverseWorldStep(x, z, wx, wz)) continue;
+    const d = Math.hypot(gx - wx, gz - wz);
+    if (d < anyD) {
+      anyD = d;
+      any = { x: wx, z: wz };
+    }
+    if (d < closerD) {
+      closerD = d;
+      closer = { x: wx, z: wz };
+    }
+    // Lateral: motion mostly perpendicular to goal, still some progress sideways.
+    const mx = wx - x;
+    const mz = wz - z;
+    const along = mx * gnx + mz * gnz;
+    const side = Math.abs(mx * -gnz + mz * gnx);
+    const score = side * 2 - Math.max(0, -along);
+    if (side > 0.4 && score > lateralScore) {
+      lateralScore = score;
+      lateral = { x: wx, z: wz };
+    }
+  }
+  // Prefer closer; if that failed to move progress, wall-slide laterally around the block.
+  return closer || lateral || any;
 }
 
 /** Spiral search for a reachable goal near an unwalkable click.
@@ -963,7 +1175,7 @@ export function findNearestReachable(fromX, fromZ, targetX, targetZ, maxRadius =
   }
 
   // Prefer local walkable snap without A* (formation slots, near-goal clicks)
-  const snapped = pushOutOfObstacle(targetX, targetZ);
+  const snapped = snapOutOfObstacle(targetX, targetZ);
   if (isPositionWalkable(snapped.x, snapped.z)) {
     if (!canTakePathfindSlot(playerPriority)) return snapped;
     notePathfindSlot(playerPriority);

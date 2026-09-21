@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>explosion sheet proof</title>
+  <style>
+    html, body { margin: 0; background: #1a120e; color: #ccc; font: 14px sans-serif; }
+    #view { display: block; }
+    #atlas { position: absolute; left: 8px; top: 8px; width: 256px; height: 256px; border: 1px solid #444; }
+    #label { position: absolute; left: 280px; top: 8px; }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <img id="atlas" src="../assets/fx/explosion.png" alt="atlas" />
+  <div id="label"></div>
+  <script type="importmap">
+    { "imports": { "three": "/node_modules/three/build/three.module.js" } }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+
+    const COLS = 8, ROWS = 8, FRAMES = 64;
+    const view = document.getElementById('view');
+    view.width = 1100;
+    view.height = 640;
+    const renderer = new THREE.WebGLRenderer({ canvas: view, antialias: true });
+    renderer.setSize(1100, 640, false);
+    renderer.setClearColor(0x1a120e, 1);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(40, 1100 / 640, 0.1, 100);
+    camera.position.set(0, 6, 14);
+    camera.lookAt(0, 1.2, 0);
+
+    const ground = new THREE.Mesh(
+      new THREE.CircleGeometry(8, 40),
+      new THREE.MeshBasicMaterial({ color: 0x6a4030 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    scene.add(ground);
+
+    const loader = new THREE.TextureLoader();
+    const tex = await loader.loadAsync('../assets/fx/explosion.png');
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    const map = tex.clone();
+    map.repeat.set(1 / COLS, 1 / ROWS);
+    const mat = new THREE.MeshBasicMaterial({
+      map, transparent: true, blending: THREE.AdditiveBlending,
+      depthWrite: false, toneMapped: false, side: THREE.DoubleSide,
+    });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(5.5, 5.5), mat);
+    quad.position.set(0, 2.4, 0);
+    quad.lookAt(camera.position);
+    scene.add(quad);
+
+    const label = document.getElementById('label');
+    function show(f) {
+      const col = f % COLS;
+      const row = Math.floor(f / COLS);
+      map.offset.set(col / COLS, 1 - (row + 1) / ROWS);
+      map.needsUpdate = true;
+      label.textContent = 'frame ' + f + ' / ' + (FRAMES - 1) + ' (CC0 boom3)';
+      renderer.render(scene, camera);
+    }
+    window.__showFrame = show;
+    window.__proofReady = true;
+    const play = /[?&]play=1/.test(location.search);
+    if (play) {
+      let f = 0;
+      const tick = () => {
+        show(f);
+        f = (f + 1) % FRAMES;
+        setTimeout(tick, 45);
+      };
+      tick();
+    } else {
+      show(8);
+    }
+  </script>
+</body>
+</html>

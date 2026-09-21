@@ -5,6 +5,8 @@
 
 import {
   BUILDING_TYPES, UNIT_TYPES, BUILD_RADIUS_FROM_HQ, BUILDING_SHAPES,
+  BUILDING_UNLOCK_REQUIRES, HQ_BUILD_MENU_TYPES, LOW_POWER_RATE,
+  DEFENSE_TURN_RATE, DEFENSE_AIM_FIRE_TOL, getSolarPanelYaw,
   isWorldInsidePlayableDisk,
 } from './config.js';
 import * as State from './state.js';
@@ -12,6 +14,53 @@ import * as Pathfinding from './pathfinding.js';
 import * as Units from './units.js';
 import * as Resources from './resources.js';
 import * as Audio from './audio.js';
+import * as Fog from './fog.js';
+import { unitGrid } from './spatial.js';
+
+export { HQ_BUILD_MENU_TYPES };
+
+/** True if owner has at least one completed, living building of `type`. */
+export function playerHasBuiltType(ownerId, type) {
+  return State.getPlayerBuildings(ownerId).some(
+    b => b.type === type && b.isBuilt && b.hp > 0
+  );
+}
+
+/** Tech-tree gate for HQ construction menu / placement. */
+export function isBuildingTypeUnlocked(type, ownerId) {
+  if (type === 'hq') return true;
+  if (!(type in BUILDING_UNLOCK_REQUIRES)) return true;
+  const req = BUILDING_UNLOCK_REQUIRES[type];
+  if (req == null) return true;
+  return playerHasBuiltType(ownerId, req);
+}
+
+/**
+ * Power produced / consumed by completed buildings.
+ * @returns {{ produce: number, consume: number, surplus: number }}
+ */
+export function getPlayerPower(ownerId) {
+  let produce = 0;
+  let consume = 0;
+  State.getPlayerBuildings(ownerId).forEach(b => {
+    if (!b.isBuilt || b.hp <= 0) return;
+    const s = BUILDING_TYPES[b.type];
+    if (!s) return;
+    produce += s.powerProduce || 0;
+    consume += s.powerConsume || 0;
+  });
+  return { produce, consume, surplus: produce - consume };
+}
+
+/** 1 when powered, `LOW_POWER_RATE` when surplus &lt; 0. */
+export function getPowerRateFactor(ownerId) {
+  return getPlayerPower(ownerId).surplus < 0 ? LOW_POWER_RATE : 1;
+}
+
+export function getBuildingUnlockFailureCode(type, ownerId) {
+  if (!isBuildingTypeUnlocked(type, ownerId)) return 'tech_locked';
+  return null;
+}
 
 // --- Building creation ---
 // options.id: authoritative id (snapshots); skipNavRebuild: batch apply (rebuild once after)
@@ -28,13 +77,19 @@ export function createBuilding(type, ownerId, x, z, options = {}) {
   if (!player) return null;
 
   const id = options.id != null ? options.id : State.generateId('bldg');
+  let initialRotation = 0;
+  if (typeof options.rotation === 'number' && Number.isFinite(options.rotation)) {
+    initialRotation = options.rotation;
+  } else if (type === 'solarPanel') {
+    initialRotation = getSolarPanelYaw();
+  }
   const building = {
     id,
     type,
     ownerId,
     team: options.team != null ? options.team : player.team,
     x, z,
-    rotation: 0,
+    rotation: initialRotation,
     hp: stats.hp,
     maxHp: stats.hp,
     size: stats.size || 4,
@@ -49,6 +104,16 @@ export function createBuilding(type, ownerId, x, z, options = {}) {
 
     // Capture (engineer) — 0..1 progress, does not change hp
     captureProgress: 0,
+
+    // Defense turrets (copied from BUILDING_TYPES when armed)
+    damage: stats.damage || 0,
+    range: stats.range || 0,
+    cooldown: stats.cooldown || 1,
+    aoe: stats.aoe || 0,
+    dmgVsInfantry: stats.dmgVsInfantry ?? 1,
+    dmgVsVehicle: stats.dmgVsVehicle ?? 1,
+    dmgVsBuilding: stats.dmgVsBuilding ?? 1,
+    lastFireTime: 0,
 
     // Rendering
     _renderIndex: -1,
@@ -81,7 +146,7 @@ export function placeHQ(ownerId) {
 
 // --- Building placement validation ---
 /**
- * @param {{ skipCredits?: boolean, skipHqRangeCheck?: boolean }} [opts]
+ * @param {{ skipCredits?: boolean, skipHqRangeCheck?: boolean, skipTechCheck?: boolean, skipPowerCheck?: boolean }} [opts]
  * @returns {string|null}
  */
 function getPlaceBuildingFailureCodeInternal(type, ownerId, x, z, opts = {}) {
@@ -92,6 +157,19 @@ function getPlaceBuildingFailureCodeInternal(type, ownerId, x, z, opts = {}) {
   if (!player) return 'no_player';
 
   if (!opts.skipCredits && player.credits < stats.cost) return 'no_credits';
+
+  if (!opts.skipTechCheck) {
+    const techFail = getBuildingUnlockFailureCode(type, ownerId);
+    if (techFail) return techFail;
+  }
+
+  if (!opts.skipPowerCheck) {
+    const need = stats.powerConsume || 0;
+    if (need > 0) {
+      const pow = getPlayerPower(ownerId);
+      if (pow.produce < pow.consume + need) return 'no_power';
+    }
+  }
 
   if (!opts.skipHqRangeCheck) {
     const hqs = State.getPlayerBuildings(ownerId).filter(b => b.type === 'hq' && b.hp > 0);
@@ -138,6 +216,8 @@ export function getMobileHqDeployFailureCode(ownerId, x, z) {
   return getPlaceBuildingFailureCodeInternal('hq', ownerId, x, z, {
     skipCredits: true,
     skipHqRangeCheck: true,
+    skipTechCheck: true,
+    skipPowerCheck: true,
   });
 }
 
@@ -196,7 +276,8 @@ export function updateConstruction(dt) {
     if (building.hp <= 0) return;
     if (building.isBuilt || building.constructionProgress >= 1) return;
 
-    building.constructionProgress += dt / building.constructionTime;
+    const rate = getPowerRateFactor(building.ownerId);
+    building.constructionProgress += (dt * rate) / building.constructionTime;
 
     const player = State.players[building.ownerId];
     if (building.constructionProgress >= 1) {
@@ -300,7 +381,8 @@ export function updateProduction(dt) {
     if (building.productionQueue.length === 0) return;
 
     const current = building.productionQueue[0];
-    current.remainingTime -= dt;
+    const rate = getPowerRateFactor(building.ownerId);
+    current.remainingTime -= dt * rate;
 
     if (current.remainingTime <= 0) {
       // Unit complete - spawn at rally point
@@ -327,8 +409,85 @@ function getSpawnPosition(building) {
   const offset = (shape?.depth || 4) / 2 + 2;
   const rawX = building.x + (Math.random() - 0.5) * 4;
   const rawZ = building.z + offset;
-  const safe = Pathfinding.pushOutOfObstacle(rawX, rawZ);
+  const safe = Pathfinding.snapOutOfObstacle(rawX, rawZ);
   return { x: safe.x, z: safe.z };
+}
+
+/** Shortest signed yaw delta in (−π, π]. */
+function yawDelta(from, to) {
+  let d = to - from;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+/** Slew `building.rotation` toward `targetYaw` by at most `DEFENSE_TURN_RATE * dt`. */
+function turnBuildingToward(building, targetYaw, dt) {
+  const maxStep = DEFENSE_TURN_RATE * Math.max(0, dt);
+  const d = yawDelta(building.rotation || 0, targetYaw);
+  if (Math.abs(d) <= maxStep) {
+    building.rotation = targetYaw;
+    return 0;
+  }
+  building.rotation = (building.rotation || 0) + Math.sign(d) * maxStep;
+  return yawDelta(building.rotation, targetYaw);
+}
+
+/**
+ * Auto-aim + fire for Turret / Artillery buildings (host sim only).
+ * Tracks targets every tick; fire is gated on power, cooldown, and aim cone.
+ */
+export function updateDefenseBuildings(time, dt = 0) {
+  State.buildings.forEach(building => {
+    if (!building.isBuilt || building.hp <= 0) return;
+    if (!(building.damage > 0) || !(building.range > 0)) return;
+
+    const range = building.range;
+    const visionR = building.visionRange != null ? building.visionRange : range;
+    let best = null;
+    let bestDist = range;
+
+    const nearby = unitGrid.queryRadius(building.x, building.z, range);
+    for (let i = 0; i < nearby.length; i++) {
+      const u = nearby[i];
+      if (!u || u.hp <= 0) continue;
+      if (u.team === building.team || u.ownerId === building.ownerId) continue;
+      const d = Pathfinding.getDistance(building.x, building.z, u.x, u.z);
+      if (d > range || d >= bestDist) continue;
+      if (d > visionR + 0.5) continue;
+      if (!Fog.isVisibleToTeam(building.team, u.x, u.z)) continue;
+      bestDist = d;
+      best = u;
+    }
+
+    if (!best) {
+      State.buildings.forEach(b => {
+        if (b.hp <= 0 || !b.isBuilt) return;
+        if (b.id === building.id) return;
+        if (b.team === building.team || b.ownerId === building.ownerId) return;
+        const d = Pathfinding.getDistance(building.x, building.z, b.x, b.z);
+        if (d > range || d >= bestDist) return;
+        if (d > visionR + 0.5) return;
+        if (!Fog.isVisibleToTeam(building.team, b.x, b.z)) return;
+        bestDist = d;
+        best = b;
+      });
+    }
+
+    if (!best) return;
+
+    const aimYaw = Math.atan2(best.x - building.x, best.z - building.z);
+    const remaining = turnBuildingToward(building, aimYaw, dt);
+
+    if (getPlayerPower(building.ownerId).surplus < 0) return;
+    if (Math.abs(remaining) > DEFENSE_AIM_FIRE_TOL) return;
+
+    // Cooldown is stored in seconds; `time` is performance.now() ms (same as unit fireRate*1000).
+    const cdMs = (building.cooldown > 0 ? building.cooldown : 1) * 1000;
+    if (time - (building.lastFireTime || 0) < cdMs) return;
+
+    Units.fireAtTarget(building, best, time);
+  });
 }
 
 /** Tag produced units to this structure's base so Story defense stays local. */

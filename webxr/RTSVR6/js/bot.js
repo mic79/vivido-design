@@ -94,7 +94,7 @@ function commandBotEngageEnemyUnits(unitIds, enemyRef) {
   let ax = anchor.x;
   let az = anchor.z;
   if (!Pathfinding.isPositionWalkable(ax, az)) {
-    const pushed = Pathfinding.pushOutOfObstacle(ax, az);
+    const pushed = Pathfinding.snapOutOfObstacle(ax, az);
     ax = pushed.x;
     az = pushed.z;
   }
@@ -197,22 +197,28 @@ function performEconomyLogic(player, buildings, harvesters, elapsed) {
   const personality = mem.personality;
   const credits = player.credits;
 
+  const hasSolarPlaced = buildings.some(b => b.type === 'solarPanel' && b.hp > 0);
+  const hasSolarBuilt = buildings.some(b => b.type === 'solarPanel' && b.isBuilt && b.hp > 0);
   const hasBarracks = buildings.some(b => b.type === 'barracks' && b.hp > 0);
+  const hasBarracksBuilt = buildings.some(b => b.type === 'barracks' && b.isBuilt && b.hp > 0);
   const hasRefinery = buildings.some(b => b.type === 'refinery' && b.hp > 0);
+  const hasRefineryBuilt = buildings.some(b => b.type === 'refinery' && b.isBuilt && b.hp > 0);
   const hasFactory = buildings.some(b => b.type === 'warFactory' && b.hp > 0);
 
   // Difficulty/Personality scaling for construction timing
   const expansionThreshold = BOT_ECON_EXPAND_CREDITS;
   const factoryThreshold = 800 - (personality.techPreference * 400); // 400 to 800 credits
 
-  // Priority 1: Mandatory Infrastructure (Core Base)
-  if (!hasBarracks && credits >= 300) {
-    const pos = findBuildPosition(State.getPlayerHQ(pid), 10, 'barracks', pid);
-    if (pos) Buildings.placeBuilding('barracks', pid, pos.x, pos.z);
+  // Priority 0: Power — unlocks everything else
+  if (!hasSolarPlaced && credits >= 150) {
+    const pos = findBuildPosition(State.getPlayerHQ(pid), 8, 'solarPanel', pid);
+    if (pos) Buildings.placeBuilding('solarPanel', pid, pos.x, pos.z);
     return;
   }
+  if (hasSolarPlaced && !hasSolarBuilt) return;
 
-  if (!hasRefinery && credits >= 500) {
+  // Priority 1: Mandatory Infrastructure (Core Base) — tech order: refinery → barracks → factory
+  if (hasSolarBuilt && !hasRefinery && credits >= 500) {
     const hq = State.getPlayerHQ(pid);
     let pos = null;
     if (hq) {
@@ -222,11 +228,37 @@ function performEconomyLogic(player, buildings, harvesters, elapsed) {
     if (pos) Buildings.placeBuilding('refinery', pid, pos.x, pos.z);
     return;
   }
+  if (hasRefinery && !hasRefineryBuilt) return;
 
-  if (!hasFactory && credits >= factoryThreshold && hasRefinery) {
+  if (hasRefineryBuilt && !hasBarracks && credits >= 300) {
+    const pos = findBuildPosition(State.getPlayerHQ(pid), 10, 'barracks', pid);
+    if (pos) Buildings.placeBuilding('barracks', pid, pos.x, pos.z);
+    return;
+  }
+  if (hasBarracks && !hasBarracksBuilt) return;
+
+  if (!hasFactory && credits >= factoryThreshold && hasBarracksBuilt) {
     const pos = findBuildPosition(State.getPlayerHQ(pid), 12, 'warFactory', pid);
     if (pos) Buildings.placeBuilding('warFactory', pid, pos.x, pos.z);
     return;
+  }
+
+  // Extra solar if low power before more consumers
+  const pow = Buildings.getPlayerPower(pid);
+  if (pow.surplus < 40 && credits >= 150) {
+    const pos = findBuildPosition(State.getPlayerHQ(pid), 10, 'solarPanel', pid);
+    if (pos) Buildings.placeBuilding('solarPanel', pid, pos.x, pos.z);
+    return;
+  }
+
+  // Defenses once barracks unlocks turrets
+  if (hasBarracksBuilt && mem.militaryEmergency && credits >= 400) {
+    const turrets = buildings.filter(b => b.type === 'turret' && b.hp > 0);
+    if (turrets.length < 2) {
+      const pos = findBuildPosition(State.getPlayerHQ(pid), 14, 'turret', pid);
+      if (pos) Buildings.placeBuilding('turret', pid, pos.x, pos.z);
+      return;
+    }
   }
 
   const builtRefineries = buildings.filter(b => b.type === 'refinery' && b.isBuilt);
@@ -268,7 +300,7 @@ function performEconomyLogic(player, buildings, harvesters, elapsed) {
 
   // Bonus: If very aggressive and has lots of cash, build a second War Factory
   const factories = buildings.filter(b => b.type === 'warFactory' && b.hp > 0);
-  if (personality.aggression > 0.55 && factories.length < 2 && credits >= BOT_SECOND_WARFACTORY_CREDITS && hasRefinery) {
+  if (personality.aggression > 0.55 && factories.length < 2 && credits >= BOT_SECOND_WARFACTORY_CREDITS && hasBarracksBuilt) {
     const pos = findBuildPosition(State.getPlayerHQ(pid), 20, 'warFactory', pid);
     if (pos) Buildings.placeBuilding('warFactory', pid, pos.x, pos.z);
   }
@@ -593,7 +625,7 @@ function manageRetaliation(player, idleUnits) {
       let ax = lead.x;
       let az = lead.z;
       if (!Pathfinding.isPositionWalkable(ax, az)) {
-        const po = Pathfinding.pushOutOfObstacle(ax, az);
+        const po = Pathfinding.snapOutOfObstacle(ax, az);
         ax = po.x;
         az = po.z;
       }

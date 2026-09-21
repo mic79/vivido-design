@@ -5,6 +5,7 @@
 
 import {
   UNIT_TYPES, BUILDING_TYPES, PLAYER_COLOR_HEX,
+  HQ_BUILD_MENU_TYPES, BUILDING_UNLOCK_REQUIRES,
   MAP_NAV_PLANE_HALF_M, MAP_UNIT_NAV_RADIUS, FOG_GRID_SIZE, FOG_CELL_SIZE,
   clampWorldToPlayableDisk,
   clampWorldToCameraNavDisk,
@@ -720,7 +721,7 @@ function getHudControlsHelpHtml() {
       <p style="margin:10px 0 0 0;opacity:0.85;font-size:11px;">Zoom in (pinch) for easier taps on single units; zoomed out is best for overview and orders.</p>`;
   }
   return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left: Select · Left on open ground: Deselect · Right: Move / attack / follow (engineers repair nearby friendly vehicles; right-click follow a vehicle to stay with it)<br>
-    HQ click: Build · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, draped on terrain height) · Esc: Menu · Shadows / MSAA 4x: menu / HUD toggles (MSAA reloads the page to recreate the GL context)<br>
+    HQ click: Build (Solar → Refinery → Barracks → Factory / Turret / Artillery) · Power HUD ⚡ · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, draped on terrain height) · Esc: Menu · Shadows / MSAA 4x: menu / HUD toggles (MSAA reloads the page to recreate the GL context)<br>
     <span style="opacity:0.85">VR: Laser + trigger on menu & map · grip+trigger on one hand for follow · X menu · Y map · B deselect · A select all · grips pan · Shadows and MSAA 4x on wrist menu and match HUD</span>`;
 }
 
@@ -781,6 +782,8 @@ function createHUD() {
           font-family: Consolas, monospace; font-size: 20px; line-height: 1; align-items: center; justify-content: center;">☰</button>
         <div id="hud-resources-stats" style="flex: 1; min-width: 0;">
           <span id="hud-credits">$1000</span>
+          <span style="color: #555; margin: 0 6px;">|</span>
+          <span id="hud-power" style="color: #6cf;">⚡100/0</span>
           <span style="color: #555; margin: 0 6px;">|</span>
           <span id="hud-income" style="color: #4f4;">+2/s</span>
           <span style="color: #555; margin: 0 6px;">|</span>
@@ -1480,14 +1483,25 @@ function updateHUD() {
   }
 
   const creditsEl = document.getElementById('hud-credits');
+  const powerEl = document.getElementById('hud-power');
   const incomeEl = document.getElementById('hud-income');
   const unitsEl = document.getElementById('hud-units');
   const timeEl = document.getElementById('hud-time');
 
   const creditsText = `$${Math.floor(player.credits)}`;
+  const pow = Buildings.getPlayerPower(player.id);
+  const powerLow = pow.surplus < 0;
+  const powerText = `⚡${pow.produce}/${pow.consume}`;
   const incomeText = `+${player.income.toFixed(1)}/s`;
   const unitsText = `${player.unitCount}/${player.unitCap}`;
   if (creditsEl && creditsEl.textContent !== creditsText) creditsEl.textContent = creditsText;
+  if (powerEl) {
+    if (powerEl.textContent !== powerText) powerEl.textContent = powerText;
+    powerEl.style.color = powerLow ? '#f66' : '#6cf';
+    powerEl.title = powerLow
+      ? `Low power (${pow.surplus}) — construction & production slowed; defenses offline`
+      : `Power ${pow.produce} produced / ${pow.consume} used (surplus ${pow.surplus})`;
+  }
   if (incomeEl && incomeEl.textContent !== incomeText) incomeEl.textContent = incomeText;
   if (unitsEl && unitsEl.textContent !== unitsText) unitsEl.textContent = unitsText;
 
@@ -1499,7 +1513,8 @@ function updateHUD() {
 
   const vrTop = document.getElementById('vr-hud-top');
   if (vrTop) {
-    const vrTopText = `$${Math.floor(player.credits)}  +${player.income.toFixed(1)}/s  |  ${player.unitCount}/${player.unitCap} units  |  ${min}:${sec.toString().padStart(2, '0')}`;
+    const pMark = powerLow ? 'LOW' : `${pow.produce}/${pow.consume}`;
+    const vrTopText = `$${Math.floor(player.credits)}  ⚡${pMark}  +${player.income.toFixed(1)}/s  |  ${player.unitCount}/${player.unitCap} units  |  ${min}:${sec.toString().padStart(2, '0')}`;
     // A-Frame a-text drops updates if `value` is set every tick to a new string while
     // the previous mesh rebuild is in flight — only write on change.
     if (vrTopText !== lastVrHudTop) {
@@ -2372,6 +2387,60 @@ function queueHeadRemainingForUi(building) {
 }
 
 /**
+ * HQ construction button affordance (tech + credits + spare power).
+ * @returns {{ canBuild: boolean, unlocked: boolean, label: string, title: string }}
+ */
+function hqBuildOptionState(type, player) {
+  const stats = BUILDING_TYPES[type];
+  if (!stats || !player) {
+    return {
+      canBuild: false,
+      unlocked: false,
+      label: type,
+      title: '',
+      statusLine: '',
+      type,
+    };
+  }
+  const unlocked = Buildings.isBuildingTypeUnlocked(type, player.id);
+  const need = stats.powerConsume || 0;
+  const pow = Buildings.getPlayerPower(player.id);
+  const hasPower = need <= 0 || pow.produce >= pow.consume + need;
+  const affordable = player.credits >= stats.cost;
+  const canBuild = unlocked && affordable && hasPower;
+  let lockHint = '';
+  let statusLine = `$${stats.cost}`;
+  if (!unlocked) {
+    const req = BUILDING_UNLOCK_REQUIRES[type];
+    const reqName = BUILDING_TYPES[req]?.name || 'Structure';
+    lockHint = `${reqName} required`;
+    statusLine = lockHint;
+  } else if (!hasPower) {
+    lockHint = 'More power required';
+    statusLine = lockHint;
+  } else if (!affordable) {
+    lockHint = 'Not enough credits';
+    statusLine = lockHint;
+  }
+  const title = [
+    `Build ${stats.name}`,
+    `Cost: $${stats.cost} | Build Time: ${stats.buildTime}s`,
+    need > 0 ? `Power: −${need}` : (stats.powerProduce ? `Power: +${stats.powerProduce}` : null),
+    lockHint || null,
+  ].filter(Boolean).join('\n');
+  return { canBuild, unlocked, label: stats.name, title, stats, statusLine, type };
+}
+
+function playerTechPowerSig(player) {
+  if (!player) return '0';
+  const bits = HQ_BUILD_MENU_TYPES.map(t =>
+    Buildings.isBuildingTypeUnlocked(t, player.id) ? '1' : '0'
+  ).join('');
+  const pow = Buildings.getPlayerPower(player.id);
+  return `${bits}:${pow.produce}:${pow.consume}`;
+}
+
+/**
  * Full panel layout signature (no per-frame queue *timer* — `remainingTime` is patched via
  * `patchFlatBuildPanelLiveReadouts` every UI tick so MP clients see host-accurate progress).
  */
@@ -2390,6 +2459,7 @@ function buildPanelLayoutSig(building, player) {
     uc,
     qKey,
     building.type !== 'hq' && building.isBuilt ? 'sell1' : 'sell0',
+    playerTechPowerSig(player),
   ].join('|');
 }
 
@@ -2424,17 +2494,17 @@ function patchFlatBuildPanelLiveReadouts(building, player) {
   const opts = document.getElementById('hud-build-options');
   if (!opts) return;
   if (building.type === 'hq') {
-    const types = ['barracks', 'warFactory', 'refinery'];
+    const types = HQ_BUILD_MENU_TYPES;
     types.forEach(type => {
       const btn = opts.querySelector(`[data-rts-hq-build="${type}"]`);
       if (!btn) return;
-      const stats = BUILDING_TYPES[type];
-      const affordable = player.credits >= stats.cost;
-      btn.style.background = affordable ? '#1a3a1a' : '#2a1a1a';
-      btn.style.color = affordable ? '#fff' : '#666';
-      btn.style.borderColor = affordable ? '#0a0' : '#400';
-      btn.style.cursor = affordable ? 'pointer' : 'not-allowed';
-      if (affordable) {
+      const st = hqBuildOptionState(type, player);
+      btn.style.background = st.canBuild ? '#1a3a1a' : '#2a1a1a';
+      btn.style.color = st.canBuild ? '#fff' : '#666';
+      btn.style.borderColor = st.canBuild ? '#0a0' : (st.unlocked ? '#400' : '#333');
+      btn.style.cursor = st.canBuild ? 'pointer' : 'not-allowed';
+      btn.title = st.title;
+      if (st.canBuild) {
         btn.setAttribute('onclick', `window._startBuildMode('${type}')`);
         btn.setAttribute('onmouseover', "this.style.background='#2a5a2a'");
         btn.setAttribute('onmouseout', "this.style.background='#1a3a1a'");
@@ -2444,7 +2514,10 @@ function patchFlatBuildPanelLiveReadouts(building, player) {
         btn.removeAttribute('onmouseout');
       }
       const price = btn.querySelector('.rts-btn-price');
-      if (price) price.style.color = affordable ? '#0f0' : '#f44';
+      if (price) {
+        price.style.color = st.canBuild ? '#0f0' : '#f44';
+        price.textContent = st.statusLine;
+      }
     });
   } else {
     Buildings.getProductionOptions(building.id).forEach(opt => {
@@ -2488,6 +2561,7 @@ function vrBuildButtonsSig(building, player) {
     q.length,
     qh,
     building.type !== 'hq' && building.isBuilt ? 'sell1' : 'sell0',
+    playerTechPowerSig(player),
   ].join('|');
 }
 
@@ -2577,23 +2651,23 @@ function refreshBuildingPanel(force = false) {
 
   html += '<div id="hud-build-options">';
   if (building.type === 'hq') {
-    const buildableTypes = ['barracks', 'warFactory', 'refinery'];
-    buildableTypes.forEach(type => {
-      const stats = BUILDING_TYPES[type];
-      const affordable = player && player.credits >= stats.cost;
+    HQ_BUILD_MENU_TYPES.forEach(type => {
+      const st = hqBuildOptionState(type, player);
+      const stats = st.stats || BUILDING_TYPES[type];
+      const priceLabel = st.statusLine || `$${stats.cost}`;
       html += `
         <button type="button" data-rts-hq-build="${type}" style="
           display: inline-block; padding: 6px 10px; margin: 3px;
-          background: ${affordable ? '#1a3a1a' : '#2a1a1a'};
-          color: ${affordable ? '#fff' : '#666'};
-          border: 1px solid ${affordable ? '#0a0' : '#400'};
-          border-radius: 4px; cursor: ${affordable ? 'pointer' : 'not-allowed'};
+          background: ${st.canBuild ? '#1a3a1a' : '#2a1a1a'};
+          color: ${st.canBuild ? '#fff' : '#666'};
+          border: 1px solid ${st.canBuild ? '#0a0' : (st.unlocked ? '#400' : '#333')};
+          border-radius: 4px; cursor: ${st.canBuild ? 'pointer' : 'not-allowed'};
           font-family: Consolas, monospace; font-size: 12px;
           transition: background 0.15s;
-        " ${affordable ? `onclick="window._startBuildMode('${type}')"` : ''}
-           ${affordable ? `onmouseover="this.style.background='#2a5a2a'" onmouseout="this.style.background='#1a3a1a'"` : ''}
-           title="Build ${stats.name}&#10;Cost: $${stats.cost} | Build Time: ${stats.buildTime}s">
-          ${stats.name}<br><span class="rts-btn-price" style="font-size: 10px; color: ${affordable ? '#0f0' : '#f44'};">$${stats.cost}</span>
+        " ${st.canBuild ? `onclick="window._startBuildMode('${type}')"` : ''}
+           ${st.canBuild ? `onmouseover="this.style.background='#2a5a2a'" onmouseout="this.style.background='#1a3a1a'"` : ''}
+           title="${st.title.replace(/"/g, '&quot;')}">
+          ${stats.name}<br><span class="rts-btn-price" style="font-size: 10px; color: ${st.canBuild ? '#0f0' : '#f44'};">${priceLabel}</span>
         </button>
       `;
     });
@@ -2716,11 +2790,11 @@ function refreshVrBuildingPanel() {
   while (root.firstChild) root.removeChild(root.firstChild);
 
   if (building.type === 'hq') {
-    const buildableTypes = ['barracks', 'warFactory', 'refinery'];
-    buildableTypes.forEach(type => {
-      const stats = BUILDING_TYPES[type];
-      const affordable = player && player.credits >= stats.cost;
-      vrAddBuildRow(root, cx, y, btnW, rowH, stats.name, `$${stats.cost}`, affordable, {
+    HQ_BUILD_MENU_TYPES.forEach(type => {
+      const st = hqBuildOptionState(type, player);
+      const stats = st.stats || BUILDING_TYPES[type];
+      const sub = st.statusLine || `$${stats.cost}`;
+      vrAddBuildRow(root, cx, y, btnW, rowH, stats.name, sub, st.canBuild, {
         kind: 'build',
         buildingType: type,
       });

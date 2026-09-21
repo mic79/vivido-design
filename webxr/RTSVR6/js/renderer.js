@@ -28,6 +28,7 @@ import {
 import * as Perf from './perf-profiler.js';
 import * as FogVisual from './fog-visual.js';
 import * as YawShadows from './yaw-baked-shadows.js';
+import * as Effects from './effects.js';
 let RESOURCE_FIELD_LAYOUT = getResourceFieldPositions();
 
 let scene3D = null;  // THREE.Scene reference
@@ -89,6 +90,14 @@ const WAR_FACTORY_GLB_URL = 'assets/Meshy_AI_A_lunar_temporary_gar_0417231334_te
 /** Horizontal size vs `max(warFactory width, depth)`; gameplay footprint unchanged. */
 const WAR_FACTORY_GLB_VISUAL_SCALE = 2;
 
+/** User-added CC0 / free GLBs under `assets/buildings/`. */
+const SOLAR_PANEL_GLB_URL = 'assets/buildings/painel_solar.glb';
+const SOLAR_PANEL_GLB_VISUAL_SCALE = 1.6;
+const TURRET_GLB_URL = 'assets/buildings/basic_machine_gun_turret_-_viper.glb';
+const TURRET_GLB_VISUAL_SCALE = 2.8;
+const ARTILLERY_TURRET_GLB_URL = 'assets/buildings/searam_ship_defense_system.glb';
+const ARTILLERY_TURRET_GLB_VISUAL_SCALE = 1.1875;
+
 /** After HQ GLB loads: HUD / picking use model bounds instead of BUILDING_SHAPES.hq box. */
 let hqModelVisualHeight = null;
 let hqModelPickHalfHeight = null;
@@ -120,6 +129,27 @@ let warFactoryTexturedMode = false;
 let warFactoryModelVisualHeight = null;
 let warFactoryModelPickHalfHeight = null;
 let warFactoryModelPickRadius = null;
+
+let solarPanelTexturedTemplate = null;
+const solarPanelTexturedByBuildingId = new Map();
+let solarPanelTexturedMode = false;
+let solarPanelModelVisualHeight = null;
+let solarPanelModelPickHalfHeight = null;
+let solarPanelModelPickRadius = null;
+
+let turretTexturedTemplate = null;
+const turretTexturedByBuildingId = new Map();
+let turretTexturedMode = false;
+let turretModelVisualHeight = null;
+let turretModelPickHalfHeight = null;
+let turretModelPickRadius = null;
+
+let artilleryTurretTexturedTemplate = null;
+const artilleryTurretTexturedByBuildingId = new Map();
+let artilleryTurretTexturedMode = false;
+let artilleryTurretModelVisualHeight = null;
+let artilleryTurretModelPickHalfHeight = null;
+let artilleryTurretModelPickRadius = null;
 let healthBarBgMesh = null;
 let healthBarFgMesh = null;
 let selectionRingMesh = null;
@@ -170,6 +200,8 @@ const _scale = new THREE.Vector3(1, 1, 1);
 const _color = new THREE.Color();
 const _euler = new THREE.Euler();
 const _zeroScale = new THREE.Vector3(0, 0, 0);
+const _projDir = new THREE.Vector3();
+const _projZ = new THREE.Vector3(0, 0, 1);
 const _cameraWorldPos = new THREE.Vector3();
 /** Scratch for `_color.lerp` targets — avoids `new THREE.Color()` in hot paths. */
 const _tmpLerpColor = new THREE.Color();
@@ -344,6 +376,9 @@ export async function initRenderer(sceneEl) {
   await tryReplaceRefineryWithGltfModel(sceneEl);
   await tryReplaceBarracksWithGltfModel(sceneEl);
   await tryReplaceWarFactoryWithGltfModel(sceneEl);
+  await tryReplaceSolarPanelWithGltfModel(sceneEl);
+  await tryReplaceTurretWithGltfModel(sceneEl);
+  await tryReplaceArtilleryTurretWithGltfModel(sceneEl);
   await tryReplaceInfantryWithGltfModel(sceneEl);
   await tryReplaceHarvesterWithGltfModel(sceneEl);
   await tryReplaceLightTankWithGltfModel(sceneEl);
@@ -711,6 +746,11 @@ function buildingHudHeight(buildingType) {
   if (buildingType === 'refinery' && refineryModelVisualHeight != null) return refineryModelVisualHeight;
   if (buildingType === 'barracks' && barracksModelVisualHeight != null) return barracksModelVisualHeight;
   if (buildingType === 'warFactory' && warFactoryModelVisualHeight != null) return warFactoryModelVisualHeight;
+  if (buildingType === 'solarPanel' && solarPanelModelVisualHeight != null) return solarPanelModelVisualHeight;
+  if (buildingType === 'turret' && turretModelVisualHeight != null) return turretModelVisualHeight;
+  if (buildingType === 'artilleryTurret' && artilleryTurretModelVisualHeight != null) {
+    return artilleryTurretModelVisualHeight;
+  }
   return BUILDING_SHAPES[buildingType]?.height ?? 3;
 }
 
@@ -738,6 +778,27 @@ function buildingPickVerticalAndRadius(buildingType) {
     && warFactoryModelPickRadius != null
   ) {
     return { centerY: warFactoryModelPickHalfHeight, radius: warFactoryModelPickRadius };
+  }
+  if (
+    buildingType === 'solarPanel'
+    && solarPanelModelPickHalfHeight != null
+    && solarPanelModelPickRadius != null
+  ) {
+    return { centerY: solarPanelModelPickHalfHeight, radius: solarPanelModelPickRadius };
+  }
+  if (
+    buildingType === 'turret'
+    && turretModelPickHalfHeight != null
+    && turretModelPickRadius != null
+  ) {
+    return { centerY: turretModelPickHalfHeight, radius: turretModelPickRadius };
+  }
+  if (
+    buildingType === 'artilleryTurret'
+    && artilleryTurretModelPickHalfHeight != null
+    && artilleryTurretModelPickRadius != null
+  ) {
+    return { centerY: artilleryTurretModelPickHalfHeight, radius: artilleryTurretModelPickRadius };
   }
   const shape = BUILDING_SHAPES[buildingType];
   if (!shape) return { centerY: 2, radius: 3 };
@@ -973,6 +1034,57 @@ function syncWarFactoryTexturedOne(building, worldMat4, drawVisible, THREE_w) {
   YawShadows.syncYawSelfShadowOnObject3D(root, 'warFactory', building.rotation || 0);
 }
 
+function syncSolarPanelTexturedOne(building, worldMat4, drawVisible, THREE_w) {
+  let root = solarPanelTexturedByBuildingId.get(building.id);
+  if (!root) {
+    root = solarPanelTexturedTemplate.clone(true);
+    root.name = `solar_panel_gltf_${building.id}`;
+    root.frustumCulled = true;
+    applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
+    scene3D.add(root);
+    solarPanelTexturedByBuildingId.set(building.id, root);
+  }
+  root.matrixAutoUpdate = false;
+  root.matrix.copy(worldMat4);
+  root.matrixWorldNeedsUpdate = true;
+  root.visible = drawVisible;
+  YawShadows.syncYawSelfShadowOnObject3D(root, 'solarPanel', building.rotation || 0);
+}
+
+function syncTurretTexturedOne(building, worldMat4, drawVisible, THREE_w) {
+  let root = turretTexturedByBuildingId.get(building.id);
+  if (!root) {
+    root = turretTexturedTemplate.clone(true);
+    root.name = `turret_gltf_${building.id}`;
+    root.frustumCulled = true;
+    applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
+    scene3D.add(root);
+    turretTexturedByBuildingId.set(building.id, root);
+  }
+  root.matrixAutoUpdate = false;
+  root.matrix.copy(worldMat4);
+  root.matrixWorldNeedsUpdate = true;
+  root.visible = drawVisible;
+  YawShadows.syncYawSelfShadowOnObject3D(root, 'turret', building.rotation || 0);
+}
+
+function syncArtilleryTurretTexturedOne(building, worldMat4, drawVisible, THREE_w) {
+  let root = artilleryTurretTexturedByBuildingId.get(building.id);
+  if (!root) {
+    root = artilleryTurretTexturedTemplate.clone(true);
+    root.name = `artillery_turret_gltf_${building.id}`;
+    root.frustumCulled = true;
+    applyHqPlayerTintToObject3D(root, building.ownerId, THREE_w);
+    scene3D.add(root);
+    artilleryTurretTexturedByBuildingId.set(building.id, root);
+  }
+  root.matrixAutoUpdate = false;
+  root.matrix.copy(worldMat4);
+  root.matrixWorldNeedsUpdate = true;
+  root.visible = drawVisible;
+  YawShadows.syncYawSelfShadowOnObject3D(root, 'artilleryTurret', building.rotation || 0);
+}
+
 async function tryReplaceHqWithGltfModel(sceneEl) {
   const THREE_w = window.THREE;
   if (!THREE_w || !scene3D || !buildingMeshes.hq || !sceneEl) return;
@@ -1158,6 +1270,114 @@ async function tryReplaceWarFactoryWithGltfModel(sceneEl) {
   warFactoryTexturedMode = true;
   buildingMeshes.warFactory.visible = false;
 
+  configureBattlefieldShadows(sceneEl);
+}
+
+/**
+ * Shared textured-building install: load GLB via A-Frame, fit footprint, hide box InstancedMesh.
+ * @returns {{ template: object, visualHeight: number, pickHalfHeight: number, pickRadius: number }|null}
+ */
+async function installBuildingGltfTemplate(sceneEl, {
+  type,
+  url,
+  visualScale,
+  templateName,
+  label,
+}) {
+  const THREE_w = window.THREE;
+  if (!THREE_w || !scene3D || !buildingMeshes[type] || !sceneEl) return null;
+
+  let loadedRoot;
+  try {
+    loadedRoot = await loadHqGltfRootCloneViaAframe(sceneEl, url);
+  } catch (err) {
+    console.warn(`[RTSVR6] ${label} GLB load failed (keeping box).`, err);
+    return null;
+  }
+
+  const shape = BUILDING_SHAPES[type];
+  const targetFootprint = Math.max(shape.width, shape.depth) * visualScale;
+
+  const mergedMeasure = mergeWorldMeshesToPositionsGeometry(loadedRoot.clone(true), THREE_w);
+  const p = computeBottomFootprintPivotAndScaleFactors(mergedMeasure, targetFootprint);
+  mergedMeasure.dispose();
+
+  const inner = loadedRoot.clone(true);
+  inner.position.set(p.tx * p.scale, p.ty * p.scale, p.tz * p.scale);
+  inner.scale.setScalar(p.scale);
+  inner.traverse((node) => {
+    if (node.isMesh || node.isSkinnedMesh) {
+      node.castShadow = true;
+      node.receiveShadow = false;
+    }
+  });
+
+  disposeHqTexturedObject3D(loadedRoot, THREE_w);
+
+  const wrap = new THREE_w.Group();
+  wrap.name = templateName;
+  wrap.add(inner);
+  wrap.updateMatrixWorld(true);
+  const bb = new THREE_w.Box3().setFromObject(wrap);
+  return {
+    template: wrap,
+    visualHeight: bb.max.y - bb.min.y,
+    pickHalfHeight: Math.abs(bb.min.y) < 0.08 ? bb.max.y * 0.5 : (bb.max.y + bb.min.y) * 0.5,
+    pickRadius: Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) * 0.6,
+  };
+}
+
+async function tryReplaceSolarPanelWithGltfModel(sceneEl) {
+  const r = await installBuildingGltfTemplate(sceneEl, {
+    type: 'solarPanel',
+    url: SOLAR_PANEL_GLB_URL,
+    visualScale: SOLAR_PANEL_GLB_VISUAL_SCALE,
+    templateName: 'solar_panel_gltf_template',
+    label: 'Solar Panel',
+  });
+  if (!r) return;
+  solarPanelTexturedTemplate = r.template;
+  solarPanelModelVisualHeight = r.visualHeight;
+  solarPanelModelPickHalfHeight = r.pickHalfHeight;
+  solarPanelModelPickRadius = r.pickRadius;
+  solarPanelTexturedMode = true;
+  buildingMeshes.solarPanel.visible = false;
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceTurretWithGltfModel(sceneEl) {
+  const r = await installBuildingGltfTemplate(sceneEl, {
+    type: 'turret',
+    url: TURRET_GLB_URL,
+    visualScale: TURRET_GLB_VISUAL_SCALE,
+    templateName: 'turret_gltf_template',
+    label: 'Turret',
+  });
+  if (!r) return;
+  turretTexturedTemplate = r.template;
+  turretModelVisualHeight = r.visualHeight;
+  turretModelPickHalfHeight = r.pickHalfHeight;
+  turretModelPickRadius = r.pickRadius;
+  turretTexturedMode = true;
+  buildingMeshes.turret.visible = false;
+  configureBattlefieldShadows(sceneEl);
+}
+
+async function tryReplaceArtilleryTurretWithGltfModel(sceneEl) {
+  const r = await installBuildingGltfTemplate(sceneEl, {
+    type: 'artilleryTurret',
+    url: ARTILLERY_TURRET_GLB_URL,
+    visualScale: ARTILLERY_TURRET_GLB_VISUAL_SCALE,
+    templateName: 'artillery_turret_gltf_template',
+    label: 'Artillery',
+  });
+  if (!r) return;
+  artilleryTurretTexturedTemplate = r.template;
+  artilleryTurretModelVisualHeight = r.visualHeight;
+  artilleryTurretModelPickHalfHeight = r.pickHalfHeight;
+  artilleryTurretModelPickRadius = r.pickRadius;
+  artilleryTurretTexturedMode = true;
+  buildingMeshes.artilleryTurret.visible = false;
   configureBattlefieldShadows(sceneEl);
 }
 
@@ -1799,27 +2019,63 @@ export function refreshResourceFieldMeshes() {
   createResourceFieldMeshes();
 }
 
-// --- Projectile pool ---
+// --- Shots: on-top arc lines (same trick as order lines, which actually show in VR) ---
+const PROJ_SLOT_PAIRS = Math.max(1, Math.floor(MAX_PROJECTILES / 2));
+const SHOT_ARC_PTS = 12;
+let projectileTipMesh = null;
+let shotLineGroup = null;
+/** @type {THREE.Line[]} */
+const shotLines = [];
+const _shotUp = new THREE.Vector3(0, 1, 0);
+
 function createProjectileMesh() {
-  const geometry = new THREE.SphereGeometry(0.2, 6, 4);
-  const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-
-  projectileMesh = new THREE.InstancedMesh(geometry, material, MAX_PROJECTILES);
-  projectileMesh.count = MAX_PROJECTILES;
-  projectileMesh.instanceColor = new THREE.InstancedBufferAttribute(
-    new Float32Array(MAX_PROJECTILES * 3), 3
-  );
-  projectileMesh.frustumCulled = false;
-
-  for (let i = 0; i < MAX_PROJECTILES; i++) {
+  // Dart, not a ball: 1m long along Y, a few cm thick, scaled per shot.
+  const tipGeo = new THREE.CylinderGeometry(0.04, 0.015, 1, 5);
+  const tipMat = new THREE.MeshBasicMaterial({
+    color: 0xfff3c4,
+    fog: false,
+    toneMapped: false,
+    depthTest: false,
+    depthWrite: false,
+    transparent: true,
+    opacity: 1,
+  });
+  projectileTipMesh = new THREE.InstancedMesh(tipGeo, tipMat, PROJ_SLOT_PAIRS);
+  projectileTipMesh.count = 0;
+  projectileTipMesh.frustumCulled = false;
+  projectileTipMesh.renderOrder = 1004;
+  for (let i = 0; i < PROJ_SLOT_PAIRS; i++) {
     _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
-    projectileMesh.setMatrixAt(i, _mat4);
-    _color.set(0xffff00);
-    projectileMesh.setColorAt(i, _color);
+    projectileTipMesh.setMatrixAt(i, _mat4);
   }
-  projectileMesh.instanceMatrix.needsUpdate = true;
-  projectileMesh.instanceColor.needsUpdate = true;
-  scene3D.add(projectileMesh);
+  projectileTipMesh.instanceMatrix.needsUpdate = true;
+  scene3D.add(projectileTipMesh);
+  projectileMesh = projectileTipMesh;
+
+  shotLineGroup = new THREE.Group();
+  shotLineGroup.name = 'rts-shot-arcs';
+  shotLines.length = 0;
+  for (let i = 0; i < PROJ_SLOT_PAIRS; i++) {
+    const positions = new Float32Array(SHOT_ARC_PTS * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.LineBasicMaterial({
+      color: 0xffe14a,
+      fog: false,
+      toneMapped: false,
+      transparent: true,
+      opacity: 1,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const line = new THREE.Line(geo, mat);
+    line.frustumCulled = false;
+    line.renderOrder = 1005;
+    line.visible = false;
+    shotLineGroup.add(line);
+    shotLines.push(line);
+  }
+  scene3D.add(shotLineGroup);
 }
 
 // --- World fog-of-war tint ---
@@ -2590,7 +2846,8 @@ function unitInCameraFrustum(unit, y) {
 }
 
 function hideTransientFx() {
-  if (projectileMesh) projectileMesh.count = 0;
+  if (projectileTipMesh) projectileTipMesh.count = 0;
+  for (let i = 0; i < shotLines.length; i++) shotLines[i].visible = false;
 }
 
 /** Only on-screen (frustum) state — off-screen motion must not keep presenting an empty view. */
@@ -2964,6 +3221,9 @@ function updateBuildingInstances() {
   const refinerySeenIds = new Set();
   const barracksSeenIds = new Set();
   const warFactorySeenIds = new Set();
+  const solarPanelSeenIds = new Set();
+  const turretSeenIds = new Set();
+  const artilleryTurretSeenIds = new Set();
 
   State.buildings.forEach(building => {
     if (building.hp <= 0) return;
@@ -3024,6 +3284,29 @@ function updateBuildingInstances() {
       _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
     }
 
+    if (solarPanelTexturedMode && building.type === 'solarPanel' && solarPanelTexturedTemplate && THREE_w) {
+      solarPanelSeenIds.add(building.id);
+      syncSolarPanelTexturedOne(building, _mat4, DRAW_AS_VISIBLE, THREE_w);
+      _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+    }
+
+    if (turretTexturedMode && building.type === 'turret' && turretTexturedTemplate && THREE_w) {
+      turretSeenIds.add(building.id);
+      syncTurretTexturedOne(building, _mat4, DRAW_AS_VISIBLE, THREE_w);
+      _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+    }
+
+    if (
+      artilleryTurretTexturedMode
+      && building.type === 'artilleryTurret'
+      && artilleryTurretTexturedTemplate
+      && THREE_w
+    ) {
+      artilleryTurretSeenIds.add(building.id);
+      syncArtilleryTurretTexturedOne(building, _mat4, DRAW_AS_VISIBLE, THREE_w);
+      _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+    }
+
     mesh.setMatrixAt(idx, _mat4);
 
     // Player color tint
@@ -3072,6 +3355,36 @@ function updateBuildingInstances() {
         scene3D.remove(root);
         disposeHqTexturedObject3D(root, window.THREE);
         warFactoryTexturedByBuildingId.delete(id);
+      }
+    }
+  }
+
+  if (solarPanelTexturedMode) {
+    for (const [id, root] of [...solarPanelTexturedByBuildingId]) {
+      if (!solarPanelSeenIds.has(id)) {
+        scene3D.remove(root);
+        disposeHqTexturedObject3D(root, window.THREE);
+        solarPanelTexturedByBuildingId.delete(id);
+      }
+    }
+  }
+
+  if (turretTexturedMode) {
+    for (const [id, root] of [...turretTexturedByBuildingId]) {
+      if (!turretSeenIds.has(id)) {
+        scene3D.remove(root);
+        disposeHqTexturedObject3D(root, window.THREE);
+        turretTexturedByBuildingId.delete(id);
+      }
+    }
+  }
+
+  if (artilleryTurretTexturedMode) {
+    for (const [id, root] of [...artilleryTurretTexturedByBuildingId]) {
+      if (!artilleryTurretSeenIds.has(id)) {
+        scene3D.remove(root);
+        disposeHqTexturedObject3D(root, window.THREE);
+        artilleryTurretTexturedByBuildingId.delete(id);
       }
     }
   }
@@ -3239,6 +3552,15 @@ function updateSelectionRings() {
       }
       if (building.type === 'warFactory' && warFactoryTexturedMode) {
         bSize *= WAR_FACTORY_GLB_VISUAL_SCALE;
+      }
+      if (building.type === 'solarPanel' && solarPanelTexturedMode) {
+        bSize *= SOLAR_PANEL_GLB_VISUAL_SCALE;
+      }
+      if (building.type === 'turret' && turretTexturedMode) {
+        bSize *= TURRET_GLB_VISUAL_SCALE;
+      }
+      if (building.type === 'artilleryTurret' && artilleryTurretTexturedMode) {
+        bSize *= ARTILLERY_TURRET_GLB_VISUAL_SCALE;
       }
       const bGY = sampleGameplayEntityYCached(building, building.x, building.z);
       _mat4.compose(
@@ -3467,28 +3789,56 @@ function updateResourceFields() {
 // PROJECTILES
 // ==========================================
 
+function shotArcPoint(proj, u, arcH, out) {
+  out.x = proj.startX + (proj.endX - proj.startX) * u;
+  out.z = proj.startZ + (proj.endZ - proj.startZ) * u;
+  const yFlat = proj.startY + (proj.endY - proj.startY) * u;
+  out.y = yFlat + Math.sin(u * Math.PI) * arcH;
+}
+
 export function spawnProjectile(fromX, fromY, fromZ, toX, toY, toZ, color, duration = 200) {
+  if (!projectileTipMesh || !shotLines.length) return;
+  const slot = projectileIndex % PROJ_SLOT_PAIRS;
+  const heavy = arguments[9] === true;
   const proj = {
-    index: projectileIndex % MAX_PROJECTILES,
+    slot,
     startX: fromX, startY: fromY, startZ: fromZ,
     endX: toX, endY: toY, endZ: toZ,
     startTime: performance.now(),
-    duration,
-    onHit: arguments[8], // Ninth argument is onHit callback
+    duration: Math.max(420, duration),
+    onHit: arguments[8],
     active: true,
+    heavy,
+    color: (typeof color === 'number' ? color : 0xffee66) | 0,
   };
 
   activeProjectiles.push(proj);
   projectileIndex++;
+  projectileTipMesh.count = Math.max(projectileTipMesh.count, slot + 1);
 
-  // Set color
-  _color.setHex(color);
-  projectileMesh.setColorAt(proj.index, _color);
-  projectileMesh.instanceColor.needsUpdate = true;
+  const line = shotLines[slot];
+  if (line) {
+    line.material.color.setHex(heavy ? 0xffb020 : 0xfff2a0);
+    line.visible = true;
+  }
+
+  try {
+    Effects.spawnMuzzleFlash(fromX, fromY, fromZ, toX - fromX, toZ - fromZ);
+  } catch (_) {
+    /* */
+  }
+}
+
+function hideProjectileSlot(slot) {
+  _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
+  if (projectileTipMesh) projectileTipMesh.setMatrixAt(slot, _mat4);
+  if (shotLines[slot]) shotLines[slot].visible = false;
 }
 
 function updateProjectiles() {
+  if (!projectileTipMesh) return;
   const now = performance.now();
+  const scratch = _pos;
 
   for (let i = activeProjectiles.length - 1; i >= 0; i--) {
     const proj = activeProjectiles[i];
@@ -3496,7 +3846,6 @@ function updateProjectiles() {
     const t = Math.min(1, elapsed / proj.duration);
 
     if (t >= 1) {
-      // Execute hit callback if present
       if (proj.onHit) {
         try {
           proj.onHit();
@@ -3504,24 +3853,59 @@ function updateProjectiles() {
           console.error('Error in projectile onHit:', err);
         }
       }
-
-      // Hide projectile
-      _mat4.compose(_pos.set(0, -1000, 0), _quat.identity(), _zeroScale);
-      projectileMesh.setMatrixAt(proj.index, _mat4);
+      try {
+        Effects.spawnImpact(proj.endX, proj.endY, proj.endZ, !!proj.heavy);
+      } catch (_) {
+        /* */
+      }
+      hideProjectileSlot(proj.slot);
       activeProjectiles.splice(i, 1);
       continue;
     }
 
-    // Interpolate position
-    const x = proj.startX + (proj.endX - proj.startX) * t;
-    const y = proj.startY + (proj.endY - proj.startY) * t + Math.sin(t * Math.PI) * 2; // Arc
-    const z = proj.startZ + (proj.endZ - proj.startZ) * t;
+    const span = Math.hypot(proj.endX - proj.startX, proj.endZ - proj.startZ);
+    const arcH = proj.heavy
+      ? Math.min(6.5, 2.2 + span * 0.028)
+      : Math.min(2.4, 0.55 + span * 0.012);
+    shotArcPoint(proj, t, arcH, scratch);
+    const dx = proj.endX - proj.startX;
+    const dz = proj.endZ - proj.startZ;
+    const dy = (proj.endY - proj.startY) + Math.cos(t * Math.PI) * Math.PI * arcH;
+    _projDir.set(dx, dy, dz);
+    if (_projDir.lengthSq() < 1e-8) _projDir.set(0, 1, 0);
+    else _projDir.normalize();
+    _quat.setFromUnitVectors(_shotUp, _projDir);
+    // XZ = thickness, Y = length. Light = tracer dart, heavy = short rocket.
+    if (proj.heavy) _scale.set(1.05, 0.9, 1.05);
+    else _scale.set(0.75, 0.32, 0.75);
+    _mat4.compose(scratch, _quat, _scale);
+    projectileTipMesh.setMatrixAt(proj.slot, _mat4);
 
-    _mat4.compose(_pos.set(x, y, z), _quat.identity(), _scale.set(1, 1, 1));
-    projectileMesh.setMatrixAt(proj.index, _mat4);
+    const line = shotLines[proj.slot];
+    if (line) {
+      const attr = line.geometry.attributes.position;
+      const arr = attr.array;
+      for (let p = 0; p < SHOT_ARC_PTS; p++) {
+        const u = (p / (SHOT_ARC_PTS - 1)) * t;
+        const x = proj.startX + (proj.endX - proj.startX) * u;
+        const z = proj.startZ + (proj.endZ - proj.startZ) * u;
+        const y = proj.startY + (proj.endY - proj.startY) * u + Math.sin(u * Math.PI) * arcH;
+        arr[p * 3] = x;
+        arr[p * 3 + 1] = y;
+        arr[p * 3 + 2] = z;
+      }
+      attr.needsUpdate = true;
+      line.geometry.computeBoundingSphere();
+      line.visible = true;
+    }
   }
 
-  projectileMesh.instanceMatrix.needsUpdate = true;
+  let maxSlot = -1;
+  for (let i = 0; i < activeProjectiles.length; i++) {
+    if (activeProjectiles[i].slot > maxSlot) maxSlot = activeProjectiles[i].slot;
+  }
+  projectileTipMesh.count = maxSlot < 0 ? 0 : maxSlot + 1;
+  projectileTipMesh.instanceMatrix.needsUpdate = true;
 }
 
 // ==========================================
@@ -3771,6 +4155,15 @@ export function disposeRenderer() {
   warFactoryModelVisualHeight = null;
   warFactoryModelPickHalfHeight = null;
   warFactoryModelPickRadius = null;
+  solarPanelModelVisualHeight = null;
+  solarPanelModelPickHalfHeight = null;
+  solarPanelModelPickRadius = null;
+  turretModelVisualHeight = null;
+  turretModelPickHalfHeight = null;
+  turretModelPickRadius = null;
+  artilleryTurretModelVisualHeight = null;
+  artilleryTurretModelPickHalfHeight = null;
+  artilleryTurretModelPickRadius = null;
 
   if (hqTexturedMode) {
     const THREE_w = window.THREE;
@@ -3832,6 +4225,51 @@ export function disposeRenderer() {
     if (buildingMeshes.warFactory) buildingMeshes.warFactory.visible = true;
   }
 
+  if (solarPanelTexturedMode) {
+    const THREE_w = window.THREE;
+    for (const root of solarPanelTexturedByBuildingId.values()) {
+      scene3D.remove(root);
+      disposeHqTexturedObject3D(root, THREE_w);
+    }
+    solarPanelTexturedByBuildingId.clear();
+    if (solarPanelTexturedTemplate) {
+      disposeHqTexturedObject3D(solarPanelTexturedTemplate, THREE_w);
+      solarPanelTexturedTemplate = null;
+    }
+    solarPanelTexturedMode = false;
+    if (buildingMeshes.solarPanel) buildingMeshes.solarPanel.visible = true;
+  }
+
+  if (turretTexturedMode) {
+    const THREE_w = window.THREE;
+    for (const root of turretTexturedByBuildingId.values()) {
+      scene3D.remove(root);
+      disposeHqTexturedObject3D(root, THREE_w);
+    }
+    turretTexturedByBuildingId.clear();
+    if (turretTexturedTemplate) {
+      disposeHqTexturedObject3D(turretTexturedTemplate, THREE_w);
+      turretTexturedTemplate = null;
+    }
+    turretTexturedMode = false;
+    if (buildingMeshes.turret) buildingMeshes.turret.visible = true;
+  }
+
+  if (artilleryTurretTexturedMode) {
+    const THREE_w = window.THREE;
+    for (const root of artilleryTurretTexturedByBuildingId.values()) {
+      scene3D.remove(root);
+      disposeHqTexturedObject3D(root, THREE_w);
+    }
+    artilleryTurretTexturedByBuildingId.clear();
+    if (artilleryTurretTexturedTemplate) {
+      disposeHqTexturedObject3D(artilleryTurretTexturedTemplate, THREE_w);
+      artilleryTurretTexturedTemplate = null;
+    }
+    artilleryTurretTexturedMode = false;
+    if (buildingMeshes.artilleryTurret) buildingMeshes.artilleryTurret.visible = true;
+  }
+
   harvesterGltfActive = false;
   lightTankGltfActive = false;
   heavyTankGltfActive = false;
@@ -3867,7 +4305,21 @@ export function disposeRenderer() {
   }
   orderConfirmPulses.length = 0;
   if (resourceFieldMesh) { scene3D.remove(resourceFieldMesh); resourceFieldMesh.dispose(); }
-  if (projectileMesh) { scene3D.remove(projectileMesh); projectileMesh.dispose(); }
+  if (projectileTipMesh) {
+    scene3D.remove(projectileTipMesh);
+    projectileTipMesh.dispose();
+    projectileTipMesh = null;
+  }
+  if (shotLineGroup) {
+    scene3D.remove(shotLineGroup);
+    shotLineGroup.traverse((obj) => {
+      obj.geometry?.dispose();
+      obj.material?.dispose();
+    });
+    shotLineGroup = null;
+  }
+  shotLines.length = 0;
+  projectileMesh = null;
   disposeFogOverlayMeshes();
   if (playableBorderMesh) {
     scene3D.remove(playableBorderMesh);

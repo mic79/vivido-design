@@ -262,7 +262,10 @@ function gameUpdate(dt, time) {
 
   // 9. Combat
   if (abl.combat) {
-    Perf.time('combat', () => Units.updateCombat(time, dt));
+    Perf.time('combat', () => {
+      Units.updateCombat(time, dt);
+      Buildings.updateDefenseBuildings(time, dt);
+    });
   }
 
   // 9b. Engineer vehicle repair (host-authoritative; runs after movement + combat)

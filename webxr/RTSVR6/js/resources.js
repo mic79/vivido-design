@@ -76,7 +76,7 @@ function findResourceFieldApproachPos(fromX, fromZ, field, rotate = 0) {
     return reach;
   }
 
-  const pushed = Pathfinding.pushOutOfObstacle(fx, fz);
+  const pushed = Pathfinding.snapOutOfObstacle(fx, fz);
   return { x: pushed.x, z: pushed.z };
 }
 
@@ -164,10 +164,37 @@ function harvesterCreepTowardField(unit, field, dt) {
 
   const res = Pathfinding.resolveNavMotion(unit.x, unit.z, nx, nz);
   if (!res.blocked) {
+    const intended = Math.hypot(nx - unit.x, nz - unit.z);
+    const gained = Math.hypot(res.x - unit.x, res.z - unit.z);
+    if (intended > 0.04 && gained < Math.max(0.02, intended * 0.2)) {
+      const step = Pathfinding.bestEscapeStep(unit.x, unit.z, fx, fz);
+      if (step) {
+        const moved = Pathfinding.resolveNavMotion(unit.x, unit.z, step.x, step.z);
+        if (!moved.blocked) {
+          unit.x = moved.x;
+          unit.z = moved.z;
+        }
+      }
+      return canStartHarvestingAtField(unit, field)
+        || fieldCenterDistance(unit, field) < HARVESTER_WORK_RADIUS;
+    }
     unit.x = res.x;
     unit.z = res.z;
     if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
       unit.rotation = Math.atan2(dx, dz);
+    }
+  } else {
+    const step = Pathfinding.bestEscapeStep(unit.x, unit.z, fx, fz);
+    if (step) {
+      const moved = Pathfinding.resolveNavMotion(unit.x, unit.z, step.x, step.z);
+      if (!moved.blocked) {
+        unit.x = moved.x;
+        unit.z = moved.z;
+      }
+    } else if (!Pathfinding.isPositionWalkable(unit.x, unit.z)) {
+      const safe = Pathfinding.pushOutOfObstacle(unit.x, unit.z);
+      unit.x = safe.x;
+      unit.z = safe.z;
     }
   }
 
@@ -443,7 +470,8 @@ function refineryApproachPos(fromX, fromZ, refinery) {
   const bx = refinery.x;
   const bz = refinery.z;
   const h = (refinery.size || 4) * 0.5;
-  const standoff = h + OBSTACLE_BUFFER + 1.25;
+  // Match expanded nav pad on refineries so approach stands outside the blocked cells.
+  const standoff = h + OBSTACLE_BUFFER + 2.25 + 1.5;
   const dx = fromX - bx;
   const dz = fromZ - bz;
   const len = Math.hypot(dx, dz);
@@ -603,7 +631,9 @@ function moveAlongPathSimple(unit, dt) {
     }
 
     Pathfinding.notePathfindSlot(false);
-    const path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z);
+    const smooth = !unit._preferGridPath;
+    unit._preferGridPath = false;
+    const path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z, smooth);
     
     // If we've reached the closest point to destination but can't proceed,
     // explicitly try to transition to the required action state instead of just aborting to idle and losing our action sequence.
@@ -718,7 +748,26 @@ function moveAlongPathSimple(unit, dt) {
   const nx = unit.x + dx * ratio;
   const nz = unit.z + dz * ratio;
   const res = Pathfinding.resolveNavMotion(unit.x, unit.z, nx, nz);
-  if (res.blocked) {
+  const intended = Math.hypot(nx - unit.x, nz - unit.z);
+  const gained = Math.hypot(res.x - unit.x, res.z - unit.z);
+  const stuckOnEdge = !res.blocked && intended > 0.04 && gained < Math.max(0.02, intended * 0.2);
+  if (res.blocked || stuckOnEdge) {
+    const goal = unit.targetPos || { x: wp.x, z: wp.z };
+    const step = Pathfinding.bestEscapeStep(unit.x, unit.z, goal.x, goal.z);
+    if (step) {
+      const moved = Pathfinding.resolveNavMotion(unit.x, unit.z, step.x, step.z);
+      if (!moved.blocked) {
+        unit.x = moved.x;
+        unit.z = moved.z;
+      }
+    } else if (!Pathfinding.isPositionWalkable(unit.x, unit.z)) {
+      const s = Pathfinding.pushOutOfObstacle(unit.x, unit.z);
+      unit.x = s.x;
+      unit.z = s.z;
+    }
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._preferGridPath = true;
     harvesterNotePathBlocked(unit);
     return;
   }

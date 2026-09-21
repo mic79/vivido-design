@@ -5,6 +5,7 @@
  *   node RTSVR6/scripts/bake-unit-yaw-shadows.mjs
  *
  * Env: FRAMES=36 CELL=64 PORT=8795 DARK=0.32
+ *      ONLY=solarPanel,turret,artilleryTurret  — bake those ids and merge into existing manifest
  * Writes assets/shadows/yaw/<id>-ground.png, <id>-self.png, manifest.json
  *
  * Sun must match rock LM (`extras.rtsMoonRockShadows[].sunDir` from terrain GLB).
@@ -24,6 +25,10 @@ const FRAMES = Math.max(1, Math.min(72, Number(process.env.FRAMES || 36)));
 const CELL = Math.max(32, Math.min(256, Number(process.env.CELL || 128)));
 /** Umbra floor (rock LM uses ~0.32). */
 const DARK = Math.min(0.9, Math.max(0.05, Number(process.env.DARK || 0.32)));
+const ONLY = (process.env.ONLY || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 /** Fallback if GLB extras missing — same as bake-rock-shadows GAME_SUN direction. */
 const GAME_SUN_POS = { x: -0.005, y: 55, z: -48.83 };
@@ -62,7 +67,7 @@ console.log('sunDir', ROCK_SUN);
  *   like runtime, NOT XZ-only (that blew up scoutBike/mobileHq/artillery cookies).
  * targetWidth: buildings only — footprint max(XZ) × visual scale.
  */
-const ENTRIES = [
+const ALL_ENTRIES = [
   {
     id: 'infantry',
     url: 'assets/Meshy_AI_Apollo_astronaut_with_0416105251_texture.glb',
@@ -164,7 +169,41 @@ const ENTRIES = [
     targetWidth: 6,
     types: ['refinery'],
   },
+  {
+    id: 'solarPanel',
+    url: 'assets/buildings/painel_solar.glb',
+    frames: Math.min(FRAMES, 16),
+    meshYawY: 0,
+    cookieScale: 1.15,
+    // BUILDING_SHAPES.solarPanel 2.4 × SOLAR_PANEL_GLB_VISUAL_SCALE 1.6
+    targetWidth: 3.84,
+    types: ['solarPanel'],
+  },
+  {
+    id: 'turret',
+    url: 'assets/buildings/basic_machine_gun_turret_-_viper.glb',
+    frames: Math.min(FRAMES, 16),
+    meshYawY: 0,
+    cookieScale: 1.15,
+    // BUILDING_SHAPES.turret 1.6 × TURRET_GLB_VISUAL_SCALE 2.8
+    targetWidth: 4.48,
+    types: ['turret'],
+  },
+  {
+    id: 'artilleryTurret',
+    url: 'assets/buildings/searam_ship_defense_system.glb',
+    frames: Math.min(FRAMES, 16),
+    meshYawY: 0,
+    cookieScale: 1.15,
+    // max(2.2, 2.8) × ARTILLERY_TURRET_GLB_VISUAL_SCALE 1.1875
+    targetWidth: 3.325,
+    types: ['artilleryTurret'],
+  },
 ];
+
+const ENTRIES = ONLY.length
+  ? ALL_ENTRIES.filter((e) => ONLY.includes(e.id))
+  : ALL_ENTRIES;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -695,6 +734,34 @@ for (const entry of ENTRIES) {
     meshYawY: entry.meshYawY || 0,
   });
   console.log('  wrote', groundFile, selfFile, 'half', result.groundHalf.toFixed(2));
+}
+
+if (ONLY.length) {
+  const manifestPath = path.join(OUT, 'manifest.json');
+  if (fs.existsSync(manifestPath)) {
+    try {
+      const prev = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      if (prev.sunDir) manifest.sunDir = prev.sunDir;
+      if (prev.sun) manifest.sun = prev.sun;
+      if (prev.sunSource) manifest.sunSource = prev.sunSource;
+      const byId = new Map((prev.entries || []).map((e) => [e.id, e]));
+      for (const e of manifest.entries) byId.set(e.id, e);
+      // Keep prior entry order; append any brand-new ids at the end.
+      const ordered = [];
+      const seen = new Set();
+      for (const e of prev.entries || []) {
+        ordered.push(byId.get(e.id));
+        seen.add(e.id);
+      }
+      for (const e of manifest.entries) {
+        if (!seen.has(e.id)) ordered.push(e);
+      }
+      manifest.entries = ordered.filter(Boolean);
+      console.log('merged ONLY bake into existing manifest (', manifest.entries.length, 'entries)');
+    } catch (err) {
+      console.warn('manifest merge failed, writing bake-only manifest', err?.message || err);
+    }
+  }
 }
 
 fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 2));

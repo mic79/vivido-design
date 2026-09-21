@@ -382,6 +382,30 @@ export const STORY_UNIT_CAP_PER_PLAYER = 100;
 export const STARTING_CREDITS = 1000;
 export const PASSIVE_INCOME_PER_SEC = 2;
 
+/**
+ * Directional sun — must match `index.html` light position and renderer shadow placement.
+ * Light looks at world origin; XZ of this vector is “toward the sun” for yaw.
+ */
+export const SUN_LIGHT_OFFSET = { x: -0.005, y: 55, z: -48.83 };
+
+/** Yaw (rad) so a model’s +Z faces the sun on the XZ plane (unit rotation convention). */
+export function getSunFacingYaw() {
+  return Math.atan2(SUN_LIGHT_OFFSET.x, SUN_LIGHT_OFFSET.z);
+}
+
+/**
+ * Solar panel yaw: `painel_solar.glb` collecting-face normals point along local **−X**,
+ * not +Z — offset +π/2 so the panel faces the directional sun.
+ */
+export function getSolarPanelYaw() {
+  return getSunFacingYaw() + Math.PI / 2;
+}
+
+/** Defense building yaw slew (rad/s) while tracking a target. */
+export const DEFENSE_TURN_RATE = 3.2;
+/** Fire only when within this many radians of the aim yaw (after slew). */
+export const DEFENSE_AIM_FIRE_TOL = 0.45;
+
 /** Max distance (m) from unit center to a friendly built War Factory to sell a vehicle. */
 export const VEHICLE_SELL_WAR_FACTORY_RANGE = 16;
 
@@ -683,6 +707,34 @@ export const ENGINEER_CAPTURE_EDGE_REACH = 10;
 /** Friendly vehicles within this range get HP from idle/moving engineers; same band when following a vehicle. */
 export const ENGINEER_REPAIR_RANGE = 5.5;
 
+/**
+ * HQ construction menu order (tech tree).
+ * Solar → Refinery → Barracks → (War Factory | Turret | Artillery).
+ */
+export const HQ_BUILD_MENU_TYPES = [
+  'solarPanel',
+  'refinery',
+  'barracks',
+  'warFactory',
+  'turret',
+  'artilleryTurret',
+];
+
+/** Prerequisite building type that must be built (alive) before this type unlocks. `null` = always available. */
+export const BUILDING_UNLOCK_REQUIRES = {
+  solarPanel: null,
+  refinery: 'solarPanel',
+  barracks: 'refinery',
+  warFactory: 'barracks',
+  turret: 'barracks',
+  artilleryTurret: 'barracks',
+};
+
+/** Power produced by one completed solar panel. */
+export const POWER_PER_SOLAR = 100;
+/** Construction / production speed while power surplus is negative. */
+export const LOW_POWER_RATE = 0.35;
+
 // --- Building Types ---
 export const BUILDING_TYPES = {
   hq: {
@@ -694,6 +746,18 @@ export const BUILDING_TYPES = {
     size: 6,       // 6x6 footprint
     producesUnits: [], // Removed engineer (moved to Barracks)
     isHQ: true,
+    powerConsume: 0,
+  },
+  solarPanel: {
+    name: 'Solar Panel',
+    cost: 150,
+    buildTime: 5,
+    hp: 250,
+    visionRange: 8,
+    size: 2,
+    producesUnits: [],
+    powerProduce: POWER_PER_SOLAR,
+    powerConsume: 0,
   },
   barracks: {
     name: 'Barracks',
@@ -703,6 +767,7 @@ export const BUILDING_TYPES = {
     visionRange: 12,
     size: 4,
     producesUnits: BARRACKS_UNITS,
+    powerConsume: 30,
   },
   warFactory: {
     name: 'War Factory',
@@ -712,6 +777,7 @@ export const BUILDING_TYPES = {
     visionRange: 12,
     size: 5,
     producesUnits: FACTORY_UNITS,
+    powerConsume: 50,
   },
   refinery: {
     name: 'Refinery',
@@ -722,6 +788,43 @@ export const BUILDING_TYPES = {
     size: 4,
     producesUnits: ['harvester'],
     freeUnit: 'harvester', // Comes with 1 free harvester
+    powerConsume: 40,
+  },
+  /** Defensive AA-style gun (HQ menu "Turret"). */
+  turret: {
+    name: 'Turret',
+    cost: 400,
+    buildTime: 8,
+    hp: 500,
+    visionRange: 18,
+    size: 2,
+    producesUnits: [],
+    powerConsume: 25,
+    damage: 28,
+    range: 16,
+    cooldown: 0.7,
+    aoe: 0,
+    dmgVsInfantry: 1.25,
+    dmgVsVehicle: 1.0,
+    dmgVsBuilding: 0.55,
+  },
+  /** Long-range base artillery (HQ menu "Artillery") — distinct from the mobile artillery unit. */
+  artilleryTurret: {
+    name: 'Artillery',
+    cost: 700,
+    buildTime: 14,
+    hp: 450,
+    visionRange: 24,
+    size: 3,
+    producesUnits: [],
+    powerConsume: 40,
+    damage: 55,
+    range: 28,
+    cooldown: 2.8,
+    aoe: 3.5,
+    dmgVsInfantry: 0.85,
+    dmgVsVehicle: 1.35,
+    dmgVsBuilding: 1.5,
   },
 };
 
@@ -742,27 +845,21 @@ export const SPATIAL_CELL_SIZE = 15;
 // Harvesters (4 players × refineries × queues) blow past small pools — overflow = invisible mesh but selection rings still draw.
 export const MAX_INSTANCES_PER_TYPE = 200; // Per unit-type InstancedMesh (THREE hard limit is buffer size; keep reasonable for mobile/VR)
 export const MAX_BUILDING_INSTANCES = 48; // Per building type (Story multi-base needs headroom)
-export const MAX_PROJECTILES = 60;
-export const MAX_PARTICLES = 200;
+export const MAX_PROJECTILES = 100;
+export const MAX_PARTICLES = 620;
 export const HEALTH_BAR_WIDTH = 1.2;
 export const HEALTH_BAR_HEIGHT = 0.15;
 export const HEALTH_BAR_Y_OFFSET = 2.2;
 
 // --- Combat ---
-/** Soft steering only (no rigid collisions): debunch radius in world metres. */
-export const UNIT_SEPARATION_RADIUS = 2.55;
 /**
- * Lateral separation “speed” (m/s) blended into `resolveNavMotion` each frame (`× dt`).
- * Stronger than the old fixed 0.12 push so stacks clear quickly without extra spatial queries.
+ * Unit↔unit soft-body push is REMOVED (user directive). Classic C&C-style overlap.
+ * Constants kept only so old tests / docs that import them still resolve.
  */
-export const UNIT_SEPARATION_ACCEL = 6.2;
-/** Harder floor on center–center distance (m) applied after move+separation so stacks break up. */
-export const UNIT_CLEARANCE_MIN = 1.12;
-/**
- * Idle units already in enemy contact: process 1/N of them per sim tick (movers always run).
- * Keeps melee soft-push without O(all units) queries every frame.
- */
-export const UNIT_SEPARATION_CONTACT_STAGGER = 4;
+export const UNIT_SEPARATION_RADIUS = 0;
+export const UNIT_SEPARATION_ACCEL = 0;
+export const UNIT_CLEARANCE_MIN = 0;
+export const UNIT_SEPARATION_CONTACT_STAGGER = 1;
 export const FORMATION_SPACING = 4.5; // Spread out to avoid being sniped in lines
 
 // --- Bot AI (fair: no fog/vision/economy cheats — scale these down for easier bots) ---
@@ -799,9 +896,9 @@ export const BOT_DEFENSE_RELEASE_SCOUT_DIST = 44; // HQ→threat: farther than t
 export const GUARD_CHASE_LEASH_MULT = 1.1;
 export const GUARD_CHASE_LEASH_PAD_M = 4;
 /** Shared synchronous A* budget per 60 Hz sim tick (combat + harvesters). */
-export const PATHFIND_SIM_PER_TICK = 10;
+export const PATHFIND_SIM_PER_TICK = 24;
 /** Extra budget for player-issued move/attack orders so clicks stay responsive. */
-export const PATHFIND_PLAYER_PER_TICK = 20;
+export const PATHFIND_PLAYER_PER_TICK = 40;
 /** Cap findPath probes inside findNearestReachable spirals (bot retaliation used to fire hundreds). */
 export const PATHFIND_SPIRAL_MAX_ATTEMPTS = 12;
 export const BOT_HARVESTER_EXPLORE_PER_TICK = 6;
@@ -883,16 +980,22 @@ export const UNIT_SHAPES = {
 };
 
 export const BUILDING_SHAPES = {
-  hq:         { width: 6, height: 4, depth: 6 },
-  barracks:   { width: 4, height: 2.5, depth: 4 },
-  warFactory: { width: 5, height: 3, depth: 5 },
-  refinery:   { width: 4, height: 3, depth: 4 },
+  hq:              { width: 6, height: 4, depth: 6 },
+  solarPanel:      { width: 2.4, height: 0.35, depth: 2.4 },
+  barracks:        { width: 4, height: 2.5, depth: 4 },
+  warFactory:      { width: 5, height: 3, depth: 5 },
+  refinery:        { width: 4, height: 3, depth: 4 },
+  turret:          { width: 1.6, height: 2.2, depth: 1.6 },
+  artilleryTurret: { width: 2.2, height: 1.8, depth: 2.8 },
 };
 
 // Colors for building types (darker tint + player color accent)
 export const BUILDING_BASE_COLORS = {
-  hq:         0x666666,
-  barracks:   0x556644,
-  warFactory: 0x555566,
-  refinery:   0x665544,
+  hq:              0x666666,
+  solarPanel:      0x1a3344,
+  barracks:        0x556644,
+  warFactory:      0x555566,
+  refinery:        0x665544,
+  turret:          0x554433,
+  artilleryTurret: 0x664422,
 };

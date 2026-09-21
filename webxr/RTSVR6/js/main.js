@@ -58,9 +58,13 @@ function placeLobbyLunarSettlementShowcase(hqPos) {
     clampWorldToPlayableDisk(hqPos.x + ix * forward + rx * right, hqPos.z + iz * forward + rz * right, 10);
 
   const buildingPlan = [
+    { type: 'solarPanel', forward: 4, right: 8 },
+    { type: 'solarPanel', forward: 4, right: 11 },
     { type: 'barracks', forward: 6, right: 15 },
     { type: 'refinery', forward: 14, right: 0 },
     { type: 'warFactory', forward: 6, right: -15 },
+    { type: 'turret', forward: 10, right: 20 },
+    { type: 'artilleryTurret', forward: 10, right: -20 },
   ];
   for (const b of buildingPlan) {
     const p = at(b.forward, b.right);

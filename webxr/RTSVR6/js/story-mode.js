@@ -797,6 +797,8 @@ export function spawnStoryMatch(layout) {
       if (b) b.homeBasePos = { x: hqPad.x, z: hqPad.z };
     };
 
+    placeNear('solarPanel', 6, 6);
+    placeNear('solarPanel', 6, 9);
     placeNear('barracks', 10, 12);
     placeNear('refinery', 16, 0);
     placeNear('warFactory', 10, -12);
