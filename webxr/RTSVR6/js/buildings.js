@@ -16,6 +16,7 @@ import * as Resources from './resources.js';
 import * as Audio from './audio.js';
 import * as Fog from './fog.js';
 import { unitGrid } from './spatial.js';
+import * as Trace from './match-trace.js';
 
 export { HQ_BUILD_MENU_TYPES };
 
@@ -114,6 +115,8 @@ export function createBuilding(type, ownerId, x, z, options = {}) {
     dmgVsVehicle: stats.dmgVsVehicle ?? 1,
     dmgVsBuilding: stats.dmgVsBuilding ?? 1,
     lastFireTime: 0,
+    // Player-assigned target for turrets / static artillery. Null = shoot nearest.
+    manualTargetId: null,
 
     // Rendering
     _renderIndex: -1,
@@ -246,7 +249,25 @@ export function tryDeployMobileHq(unit) {
   Audio.playBuildCompleteSound(x, z);
   State.pushHostFx({ kind: 'build_complete', x, z });
   console.log(`🏕️ P${ownerId} deployed Mobile HQ → HQ at (${x.toFixed(0)}, ${z.toFixed(0)})`);
+  Trace.traceOrder('deploy', ownerId, { keep: true, type: 'hq', x: Math.round(x), z: Math.round(z) });
   return true;
+}
+
+/** Geometry / tech only — ignore cash, power, AND HQ-range (for pre-deploy pad simulation). */
+export function canPlaceBuildingFootprint(type, ownerId, x, z) {
+  return getPlaceBuildingFailureCodeInternal(type, ownerId, x, z, {
+    skipCredits: true,
+    skipPowerCheck: true,
+    skipHqRangeCheck: true,
+  }) === null;
+}
+
+/** Geometry / tech / HQ-range only — ignore cash & power so pad search still works while brownout. */
+export function canPlaceBuildingGeometry(type, ownerId, x, z) {
+  return getPlaceBuildingFailureCodeInternal(type, ownerId, x, z, {
+    skipCredits: true,
+    skipPowerCheck: true,
+  }) === null;
 }
 
 export function canPlaceBuilding(type, ownerId, x, z) {
@@ -265,6 +286,12 @@ export function placeBuilding(type, ownerId, x, z) {
 
   if (building) {
     console.log(`🏗️ P${ownerId} placed ${stats.name} at (${x.toFixed(0)}, ${z.toFixed(0)})`);
+    Trace.traceOrder('build', ownerId, {
+      keep: true,
+      type,
+      x: Math.round(x),
+      z: Math.round(z),
+    });
   }
 
   return building;
@@ -336,6 +363,13 @@ export function queueUnit(buildingId, unitType) {
     totalTime: uStats.buildTime,
     /** Host sim time when this row was queued — MP clients can derive progress from `elapsedTime`. */
     startedAtElapsed: State.gameSession.elapsedTime,
+  });
+
+  Trace.traceOrder('train', building.ownerId, {
+    keep: true,
+    type: unitType,
+    x: Math.round(building.x),
+    z: Math.round(building.z),
   });
 
   return true;
@@ -433,9 +467,42 @@ function turnBuildingToward(building, targetYaw, dt) {
   return yawDelta(building.rotation, targetYaw);
 }
 
+export function setDefenseTarget(buildingId, targetId) {
+  const building = State.buildings.get(buildingId);
+  if (!building || building.hp <= 0) return false;
+  building.manualTargetId = targetId || null;
+  return true;
+}
+
+export function clearDefenseTarget(buildingId) {
+  return setDefenseTarget(buildingId, null);
+}
+
+function resolveDefenseManualTarget(building) {
+  if (!building.manualTargetId) return null;
+  const forced = State.units.get(building.manualTargetId) || State.buildings.get(building.manualTargetId);
+  if (!forced || forced.hp <= 0 || forced.id === building.id) {
+    building.manualTargetId = null;
+    return null;
+  }
+  return forced;
+}
+
+function tryFireDefense(building, target, time, dt, range) {
+  const aimYaw = Math.atan2(target.x - building.x, target.z - building.z);
+  const remaining = turnBuildingToward(building, aimYaw, dt);
+  if (getPlayerPower(building.ownerId).surplus < 0) return;
+  const d = Pathfinding.getDistance(building.x, building.z, target.x, target.z);
+  if (d > range) return;
+  if (Math.abs(remaining) > DEFENSE_AIM_FIRE_TOL) return;
+  const cdMs = (building.cooldown > 0 ? building.cooldown : 1) * 1000;
+  if (time - (building.lastFireTime || 0) < cdMs) return;
+  Units.fireAtTarget(building, target, time);
+}
+
 /**
  * Auto-aim + fire for Turret / Artillery buildings (host sim only).
- * Tracks targets every tick; fire is gated on power, cooldown, and aim cone.
+ * A manual target, if set, is held until it dies or the player clears it.
  */
 export function updateDefenseBuildings(time, dt = 0) {
   State.buildings.forEach(building => {
@@ -443,6 +510,14 @@ export function updateDefenseBuildings(time, dt = 0) {
     if (!(building.damage > 0) || !(building.range > 0)) return;
 
     const range = building.range;
+    const forced = resolveDefenseManualTarget(building);
+    if (forced) {
+      // Hold this target even when a closer enemy is in range, and even when it
+      // is currently out of range (keep the barrel on it until it dies or is cleared).
+      tryFireDefense(building, forced, time, dt, range);
+      return;
+    }
+
     const visionR = building.visionRange != null ? building.visionRange : range;
     let best = null;
     let bestDist = range;
@@ -475,18 +550,7 @@ export function updateDefenseBuildings(time, dt = 0) {
     }
 
     if (!best) return;
-
-    const aimYaw = Math.atan2(best.x - building.x, best.z - building.z);
-    const remaining = turnBuildingToward(building, aimYaw, dt);
-
-    if (getPlayerPower(building.ownerId).surplus < 0) return;
-    if (Math.abs(remaining) > DEFENSE_AIM_FIRE_TOL) return;
-
-    // Cooldown is stored in seconds; `time` is performance.now() ms (same as unit fireRate*1000).
-    const cdMs = (building.cooldown > 0 ? building.cooldown : 1) * 1000;
-    if (time - (building.lastFireTime || 0) < cdMs) return;
-
-    Units.fireAtTarget(building, best, time);
+    tryFireDefense(building, best, time, dt, range);
   });
 }
 

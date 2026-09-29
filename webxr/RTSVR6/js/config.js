@@ -35,6 +35,9 @@ export let MAP_PROFILE = /** @type {MapProfileId} */ ('standard');
 export let MAP_TERRAIN_STYLE = /** @type {'crater'|'hills'|'kit'} */ ('crater');
 /** Live nav-area multiplier (skirmish 4 = 2× radius; Story kit = 1 so play stays on the kit). */
 export let MAP_NAV_AREA_SCALE = 1;
+/** 1v1 skirmish walkable area. 2v2 / FFA use 4.5× this (double the previous large disk). */
+export const MAP_SKIRMISH_NAV_AREA_SCALE = 4;
+export const MAP_LARGE_SKIRMISH_NAV_AREA_SCALE = 18;
 export let MAP_SIZE = MAP_SIZE_STANDARD;
 export let MAP_HALF = MAP_SIZE / 2;
 export let MAP_PLAYABLE_RADIUS = MAP_HALF * Math.SQRT2;
@@ -51,12 +54,46 @@ export let FOG_CELL_SIZE = MAP_NAV_PLANE_SPAN_M / FOG_GRID_SIZE;
 
 /** Optional Story override for crystal sites (set each Story run; null = default skirmish layout). */
 export let STORY_RESOURCE_FIELD_POSITIONS = /** @type {Array<{x:number,z:number}>|null} */ (null);
+/** Extra crystals for 2v2 / FFA, placed in the expanded ring. Null on 1v1. */
+export let SKIRMISH_EXTRA_RESOURCE_POSITIONS = /** @type {Array<{x:number,z:number}>|null} */ (null);
+/** Corner crystals snapped onto flat pads. Null uses the diagonal formula. */
+export let SKIRMISH_CORNER_RESOURCE_POSITIONS = /** @type {Array<{x:number,z:number}>|null} */ (null);
 
 export function setStoryResourcePositions(positions) {
   STORY_RESOURCE_FIELD_POSITIONS =
     positions && positions.length > 0
       ? positions.map(p => ({ x: p.x, z: p.z }))
       : null;
+}
+
+export function setSkirmishExtraResourcePositions(positions) {
+  SKIRMISH_EXTRA_RESOURCE_POSITIONS =
+    positions && positions.length > 0
+      ? positions.map(p => ({ x: p.x, z: p.z }))
+      : null;
+}
+
+export function setSkirmishCornerResourcePositions(positions) {
+  SKIRMISH_CORNER_RESOURCE_POSITIONS =
+    positions && positions.length > 0
+      ? positions.map(p => ({ x: p.x, z: p.z }))
+      : null;
+}
+
+/**
+ * 2v2 and FFA walk a disk whose area is 4.5× the 1v1 skirmish disk.
+ * Kit terrain stays on the kit footprint. Call after `applyMapProfile('standard')`.
+ * @param {string} mode
+ */
+export function applySkirmishNavForMode(mode) {
+  if (MAP_PROFILE === 'story') return;
+  const kit = wantKitTerrain() || MAP_TERRAIN_STYLE === 'kit';
+  const large = !kit && (mode === '2v2' || mode === 'ffa');
+  MAP_NAV_AREA_SCALE = kit ? 1 : (large ? MAP_LARGE_SKIRMISH_NAV_AREA_SCALE : MAP_SKIRMISH_NAV_AREA_SCALE);
+  FOG_GRID_SIZE = large ? 84 : 40;
+  if (!large) SKIRMISH_EXTRA_RESOURCE_POSITIONS = null;
+  SKIRMISH_CORNER_RESOURCE_POSITIONS = null;
+  recomputeMapDerived();
 }
 
 function recomputeMapDerived() {
@@ -459,9 +496,9 @@ export const PLAYER_TEAMS = [0, 0, 1, 1];
 
 // --- Resource Fields ---
 export const RESOURCE_FIELD_CAPACITY = 5000;
-export const HARVEST_AMOUNT = 50;       // Credits per harvester trip
-export const HARVEST_TIME = 3.0;        // Seconds to fill harvester at field
-export const DEPOSIT_TIME = 1.5;        // Seconds to unload at refinery
+export const HARVEST_AMOUNT = 100;      // Credits per harvester trip (was 50 — too little for 5k crystals)
+export const HARVEST_TIME = 2.5;        // Seconds to fill harvester at field
+export const DEPOSIT_TIME = 1.2;        // Seconds to unload at refinery
 
 /** Inner / contested crystal sites (world XZ). First four come from `getResourceFieldPositions` near spawns. */
 const RESOURCE_FIELD_CONTESTED_POSITIONS = [
@@ -490,8 +527,11 @@ export function getResourceFieldPositions() {
   ];
   const ring =
     MAP_UNIT_NAV_RADIUS - MATCH_HQ_SPAWN_MARGIN - MATCH_SPAWN_NEAR_CRYSTAL_OFFSET_M;
-  const nearSpawn = corners.map(c => ({ x: c.x * ring, z: c.z * ring }));
-  return [...nearSpawn, ...RESOURCE_FIELD_CONTESTED_POSITIONS];
+  const nearSpawn = (SKIRMISH_CORNER_RESOURCE_POSITIONS && SKIRMISH_CORNER_RESOURCE_POSITIONS.length === 4)
+    ? SKIRMISH_CORNER_RESOURCE_POSITIONS
+    : corners.map(c => ({ x: c.x * ring, z: c.z * ring }));
+  const extras = SKIRMISH_EXTRA_RESOURCE_POSITIONS || [];
+  return [...nearSpawn, ...RESOURCE_FIELD_CONTESTED_POSITIONS, ...extras];
 }
 
 // --- Unit Types ---
@@ -564,8 +604,8 @@ export const UNIT_TYPES = {
     aoe: 0,
     canCapture: true,
     canRepair: true,
-    repairRate: 15, // HP/sec (repair not implemented yet)
-    description: 'Captures enemy buildings (time-based); repair planned',
+    repairRate: 15, // HP/sec — vehicles and buildings
+    description: 'Captures enemy buildings; repairs friendly vehicles and buildings',
   },
   scoutBike: {
     name: 'Scout buggy',
@@ -680,7 +720,7 @@ export const UNIT_TYPES = {
     damage: 0,
     fireRate: 0,
     range: 0,
-    speed: 1.4,
+    speed: 2.4,
     visionRange: 20,
     dmgVsInfantry: 0,
     dmgVsVehicle: 0,
@@ -704,8 +744,9 @@ export const CAPTURE_HP_REF_FOR_DURATION = 2000;
  * at which capture still progresses. Nav-only edge distance was too tight in practice.
  */
 export const ENGINEER_CAPTURE_EDGE_REACH = 10;
-/** Friendly vehicles within this range get HP from idle/moving engineers; same band when following a vehicle. */
-export const ENGINEER_REPAIR_RANGE = 5.5;
+/** Friendly vehicles/buildings within this range get HP from idle/moving engineers; same band when ordered to repair.
+ * Must clear HQ nav ring: hullDist ≈ OBSTACLE_BUFFER + HQ visualPad (+ approach pad) ≈ 5–6.5. */
+export const ENGINEER_REPAIR_RANGE = 7.5;
 
 /**
  * HQ construction menu order (tech tree).
@@ -808,23 +849,23 @@ export const BUILDING_TYPES = {
     dmgVsVehicle: 1.0,
     dmgVsBuilding: 0.55,
   },
-  /** Long-range base artillery (HQ menu "Artillery") — distinct from the mobile artillery unit. */
+  /** Long-range base artillery — same gun profile as the mobile artillery unit. */
   artilleryTurret: {
     name: 'Artillery',
     cost: 700,
     buildTime: 14,
     hp: 450,
-    visionRange: 24,
+    visionRange: 70,
     size: 3,
     producesUnits: [],
     powerConsume: 40,
-    damage: 55,
-    range: 28,
-    cooldown: 2.8,
-    aoe: 3.5,
-    dmgVsInfantry: 0.85,
-    dmgVsVehicle: 1.35,
-    dmgVsBuilding: 1.5,
+    damage: 40,
+    range: 70,
+    cooldown: 3.5,
+    aoe: 5,
+    dmgVsInfantry: 1.5,
+    dmgVsVehicle: 1.0,
+    dmgVsBuilding: 2.5,
   },
 };
 
@@ -860,7 +901,8 @@ export const UNIT_SEPARATION_RADIUS = 0;
 export const UNIT_SEPARATION_ACCEL = 0;
 export const UNIT_CLEARANCE_MIN = 0;
 export const UNIT_SEPARATION_CONTACT_STAGGER = 1;
-export const FORMATION_SPACING = 4.5; // Spread out to avoid being sniped in lines
+/** Hex-slot pitch (m). Wider than artillery AoE (5) so one shell does not cover two centers. */
+export const FORMATION_SPACING = 9;
 
 // --- Bot AI (fair: no fog/vision/economy cheats — scale these down for easier bots) ---
 export const BOT_TICK_RATE = 4.0;              // Decision cadence (orders still gated by APM budget)
@@ -868,9 +910,9 @@ export const BOT_TICK_RATE = 4.0;              // Decision cadence (orders still
 export const BOT_TARGET_APM = 150;
 export const BOT_SCOUT_DELAY = 12;
 export const BOT_SCOUT_DELAY_ECON = 3;       // When no known ore, start scouting almost immediately
-export const BOT_ATTACK_THRESHOLD = 5;         // Earlier main strikes when reserves allow
-export const BOT_FULL_ATTACK_THRESHOLD = 16;   // Larger late-game pushes
-export const BOT_STRIKE_RESERVE_MULT = 0.28;    // Portion of army held back; lower = more aggressive attack
+export const BOT_ATTACK_THRESHOLD = 8;         // Don't poke until a real squad exists
+export const BOT_FULL_ATTACK_THRESHOLD = 18;   // Larger late-game pushes
+export const BOT_STRIKE_RESERVE_MULT = 0.45;    // Hold more home — defense first
 export const BOT_MAX_PRODUCTION_QUEUE = 5;     // Deep queues (same as player could fill manually)
 export const BOT_FOCUS_FIRE_INTERVAL = 1.15;   // Human-scale focus-fire micro (also spends APM)
 /** Max units that run auto-acquire per sim frame (round-robin); attacking units always tick. */
@@ -882,13 +924,47 @@ export const FOG_OVERLAY_REDRAW_HZ = 8;
 export const BOT_SCOUT_CAP = 3;
 export const BOT_SCOUT_CAP_ECON = 7;           // Parallel scouts when economy must find new fields
 export const BOT_SCOUT_GAP_ECON = 0.45;        // Seconds between scout spawns in econ crisis
+/** After expand ore is known: keep probing for unknown enemy HQs (map-corner intel). */
+export const BOT_SCOUT_CAP_INTEL = 5;
+export const BOT_SCOUT_GAP_INTEL = 1.4;
+export const BOT_SCOUT_DELAY_INTEL = 8;
 export const BOT_SCOUT_REPATH_SEC = 3.5;       // Re-issue move if scout goes idle off-route
 export const BOT_SCOUT_ARRIVE_RADIUS = 11;     // World units: reached waypoint → pick next fog target
 export const BOT_SCOUT_DANGER_WEIGHT = 520;    // Higher = avoid last-seen enemies & death zones more
 export const BOT_SCOUT_DANGER_ZONE_TTL = 140;  // Seconds to treat a death location as hazardous
-export const BOT_ECON_EXPAND_CREDITS = 1100;   // Expand sooner when fields are known
-export const BOT_STOP_HARVESTER_AT_POP = 20;   // Reserve pop for military sooner
+/** Approach unknown enemy spawn pads from this standoff (m) so fog reveal of the HQ is likely. */
+export const BOT_INTEL_SPAWN_STANDOFF = 8;
+export const BOT_ECON_EXPAND_CREDITS = 520;    // ≈ refinery cost when field is already in HQ build radius
+/** Contested / far fields need Mobile HQ (750) before a 2nd refinery can place. */
+export const BOT_ECON_MOBILE_HQ_EXPAND_CREDITS = 750;
+/** Keep at least this many harvesters even near the military pop soft-cap. */
+export const BOT_MIN_HARVESTERS_KEEP = 4;
+/** Min living harvesters before Mobile HQ expand — keep low so MHQ leaves while home ore remains. */
+/** Min trucks before expand/MHQ logic runs — keep low so MHQ isn't gated behind HV spam. */
+export const BOT_EXPAND_MIN_HARVESTERS = 1;
+/** Cap trucks while banking/building the first Mobile HQ (then fill to GLOBAL_CAP). */
+export const BOT_HV_CAP_BEFORE_MHQ = 2;
+/** Before the war factory exists, only this many HVs — cash must rush the factory→MHQ. */
+export const BOT_HV_CAP_BEFORE_FACTORY = 2;
+export const BOT_STOP_HARVESTER_AT_POP = 32;   // Soft-cap only above min-harvester floor / per-refinery target
+/** Soft max refineries — bots keep expanding while unclaimed ore remains (map has ≤8 fields). */
+export const BOT_MAX_REFINERIES = 8;
+/** Owned refinery counts as covering a field within this distance (m). */
+export const BOT_FIELD_CLAIM_RADIUS = 32;
+/**
+ * Contested-ring crystals sit ~42m apart — one well-placed pad should cover a whole patch.
+ * Fields within this of a claimed field are treated as same-patch (no extra refinery).
+ */
+export const BOT_ORE_CLUSTER_RADIUS = 48;
+/** Skip expand targets with less remaining than this fraction of capacity (don't MHQ to scraps). */
+export const BOT_EXPAND_MIN_ORE_FRAC = 0.18;
+/** World distance: expand field near an enemy HQ is contested — prefer safer ore. */
+export const BOT_EXPAND_ENEMY_HQ_AVOID = 55;
 export const BOT_SECOND_WARFACTORY_CREDITS = 1150;
+/** Min combat units (excl. scouts) before striking an enemy HQ. */
+export const BOT_HQ_STRIKE_MIN = 10;
+/** Strike size ≥ known defenders near target × this factor. */
+export const BOT_STRIKE_DEFENDER_MULT = 1.35;
 export const BOT_RETALIATION_ENEMY_MULT = 1.25; // Required locals vs logged enemy strength
 export const BOT_DEFEND_RADIUS = 30;
 export const BOT_DEFENSE_RELEASE_SCOUT_DIST = 44; // HQ→threat: farther than this, keep scouts on exploration
@@ -918,9 +994,78 @@ export const BOT_BASE_VEHICLE_THREAT_RADIUS = 56;
 export const BOT_HARVESTER_VEHICLE_THREAT_RADIUS = 42;
 export const BOT_RETALIATION_FLANK_DIST = 28;
 export const BOT_HARASS_COOLDOWN_SEC = 75;
-export const BOT_SCOUT_MISSION_MAX_SEC = 95;
-export const BOT_MIN_HARVESTERS_BEFORE_SACRIFICE = 2;
-export const BOT_HARVESTER_PER_REFINERY_TARGET = 7;
+export const BOT_SCOUT_MISSION_MAX_SEC = 180; // Corner-to-corner recon needs >95s at buggy speed
+export const BOT_MIN_HARVESTERS_BEFORE_SACRIFICE = 6;
+/** Target harvesters per live refinery — total capped by BOT_HARVESTER_GLOBAL_CAP. */
+export const BOT_HARVESTER_PER_REFINERY_TARGET = 5;
+/** Absolute harvester ceiling — tight ore flow (≤10), not endless trucks. */
+export const BOT_HARVESTER_GLOBAL_CAP = 10;
+/** Economy "stable" once this many HVs exist (and enough are working). */
+export const BOT_MIN_STABLE_HARVESTERS = 8;
+/** Min working (mining/hauling) HVs required for economyStable. */
+export const BOT_MIN_STABLE_WORKING = 5;
+/** Park this many combat units at each HQ. */
+export const BOT_GUARD_PER_HQ = 3;
+/** Park this many combat units at each refinery. */
+export const BOT_GUARD_PER_REFINERY = 2;
+/** Soft max non-scout combat while economy is still spinning up. */
+export const BOT_DEFENSE_ARMY_SOFT_CAP = 10;
+
+/**
+ * Named FFA / skirmish bot strategies (deterministic personality packs).
+ * Bench assigns one per seat to compare which wins.
+ */
+export const BOT_STRATEGY_PRESETS = {
+  eco_expand: {
+    label: 'Eco Expand',
+    aggression: 0.42,
+    expansiveness: 0.95,
+    defensiveness: 0.55,
+    techPreference: 0.55,
+    artilleryAffinity: 0.45,
+    staticDefenseBias: 0.55,
+  },
+  aggro_rush: {
+    label: 'Aggro Rush',
+    aggression: 0.72,
+    expansiveness: 0.7,
+    defensiveness: 0.4,
+    techPreference: 0.4,
+    artilleryAffinity: 0.35,
+    staticDefenseBias: 0.35,
+  },
+  tech_armor: {
+    label: 'Tech Armor',
+    aggression: 0.55,
+    expansiveness: 0.75,
+    defensiveness: 0.5,
+    techPreference: 0.95,
+    artilleryAffinity: 0.7,
+    staticDefenseBias: 0.5,
+  },
+  scout_harass: {
+    label: 'Scout Harass',
+    aggression: 0.58,
+    expansiveness: 0.88,
+    defensiveness: 0.45,
+    techPreference: 0.48,
+    artilleryAffinity: 0.55,
+    staticDefenseBias: 0.4,
+  },
+  /** 1v1 default — answers long-range pressure and holds the base. */
+  siege_answer: {
+    label: 'Siege Answer',
+    aggression: 0.58,
+    expansiveness: 0.8,
+    defensiveness: 0.65,
+    techPreference: 0.7,
+    artilleryAffinity: 0.9,
+    staticDefenseBias: 0.75,
+  },
+};
+export const BOT_STRATEGY_ORDER = ['eco_expand', 'aggro_rush', 'tech_armor', 'scout_harass'];
+/** Preferred seat strategy in 1v1 when only one bot. */
+export const BOT_STRATEGY_1V1 = 'siege_answer';
 
 // --- Networking ---
 /** Host → client world state cadence (Hz). Higher = smoother clients; more bandwidth. */

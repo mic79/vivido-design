@@ -28,6 +28,7 @@
       else if (action === 'shadows' && window._toggleDynamicShadows) window._toggleDynamicShadows();
       else if (action === 'msaa' && window._toggleMsaa4x) window._toggleMsaa4x();
       else if (action === 'focusCull' && window._toggleFocusCull) window._toggleFocusCull();
+      else if (action === 'victoryGraphMetric' && window._cycleVictoryGraphMetric) window._cycleVictoryGraphMetric();
     },
     remove: function () {
       this.el.removeEventListener('click', this.onClick);

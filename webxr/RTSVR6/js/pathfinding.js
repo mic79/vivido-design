@@ -536,13 +536,15 @@ function findPathGridAStar(startX, startZ, endX, endZ) {
 
   let iterations = 0;
   const cellDist = Math.abs(sc - ec) + Math.abs(sr - er);
+  // Long canyon detours fill a wide pocket before the way around is found.
+  // A short cap returned a partial path that ended on the near lip.
   const MAX_ITER = Math.min(
     GRID_CELLS,
-    Math.max(1200, Math.min(16000, 600 + cellDist * 90)),
+    Math.max(4000, Math.min(80000, 2000 + cellDist * 280)),
   );
 
   while (open.length > 0) {
-    if (++iterations > MAX_ITER) break;
+    if (++iterations > MAX_ITER) return null;
 
     const [, currentKey] = heapPop(open);
     if (astarClosed[currentKey] === stamp) continue;
@@ -584,7 +586,7 @@ function findPathGridAStar(startX, startZ, endX, endZ) {
     }
   }
 
-  return findPartialPathArray(ec, er);
+  return null;
 }
 
 /** three-pathfinding: getGroup + findPath on the nav mesh zone (see library README). */

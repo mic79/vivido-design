@@ -4,7 +4,7 @@
 // ========================================
 
 import {
-  UNIT_TYPES, FORMATION_SPACING,
+  UNIT_TYPES, BUILDING_TYPES, UNIT_SHAPES, FORMATION_SPACING,
   clampWorldToPlayableDisk,
   PLAYER_COLORS,
   CAPTURE_DURATION_MIN_SEC, CAPTURE_DURATION_MAX_SEC,
@@ -24,6 +24,7 @@ import * as Audio from './audio.js';
 import * as Fog from './fog.js';
 import * as Effects from './effects.js';
 import * as Resources from './resources.js';
+import * as Trace from './match-trace.js';
 import { sampleGameplayEntityY } from './moon-environment.js';
 import { unitGrid, buildingGrid } from './spatial.js';
 
@@ -49,6 +50,11 @@ function pathRetryNotBefore(unit) {
   return unit._pathRetryAt || 0;
 }
 
+/** Sim-clock ms — must track gameUpdate time, not wall clock (fast-forward / tab hide). */
+function simNowMs() {
+  return (State.gameSession.elapsedTime || 0) * 1000;
+}
+
 function pathRetryDelayMs(unit, overrideMs) {
   if (overrideMs != null) return overrideMs;
   if (unitHasPlayerPathPriority(unit)) return PATH_REQUERY_MS;
@@ -60,7 +66,7 @@ function pathRetryDelayMs(unit, overrideMs) {
 }
 
 function schedulePathRetry(unit, ms) {
-  unit._pathRetryAt = performance.now() + pathRetryDelayMs(unit, ms);
+  unit._pathRetryAt = simNowMs() + pathRetryDelayMs(unit, ms);
 }
 
 function notePathStepBlocked(unit) {
@@ -86,27 +92,34 @@ function unitHasPlayerMoveGoal(unit) {
 }
 
 function unitShouldKeepMoveGoal(unit) {
-  return unitHasAttackOrder(unit) || unitHasPlayerMoveGoal(unit);
+  // Bot attack-moves are NOT playerCommanded — still must keep the goal on path failure
+  // or they idle against façades forever.
+  if (unit.targetPos == null) return false;
+  return unit.state === 'moving' || unit.state === 'attacking' || unitHasAttackOrder(unit)
+    || unitHasPlayerMoveGoal(unit);
 }
 
 function unitHasPlayerPathPriority(unit) {
   return unit.playerCommanded && (unit.targetPos != null || unitHasAttackOrder(unit));
 }
 
-/** Player/bot attack or move orders should path immediately, not wait on crowd-retry backoff. */
-function resetUnitPathThrottle(unit) {
+/** Clear A* backoff without claiming the unit "made progress" (stuck timer stays honest). */
+function clearPathBackoff(unit) {
   unit._pathRetryAt = 0;
   unit._reachRetryAt = 0;
+}
+
+/** Player/bot attack or move orders should path immediately, not wait on crowd-retry backoff. */
+function resetUnitPathThrottle(unit) {
+  clearPathBackoff(unit);
   unit._pathBlockedStreak = 0;
   unit._slideStreak = 0;
-  unit._stuckAnchorX = unit.x;
-  unit._stuckAnchorZ = unit.z;
-  unit._stuckAnchorAt = performance.now();
+  resetStuckAnchor(unit);
 }
 
 function canRunPathfindNow(unit) {
   if (unitHasPlayerPathPriority(unit)) return true;
-  return performance.now() >= pathRetryNotBefore(unit);
+  return simNowMs() >= pathRetryNotBefore(unit);
 }
 
 function canTakePathfindSlot(unit) {
@@ -170,7 +183,9 @@ function approachPointOutsideBuilding(fromX, fromZ, building) {
     : building.type === 'turret' ? 1.25
     : building.type === 'solarPanel' ? 1.0
     : 1.25;
-  const standoff = h + OBSTACLE_BUFFER + visualPad + 1.35;
+  // Sit just outside the nav block — old +1.35 put engineers outside ENGINEER_REPAIR_RANGE on HQ
+  // (hullDist ≈ 6.35 vs repair 5.5 → walk up, idle, never heal).
+  const standoff = h + OBSTACLE_BUFFER + visualPad + 0.35;
   const dx = fromX - bx;
   const dz = fromZ - bz;
   const len = Math.hypot(dx, dz);
@@ -238,6 +253,8 @@ export function createUnit(type, ownerId, x, z, options = {}) {
     targetUnitId: null,
     targetBuildingId: null,
     followLeadId: null,  // ally escorted while following / defending; survives while attacking threats
+    /** Friendly building id this engineer was ordered to repair (mirrors followLeadId for vehicles). */
+    repairBuildingId: null,
     path: null,          // Array of { x, z } waypoints
     pathIndex: 0,
     lastFireTime: 0,
@@ -384,28 +401,61 @@ export function syncSquadFollowersFromLeaders() {
   });
 }
 
+function isVehicleNeedingRepair(u) {
+  return u && u.hp > 0 && u.category === 'vehicle' && u.hp + 1e-4 < u.maxHp;
+}
+
+function isBuildingNeedingRepair(b) {
+  return b && b.hp > 0 && b.hp + 1e-4 < b.maxHp;
+}
+
+function buildingRepairDist(ux, uz, building) {
+  return distancePointToBuildingHull(ux, uz, building);
+}
+
 /**
  * Squad mirroring keeps a fixed XZ offset while the leader is idle, so an engineer ordered to
  * follow a damaged vehicle can sit outside {@link ENGINEER_REPAIR_RANGE} forever. Chase the
  * lead's **current** position until close enough to repair (overrides mirrored idle for this case).
+ * Same for an explicit repair-building order.
  */
 export function syncEngineerRepairApproach() {
   State.units.forEach(f => {
-    if (f.type !== 'engineer' || f.hp <= 0 || !f.followLeadId) return;
-    // Only skip for a real capture/repair-building order — not mirrored combat.
-    if (f.state === 'attacking' && f.targetBuildingId && !f.targetUnitId) return;
-    const lead = State.units.get(f.followLeadId);
-    if (!lead || lead.hp <= 0 || lead.team !== f.team) return;
-    if (lead.category !== 'vehicle' || !isVehicleNeedingRepair(lead)) return;
+    if (f.type !== 'engineer' || f.hp <= 0) return;
+    // Capture order — don't divert to repair approach.
+    if (f.state === 'attacking' && f.targetBuildingId && !f.targetUnitId && !f.repairBuildingId) return;
 
-    const d = Pathfinding.getDistance(f.x, f.z, lead.x, lead.z);
-    if (d <= ENGINEER_REPAIR_RANGE - 0.45) return;
+    let gx = null;
+    let gz = null;
+
+    if (f.repairBuildingId) {
+      const b = State.buildings.get(f.repairBuildingId);
+      if (!b || b.hp <= 0 || b.team !== f.team) {
+        f.repairBuildingId = null;
+      } else if (buildingRepairDist(f.x, f.z, b) > ENGINEER_REPAIR_RANGE - 0.45) {
+        const ap = approachPointOutsideBuilding(f.x, f.z, b);
+        gx = ap.x;
+        gz = ap.z;
+      }
+    }
+
+    if (gx == null && f.followLeadId) {
+      const lead = State.units.get(f.followLeadId);
+      if (lead && lead.hp > 0 && lead.team === f.team
+        && lead.category === 'vehicle' && isVehicleNeedingRepair(lead)) {
+        const d = Pathfinding.getDistance(f.x, f.z, lead.x, lead.z);
+        if (d > ENGINEER_REPAIR_RANGE - 0.45) {
+          const c = clampWorldToPlayableDisk(lead.x, lead.z, 0);
+          gx = c.x;
+          gz = c.z;
+        }
+      }
+    }
+
+    if (gx == null) return;
 
     f.playerCommanded = true;
     f.state = 'moving';
-    const c = clampWorldToPlayableDisk(lead.x, lead.z, 0);
-    const gx = c.x;
-    const gz = c.z;
     const repath =
       !f.targetPos ||
       Math.hypot(f.targetPos.x - gx, f.targetPos.z - gz) > 1.25 ||
@@ -443,6 +493,7 @@ export function updateMovement(dt) {
     return ap - bp;
   });
   for (const unit of movers) {
+    unstickMoverIfFrozen(unit, dt);
     moveAlongPath(unit, dt);
   }
 
@@ -473,6 +524,8 @@ export function updateMovement(dt) {
 
 function escapeAndRepath(unit, gx, gz) {
   // One legal nav step only — never snap/teleport to cell centers.
+  const beforeX = unit.x;
+  const beforeZ = unit.z;
   const step = Pathfinding.bestEscapeStep(unit.x, unit.z, gx, gz);
   if (step) {
     const moved = Pathfinding.resolveNavMotion(unit.x, unit.z, step.x, step.z);
@@ -492,15 +545,21 @@ function escapeAndRepath(unit, gx, gz) {
   unit._preferGridPath = true;
   unit._pathBlockedStreak = (unit._pathBlockedStreak || 0) + 1;
   unit._slideStreak = 0;
-  resetStuckAnchor(unit);
-  resetUnitPathThrottle(unit);
+  clearPathBackoff(unit);
+  // CRITICAL: do NOT reset stuck timers on failed scrapes — that was why tanks
+  // ground on façades forever (every blocked frame looked like "progress").
+  const gained = Math.hypot(unit.x - beforeX, unit.z - beforeZ);
+  if (gained > 0.35) resetStuckAnchor(unit);
 }
 
 /** Reset position-stuck detector (call when order changes or real progress happens). */
 function resetStuckAnchor(unit) {
   unit._stuckAnchorX = unit.x;
   unit._stuckAnchorZ = unit.z;
-  unit._stuckAnchorAt = performance.now();
+  unit._stuckAnchorAt = simNowMs();
+  unit._freezeX = unit.x;
+  unit._freezeZ = unit.z;
+  unit._stuckTime = 0;
 }
 
 /**
@@ -508,7 +567,7 @@ function resetStuckAnchor(unit) {
  * can try again. Does **not** teleport — that was causing visible jumps.
  */
 function notePositionProgress(unit) {
-  const now = performance.now();
+  const now = simNowMs();
   if (unit._stuckAnchorX == null) {
     resetStuckAnchor(unit);
     return false;
@@ -523,11 +582,99 @@ function notePositionProgress(unit) {
     unit.pathIndex = 0;
     unit._preferGridPath = true;
     unit._slideStreak = 0;
-    resetStuckAnchor(unit);
-    resetUnitPathThrottle(unit);
+    // Keep stuck clock — notePositionProgress alone is a soft recover; full unstick
+    // still fires if we remain frozen after another repath cycle.
+    unit._stuckAnchorAt = now;
+    clearPathBackoff(unit);
     return true;
   }
   return false;
+}
+
+/** Creep one nav-legal step toward the goal while waiting on A* / slots. */
+function creepTowardGoal(unit, dt) {
+  const goal = unit.targetPos;
+  if (!goal) return false;
+  const dx = goal.x - unit.x;
+  const dz = goal.z - unit.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.6) return false;
+  const step = Math.min((unit.speed || 4) * dt, dist);
+  const nx = unit.x + (dx / dist) * step;
+  const nz = unit.z + (dz / dist) * step;
+  const res = Pathfinding.resolveNavMotion(unit.x, unit.z, nx, nz);
+  const gained = Math.hypot(res.x - unit.x, res.z - unit.z);
+  if (res.blocked || gained < 0.02) {
+    return forceUnwedgeStep(unit, goal.x, goal.z);
+  }
+  unit.x = res.x;
+  unit.z = res.z;
+  if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
+    unit.rotation = Math.atan2(dx, dz);
+  }
+  return true;
+}
+
+/** Any legal escape step — prefer toward goal, else any open neighbor. */
+function forceUnwedgeStep(unit, gx, gz) {
+  const esc = Pathfinding.bestEscapeStep(unit.x, unit.z, gx, gz);
+  if (esc) {
+    const moved = Pathfinding.resolveNavMotion(unit.x, unit.z, esc.x, esc.z);
+    if (!moved.blocked && Math.hypot(moved.x - unit.x, moved.z - unit.z) > 0.04) {
+      unit.x = moved.x;
+      unit.z = moved.z;
+      return true;
+    }
+  }
+  if (!Pathfinding.isPositionWalkable(unit.x, unit.z)) {
+    const s = Pathfinding.pushOutOfObstacle(unit.x, unit.z);
+    if (Math.hypot(s.x - unit.x, s.z - unit.z) > 0.04) {
+      unit.x = s.x;
+      unit.z = s.z;
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Hard recover for ANY mover frozen in place — tanks, infantry, engineers, not just HVs.
+ * Rotates the approach around the goal so the next A* doesn't re-hit the same façade.
+ */
+function unstickMoverIfFrozen(unit, dt) {
+  if (!unit.targetPos) {
+    unit._stuckTime = 0;
+    return;
+  }
+  if (unit.state !== 'moving' && unit.state !== 'attacking') {
+    unit._stuckTime = 0;
+    return;
+  }
+
+  const moved = Math.hypot(unit.x - (unit._freezeX ?? unit.x), unit.z - (unit._freezeZ ?? unit.z));
+  if (moved > 0.5) {
+    unit._freezeX = unit.x;
+    unit._freezeZ = unit.z;
+    unit._stuckTime = 0;
+    return;
+  }
+  unit._stuckTime = (unit._stuckTime || 0) + dt;
+  if (unit._stuckTime < 2.8) return;
+
+  unit._stuckTime = 0;
+  unit._freezeX = unit.x;
+  unit._freezeZ = unit.z;
+  unit.path = null;
+  unit.pathIndex = 0;
+  unit._preferGridPath = true;
+  unit._slideStreak = 0;
+  clearPathBackoff(unit);
+
+  // Slide off the lip, but keep the original destination. Replacing it with a
+  // nearby reachable cell parked units on the near side of a canyon.
+  forceUnwedgeStep(unit, unit.targetPos.x, unit.targetPos.z);
+  unit._approachHoldUntil = simNowMs() + 400;
+  resetStuckAnchor(unit);
 }
 
 function moveAlongPath(unit, dt) {
@@ -540,9 +687,35 @@ function moveAlongPath(unit, dt) {
       return;
     }
 
-    if (!canRunPathfindNow(unit)) return;
+    // Never keep an unwalkable goal — corner fog / building centers freeze movers.
+    if (!Pathfinding.isPositionWalkable(unit.targetPos.x, unit.targetPos.z)) {
+      const snapped = Pathfinding.snapWorldXZToWalkable(unit.targetPos.x, unit.targetPos.z);
+      const snapOk = Pathfinding.isPositionWalkable(snapped.x, snapped.z);
+      const nearSnap = snapOk && Math.hypot(snapped.x - unit.x, snapped.z - unit.z) < 2.8;
+      const nearRaw = Math.hypot(unit.targetPos.x - unit.x, unit.targetPos.z - unit.z) < 6;
+      if (!snapOk || nearSnap || nearRaw) {
+        // As close as nav allows — finish the move order instead of grinding the obstacle.
+        if (unit.state === 'moving') {
+          unit.targetPos = null;
+          unit.path = null;
+          unit.pathIndex = 0;
+          unit.state = 'idle';
+          unit.playerCommanded = false;
+        } else if (snapOk) {
+          unit.targetPos = { x: snapped.x, z: snapped.z };
+        }
+        return;
+      }
+      unit.targetPos = { x: snapped.x, z: snapped.z };
+    }
+
+    if (!canRunPathfindNow(unit)) {
+      creepTowardGoal(unit, dt);
+      return;
+    }
     if (!canTakePathfindSlot(unit)) {
       schedulePathRetry(unit, unitHasPlayerPathPriority(unit) ? 16 : 50);
+      creepTowardGoal(unit, dt);
       return;
     }
 
@@ -554,11 +727,12 @@ function moveAlongPath(unit, dt) {
     let path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z, smooth);
     if (!path || path.length === 0) {
       const reachAt = unit._reachRetryAt || 0;
-      if (performance.now() < reachAt) {
-        schedulePathRetry(unit, Math.max(unitHasPlayerPathPriority(unit) ? 16 : 50, reachAt - performance.now()));
+      if (simNowMs() < reachAt) {
+        schedulePathRetry(unit, Math.max(unitHasPlayerPathPriority(unit) ? 16 : 50, reachAt - simNowMs()));
+        creepTowardGoal(unit, dt);
         return;
       }
-      unit._reachRetryAt = performance.now() + (unitHasPlayerPathPriority(unit) ? 280 : 900);
+      unit._reachRetryAt = simNowMs() + (unitHasPlayerPathPriority(unit) ? 280 : 900);
       if (canTakePathfindSlot(unit)) {
         notePathfindSlotUsed(unit);
         const reachable = Pathfinding.findNearestReachable(
@@ -567,10 +741,19 @@ function moveAlongPath(unit, dt) {
           unitHasPlayerPathPriority(unit),
         );
         if (reachable) {
-          unit.targetPos = { x: reachable.x, z: reachable.z };
-          if (canTakePathfindSlot(unit)) {
-            notePathfindSlotUsed(unit);
-            path = Pathfinding.findPath(unit.x, unit.z, reachable.x, reachable.z, false);
+          const goalD = Math.hypot(unit.targetPos.x - unit.x, unit.targetPos.z - unit.z);
+          const viaD = Math.hypot(unit.targetPos.x - reachable.x, unit.targetPos.z - reachable.z);
+          const moved = Math.hypot(reachable.x - unit.x, reachable.z - unit.z);
+          const goalWalkable = Pathfinding.isPositionWalkable(unit.targetPos.x, unit.targetPos.z);
+          // A lip on this side of a canyon is "reachable" but not a way around.
+          // Only shorten the order when the real goal is blocked, or the via
+          // actually advances toward it.
+          if (!goalWalkable || (viaD + 8 < goalD && moved > 6)) {
+            unit.targetPos = { x: reachable.x, z: reachable.z };
+            if (canTakePathfindSlot(unit)) {
+              notePathfindSlotUsed(unit);
+              path = Pathfinding.findPath(unit.x, unit.z, reachable.x, reachable.z, false);
+            }
           }
         }
       } else {
@@ -581,8 +764,12 @@ function moveAlongPath(unit, dt) {
     if (!path || path.length === 0) {
       if (unitShouldKeepMoveGoal(unit)) {
         // Don't freeze forever waiting on A* — nudge out then retry.
-        if (notePositionProgress(unit)) return;
+        if (notePositionProgress(unit)) {
+          creepTowardGoal(unit, dt);
+          return;
+        }
         schedulePathRetry(unit, unitHasPlayerPathPriority(unit) ? 60 : 120);
+        creepTowardGoal(unit, dt);
         return;
       }
       unit.targetPos = null;
@@ -667,8 +854,13 @@ function moveAlongPath(unit, dt) {
 
   const moveSpeed = unit.speed * dt;
   const ratio = Math.min(1, moveSpeed / dist);
-  const nx = unit.x + dx * ratio;
-  const nz = unit.z + dz * ratio;
+  const sep = formationSeparation(unit);
+  let nx = unit.x + dx * ratio + sep.x * moveSpeed * 0.55;
+  let nz = unit.z + dz * ratio + sep.z * moveSpeed * 0.55;
+  if ((sep.x || sep.z) && !Pathfinding.isPositionWalkable(nx, nz)) {
+    nx = unit.x + dx * ratio;
+    nz = unit.z + dz * ratio;
+  }
   const startBlocked = !Pathfinding.isPositionWalkable(unit.x, unit.z);
   const res = Pathfinding.resolveNavMotion(unit.x, unit.z, nx, nz);
   const intended = Math.hypot(nx - unit.x, nz - unit.z);
@@ -959,11 +1151,7 @@ export function updateCombat(time, dt) {
   });
 }
 
-function isVehicleNeedingRepair(u) {
-  return u && u.hp > 0 && u.category === 'vehicle' && u.hp + 1e-4 < u.maxHp;
-}
-
-/** Engineers restore friendly vehicle HP when in range, or when following a damaged friendly vehicle. */
+/** Engineers restore friendly vehicle/building HP when in range, or when ordered onto a patient. */
 export function updateEngineerRepair(dt) {
   const engStats = UNIT_TYPES.engineer;
   const repairPerSec = engStats.repairRate ?? 15;
@@ -972,12 +1160,26 @@ export function updateEngineerRepair(dt) {
 
   State.units.forEach(unit => {
     if (unit.type !== 'engineer' || unit.hp <= 0) return;
-    // Capture-building orders only — mirrored combat no longer puts engineers in attacking+unit.
-    if (unit.state === 'attacking' && unit.targetBuildingId && !unit.targetUnitId) return;
+    // Capture-building orders only — don't heal while capturing.
+    if (unit.state === 'attacking' && unit.targetBuildingId && !unit.targetUnitId && !unit.repairBuildingId) {
+      return;
+    }
 
-    let patient = null;
+    let patient = null; // unit or building
 
-    if (unit.followLeadId) {
+    if (unit.repairBuildingId) {
+      const b = State.buildings.get(unit.repairBuildingId);
+      if (!b || b.hp <= 0 || b.team !== unit.team) {
+        unit.repairBuildingId = null;
+      } else if (
+        isBuildingNeedingRepair(b)
+        && buildingRepairDist(unit.x, unit.z, b) <= ENGINEER_REPAIR_RANGE
+      ) {
+        patient = b;
+      }
+    }
+
+    if (!patient && unit.followLeadId) {
       const lead = State.units.get(unit.followLeadId);
       if (lead && lead.team === unit.team && isVehicleNeedingRepair(lead)) {
         const d = Pathfinding.getDistance(unit.x, unit.z, lead.x, lead.z);
@@ -992,6 +1194,24 @@ export function updateEngineerRepair(dt) {
         other.team === unit.team &&
         isVehicleNeedingRepair(other)
       );
+      if (!patient) {
+        const nearbyB = buildingGrid.queryRadiusFiltered(unit.x, unit.z, r + 6, b =>
+          b.team === unit.team &&
+          isBuildingNeedingRepair(b) &&
+          buildingRepairDist(unit.x, unit.z, b) <= r
+        );
+        let best = null;
+        let bestD = Infinity;
+        for (let i = 0; i < nearbyB.length; i++) {
+          const b = nearbyB[i];
+          const d = buildingRepairDist(unit.x, unit.z, b);
+          if (d < bestD) {
+            bestD = d;
+            best = b;
+          }
+        }
+        patient = best;
+      }
     }
 
     if (!patient) return;
@@ -1126,15 +1346,20 @@ function handleAttackState(unit, time, dt) {
   }
 
   if (dist > maxEngageRange) {
+    const holdApproach =
+      unit._approachHoldUntil != null && simNowMs() < unit._approachHoldUntil;
     const staleChase =
-      !unit.targetPos ||
-      !unit.path ||
-      time - (unit._lastPathTime || 0) > 500;
+      !holdApproach && (
+        !unit.targetPos ||
+        !unit.path ||
+        time - (unit._lastPathTime || 0) > 500
+      );
     if (staleChase) {
       if (unit.targetBuildingId && !target.category) {
-        unit.targetPos = approachPointOutsideBuilding(unit.x, unit.z, target);
+        const ap = approachPointOutsideBuilding(unit.x, unit.z, target);
+        unit.targetPos = standWithFormSlot(unit, ap.x, ap.z);
       } else {
-        unit.targetPos = { x: target.x, z: target.z };
+        unit.targetPos = standWithFormSlot(unit, target.x, target.z);
       }
       unit.path = null;
       unit._lastPathTime = time;
@@ -1171,15 +1396,20 @@ function handleAttackState(unit, time, dt) {
     }
   } else {
     // In weapon range but not currently visible — keep chasing last known position.
+    const holdApproach =
+      unit._approachHoldUntil != null && simNowMs() < unit._approachHoldUntil;
     const staleChase =
-      !unit.targetPos ||
-      !unit.path ||
-      time - (unit._lastPathTime || 0) > 500;
+      !holdApproach && (
+        !unit.targetPos ||
+        !unit.path ||
+        time - (unit._lastPathTime || 0) > 500
+      );
     if (staleChase) {
       if (unit.targetBuildingId && !target.category) {
-        unit.targetPos = approachPointOutsideBuilding(unit.x, unit.z, target);
+        const ap = approachPointOutsideBuilding(unit.x, unit.z, target);
+        unit.targetPos = standWithFormSlot(unit, ap.x, ap.z);
       } else {
-        unit.targetPos = { x: target.x, z: target.z };
+        unit.targetPos = standWithFormSlot(unit, target.x, target.z);
       }
       unit.path = null;
       unit._lastPathTime = time;
@@ -1315,20 +1545,103 @@ function applyDamage(target, damage, attacker = null) {
       destroyBuilding(target);
     }
   } else if (attacker && target.category) {
-    // Damage reaction for units that survive the hit
-    if (target.type === 'harvester' || target.type === 'mobileHq') {
-      // Harvesters / Mobile HQ under attack should flee toward primary HQ
+    const attackerIsUnit = !!(attacker.category && State.units.has(attacker.id));
+    const attackerIsDefenseBuilding =
+      !attacker.category
+      && (attacker.type === 'turret' || attacker.type === 'artilleryTurret');
+
+    // Stamp for bot AI — HP-drop reactions run on the bot tick.
+    target._botDamagedAt = State.gameSession.elapsedTime;
+    if (attacker.id != null) target._botLastAttackerId = attacker.id;
+    if (attackerIsDefenseBuilding || attacker.type === 'artillery' || attacker.type === 'sniper') {
+      target._botLastAttackerLongRange = true;
+    }
+    // Remember a gun that has actually hit us. Fog drops the building, but its
+    // range still covers the center crystals — don't march the next MHQ back in.
+    if (attackerIsDefenseBuilding || attacker.type === 'artillery') {
+      const owner = State.players[target.ownerId];
+      const mem = owner?.botMemory;
+      if (mem) {
+        if (!mem.knownGuns) mem.knownGuns = [];
+        const range = (attacker.range
+          || BUILDING_TYPES[attacker.type]?.range
+          || 70) + 8;
+        let prev = null;
+        for (let gi = 0; gi < mem.knownGuns.length; gi++) {
+          if (mem.knownGuns[gi].id === attacker.id) prev = mem.knownGuns[gi];
+        }
+        if (prev) {
+          prev.x = attacker.x;
+          prev.z = attacker.z;
+          prev.range = range;
+          prev.time = State.gameSession.elapsedTime;
+        } else {
+          mem.knownGuns.push({
+            id: attacker.id,
+            x: attacker.x,
+            z: attacker.z,
+            range,
+            time: State.gameSession.elapsedTime,
+          });
+          if (mem.knownGuns.length > 8) mem.knownGuns.shift();
+        }
+      }
+    }
+
+    if (target.type === 'mobileHq') {
+      // Step just outside the gun. Never path to the home HQ — that target sits inside
+      // the HQ nav ring, so the MHQ orbits the base forever instead of taking another crystal.
+      const dx = target.x - attacker.x;
+      const dz = target.z - attacker.z;
+      const len = Math.hypot(dx, dz) || 1;
+      const gunRange = (attacker.range || BUILDING_TYPES[attacker.type]?.range || 40) + 16;
+      const c = clampWorldToPlayableDisk(
+        attacker.x + (dx / len) * gunRange,
+        attacker.z + (dz / len) * gunRange,
+        6,
+      );
+      target.targetPos = { x: c.x, z: c.z };
+      target.guardPos = { x: c.x, z: c.z };
+      target.path = null;
+      target.state = 'moving';
+      target._botFleeUntil = State.gameSession.elapsedTime + 1.6;
+      target._mhqAbortExpand = true;
+      target.playerCommanded = true;
+    } else if (target.type === 'harvester' || target.type === 'scoutBike') {
       const hq = State.getPlayerHQ(target.ownerId);
-      if (hq && target.state !== 'moving') {
-        target.targetPos = { x: hq.x, z: hq.z };
+      if (hq) {
+        const dx = target.x - attacker.x;
+        const dz = target.z - attacker.z;
+        const len = Math.hypot(dx, dz) || 1;
+        let fx = target.x + (dx / len) * 28;
+        let fz = target.z + (dz / len) * 28;
+        const dAtk = (fx - attacker.x) ** 2 + (fz - attacker.z) ** 2;
+        const dHq = (hq.x - attacker.x) ** 2 + (hq.z - attacker.z) ** 2;
+        if (dHq > dAtk) {
+          fx = hq.x;
+          fz = hq.z;
+        }
+        target.targetPos = { x: fx, z: fz };
+        target.guardPos = { x: fx, z: fz };
         target.path = null;
         target.state = 'moving';
+        target._botFleeUntil = State.gameSession.elapsedTime + 3.5;
+        target.playerCommanded = true;
       }
-    } else if (target.damage > 0 && attacker && State.units.has(attacker.id)) {
+    } else if (target.damage > 0 && attackerIsUnit) {
       if (target.state === 'idle' || target.state === 'moving') {
         beginEngagingUnit(target, attacker, { retaliate: true });
       } else if (target.state === 'attacking' && shouldPrioritizeAttackerOverCurrentTarget(target, attacker)) {
         beginEngagingUnit(target, attacker, { retaliate: true });
+      }
+    } else if (target.damage > 0 && attackerIsDefenseBuilding) {
+      // Vehicles/infantry: attack the gun that just hit them instead of standing still.
+      if (target.state === 'idle' || target.state === 'moving') {
+        target.targetBuildingId = attacker.id;
+        target.targetUnitId = null;
+        target.targetPos = { x: attacker.x, z: attacker.z };
+        target.state = 'attacking';
+        target.path = null;
       }
     }
   } else if (target.category && !attacker) {
@@ -1506,7 +1819,15 @@ export function destroyUnit(unit, attacker = null, opts = {}) {
     const longRangeKiller =
       killerType === 'sniper' ||
       killerType === 'artillery' ||
-      (killerType && (UNIT_TYPES[killerType]?.range ?? 0) >= 23);
+      killerType === 'artilleryTurret' ||
+      (killerType && (UNIT_TYPES[killerType]?.range ?? 0) >= 23) ||
+      (killerType && (BUILDING_TYPES[killerType]?.range ?? 0) >= 23);
+
+    // Building attackers (static guns) aren't in the unit scan — count them explicitly.
+    if (attacker && !attacker.category) {
+      threats.types[attacker.type] = (threats.types[attacker.type] || 0) + 1;
+      threats.vehicle += 1; // treat as hard threat for retaliation sizing
+    }
 
     player.botMemory.dangerZones.push({
       x: unit.x,
@@ -1709,6 +2030,7 @@ export function checkWinCondition() {
   if (teamsAlive.size <= 1) {
     State.gameSession.gameOver = true;
     State.gameSession.winner = teamsAlive.size === 1 ? Array.from(teamsAlive)[0] : -1;
+    State.sampleStatsTimeline(true);
     console.log(`🏆 Game over! Winner: Team ${State.gameSession.winner}`);
   }
 }
@@ -1740,6 +2062,120 @@ function resolveMoveOrderGoal(fromX, fromZ, targetX, targetZ) {
   return clampWorldToPlayableDisk(home.x, home.z, 0);
 }
 
+/**
+ * Honeycomb slot around a group order. Index 0 is the center; later indexes
+ * walk rings so neighbors stay FORMATION_SPACING apart. No collision — units
+ * may still cross while moving.
+ * @param {number} index
+ * @param {number} spacing
+ */
+function formationHexOffset(index, spacing) {
+  if (index <= 0) return { x: 0, z: 0 };
+  const dirs = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
+  let ring = 1;
+  let cursor = 1;
+  while (cursor + 6 * ring <= index) {
+    cursor += 6 * ring;
+    ring += 1;
+  }
+  let q = dirs[4][0] * ring;
+  let r = dirs[4][1] * ring;
+  let left = index - cursor;
+  for (let side = 0; side < 6 && left > 0; side++) {
+    const steps = Math.min(ring, left);
+    for (let j = 0; j < steps; j++) {
+      q += dirs[side][0];
+      r += dirs[side][1];
+    }
+    left -= steps;
+  }
+  return {
+    x: spacing * (q + r * 0.5),
+    z: spacing * (r * 0.8660254037844386),
+  };
+}
+
+const UNIT_VISUAL_SCALE = {
+  artillery: 3,
+  heavyTank: 2,
+  lightTank: 2,
+  harvester: 2,
+  mobileHq: 4,
+  scoutBike: 4,
+};
+
+function groupFormationSpacing(units) {
+  let span = FORMATION_SPACING;
+  for (let i = 0; i < units.length; i++) {
+    const shape = UNIT_SHAPES[units[i].type];
+    if (!shape) continue;
+    const base = Math.max(shape.width || 0, shape.depth || 0, (shape.radiusBottom || 0) * 2, (shape.radiusTop || 0) * 2);
+    const mul = UNIT_VISUAL_SCALE[units[i].type] || 1;
+    span = Math.max(span, base * mul + 1.5);
+  }
+  return span;
+}
+
+/** First open honeycomb cell around a preferred point. Snap must not pile the group on one cell. */
+function claimFormationPoint(preferX, preferZ, spacing, claimed) {
+  const minD = spacing * 0.82;
+  for (let ring = 0; ring < 10; ring++) {
+    const steps = ring === 0 ? 1 : ring * 6;
+    for (let i = 0; i < steps; i++) {
+      const ang = ring === 0 ? 0 : (i / steps) * Math.PI * 2;
+      const rad = ring * spacing;
+      let x = preferX + Math.cos(ang) * rad;
+      let z = preferZ + Math.sin(ang) * rad;
+      let t = clampWorldToPlayableDisk(x, z, 0);
+      const pushed = Pathfinding.snapOutOfObstacle(t.x, t.z);
+      t = clampWorldToPlayableDisk(pushed.x, pushed.z, 0);
+      if (!Pathfinding.isPositionWalkable(t.x, t.z)) {
+        const again = Pathfinding.snapWorldXZToWalkable(t.x, t.z);
+        t = { x: again.x, z: again.z };
+      }
+      let clear = Pathfinding.isPositionWalkable(t.x, t.z);
+      for (let c = 0; clear && c < claimed.length; c++) {
+        if (Math.hypot(claimed[c].x - t.x, claimed[c].z - t.z) < minD) clear = false;
+      }
+      if (!clear) continue;
+      claimed.push(t);
+      return t;
+    }
+  }
+  const fallback = { x: preferX, z: preferZ };
+  claimed.push(fallback);
+  return fallback;
+}
+
+/** Soft push so a marching group does not share one point. Not a block — crossings still pass. */
+function formationSeparation(unit) {
+  const minD = unit._formSpacing || FORMATION_SPACING;
+  if (!(minD > 0) || !unit._formGrouped) return { x: 0, z: 0 };
+  const near = unitGrid.queryRadius(unit.x, unit.z, minD);
+  let px = 0;
+  let pz = 0;
+  for (let i = 0; i < near.length; i++) {
+    const o = near[i];
+    if (!o || o.id === unit.id || o.hp <= 0 || o.ownerId !== unit.ownerId) continue;
+    const dx = unit.x - o.x;
+    const dz = unit.z - o.z;
+    const d = Math.hypot(dx, dz);
+    if (!(d < minD)) continue;
+    const push = (minD - d) / minD;
+    const inv = d > 0.05 ? 1 / d : 0;
+    px += dx * inv * push;
+    pz += dz * inv * push;
+  }
+  return { x: px, z: pz };
+}
+
+function standWithFormSlot(unit, x, z) {
+  const ox = unit.formOffsetX || 0;
+  const oz = unit.formOffsetZ || 0;
+  if (!ox && !oz) return { x, z };
+  return clampWorldToPlayableDisk(x + ox, z + oz, 0);
+}
+
 // --- Player commands ---
 export function commandMove(unitIds, targetX, targetZ, options = {}) {
   const playerCommanded = options.playerCommanded !== false;
@@ -1765,22 +2201,43 @@ export function commandMove(unitIds, targetX, targetZ, options = {}) {
     Renderer.showOrderConfirm(goal.x, goal.z, 'move');
   }
 
-  const cols = Math.ceil(Math.sqrt(numUnits));
+  const ownerId = unitsArray[0].ownerId;
+  const typeCounts = {};
+  let mhqFrom = null;
+  for (let i = 0; i < numUnits; i++) {
+    const ut = unitsArray[i].type;
+    typeCounts[ut] = (typeCounts[ut] || 0) + 1;
+    if (ut === 'mobileHq' && !mhqFrom) mhqFrom = { x: unitsArray[i].x, z: unitsArray[i].z };
+  }
+  let why = options.traceWhy || null;
+  if (mhqFrom) {
+    const home = State.getPlayerHQ(ownerId);
+    if (home) {
+      const fromD = Math.hypot(mhqFrom.x - home.x, mhqFrom.z - home.z);
+      const toD = Math.hypot(goal.x - home.x, goal.z - home.z);
+      if (fromD > 70 && toD + 30 < fromD) why = why ? `${why}|turnback` : 'turnback';
+    }
+  }
+  Trace.traceOrder(options.traceKind || 'move', ownerId, {
+    n: numUnits,
+    types: typeCounts,
+    x: Math.round(goal.x),
+    z: Math.round(goal.z),
+    why,
+    mhqFrom: mhqFrom ? { x: Math.round(mhqFrom.x), z: Math.round(mhqFrom.z) } : undefined,
+    keep: !!options.traceWhy,
+  });
 
+  const spacing = groupFormationSpacing(unitsArray);
+  const claimed = [];
   unitsArray.forEach((unit, index) => {
-    const row = Math.floor(index / cols);
-    const col = index % cols;
-    const offsetX = (col - (cols - 1) / 2) * FORMATION_SPACING;
-    const offsetZ = (row - (Math.ceil(numUnits / cols) - 1) / 2) * FORMATION_SPACING;
-
-    // RUTHLESS ANTI-SNIPE: Add jitter to formation positions to break up straight lines
-    const jitterAmount = 1.5;
-    const rawX = goal.x + offsetX + (Math.random() - 0.5) * jitterAmount;
-    const rawZ = goal.z + offsetZ + (Math.random() - 0.5) * jitterAmount;
-    let t = clampWorldToPlayableDisk(rawX, rawZ, 0);
-    // Formation slots: cheap walkable snap only (no per-unit A* storm). Pathing resolves at move time.
-    const pushed = Pathfinding.snapOutOfObstacle(t.x, t.z);
-    t = clampWorldToPlayableDisk(pushed.x, pushed.z, 0);
+    const slot = formationHexOffset(index, spacing);
+    unit.formOffsetX = slot.x;
+    unit.formOffsetZ = slot.z;
+    unit._formSpacing = spacing;
+    unit._formGrouped = numUnits > 1;
+    const prefer = clampWorldToPlayableDisk(goal.x + slot.x, goal.z + slot.z, 0);
+    const t = claimFormationPoint(prefer.x, prefer.z, spacing, claimed);
 
     unit.state = 'moving';
     unit.targetPos = { x: t.x, z: t.z };
@@ -1794,6 +2251,7 @@ export function commandMove(unitIds, targetX, targetZ, options = {}) {
     unit.targetBuildingId = null;
     if (original.has(unit.id)) {
       unit.followLeadId = null;
+      unit.repairBuildingId = null;
       unit.squadOffsetX = 0;
       unit.squadOffsetZ = 0;
       unit._squadSyncSig = null;
@@ -1806,13 +2264,16 @@ export function commandMove(unitIds, targetX, targetZ, options = {}) {
 }
 
 export function commandAttackMove(unitIds, targetX, targetZ) {
-  commandMove(unitIds, targetX, targetZ, { playerCommanded: false });
+  commandMove(unitIds, targetX, targetZ, { playerCommanded: false, traceKind: 'attackMove' });
 
   // Keep playerCommanded false so units auto-acquire targets while moving
   // (avoids “walk blindly into sniper fire” for AI).
   unitIds.forEach(id => {
     const unit = State.units.get(id);
-    if (unit) unit.playerCommanded = false;
+    if (unit) {
+      unit.playerCommanded = false;
+      unit.repairBuildingId = null;
+    }
   });
 }
 
@@ -1827,22 +2288,43 @@ export function commandAttackUnit(unitIds, targetUnitId) {
   }
 
   Renderer.showOrderConfirm(target.x, target.z, 'attack');
+  if (allIds[0] != null) {
+    const owner = State.units.get(allIds[0]);
+    if (owner) {
+      Trace.traceOrder('attackUnit', owner.ownerId, {
+        keep: true,
+        n: allIds.length,
+        targetId: targetUnitId,
+        type: target.type,
+        x: Math.round(target.x),
+        z: Math.round(target.z),
+      });
+    }
+  }
 
-  allIds.forEach(id => {
-    const unit = State.units.get(id);
-    if (!unit || unit.hp <= 0) return;
-    // Escorting engineers / non-combatants must not inherit a unit-attack order.
-    if (!original.has(unit.id) && (unit.type === 'engineer' || !(unit.damage > 0))) return;
+  const fighters = [];
+  for (let i = 0; i < allIds.length; i++) {
+    const u = State.units.get(allIds[i]);
+    if (!u || u.hp <= 0) continue;
+    if (!original.has(u.id) && (u.type === 'engineer' || !(u.damage > 0))) continue;
+    fighters.push(u);
+  }
+  fighters.forEach((unit, index) => {
+    const slot = formationHexOffset(index, FORMATION_SPACING);
+    unit.formOffsetX = slot.x;
+    unit.formOffsetZ = slot.z;
     unit.state = 'attacking';
     unit.targetUnitId = targetUnitId;
     unit.targetBuildingId = null;
     if (original.has(unit.id)) {
       unit.followLeadId = null;
+      unit.repairBuildingId = null;
       unit.squadOffsetX = 0;
       unit.squadOffsetZ = 0;
       unit._squadSyncSig = null;
     }
-    unit.targetPos = { x: target.x, z: target.z };
+    const stand = clampWorldToPlayableDisk(target.x + slot.x, target.z + slot.z, 0);
+    unit.targetPos = { x: stand.x, z: stand.z };
     unit.path = null;
     unit.pathIndex = 0;
     unit._lastPathTime = 0;
@@ -1863,20 +2345,43 @@ export function commandAttackBuilding(unitIds, targetBuildingId) {
   }
 
   Renderer.showOrderConfirm(target.x, target.z, 'attack');
+  if (allIds[0] != null) {
+    const owner = State.units.get(allIds[0]);
+    if (owner) {
+      Trace.traceOrder('attackBuilding', owner.ownerId, {
+        keep: true,
+        n: allIds.length,
+        targetId: targetBuildingId,
+        type: target.type,
+        x: Math.round(target.x),
+        z: Math.round(target.z),
+      });
+    }
+  }
 
-  allIds.forEach(id => {
-    const unit = State.units.get(id);
-    if (!unit || unit.hp <= 0) return;
+  const attackers = [];
+  for (let i = 0; i < allIds.length; i++) {
+    const u = State.units.get(allIds[i]);
+    if (!u || u.hp <= 0) continue;
+    attackers.push(u);
+  }
+  attackers.forEach((unit, index) => {
+    const slot = formationHexOffset(index, FORMATION_SPACING);
+    unit.formOffsetX = slot.x;
+    unit.formOffsetZ = slot.z;
     unit.state = 'attacking';
     unit.targetUnitId = null;
     unit.targetBuildingId = targetBuildingId;
     if (original.has(unit.id)) {
       unit.followLeadId = null;
+      unit.repairBuildingId = null;
       unit.squadOffsetX = 0;
       unit.squadOffsetZ = 0;
       unit._squadSyncSig = null;
     }
-    unit.targetPos = approachPointOutsideBuilding(unit.x, unit.z, target);
+    const ap = approachPointOutsideBuilding(unit.x, unit.z, target);
+    const stand = clampWorldToPlayableDisk(ap.x + slot.x, ap.z + slot.z, 0);
+    unit.targetPos = { x: stand.x, z: stand.z };
     unit.path = null;
     unit.pathIndex = 0;
     unit._lastPathTime = 0;
@@ -1896,8 +2401,12 @@ export function commandStop(unitIds) {
     unit.targetUnitId = null;
     unit.targetBuildingId = null;
     unit.followLeadId = null;
+    unit.repairBuildingId = null;
     unit.squadOffsetX = 0;
     unit.squadOffsetZ = 0;
+    unit.formOffsetX = 0;
+    unit.formOffsetZ = 0;
+    unit._formGrouped = false;
     unit._squadSyncSig = null;
     unit.path = null;
     unit.playerCommanded = false;
@@ -1914,6 +2423,7 @@ export function commandFollow(unitIds, targetUnitId) {
     const unit = State.units.get(id);
     if (!unit || unit.hp <= 0 || unit.id === targetUnitId) return;
     unit.followLeadId = targetUnitId;
+    unit.repairBuildingId = null;
     unit.squadOffsetX = unit.x - target.x;
     unit.squadOffsetZ = unit.z - target.z;
     unit._squadSyncSig = null;
@@ -1924,5 +2434,50 @@ export function commandFollow(unitIds, targetUnitId) {
     unit.pathIndex = 0;
     unit.state = 'idle';
     unit.playerCommanded = true;
+  });
+}
+
+/**
+ * Order engineers to approach and repair a friendly building (same role as follow→repair for vehicles).
+ * Non-engineers in the selection move to the building approach point.
+ */
+export function commandRepairBuilding(unitIds, buildingId) {
+  const target = State.buildings.get(buildingId);
+  if (!target || target.hp <= 0) return;
+
+  Renderer.showOrderConfirm(target.x, target.z, 'follow');
+
+  unitIds.forEach(id => {
+    const unit = State.units.get(id);
+    if (!unit || unit.hp <= 0) return;
+    unit.followLeadId = null;
+    unit.squadOffsetX = 0;
+    unit.squadOffsetZ = 0;
+    unit._squadSyncSig = null;
+    unit.targetUnitId = null;
+    unit.targetBuildingId = null;
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit.playerCommanded = true;
+
+    if (unit.type === 'engineer') {
+      unit.repairBuildingId = buildingId;
+      unit.state = 'idle';
+      unit.targetPos = null;
+      // Kick approach immediately if out of range.
+      if (buildingRepairDist(unit.x, unit.z, target) > ENGINEER_REPAIR_RANGE - 0.45) {
+        const ap = approachPointOutsideBuilding(unit.x, unit.z, target);
+        unit.state = 'moving';
+        unit.targetPos = { x: ap.x, z: ap.z };
+        resetUnitPathThrottle(unit);
+      }
+    } else {
+      unit.repairBuildingId = null;
+      const ap = approachPointOutsideBuilding(unit.x, unit.z, target);
+      unit.state = 'moving';
+      unit.targetPos = { x: ap.x, z: ap.z };
+      unit.guardPos = { x: ap.x, z: ap.z };
+      resetUnitPathThrottle(unit);
+    }
   });
 }

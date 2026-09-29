@@ -217,6 +217,7 @@ export function commandFailureMessage(code) {
     network: 'Not connected to host.',
     send_failed: 'Failed to send command.',
     no_harvesters: 'Select harvesters to assign a crystal.',
+    no_engineers: 'Select an engineer to repair that building.',
     invalid_field: 'That crystal is gone or empty.',
     field_not_visible: 'You have not explored that crystal yet.',
     no_refinery: 'Build a refinery before harvesting.',
@@ -992,12 +993,44 @@ function executeCommand(data, actingPlayerId) {
       Units.commandAttackBuilding(ids, data.targetId);
       return { ok: true };
     }
+    case 'defenseTarget': {
+      const building = State.buildings.get(data.buildingId);
+      if (!building || building.hp <= 0 || !building.isBuilt) return { ok: false, code: 'invalid_building' };
+      if (building.ownerId !== actingPlayerId) return { ok: false, code: 'not_owner' };
+      if (!(building.damage > 0) || !(building.range > 0)) return { ok: false, code: 'invalid_building' };
+      if (data.targetId == null) {
+        Buildings.clearDefenseTarget(building.id);
+        return { ok: true };
+      }
+      const unit = State.units.get(data.targetId);
+      const targetBuilding = State.buildings.get(data.targetId);
+      const target = unit && unit.hp > 0 ? unit : (targetBuilding && targetBuilding.hp > 0 ? targetBuilding : null);
+      if (!target || target.id === building.id) return { ok: false, code: 'invalid_target' };
+      const actor = State.players[actingPlayerId];
+      const owner = State.players[target.ownerId];
+      if (!actor) return { ok: false, code: 'no_player' };
+      if (owner && owner.team === actor.team) return { ok: false, code: 'friendly_target' };
+      Buildings.setDefenseTarget(building.id, target.id);
+      return { ok: true };
+    }
     case 'follow': {
       const ids = filterUnitsOwned(actingPlayerId, data.unitIds);
       if (ids.length === 0) return { ok: false, code: 'no_units' };
       const target = State.units.get(data.targetId);
       if (!target || target.hp <= 0) return { ok: false, code: 'invalid_target' };
       Units.commandFollow(ids, data.targetId);
+      return { ok: true };
+    }
+    case 'repairBuilding': {
+      const ids = filterUnitsOwned(actingPlayerId, data.unitIds);
+      if (ids.length === 0) return { ok: false, code: 'no_units' };
+      const building = State.buildings.get(data.targetId);
+      if (!building || building.hp <= 0) return { ok: false, code: 'invalid_target' };
+      const actor = State.players[actingPlayerId];
+      if (!actor || building.team !== actor.team) return { ok: false, code: 'invalid_target' };
+      const engIds = ids.filter(id => State.units.get(id)?.type === 'engineer');
+      if (engIds.length === 0) return { ok: false, code: 'no_engineers' };
+      Units.commandRepairBuilding(ids, data.targetId);
       return { ok: true };
     }
     case 'deployMobileHq': {
@@ -1393,6 +1426,9 @@ export function updateNetwork(time) {
     })),
     resourceFields: [],
   };
+  if (State.gameSession.gameOver && Array.isArray(State.gameSession.statsTimeline) && State.gameSession.statsTimeline.length) {
+    snapshot.statsTimeline = State.gameSession.statsTimeline;
+  }
   // Only attach optional sections when they have content — saves ~10–25 bytes per snap.
   if (State.gameSession.mpSessionPaused) {
     snapshot.mp = {
@@ -1444,6 +1480,7 @@ export function updateNetwork(time) {
     if (u.playerCommanded) us.playerCommanded = true;
     if (u.targetUnitId != null) us.targetUnitId = u.targetUnitId;
     if (u.followLeadId != null) us.followLeadId = u.followLeadId;
+    if (u.repairBuildingId != null) us.repairBuildingId = u.repairBuildingId;
     if (u.squadOffsetX) us.squadOffsetX = rnd1(u.squadOffsetX);
     if (u.squadOffsetZ) us.squadOffsetZ = rnd1(u.squadOffsetZ);
     if (u.targetBuildingId != null) us.targetBuildingId = u.targetBuildingId;
@@ -1826,6 +1863,7 @@ function applySnapshot(snapshot) {
       unit.playerCommanded = !!uData.playerCommanded;
       unit.targetUnitId = uData.targetUnitId != null ? uData.targetUnitId : null;
       unit.followLeadId = uData.followLeadId != null ? uData.followLeadId : null;
+      unit.repairBuildingId = uData.repairBuildingId != null ? uData.repairBuildingId : null;
       unit.squadOffsetX = uData.squadOffsetX != null ? uData.squadOffsetX : 0;
       unit.squadOffsetZ = uData.squadOffsetZ != null ? uData.squadOffsetZ : 0;
       unit.targetBuildingId = uData.targetBuildingId != null ? uData.targetBuildingId : null;
@@ -1932,6 +1970,9 @@ function applySnapshot(snapshot) {
   }
   if (snapshot.winner !== undefined) {
     State.gameSession.winner = snapshot.winner;
+  }
+  if (Array.isArray(snapshot.statsTimeline)) {
+    State.gameSession.statsTimeline = snapshot.statsTimeline;
   }
 
   if (isNetClient && Number.isFinite(snapSeq)) {

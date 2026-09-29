@@ -18,6 +18,7 @@ import * as UI from './ui.js';
 import * as Network from './network.js';
 import * as Pathfinding from './pathfinding.js';
 import * as Audio from './audio.js';
+import * as Trace from './match-trace.js';
 import { unitGrid, buildingGrid } from './spatial.js';
 import * as Perf from './perf-profiler.js';
 import { updateStoryKitLodFromView } from './story-kit-terrain.js';
@@ -216,6 +217,8 @@ function gameUpdate(dt, time) {
 
   // 1. Update elapsed time
   State.gameSession.elapsedTime += dt;
+  State.sampleStatsTimeline(false);
+  Trace.tickMatchTrace();
 
   // 2. Rebuild spatial grids, then bake FoW so O(1) visibility matches this tick
   if (abl.spatial) {
@@ -309,5 +312,32 @@ function handleTimeLimit() {
 
   State.gameSession.gameOver = true;
   State.gameSession.winner = winnerTeam;
+  State.sampleStatsTimeline(true);
   console.log(`⏰ Time limit! Winner: Team ${winnerTeam}`);
+}
+
+/**
+ * Bench / harness: advance host sim without waiting on rAF.
+ * Passes a synthetic ms clock so fire cooldowns (performance.now-style) stay consistent.
+ * @param {number} seconds
+ * @returns {{ steps: number, elapsed: number, gameOver: boolean }}
+ */
+export function fastForwardSim(seconds) {
+  const secs = Math.max(0, Number(seconds) || 0);
+  const steps = Math.floor(secs / FIXED_DT);
+  let now = performance.now();
+  for (let i = 0; i < steps; i++) {
+    if (State.gameSession.gameOver) break;
+    now += FIXED_DT * 1000;
+    gameUpdate(FIXED_DT, now);
+  }
+  return {
+    steps,
+    elapsed: State.gameSession.elapsedTime,
+    gameOver: !!State.gameSession.gameOver,
+  };
+}
+
+if (typeof window !== 'undefined') {
+  window.__rtsFastForward = fastForwardSim;
 }

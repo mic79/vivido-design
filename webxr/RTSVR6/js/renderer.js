@@ -3797,7 +3797,14 @@ function shotArcPoint(proj, u, arcH, out) {
 }
 
 export function spawnProjectile(fromX, fromY, fromZ, toX, toY, toZ, color, duration = 200) {
-  if (!projectileTipMesh || !shotLines.length) return;
+  const norender = typeof location !== 'undefined' && location.search.includes('norender=1');
+  if (norender || !projectileTipMesh || !shotLines.length) {
+    const hit = arguments[8];
+    if (typeof hit === 'function') {
+      try { hit(); } catch (err) { console.error('Error in projectile onHit:', err); }
+    }
+    return;
+  }
   const slot = projectileIndex % PROJ_SLOT_PAIRS;
   const heavy = arguments[9] === true;
   const proj = {

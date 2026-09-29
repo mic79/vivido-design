@@ -18,6 +18,7 @@ import * as Units from './units.js';
 import * as Fog from './fog.js';
 import * as Input from './input.js';
 import * as Network from './network.js';
+import * as Trace from './match-trace.js';
 import * as Pathfinding from './pathfinding.js';
 import * as NavDebug from './nav-debug-overlay.js';
 import * as Perf from './perf-profiler.js';
@@ -199,6 +200,13 @@ let lastVrBuildButtonsSig = '';
 let vrMinimapCanvas = null;
 let vrMinimapCtx = null;
 let vrMinimapTexture = null;
+let vrVictoryGraphCanvas = null;
+let vrVictoryGraphCtx = null;
+let vrVictoryGraphTexture = null;
+/** Index into MATCH_GRAPH_METRICS for the VR end-screen chart. */
+let vrVictoryGraphMetricIdx = 0;
+let vrVictoryGraphPlayers = null;
+let vrVictoryGraphDrawnSig = '';
 
 let lastHudHelpPlatform = '';
 let lastVrHudTop = '';
@@ -706,7 +714,7 @@ export function initUI() {
 // --- HUD ---
 function getHudControlsHelpHtml() {
   if (Input.getIsVR()) {
-    return `VR: <b>Right trigger</b> — select / move / attack (only that controller's laser is shown while the trigger is held). With units selected, tap another friendly to <b>add to selection</b>; hold <b>grip + trigger on the same hand</b> and aim at a friendly to <b>follow</b> (engineers repair nearby damaged vehicles). <b>Left X</b> — cancel build placement or open menu. <b>Y</b> map · <b>B</b> deselect & cancel build · <b>A</b> select all · grips pan · Shadows / MSAA 4x on wrist HUD.<br>
+    return `VR: <b>Right trigger</b> — select / move / attack (only that controller's laser is shown while the trigger is held). With units selected, tap another friendly to <b>add to selection</b>; hold <b>grip + trigger on the same hand</b> and aim at a friendly to <b>follow</b> (engineers repair nearby damaged vehicles) or a friendly building to <b>repair</b>. <b>Left X</b> — cancel build placement or open menu. <b>Y</b> map · <b>B</b> deselect & cancel build · <b>A</b> select all · grips pan · Shadows / MSAA 4x on wrist HUD.<br>
       <span style="opacity:0.85">Flat screen (if you peek at the mirror): WASD pan · Q/E rotate · scroll zoom · left / right click · <b>N</b> nav map (blue walkable on terrain).</span>`;
   }
   if (Input.getInputPlatform() === 'touch') {
@@ -715,13 +723,13 @@ function getHudControlsHelpHtml() {
         <li><b>Tap</b> — select, open HQ or crystals; with your army selected, <b>tap another of your units</b> to add it to the group · <b>tap open ground</b> to move</li>
         <li><b>Two fingers</b> — drag to pan · pinch zoom · twist to rotate</li>
         <li><b>Long-press open ground</b> — clear selection</li>
-        <li><b>Long-press your unit</b> — with <b>no</b> army selected, selects nearby same type; with <b>units already selected</b>, <b>hold (~0.5s) on a friendly</b> to <b>follow</b> it (or move if your aim favors ground — engineers repair nearby vehicles when escorting)</li>
+        <li><b>Long-press your unit</b> — with <b>no</b> army selected, selects nearby same type; with <b>units already selected</b>, <b>hold (~0.5s) on a friendly</b> to <b>follow</b> it (or move if your aim favors ground — engineers repair nearby vehicles when escorting), or <b>hold / click a friendly building</b> to <b>repair</b></li>
         <li><b>Map</b> — drag on minimap to jump the camera; <b>Map · show/hide</b> sits under the minimap</li>
       </ul>
       <p style="margin:10px 0 0 0;opacity:0.85;font-size:11px;">Zoom in (pinch) for easier taps on single units; zoomed out is best for overview and orders.</p>`;
   }
-  return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left: Select · Left on open ground: Deselect · Right: Move / attack / follow (engineers repair nearby friendly vehicles; right-click follow a vehicle to stay with it)<br>
-    HQ click: Build (Solar → Refinery → Barracks → Factory / Turret / Artillery) · Power HUD ⚡ · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, draped on terrain height) · Esc: Menu · Shadows / MSAA 4x: menu / HUD toggles (MSAA reloads the page to recreate the GL context)<br>
+  return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left: Select · Left on open ground: Deselect · Right: Move / attack / follow (engineers repair nearby friendly vehicles; click / right-click a friendly building to repair) · Right-click follow a vehicle to stay with it<br>
+    Selected turret or static artillery: <b>right-click an enemy</b> to assign that target (right-click ground returns it to auto) · HQ click: Build (Solar → Refinery → Barracks → Factory / Turret / Artillery) · Power HUD ⚡ · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, draped on terrain height) · Esc: Menu · Shadows / MSAA 4x: menu / HUD toggles (MSAA reloads the page to recreate the GL context)<br>
     <span style="opacity:0.85">VR: Laser + trigger on menu & map · grip+trigger on one hand for follow · X menu · Y map · B deselect · A select all · grips pan · Shadows and MSAA 4x on wrist menu and match HUD</span>`;
 }
 
@@ -854,6 +862,7 @@ function createHUD() {
       text-shadow: 0 0 20px rgba(255,255,0,0.5);
       background: rgba(0,0,0,0.8); padding: 30px 50px; border-radius: 12px;
       z-index: 200; display: none; text-align: center;
+      pointer-events: auto;
     "></div>
   `;
   uiMountRoot().appendChild(hudContainer);
@@ -1055,6 +1064,7 @@ function createMenu() {
   window._joinGame = joinGame;
   window._replayStory = replayStory;
   window._lobbyDelta = d => Network.adjustLobby(d);
+  window._cycleVictoryGraphMetric = cycleVictoryGraphMetric;
   Network.refreshLobbyDisplay();
   refreshStoryHistoryPanel();
   syncDynamicShadowToggleUi();
@@ -1288,6 +1298,151 @@ function tryInitVrMinimapTexture() {
   mesh.material.color.setRGB(1, 1, 1);
   mesh.material.needsUpdate = true;
   vrMinimapTexture = map;
+}
+
+function tryInitVrVictoryGraphTexture() {
+  if (vrVictoryGraphCtx) return true;
+  const plane = document.getElementById('vr-victory-graph');
+  if (!plane) return false;
+  const mesh = plane.getObject3D('mesh');
+  if (!mesh || !mesh.material) return false;
+
+  vrVictoryGraphCanvas = document.createElement('canvas');
+  vrVictoryGraphCanvas.width = 512;
+  vrVictoryGraphCanvas.height = 220;
+  vrVictoryGraphCtx = vrVictoryGraphCanvas.getContext('2d');
+
+  const map = new THREE.CanvasTexture(vrVictoryGraphCanvas);
+  if (THREE.SRGBColorSpace !== undefined) {
+    map.colorSpace = THREE.SRGBColorSpace;
+  }
+  mesh.material.map = map;
+  mesh.material.color.setRGB(1, 1, 1);
+  mesh.material.transparent = true;
+  mesh.material.needsUpdate = true;
+  vrVictoryGraphTexture = map;
+  return true;
+}
+
+/** Draw match progression chart onto a 2D canvas (flat SVG path + VR texture share this). */
+function drawMatchStatsChartToCanvas(ctx, w, h, timeline, players, metricKey) {
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#0a0c10';
+  ctx.fillRect(0, 0, w, h);
+
+  const padL = 44;
+  const padR = 14;
+  const padT = 18;
+  const padB = 30;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+  const samples = Array.isArray(timeline) ? timeline : [];
+  const metric = MATCH_GRAPH_METRICS.find(m => m.key === metricKey) || MATCH_GRAPH_METRICS[0];
+
+  ctx.fillStyle = '#8a9';
+  ctx.font = '11px Consolas, monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(`PROGRESSION — ${metric.label}`, padL, 12);
+
+  if (samples.length < 2) {
+    ctx.fillStyle = '#666';
+    ctx.font = '13px Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Not enough samples yet', w * 0.5, h * 0.5);
+    return;
+  }
+
+  let yMax = 1;
+  for (const row of samples) {
+    for (let i = 0; i < players.length; i++) {
+      const v = row.p?.[players[i].id]?.[metricKey] ?? 0;
+      if (v > yMax) yMax = v;
+    }
+  }
+  const mag = 10 ** Math.max(0, Math.floor(Math.log10(yMax)));
+  yMax = Math.ceil(yMax / mag) * mag || 1;
+  const t0 = samples[0].t;
+  const t1 = samples[samples.length - 1].t;
+  const tSpan = Math.max(0.1, t1 - t0);
+  const xOf = t => padL + ((t - t0) / tSpan) * plotW;
+  const yOf = v => padT + plotH - (v / yMax) * plotH;
+
+  ctx.strokeStyle = '#2a2a2a';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#777';
+  ctx.font = '10px Consolas, monospace';
+  ctx.textAlign = 'right';
+  for (let g = 0; g <= 4; g++) {
+    const yy = padT + (plotH * g) / 4;
+    const val = Math.round(yMax * (1 - g / 4));
+    ctx.beginPath();
+    ctx.moveTo(padL, yy);
+    ctx.lineTo(w - padR, yy);
+    ctx.stroke();
+    ctx.fillText(String(val), padL - 6, yy + 3);
+  }
+  ctx.textAlign = 'left';
+  ctx.fillText(formatMatchGraphTime(t0), padL, h - 8);
+  ctx.textAlign = 'right';
+  ctx.fillText(formatMatchGraphTime(t1), w - padR, h - 8);
+
+  for (const p of players) {
+    ctx.strokeStyle = p.colorHex || '#fff';
+    ctx.lineWidth = 2.25;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < samples.length; i++) {
+      const v = samples[i].p?.[p.id]?.[metricKey] ?? 0;
+      const x = xOf(samples[i].t);
+      const y = yOf(v);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // Compact legend along the bottom of the plot area
+  let lx = padL;
+  const ly = padT + 4;
+  ctx.font = '10px Consolas, monospace';
+  ctx.textAlign = 'left';
+  for (const p of players) {
+    const last = samples[samples.length - 1]?.p?.[p.id]?.[metricKey] ?? 0;
+    const label = `${p.name} ${metric.format(last)}`;
+    ctx.fillStyle = p.colorHex || '#fff';
+    ctx.fillRect(lx, ly - 7, 8, 8);
+    ctx.fillText(label, lx + 12, ly);
+    lx += ctx.measureText(label).width + 28;
+  }
+}
+
+function syncVrVictoryGraph(players) {
+  if (!tryInitVrVictoryGraphTexture()) return;
+  const metric = MATCH_GRAPH_METRICS[vrVictoryGraphMetricIdx] || MATCH_GRAPH_METRICS[0];
+  const timeline = State.gameSession.statsTimeline || [];
+  const sig = `${timeline.length}|${metric.key}|${players.map(p => p.id).join(',')}|${timeline[timeline.length - 1]?.t ?? 0}`;
+  if (sig === vrVictoryGraphDrawnSig) return;
+  vrVictoryGraphDrawnSig = sig;
+  vrVictoryGraphPlayers = players;
+  drawMatchStatsChartToCanvas(
+    vrVictoryGraphCtx,
+    vrVictoryGraphCanvas.width,
+    vrVictoryGraphCanvas.height,
+    timeline,
+    players,
+    metric.key
+  );
+  if (vrVictoryGraphTexture) vrVictoryGraphTexture.needsUpdate = true;
+
+  const lab = document.getElementById('vr-victory-metric-label');
+  if (lab) lab.setAttribute('value', `Graph: ${metric.label}  (tap to cycle)`);
+}
+
+function cycleVictoryGraphMetric() {
+  vrVictoryGraphMetricIdx = (vrVictoryGraphMetricIdx + 1) % MATCH_GRAPH_METRICS.length;
+  vrVictoryGraphDrawnSig = '';
+  if (vrVictoryGraphPlayers) syncVrVictoryGraph(vrVictoryGraphPlayers);
 }
 
 function btnStyle(bg) {
@@ -1726,14 +1881,21 @@ function updateHUD() {
             ${renderStatRow(victoryStatsPlayers, 'Credits Earned', 'creditsEarned', val => `$${Math.floor(val)}`)}
           </tbody>
         </table>
+        ${buildMatchStatsGraphSection(victoryStatsPlayers)}
         ${storyFooter}
+        <div style="margin-top: 16px;">
+          <button type="button" id="btn-victory-save-trace" style="padding:6px 12px;background:#163;color:#cfc;border:1px solid #3a6;border-radius:4px;cursor:pointer;font-family:Consolas,monospace;">Save match trace</button>
+        </div>
         <div style="margin-top: 25px; font-size: 14px; color: #888;">Press <span style="color:#eee">Esc</span> to return to command center</div>
       `;
 
       victoryEl.innerHTML = statsHtml;
-      victoryEl.style.width = '600px'; 
-      victoryEl.style.maxWidth = '90vw';
+      victoryEl.style.width = '640px'; 
+      victoryEl.style.maxWidth = '94vw';
+      victoryEl.style.maxHeight = '90vh';
+      victoryEl.style.overflowY = 'auto';
       victoryEl.style.display = 'block';
+      wireMatchStatsGraph(victoryStatsPlayers);
 
       const replayBtn = document.getElementById('btn-victory-replay-story');
       if (replayBtn && storySeed != null) {
@@ -1741,6 +1903,14 @@ function updateHUD() {
           e.preventDefault();
           e.stopPropagation();
           replayStory(storySeed);
+        });
+      }
+      const traceBtn = document.getElementById('btn-victory-save-trace');
+      if (traceBtn) {
+        traceBtn.addEventListener('click', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          Trace.downloadMatchTrace();
         });
       }
     }
@@ -1800,6 +1970,7 @@ function updateHUD() {
       for (let i = victoryStatsPlayers.length; i < 4; i++) {
         if (vrCols[i]) vrCols[i].setAttribute('visible', false);
       }
+      syncVrVictoryGraph(victoryStatsPlayers);
       vrRoot.setAttribute('visible', true);
     }
   } else {
@@ -1812,6 +1983,8 @@ function updateHUD() {
     }
     const vrRoot = document.getElementById('vr-hud-victory-root');
     if (vrRoot) vrRoot.setAttribute('visible', false);
+    vrVictoryGraphDrawnSig = '';
+    vrVictoryGraphPlayers = null;
   }
 
   // Mobile HQ deploy panel (same bottom shell as HQ build menu)
@@ -1838,6 +2011,141 @@ function renderStatRow(players, label, statKey, formatter = val => val) {
       ${players.map(p => `<td style="padding: 8px 5px; font-weight: bold;">${formatter(p.stats[statKey])}</td>`).join('')}
     </tr>
   `;
+}
+
+const MATCH_GRAPH_METRICS = [
+  { key: 'k', label: 'Kills', format: v => String(v) },
+  { key: 'c', label: 'Credits', format: v => `$${v}` },
+  { key: 'u', label: 'Produced', format: v => String(v) },
+  { key: 'l', label: 'Lost', format: v => String(v) },
+  { key: 'b', label: 'Buildings+', format: v => String(v) },
+];
+
+function formatMatchGraphTime(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${r.toString().padStart(2, '0')}`;
+}
+
+/** SVG line chart of cumulative match stats (one series per active player). */
+function buildMatchStatsChartSvg(timeline, players, metricKey) {
+  const w = 520;
+  const h = 200;
+  const padL = 44;
+  const padR = 12;
+  const padT = 14;
+  const padB = 28;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+  const samples = Array.isArray(timeline) ? timeline : [];
+  if (samples.length < 2) {
+    return `<div style="color:#888;font-size:12px;padding:18px 0;">Not enough samples for a graph yet.</div>`;
+  }
+
+  let yMax = 1;
+  for (const row of samples) {
+    for (let i = 0; i < players.length; i++) {
+      const pid = players[i].id;
+      const v = row.p?.[pid]?.[metricKey] ?? 0;
+      if (v > yMax) yMax = v;
+    }
+  }
+  // Nice ceiling
+  const mag = 10 ** Math.max(0, Math.floor(Math.log10(yMax)));
+  yMax = Math.ceil(yMax / mag) * mag || 1;
+  const t0 = samples[0].t;
+  const t1 = samples[samples.length - 1].t;
+  const tSpan = Math.max(0.1, t1 - t0);
+
+  const xOf = t => padL + ((t - t0) / tSpan) * plotW;
+  const yOf = v => padT + plotH - (v / yMax) * plotH;
+
+  const grid = [];
+  for (let g = 0; g <= 4; g++) {
+    const yy = padT + (plotH * g) / 4;
+    const val = Math.round(yMax * (1 - g / 4));
+    grid.push(`<line x1="${padL}" y1="${yy}" x2="${w - padR}" y2="${yy}" stroke="#2a2a2a" stroke-width="1"/>`);
+    grid.push(
+      `<text x="${padL - 6}" y="${yy + 3}" fill="#777" font-size="10" text-anchor="end" font-family="Consolas,monospace">${val}</text>`
+    );
+  }
+  grid.push(
+    `<text x="${padL}" y="${h - 6}" fill="#777" font-size="10" font-family="Consolas,monospace">${formatMatchGraphTime(t0)}</text>`
+  );
+  grid.push(
+    `<text x="${w - padR}" y="${h - 6}" fill="#777" font-size="10" text-anchor="end" font-family="Consolas,monospace">${formatMatchGraphTime(t1)}</text>`
+  );
+
+  const polylines = players.map(p => {
+    const pts = samples
+      .map(row => {
+        const v = row.p?.[p.id]?.[metricKey] ?? 0;
+        return `${xOf(row.t).toFixed(1)},${yOf(v).toFixed(1)}`;
+      })
+      .join(' ');
+    return `<polyline fill="none" stroke="${p.colorHex}" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round" points="${pts}"/>`;
+  }).join('');
+
+  const legend = players.map(p => {
+    const last = samples[samples.length - 1]?.p?.[p.id]?.[metricKey] ?? 0;
+    const metric = MATCH_GRAPH_METRICS.find(m => m.key === metricKey);
+    const label = metric ? metric.format(last) : String(last);
+    return `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px;color:${p.colorHex};font-size:11px;font-family:Consolas,monospace;">
+      <span style="width:10px;height:10px;border-radius:2px;background:${p.colorHex};display:inline-block;"></span>
+      ${p.name} <span style="color:#ccc">${label}</span>
+    </span>`;
+  }).join('');
+
+  return `
+    <div style="margin-top:4px;">
+      <svg viewBox="0 0 ${w} ${h}" width="100%" height="auto" style="display:block;background:rgba(0,0,0,0.35);border-radius:6px;border:1px solid #333;">
+        ${grid.join('')}
+        ${polylines}
+      </svg>
+      <div style="margin-top:8px;text-align:left;line-height:1.6;">${legend}</div>
+    </div>
+  `;
+}
+
+function buildMatchStatsGraphSection(players) {
+  const timeline = State.gameSession.statsTimeline || [];
+  const buttons = MATCH_GRAPH_METRICS.map((m, i) =>
+    `<button type="button" class="rts-match-graph-metric" data-metric="${m.key}" style="
+      padding:5px 10px;margin:0 4px 0 0;border:1px solid ${i === 0 ? '#6a6' : '#444'};
+      background:${i === 0 ? '#1a3a1a' : '#111'};color:${i === 0 ? '#cfc' : '#aaa'};
+      border-radius:4px;cursor:pointer;font-family:Consolas,monospace;font-size:11px;
+    ">${m.label}</button>`
+  ).join('');
+
+  return `
+    <div id="rts-match-graph" style="margin-top:18px;text-align:left;">
+      <div style="font-size:13px;color:#9a9;margin-bottom:8px;letter-spacing:1px;">MATCH PROGRESSION</div>
+      <div id="rts-match-graph-metrics" style="margin-bottom:8px;">${buttons}</div>
+      <div id="rts-match-graph-body">${buildMatchStatsChartSvg(timeline, players, 'k')}</div>
+    </div>
+  `;
+}
+
+function wireMatchStatsGraph(players) {
+  const root = document.getElementById('rts-match-graph');
+  if (!root) return;
+  const body = document.getElementById('rts-match-graph-body');
+  const timeline = State.gameSession.statsTimeline || [];
+  root.querySelectorAll('.rts-match-graph-metric').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const key = btn.getAttribute('data-metric') || 'k';
+      root.querySelectorAll('.rts-match-graph-metric').forEach(b => {
+        const on = b === btn;
+        b.style.border = on ? '1px solid #6a6' : '1px solid #444';
+        b.style.background = on ? '#1a3a1a' : '#111';
+        b.style.color = on ? '#cfc' : '#aaa';
+      });
+      if (body) body.innerHTML = buildMatchStatsChartSvg(timeline, players, key);
+    });
+  });
 }
 
 function drawMinimapToContext(ctx, w, h) {
@@ -2017,6 +2325,9 @@ export function resetMatchHud() {
   _minimapFogCtx = null;
   _minimapFogImageData = null;
   _minimapLastDrawMs = 0;
+  vrVictoryGraphDrawnSig = '';
+  vrVictoryGraphPlayers = null;
+  vrVictoryGraphMetricIdx = 0;
   const vrTop = document.getElementById('vr-hud-top');
   if (vrTop) vrTop.setAttribute('value', '');
 }

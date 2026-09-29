@@ -983,6 +983,7 @@ export function initInput(sceneEl) {
   window.addEventListener('contextmenu', e => e.preventDefault());
 
   window.addEventListener('wheel', e => {
+    if (e.target.closest && e.target.closest('#hud-victory')) return;
     if (lobbyIntroOrbit) lobbyIntroOrbit = null;
     cameraRig.y += e.deltaY * 0.05;
     cameraRig.y = Math.max(CAMERA_Y_MIN, Math.min(CAMERA_Y_MAX, cameraRig.y));
@@ -1515,7 +1516,9 @@ function performWorldSelectionRay(origin, direction, shiftHeld, pickNdc) {
 
       UI.hideBuildingPanel();
       if (hitUnit.ownerId !== State.gameSession.myPlayerId) {
-        UI.showStatus(`Enemy ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
+        const me = State.players[State.gameSession.myPlayerId];
+        const label = me && hitUnit.team === me.team ? 'Allied' : 'Enemy';
+        UI.showStatus(`${label} ${UNIT_TYPES[hitUnit.type]?.name || hitUnit.type}`);
       }
     }
     return;
@@ -1546,9 +1549,11 @@ function performWorldSelectionRay(origin, direction, shiftHeld, pickNdc) {
     State.deselectAll();
     UI.showBuildingPanel(hitBuilding);
     if (hitBuilding.ownerId === State.gameSession.myPlayerId) {
-      UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
+      UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}${defenseSelectHint(hitBuilding)}`);
     } else {
-      UI.showStatus(`Enemy ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
+      const me = State.players[State.gameSession.myPlayerId];
+      const label = me && hitBuilding.team === me.team ? 'Allied' : 'Enemy';
+      UI.showStatus(`${label} ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
     }
     return;
   }
@@ -1591,6 +1596,84 @@ function performWorldSelectionRay(origin, direction, shiftHeld, pickNdc) {
 }
 
 /** Mouse right-click on the world: move / attack / follow (requires controllable units selected). */
+function activeOwnDefenseBuilding() {
+  const panel = UI.activeBuildingPanel;
+  if (!panel || panel.ownerId !== State.gameSession.myPlayerId) return null;
+  if (!(panel.damage > 0) || !(panel.range > 0)) return null;
+  const live = State.buildings.get(panel.id);
+  if (!live || live.hp <= 0 || !live.isBuilt) return null;
+  return live;
+}
+
+function defenseSelectHint(building) {
+  if (!building || building.ownerId !== State.gameSession.myPlayerId) return '';
+  if (!(building.damage > 0) || !(building.range > 0)) return '';
+  if (getIsVR() || getInputPlatform() === 'touch') return ' — aim at an enemy and pull the trigger to assign it';
+  return ' — right-click an enemy to assign it';
+}
+
+function defenseTargetStatus(gun, target) {
+  const gunName = BUILDING_TYPES[gun.type]?.name || 'Gun';
+  const targetName = target.category
+    ? (UNIT_TYPES[target.type]?.name || target.type)
+    : (BUILDING_TYPES[target.type]?.name || target.type);
+  const d = Math.hypot(target.x - gun.x, target.z - gun.z);
+  if (d > (gun.range || 0) + 0.5) return `${gunName} assigned to ${targetName} (out of range)`;
+  return `${gunName} targeting ${targetName}`;
+}
+
+function assignDefenseTarget(gun, target) {
+  Network.sendCommand(
+    { action: 'defenseTarget', buildingId: gun.id, targetId: target ? target.id : null },
+    (ok, code) => {
+      if (!ok) {
+        UI.showStatus(Network.commandFailureMessage(code));
+        return;
+      }
+      if (!target) {
+        UI.showStatus(`${BUILDING_TYPES[gun.type]?.name || 'Gun'} back on auto`);
+        return;
+      }
+      UI.showStatus(defenseTargetStatus(gun, target));
+    }
+  );
+}
+
+/** Right-click while a turret or static artillery is selected. */
+function commandSelectedDefenseGun(origin, direction, pickNdc) {
+  const gun = activeOwnDefenseBuilding();
+  if (!gun) return false;
+  const pickBoost = getScreenPickRadiusBoost();
+  let hitUnit = Renderer.raycastUnits(origin, direction, 200, pickBoost, pickNdc);
+  let hitBuilding = Renderer.raycastBuildings(origin, direction, 200, pickBoost, pickNdc);
+  ({ u: hitUnit, b: hitBuilding } = resolveOverlapPicks(
+    hitUnit,
+    hitBuilding,
+    null,
+    pickNdc,
+    origin,
+    direction,
+    pickBoost
+  ));
+  const myTeam = State.players[State.gameSession.myPlayerId]?.team;
+  let target = null;
+  if (hitUnit && hitUnit.hp > 0 && hitUnit.team !== myTeam) target = hitUnit;
+  else if (hitBuilding && hitBuilding.hp > 0 && hitBuilding.id !== gun.id) {
+    const bTeam = State.players[hitBuilding.ownerId]?.team;
+    if (bTeam !== myTeam) target = hitBuilding;
+  }
+  if (target) {
+    assignDefenseTarget(gun, target);
+    return true;
+  }
+  const groundHit = raycastGround(origin, direction);
+  if (groundHit && !hitUnit && !hitBuilding) {
+    assignDefenseTarget(gun, null);
+    return true;
+  }
+  return false;
+}
+
 function performWorldCommandRay(origin, direction, pickNdc) {
   const myUnits = Array.from(State.selectedUnits).filter(id => {
     const u = State.units.get(id);
@@ -1636,6 +1719,17 @@ function performWorldCommandRay(origin, direction, pickNdc) {
       UI.showStatus('Attacking building!');
       return;
     }
+    // Friendly building + engineers selected → repair (same role as follow→repair on vehicles).
+    if (myUnits.some(id => State.units.get(id)?.type === 'engineer')) {
+      Network.sendCommand(
+        { action: 'repairBuilding', unitIds: myUnits, targetId: hitBuilding.id },
+        (ok, code) => {
+          if (ok) UI.showStatus('Engineers repairing building');
+          else UI.showStatus(Network.commandFailureMessage(code));
+        }
+      );
+      return;
+    }
   }
 
   const harvesterIds = myUnits.filter(id => State.units.get(id)?.type === 'harvester');
@@ -1664,7 +1758,7 @@ function onMouseClick(e) {
   if (performance.now() < suppressDesktopMouseFromTouchMs) return;
 
   // Ignore clicks on UI elements
-  if (e.target.closest('#minimap') || e.target.tagName === 'BUTTON' || e.target.closest('.hud')) {
+  if (e.target.closest('#minimap') || e.target.tagName === 'BUTTON' || e.target.closest('.hud') || e.target.closest('#hud-victory')) {
     return;
   }
   
@@ -1717,7 +1811,7 @@ function onRightClick(e) {
   if (performance.now() < suppressDesktopMouseFromTouchMs) return;
 
   // Ignore right-clicks on UI elements
-  if (e.target.closest('#minimap')) return;
+  if (e.target.closest('#minimap') || e.target.closest('#hud-victory')) return;
   
   if (State.gameSession.buildMode) {
     State.clearBuildPlacementFlags();
@@ -1725,14 +1819,6 @@ function onRightClick(e) {
     UI.showStatus('Build cancelled');
     return;
   }
-  
-  if (State.selectedUnits.size === 0) return;
-
-  const myUnits = Array.from(State.selectedUnits).filter(id => {
-    const u = State.units.get(id);
-    return u && u.ownerId === State.gameSession.myPlayerId;
-  });
-  if (myUnits.length === 0) return;
 
   const sceneEl = document.querySelector('a-scene');
   if (!sceneEl || !sceneEl.camera) return;
@@ -1743,8 +1829,18 @@ function onRightClick(e) {
   _raycaster.setFromCamera(_mouseNDC, sceneEl.camera);
   const origin = _raycaster.ray.origin;
   const direction = _raycaster.ray.direction;
+  const pickNdc = { x: _mouseNDC.x, y: _mouseNDC.y };
 
-  performWorldCommandRay(origin, direction, { x: _mouseNDC.x, y: _mouseNDC.y });
+  const myUnits = Array.from(State.selectedUnits).filter(id => {
+    const u = State.units.get(id);
+    return u && u.ownerId === State.gameSession.myPlayerId;
+  });
+  if (myUnits.length === 0) {
+    commandSelectedDefenseGun(origin, direction, pickNdc);
+    return;
+  }
+
+  performWorldCommandRay(origin, direction, pickNdc);
 }
 
 function screenToWorldRay(clientX, clientY) {
@@ -1772,6 +1868,7 @@ function isClientPointBlockedForWorldTouch(clientX, clientY) {
   if (el.closest('#loading-screen')) return true;
   if (el.closest('#match-prepare-overlay')) return true;
   if (el.closest('#app-start-overlay')) return true;
+  if (el.closest('#hud-victory')) return true;
   return false;
 }
 
@@ -1832,6 +1929,28 @@ function performVrStyleBattlefieldRay(origin, direction, pickNdc, opts = {}) {
     pickBoost
   ));
 
+  if (myUnits.length === 0) {
+    const gun = activeOwnDefenseBuilding();
+    if (gun) {
+      const unitGraze = hitUnit && pickNdc && selectionRayIsTerrainGraze(
+        origin, direction, Renderer.pickScreenNdcErrorForUnit(hitUnit, pickNdc), pickNdc
+      );
+      const buildingGraze = hitBuilding && pickNdc && selectionRayIsTerrainGraze(
+        origin, direction, Renderer.pickScreenNdcErrorForBuilding(hitBuilding, pickNdc), pickNdc
+      );
+      let forced = null;
+      if (hitUnit && !unitGraze && hitUnit.hp > 0 && hitUnit.team !== myTeam) forced = hitUnit;
+      else if (hitBuilding && !buildingGraze && hitBuilding.hp > 0 && hitBuilding.id !== gun.id) {
+        const bTeam = State.players[hitBuilding.ownerId]?.team;
+        if (bTeam !== myTeam) forced = hitBuilding;
+      }
+      if (forced) {
+        assignDefenseTarget(gun, forced);
+        return true;
+      }
+    }
+  }
+
   if (hitUnit) {
     // Same terrain-graze deselect as mouse: weak sphere hits on open ground clear selection.
     if (
@@ -1856,7 +1975,7 @@ function performVrStyleBattlefieldRay(origin, direction, pickNdc, opts = {}) {
         if (vrFollowChord) {
           if (!commandRayPrefersGroundOverFriendlyFollow(origin, direction, hitUnit, pickNdc, myUnits)) {
             Network.sendCommand({ action: 'follow', unitIds: myUnits, targetId: hitUnit.id });
-            UI.showStatus('Following — engineers repair damaged vehicles when in range');
+            UI.showStatus('Following — engineers repair damaged vehicles / buildings in range');
             return true;
           }
           const groundHitCmd = raycastGround(origin, direction);
@@ -1937,15 +2056,31 @@ function performVrStyleBattlefieldRay(origin, direction, pickNdc, opts = {}) {
         }
       }
       if (!fallThroughForMove) {
+        // Engineers selected → repair (desktop left-click / VR trigger). HQ used to always open
+        // the build panel instead, so players thought repair was broken.
+        if (myUnits.some(id => State.units.get(id)?.type === 'engineer')) {
+          Network.sendCommand(
+            { action: 'repairBuilding', unitIds: myUnits, targetId: hitBuilding.id },
+            (ok, code) => {
+              if (ok) UI.showStatus('Engineers repairing building');
+              else UI.showStatus(Network.commandFailureMessage(code));
+            }
+          );
+          return true;
+        }
+        // VR grip+trigger chord without engineers: still select/inspect building below.
+        if (vrFollowChord) {
+          // fall through to panel only if no engineers (handled above)
+        }
         State.deselectAll();
         UI.showBuildingPanel(hitBuilding);
-        UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
+        UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}${defenseSelectHint(hitBuilding)}`);
         return true;
       }
     } else if (ownBuilding) {
       State.deselectAll();
       UI.showBuildingPanel(hitBuilding);
-      UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}`);
+      UI.showStatus(`Selected ${BUILDING_TYPES[hitBuilding.type]?.name || hitBuilding.type}${defenseSelectHint(hitBuilding)}`);
       return true;
     } else if (myUnits.length > 0) {
       const bTeam = State.players[hitBuilding.ownerId]?.team;
@@ -2046,7 +2181,7 @@ function fireTouchLongPress(clientX, clientY) {
       if (myUnits.length > 0) {
         if (!commandRayPrefersGroundOverFriendlyFollow(origin, direction, hitUnit, pickNdc, myUnits)) {
           Network.sendCommand({ action: 'follow', unitIds: myUnits, targetId: hitUnit.id });
-          UI.showStatus('Following — engineers repair damaged vehicles when in range');
+          UI.showStatus('Following — engineers repair damaged vehicles / buildings in range');
           UI.hideBuildingPanel();
           touchLongPressConsumed = true;
           notifyTouchInteraction('long');
@@ -2075,6 +2210,28 @@ function fireTouchLongPress(clientX, clientY) {
     }
     return;
   }
+
+  // Long-press friendly building with engineers selected → repair (mirrors vehicle follow).
+  if (hitBuilding && hitBuilding.ownerId === State.gameSession.myPlayerId) {
+    const myUnits = Array.from(State.selectedUnits).filter(id => {
+      const u = State.units.get(id);
+      return u && u.ownerId === State.gameSession.myPlayerId;
+    });
+    if (myUnits.length > 0 && myUnits.some(id => State.units.get(id)?.type === 'engineer')) {
+      Network.sendCommand(
+        { action: 'repairBuilding', unitIds: myUnits, targetId: hitBuilding.id },
+        (ok, code) => {
+          if (ok) UI.showStatus('Engineers repairing building');
+          else UI.showStatus(Network.commandFailureMessage(code));
+        }
+      );
+      UI.hideBuildingPanel();
+      touchLongPressConsumed = true;
+      notifyTouchInteraction('long');
+      return;
+    }
+  }
+
   const groundHit = raycastGround(origin, direction);
   if (hitBuilding || hitRes) {
     if (!groundHit || !pickNdc) return;

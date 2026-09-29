@@ -47,6 +47,8 @@ export function initPlayers(humanIndices = [0], botIndices = [1, 2, 3]) {
           expansiveness: 0.5 + Math.random() * 0.5,   // Higher baseline expansiveness
           defensiveness: Math.random() * 0.4,         // Lower baseline defensiveness
           techPreference: 0.5 + Math.random() * 0.5,  // Favor vehicles
+          artilleryAffinity: 0.4 + Math.random() * 0.4,
+          staticDefenseBias: 0.35 + Math.random() * 0.4,
         },
         startDelayOffset: 2 + Math.random() * 4, // 2-6s start delay (fast!)
         
@@ -69,6 +71,8 @@ export function initPlayers(humanIndices = [0], botIndices = [1, 2, 3]) {
         buildingsBuilt: 0,
         buildingsLost: 0,
         creditsEarned: 0,
+        /** Ore delivered only (excludes PASSIVE_INCOME_PER_SEC). */
+        creditsHarvested: 0,
       },
     });
   }
@@ -278,7 +282,61 @@ export const gameSession = {
   mpPendingHumanDropSeatIds: [],
   /** Wall-clock ms (`Date.now()`): when host auto-resumes after `remote_left` pause; 0 if none. */
   mpPauseAutoResumeAt: 0,
+
+  /**
+   * Match-stat time series for the end-screen graph.
+   * `{ t: seconds, p: [ {k,u,l,b,bl,c}, ...per player id ] }`
+   */
+  statsTimeline: [],
+  /** Sim time of last timeline sample (force another on game-over). */
+  statsTimelineLastT: -999,
 };
+
+/** Seconds between end-screen graph samples (cap keeps MP payload small). */
+export const STATS_TIMELINE_INTERVAL_SEC = 5;
+export const STATS_TIMELINE_MAX_SAMPLES = 150;
+
+export function resetStatsTimeline() {
+  gameSession.statsTimeline = [];
+  gameSession.statsTimelineLastT = -999;
+}
+
+/** Snapshot cumulative player stats for the match-end progression chart. */
+export function sampleStatsTimeline(force = false) {
+  if (!gameSession.gameStarted) return;
+  const t = gameSession.elapsedTime;
+  const last = gameSession.statsTimelineLastT;
+  if (!force && t - last < STATS_TIMELINE_INTERVAL_SEC && gameSession.statsTimeline.length > 0) {
+    return;
+  }
+  // Avoid duplicate samples at the same second.
+  if (
+    !force
+    && gameSession.statsTimeline.length > 0
+    && Math.abs(t - last) < 0.05
+  ) {
+    return;
+  }
+  const row = {
+    t: Math.round(t * 10) / 10,
+    p: players.map(pl => {
+      const s = pl.stats || {};
+      return {
+        k: s.kills | 0,
+        u: s.unitsProduced | 0,
+        l: s.unitsLost | 0,
+        b: s.buildingsBuilt | 0,
+        bl: s.buildingsLost | 0,
+        c: Math.floor(s.creditsEarned || 0),
+      };
+    }),
+  };
+  gameSession.statsTimeline.push(row);
+  gameSession.statsTimelineLastT = t;
+  while (gameSession.statsTimeline.length > STATS_TIMELINE_MAX_SAMPLES) {
+    gameSession.statsTimeline.shift();
+  }
+}
 
 /** Batched into multiplayer snapshots so joiners hear/see the same SFX & particles as the host. */
 export const pendingHostFx = [];
@@ -323,6 +381,7 @@ export function resetMatchEntitiesForClient() {
   gameSession.elapsedTime = 0;
   gameSession.gameOver = false;
   gameSession.winner = -1;
+  resetStatsTimeline();
   clearBuildPlacementFlags();
 }
 
@@ -347,6 +406,7 @@ export function resetState() {
   gameSession.storySeed = null;
   gameSession.storyMeta = null;
   gameSession.storyHistoryRecorded = false;
+  resetStatsTimeline();
   clearBuildPlacementFlags();
   pendingHostFx.length = 0;
   gameSession.mpSessionPaused = false;

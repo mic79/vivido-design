@@ -5,14 +5,12 @@
 
 import {
   HARVEST_AMOUNT, HARVEST_TIME, DEPOSIT_TIME,
-  BOT_FIELD_ENEMY_CHECK_RADIUS, BOT_FIELD_THREAT_SCORE_SQ, BOT_HARVESTER_FLEE_ENEMY_RADIUS,
   clampWorldToPlayableDisk,
   OBSTACLE_BUFFER,
 } from './config.js';
 import * as State from './state.js';
 import * as Pathfinding from './pathfinding.js';
 import * as Fog from './fog.js';
-import { unitGrid } from './spatial.js';
 
 /** Must match `moveToField` / `moveToRefinery` arrival checks (world m). */
 const HARVESTER_ARRIVE_RADIUS = 12;
@@ -223,10 +221,22 @@ export function updateHarvesters(dt) {
   State.units.forEach(unit => {
     if (unit.hp <= 0 || unit.type !== 'harvester') return;
 
+    unstickHarvesterIfFrozen(unit, dt);
+
     switch (unit.state) {
-      case 'idle':
+      case 'idle': {
+        const player = State.players[unit.ownerId];
+        // Bot HVs must never sit with a stuck "player" order flag — that blocks auto-assign forever.
+        if (player?.isBot && unit.playerCommanded) {
+          unit.playerCommanded = false;
+        }
         assignHarvesterTask(unit);
+        // Still idle = no known ore (or no refinery). Bots go look; humans wait for orders.
+        if (unit.state === 'idle' && player?.isBot) {
+          sendBotHarvesterToSeekOre(unit);
+        }
         break;
+      }
 
       case 'movingToField':
         moveToField(unit, dt);
@@ -245,65 +255,209 @@ export function updateHarvesters(dt) {
         break;
 
       case 'moving':
-        // Player commanded move — don't override
+        // Relocate orders (scout/explore attack-move). updateUnits skips harvesters, so
+        // this must drive motion here — otherwise they freeze forever and stop mining.
+        moveHarvesterRelocate(unit, dt);
         break;
 
       default:
-        if (!unit.playerCommanded) {
-          unit.state = 'idle';
-        }
+        // attacking / unknown — harvesters must never sit outside the harvest FSM.
+        unit.playerCommanded = false;
+        unit.state = 'idle';
+        unit.targetUnitId = null;
+        unit.targetBuildingId = null;
         break;
     }
   });
 }
 
-function fieldHasVisibleCombatThreat(field, team) {
-  return unitGrid.queryRadiusFiltered(field.x, field.z, BOT_FIELD_ENEMY_CHECK_RADIUS, e =>
-    e.team !== team && e.hp > 0 && e.damage > 0 && Fog.isVisibleToTeam(team, e.x, e.z)
-  ).length > 0;
-}
+/** If a HV hasn't moved for seconds while "busy", force a repath / reassignment. */
+function unstickHarvesterIfFrozen(unit, dt) {
+  if (unit.state === 'idle' || unit.state === 'harvesting' || unit.state === 'depositing') {
+    unit._stuckTime = 0;
+    unit._stuckX = unit.x;
+    unit._stuckZ = unit.z;
+    return;
+  }
+  const moved = Math.hypot(unit.x - (unit._stuckX ?? unit.x), unit.z - (unit._stuckZ ?? unit.z));
+  if (moved > 0.5) {
+    unit._stuckX = unit.x;
+    unit._stuckZ = unit.z;
+    unit._stuckTime = 0;
+    return;
+  }
+  unit._stuckTime = (unit._stuckTime || 0) + dt;
+  if (unit._stuckTime < 3.5) return;
 
-function botHarvesterSeesCombatEnemy(unit) {
-  const p = State.players[unit.ownerId];
-  if (!p?.isBot || unit.playerCommanded) return false;
-  return unitGrid.queryRadiusFiltered(unit.x, unit.z, BOT_HARVESTER_FLEE_ENEMY_RADIUS, e =>
-    e.team !== p.team && e.hp > 0 && e.damage > 0 && Fog.isVisibleToTeam(p.team, e.x, e.z)
-  ).length > 0;
-}
+  unit._stuckTime = 0;
+  unit._stuckX = unit.x;
+  unit._stuckZ = unit.z;
+  unit.path = null;
+  unit.pathIndex = 0;
+  unit._pathRetryAt = 0;
+  unit._preferGridPath = true;
+  unit.playerCommanded = false;
 
-function isFieldTempBlockedForBotHarvester(unit, fieldId) {
-  const t = unit._botFieldBlockUntil?.[fieldId];
-  return t != null && State.gameSession.elapsedTime < t;
-}
-
-/** Pick known field with best (distance² + threat penalty); visible enemies only. */
-function findBestResourceFieldForBot(unit) {
-  const player = State.players[unit.ownerId];
-  if (!player) return null;
-  const team = player.team;
-  let best = null;
-  let bestScore = Infinity;
-  const R = BOT_FIELD_ENEMY_CHECK_RADIUS;
-
-  State.resourceFields.forEach(field => {
-    if (field.depleted) return;
-    if (isFieldTempBlockedForBotHarvester(unit, field.id)) return;
-    if (!Fog.wasExploredByTeam(team, field.x, field.z)) return;
-    const distSq = Pathfinding.getDistanceSq(unit.x, unit.z, field.x, field.z);
-    let threat = 0;
-    unitGrid.queryRadiusFiltered(field.x, field.z, R, e =>
-      e.team !== team && e.hp > 0 && e.damage > 0 && Fog.isVisibleToTeam(team, e.x, e.z)
-    ).forEach(() => {
-      threat += BOT_FIELD_THREAT_SCORE_SQ;
-    });
-    const score = distSq + threat;
-    if (score < bestScore) {
-      bestScore = score;
-      best = field;
+  if ((unit.cargo || 0) > 0) {
+    const ref = findNearestRefinery(unit);
+    if (ref) {
+      const dist = Pathfinding.getDistance(unit.x, unit.z, ref.x, ref.z);
+      // Already in unload range but FSM never transitioned — dump now.
+      if (dist < HARVESTER_WORK_RADIUS + 4) {
+        unit.assignedRefinery = ref.id;
+        unit.state = 'depositing';
+        unit.targetPos = null;
+        unit._depositTimer = 0;
+        return;
+      }
+      // Try a fresh approach from a rotated side of the refinery.
+      unit.assignedRefinery = ref.id;
+      unit.state = 'movingToRefinery';
+      const ang = (unit._unstickSpin = ((unit._unstickSpin || 0) + 1.1));
+      const h = (ref.size || 4) * 0.5;
+      const standoff = h + OBSTACLE_BUFFER + 4;
+      const ax = ref.x + Math.cos(ang) * standoff;
+      const az = ref.z + Math.sin(ang) * standoff;
+      const snap = Pathfinding.snapWorldXZToWalkable(ax, az);
+      unit.targetPos = { x: snap.x, z: snap.z };
+      // Nudge out of whatever cell we're wedged in.
+      if (!Pathfinding.isPositionWalkable(unit.x, unit.z)) {
+        const s = Pathfinding.pushOutOfObstacle(unit.x, unit.z);
+        unit.x = s.x;
+        unit.z = s.z;
+      }
+      return;
     }
-  });
+  }
+  // Explore / field trip frozen — drop to idle so assign / seek can recover.
+  unit.state = 'idle';
+  unit.targetPos = null;
+  unit.assignedField = null;
+}
 
-  return best || findNearestResourceField(unit);
+/** Finish scout/explore relocate, then resume the normal harvest loop. */
+function moveHarvesterRelocate(unit, dt) {
+  // Ore discovered while wandering — abort explore and mine immediately.
+  if ((unit.cargo || 0) === 0 && findNearestResourceField(unit)) {
+    unit.state = 'idle';
+    unit.playerCommanded = false;
+    unit.targetPos = null;
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._relocateAge = 0;
+    assignHarvesterTask(unit);
+    return;
+  }
+  if ((unit.cargo || 0) > 0) {
+    const refinery = findNearestRefinery(unit);
+    if (refinery) {
+      sendHarvesterToRefinery(unit, refinery);
+      return;
+    }
+  }
+  // Stuck / aborted relocate → drop back into auto-harvest immediately.
+  if (!unit.targetPos) {
+    unit.state = 'idle';
+    unit.playerCommanded = false;
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._relocateAge = 0;
+    assignHarvesterTask(unit);
+    if (unit.state === 'idle' && State.players[unit.ownerId]?.isBot) {
+      sendBotHarvesterToSeekOre(unit);
+    }
+    return;
+  }
+  const dist = Pathfinding.getDistance(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z);
+  if (dist < HARVESTER_ARRIVE_RADIUS) {
+    unit.state = 'idle';
+    unit.playerCommanded = false;
+    unit.targetPos = null;
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._relocateAge = 0;
+    assignHarvesterTask(unit);
+    if (unit.state === 'idle' && State.players[unit.ownerId]?.isBot) {
+      sendBotHarvesterToSeekOre(unit);
+    }
+    return;
+  }
+  // Path dead for a long time — retry harvest, else keep seeking (never freeze idle).
+  unit._relocateAge = (unit._relocateAge || 0) + dt;
+  if (unit._relocateAge > 35 || (!unit.path && unit._relocateAge > 12)) {
+    unit.state = 'idle';
+    unit.playerCommanded = false;
+    unit.targetPos = null;
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._relocateAge = 0;
+    assignHarvesterTask(unit);
+    if (unit.state === 'idle' && State.players[unit.ownerId]?.isBot) {
+      sendBotHarvesterToSeekOre(unit);
+    }
+    return;
+  }
+  moveAlongPathSimple(unit, dt);
+  if (
+    unit.targetPos &&
+    Pathfinding.getDistance(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z) < HARVESTER_ARRIVE_RADIUS
+  ) {
+    unit.state = 'idle';
+    unit.playerCommanded = false;
+    unit.targetPos = null;
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._relocateAge = 0;
+    assignHarvesterTask(unit);
+    if (unit.state === 'idle' && State.players[unit.ownerId]?.isBot) {
+      sendBotHarvesterToSeekOre(unit);
+    }
+  }
+}
+
+/**
+ * Bot HV with nothing to harvest: walk into fog toward nearest unexplored cell / map sector.
+ * Sets `moving` directly (updateUnits skips harvesters; moveHarvesterRelocate drives motion).
+ */
+function sendBotHarvesterToSeekOre(unit) {
+  const player = State.players[unit.ownerId];
+  if (!player?.isBot) return;
+  if (unit.playerCommanded) return;
+  if ((unit.cargo || 0) > 0) return;
+  // If any live explored ore exists, mine it — do not wander.
+  if (findNearestResourceField(unit)) return;
+  // Throttle so we don't repath every frame.
+  const now = State.gameSession.elapsedTime;
+  if (now - (unit._botSeekOreAt || 0) < 2.5) return;
+  unit._botSeekOreAt = now;
+
+  const hq = State.getPlayerHQ(unit.ownerId);
+  const anchorX = hq?.x ?? unit.x;
+  const anchorZ = hq?.z ?? unit.z;
+
+  let goal = Fog.findNearestUnexploredCell(player.team, unit.x, unit.z);
+  if (!goal) {
+    const seed = (unit.id || '').length + Math.floor(now);
+    const ang = seed * 0.9 + now * 0.03;
+    goal = clampWorldToPlayableDisk(
+      anchorX + Math.cos(ang) * (45 + (seed % 40)),
+      anchorZ + Math.sin(ang) * (45 + (seed % 40)),
+      8
+    );
+  }
+  if (!goal) return;
+
+  const snapped = Pathfinding.snapOutOfObstacle(goal.x, goal.z);
+  const t = clampWorldToPlayableDisk(snapped.x, snapped.z, 0);
+  unit._relocateAge = 0;
+  unit.state = 'moving';
+  unit.targetPos = { x: t.x, z: t.z };
+  unit.playerCommanded = false;
+  unit.targetUnitId = null;
+  unit.targetBuildingId = null;
+  unit.assignedField = null;
+  unit.path = null;
+  unit.pathIndex = 0;
 }
 
 function assignHarvesterTask(unit) {
@@ -315,7 +469,7 @@ function assignHarvesterTask(unit) {
 
   // Nearest refinery (including one still building — was excluded by constructionProgress filter before).
   const refinery = findNearestRefinery(unit);
-  if (!refinery) return; // No refinery - stay idle
+  if (!refinery) return; // No refinery - stay idle (bot seek runs after)
 
   // Carrying ore: always deposit first (e.g. after the assigned refinery was sold).
   if ((unit.cargo || 0) > 0) {
@@ -324,24 +478,21 @@ function assignHarvesterTask(unit) {
   }
 
   let field = null;
-  if (unit.lastHarvestedField) {
+  // Bots: always retarget nearest live explored ore (sticky lastHarvested left trucks
+  // parked after home emptied / unreachable stick targets).
+  if (!player.isBot && unit.lastHarvestedField) {
     const prevField = State.resourceFields.get(unit.lastHarvestedField);
-    if (prevField && !prevField.depleted) {
-      const blocked = player.isBot && isFieldTempBlockedForBotHarvester(unit, prevField.id);
-      const hot = player.isBot && fieldHasVisibleCombatThreat(prevField, player.team);
-      if (!blocked && !hot) {
-        field = prevField;
-      } else {
-        unit.lastHarvestedField = null;
-      }
+    if (prevField && !prevField.depleted && prevField.remaining > 0) {
+      field = prevField;
+    } else {
+      unit.lastHarvestedField = null;
     }
   }
 
-  // If no previous field or it's depleted, find nearest resource field with resources
   if (!field) {
-    field = player.isBot ? findBestResourceFieldForBot(unit) : findNearestResourceField(unit);
+    field = findNearestResourceField(unit);
   }
-  
+
   // No known crystal in fog yet — cannot start a harvest loop (refinery alone does not send them "to" it first).
   if (!field) return;
 
@@ -353,6 +504,7 @@ function assignHarvesterTask(unit) {
   unit.path = null;
   unit.pathIndex = 0;
   unit._pathRetryAt = 0;
+  unit._relocateAge = 0;
 }
 
 function moveToField(unit, dt) {
@@ -361,19 +513,6 @@ function moveToField(unit, dt) {
     // Find new field
     unit.assignedField = null;
     unit.state = 'idle';
-    return;
-  }
-
-  if (botHarvesterSeesCombatEnemy(unit)) {
-    if (unit.assignedField) {
-      if (!unit._botFieldBlockUntil) unit._botFieldBlockUntil = {};
-      unit._botFieldBlockUntil[unit.assignedField] = State.gameSession.elapsedTime + 12;
-    }
-    unit.assignedField = null;
-    unit.lastHarvestedField = null;
-    unit.state = 'idle';
-    unit.targetPos = null;
-    unit.path = null;
     return;
   }
 
@@ -416,20 +555,6 @@ function harvest(unit, dt) {
     unit.state = 'movingToField';
     clearFieldApproachCache(unit);
     setFieldHarvestTarget(unit, field);
-    unit.path = null;
-    unit._harvestTimer = 0;
-    return;
-  }
-
-  if (botHarvesterSeesCombatEnemy(unit)) {
-    if (unit.assignedField) {
-      if (!unit._botFieldBlockUntil) unit._botFieldBlockUntil = {};
-      unit._botFieldBlockUntil[unit.assignedField] = State.gameSession.elapsedTime + 12;
-    }
-    unit.assignedField = null;
-    unit.lastHarvestedField = null;
-    unit.state = 'idle';
-    unit.targetPos = null;
     unit.path = null;
     unit._harvestTimer = 0;
     return;
@@ -562,7 +687,14 @@ function moveToRefinery(unit, dt) {
   }
 
   const dist = Pathfinding.getDistance(unit.x, unit.z, refinery.x, refinery.z);
-  if (dist < HARVESTER_ARRIVE_RADIUS) {
+  const distGoal = unit.targetPos
+    ? Pathfinding.getDistance(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z)
+    : Infinity;
+  // Approach pads sit outside the nav-blocked footprint (~15–20m from center). Old checks
+  // (arriveR=12 / workR=17 / distGoal<2.5) left trucks frozen ON the pad with full cargo.
+  const atPad = !!unit.targetPos && distGoal <= 3.5;
+  const inUnloadRange = dist <= Math.max(HARVESTER_WORK_RADIUS + 4, 22);
+  if (dist < HARVESTER_ARRIVE_RADIUS || atPad || inUnloadRange) {
     unit.state = 'depositing';
     unit.targetPos = null;
     unit.path = null;
@@ -580,6 +712,19 @@ function moveToRefinery(unit, dt) {
   }
 
   moveAlongPathSimple(unit, dt);
+
+  // After move: if creep got us onto the pad / unload range, deposit now.
+  const dist2 = Pathfinding.getDistance(unit.x, unit.z, refinery.x, refinery.z);
+  const distGoal2 = unit.targetPos
+    ? Pathfinding.getDistance(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z)
+    : Infinity;
+  if (dist2 <= Math.max(HARVESTER_WORK_RADIUS + 4, 22) || distGoal2 <= 3.5) {
+    unit.state = 'depositing';
+    unit.targetPos = null;
+    unit.path = null;
+    unit.pathIndex = 0;
+    unit._depositTimer = 0;
+  }
 }
 
 function deposit(unit, dt) {
@@ -598,7 +743,7 @@ function deposit(unit, dt) {
     }
     return;
   }
-  if (Pathfinding.getDistance(unit.x, unit.z, ref.x, ref.z) > HARVESTER_WORK_RADIUS) {
+  if (Pathfinding.getDistance(unit.x, unit.z, ref.x, ref.z) > Math.max(HARVESTER_WORK_RADIUS + 4, 22)) {
     sendHarvesterToRefinery(unit, ref);
     return;
   }
@@ -610,7 +755,10 @@ function deposit(unit, dt) {
     const player = State.players[unit.ownerId];
     if (player && unit.cargo > 0) {
       player.credits += unit.cargo;
-      if (player.stats) player.stats.creditsEarned += unit.cargo;
+      if (player.stats) {
+        player.stats.creditsEarned += unit.cargo;
+        player.stats.creditsHarvested = (player.stats.creditsHarvested || 0) + unit.cargo;
+      }
       unit.cargo = 0;
     }
 
@@ -621,13 +769,55 @@ function deposit(unit, dt) {
 }
 
 // --- Simple movement for harvesters ---
+/** Direct step toward a point when A* is unavailable or failed — never stand still with cargo. */
+function harvesterCreepTowardPos(unit, tx, tz, dt) {
+  const dx = tx - unit.x;
+  const dz = tz - unit.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.08) return true;
+  const moveSpeed = unit.speed * dt;
+  const ratio = Math.min(1, moveSpeed / dist);
+  const nx = unit.x + dx * ratio;
+  const nz = unit.z + dz * ratio;
+  const res = Pathfinding.resolveNavMotion(unit.x, unit.z, nx, nz);
+  if (res.blocked) {
+    const step = Pathfinding.bestEscapeStep(unit.x, unit.z, tx, tz);
+    if (step) {
+      const moved = Pathfinding.resolveNavMotion(unit.x, unit.z, step.x, step.z);
+      if (!moved.blocked) {
+        unit.x = moved.x;
+        unit.z = moved.z;
+      }
+    } else if (!Pathfinding.isPositionWalkable(unit.x, unit.z)) {
+      const s = Pathfinding.pushOutOfObstacle(unit.x, unit.z);
+      unit.x = s.x;
+      unit.z = s.z;
+    }
+  } else {
+    unit.x = res.x;
+    unit.z = res.z;
+  }
+  if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
+    unit.rotation = Math.atan2(dx, dz);
+  }
+  return Math.hypot(tx - unit.x, tz - unit.z) < 0.6;
+}
+
 function moveAlongPathSimple(unit, dt) {
   if (!unit.path || unit.path.length === 0 || unit.pathIndex >= unit.path.length) {
     if (!unit.targetPos) return;
-    if (!harvesterCanPathfind(unit)) return;
-    if (!Pathfinding.canTakePathfindSlot(false)) {
-      harvesterSchedulePathRetry(unit, 40);
-      return;
+
+    // CRITICAL: when A* slots are exhausted (common with 4-bot FFA), HVs used to
+    // `return` here and freeze forever mid-map with full cargo. Always creep while waiting.
+    const canPath =
+      harvesterCanPathfind(unit) && Pathfinding.canTakePathfindSlot(false);
+    if (!canPath) {
+      harvesterCreepTowardPos(unit, unit.targetPos.x, unit.targetPos.z, dt);
+      if (!harvesterCanPathfind(unit)) return;
+      if (!Pathfinding.canTakePathfindSlot(false)) {
+        harvesterSchedulePathRetry(unit, 40);
+        return;
+      }
     }
 
     Pathfinding.notePathfindSlot(false);
@@ -653,11 +843,12 @@ function moveAlongPathSimple(unit, dt) {
           unit.pathIndex = 0;
           unit._depositTimer = 0;
         } else if (ref && ref.hp > 0) {
-          // Goal may be inside the footprint — snap to approach and retry (don't drop cargo to idle).
+          // Goal may be inside the footprint — snap to approach and creep (don't drop cargo to idle).
           const goal = refineryApproachPos(unit.x, unit.z, ref);
           unit.targetPos = { x: goal.x, z: goal.z };
           unit.path = null;
           unit.pathIndex = 0;
+          harvesterCreepTowardPos(unit, goal.x, goal.z, dt);
           harvesterSchedulePathRetry(unit, 80);
         } else {
           const next = findNearestRefinery(unit);
@@ -689,6 +880,9 @@ function moveAlongPathSimple(unit, dt) {
             }
             unit.path = null;
             unit.pathIndex = 0;
+            if (unit.targetPos) {
+              harvesterCreepTowardPos(unit, unit.targetPos.x, unit.targetPos.z, dt);
+            }
             harvesterSchedulePathRetry(unit, 120);
           }
         } else {
@@ -699,9 +893,15 @@ function moveAlongPathSimple(unit, dt) {
           unit.path = null;
         }
       } else {
-        unit.state = 'idle';
-        unit.targetPos = null;
-        unit.path = null;
+        // Explore relocate with no path — creep toward goal instead of idling.
+        if (unit.targetPos) {
+          harvesterCreepTowardPos(unit, unit.targetPos.x, unit.targetPos.z, dt);
+          harvesterSchedulePathRetry(unit, 100);
+        } else {
+          unit.state = 'idle';
+          unit.targetPos = null;
+          unit.path = null;
+        }
       }
       unit._harvestTimer = 0;
       unit._depositTimer = 0;
@@ -821,7 +1021,7 @@ function findNearestResourceField(unit) {
   if (!player) return null;
 
   State.resourceFields.forEach(field => {
-    if (field.depleted) return;
+    if (field.depleted || !(field.remaining > 0)) return;
 
     // Fog of war check: Harvester only "knows" about fields seen by their team
     if (!Fog.wasExploredByTeam(player.team, field.x, field.z)) return;

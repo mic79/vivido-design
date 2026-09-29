@@ -16,19 +16,27 @@ import * as Network from './network.js';
 import * as Units from './units.js';
 import * as Buildings from './buildings.js';
 import * as Loop from './loop.js';
+import * as Trace from './match-trace.js';
 import {
   clampWorldToPlayableDisk,
   BARRACKS_UNITS,
   FACTORY_UNITS,
   getMatchStartSpawnForPlayer,
   applyMapProfile,
+  applySkirmishNavForMode,
+  setSkirmishExtraResourcePositions,
+  setSkirmishCornerResourcePositions,
   MAP_PROFILE,
   MAP_UNIT_NAV_RADIUS,
   toggleFocusSceneryCull,
   getFocusSceneryCullEnabled,
   setFocusSceneryCullEnabled,
+  BOT_STRATEGY_ORDER,
+  BOT_STRATEGY_1V1,
+  BOT_STRATEGY_PRESETS,
 } from './config.js';
-import { applyMoonBattlefieldVisuals, rebuildMoonBattlefield, clearStoryBlockingHills, ensureFocusCullPipeline } from './moon-environment.js';
+import * as Bot from './bot.js';
+import { applyMoonBattlefieldVisuals, rebuildMoonBattlefield, clearStoryBlockingHills, ensureFocusCullPipeline, layoutLargeSkirmishOreSites, snapMatchSpawnToFlat, snapCrystalNearSpawn } from './moon-environment.js';
 import {
   generateStoryLayout,
   applyStoryLayoutToWorld,
@@ -302,6 +310,7 @@ async function onStartGame(mode) {
       } else {
         clearStoryBlockingHills();
         applyMapProfile('standard');
+        applySkirmishNavForMode(mode);
         if (needsRebuild) {
           UI.setMatchPreparingMessage('Switching to skirmish map…');
           await UI.nextPaint();
@@ -320,8 +329,6 @@ async function onStartGame(mode) {
     await UI.nextPaint();
 
   State.resetState();
-  State.initResourceFields();
-  Renderer.refreshResourceFieldMeshes();
 
   // Determine which players are active in this mode
   let humanIds, botIds, activeIds, teamAssign;
@@ -408,6 +415,45 @@ async function onStartGame(mode) {
     }
   });
 
+  // Named strategy packs — 1v1 uses siege_answer so bots actually counter artillery.
+  // Override: ?botstrat=eco_expand|aggro_rush|tech_armor|scout_harass|siege_answer
+  {
+    const sp = new URLSearchParams(window.location.search || '');
+    const forced = sp.get('botstrat');
+    let stratI = 0;
+    for (const p of State.players) {
+      if (!p.isActive || p.isDefeated || !p.isBot) continue;
+      let id;
+      if (forced && BOT_STRATEGY_PRESETS[forced]) id = forced;
+      else if (mode === '1v1' || mode === 'story') id = BOT_STRATEGY_1V1;
+      else id = BOT_STRATEGY_ORDER[stratI++ % BOT_STRATEGY_ORDER.length];
+      Bot.applyBotStrategy(p, id);
+    }
+  }
+
+  if (mode === '2v2' || mode === 'ffa') {
+    const used = [false, false, false, false];
+    for (const p of State.players) {
+      if (!p.isActive || p.isDefeated) continue;
+      const slot = p.id;
+      if (slot < 0 || slot > 3) continue;
+      p.spawn = snapMatchSpawnToFlat(p.spawn);
+      used[slot] = true;
+    }
+    const pads = [0, 1, 2, 3].map((i) => {
+      if (used[i]) {
+        const owner = State.players.find((p) => p.isActive && !p.isDefeated && p.id === i);
+        return owner.spawn;
+      }
+      return snapMatchSpawnToFlat(getMatchStartSpawnForPlayer(i));
+    });
+    const corners = pads.map((sp) => snapCrystalNearSpawn(sp));
+    setSkirmishCornerResourcePositions(corners);
+    setSkirmishExtraResourcePositions(layoutLargeSkirmishOreSites());
+  }
+  State.initResourceFields();
+  Renderer.refreshResourceFieldMeshes();
+
   Fog.initFog();
   Pathfinding.initPathfinding();
 
@@ -452,7 +498,10 @@ async function onStartGame(mode) {
   State.gameSession.menuOpen = false;
   State.gameSession.gameOver = false;
   State.gameSession.elapsedTime = 0;
+  State.resetStatsTimeline();
+  State.sampleStatsTimeline(true);
   State.gameSession.matchMode = mode;
+  Trace.startMatchTrace();
   State.gameSession.storyHistoryRecorded = false;
   if (mode === 'story' && storyLayout) {
     State.gameSession.storySeed = storyLayout.seed >>> 0;
@@ -497,7 +546,7 @@ async function onStartGame(mode) {
       : Input.getIsVR()
         ? 'Game started! Point laser at your HQ and use the trigger to open the build menu.'
         : Input.getInputPlatform() === 'touch'
-          ? 'Game started! Tap your HQ to build. Army: tap friendlies to add; tap ground to move; long-press a friendly to follow (engineers repair nearby vehicles). Two-finger drag pans; pinch zooms.'
+          ? 'Game started! Tap your HQ to build. Army: tap friendlies to add; tap ground to move; long-press a friendly to follow (engineers repair vehicles); long-press / right-click a friendly building to repair.'
           : 'Game started! Click your HQ to open the build menu. (VR: left trigger)';
   UI.showStatus(startHint);
 

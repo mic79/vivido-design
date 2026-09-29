@@ -7,7 +7,7 @@
  * green → yellow → red; **≥45°** solid red. Uses mesh geometric normals (not the tiled normal map).
  */
 
-import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_CELL, MAP_CAMERA_NAV_AREA_SCALE, MAP_NAV_AREA_SCALE, MAP_UNIT_PLAYABLE_RADIUS, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
+import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_CELL, MAP_CAMERA_NAV_AREA_SCALE, MAP_NAV_AREA_SCALE, MAP_SKIRMISH_NAV_AREA_SCALE, MAP_UNIT_NAV_RADIUS, MAP_UNIT_PLAYABLE_RADIUS, MATCH_HQ_SPAWN_MARGIN, MATCH_SPAWN_NEAR_CRYSTAL_OFFSET_M, SKIRMISH_CORNER_RESOURCE_POSITIONS, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
 import { bakedMoonAllowed, preferredSkirmishBakeUrl, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps, setBakedMoonRockShadowsEnabled, applyMesaHqTextures, ensureMesaWindDustOnRoot } from './baked-moon.js';
 import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings, hasStoryKitLodFor } from './story-kit-terrain.js';
 import * as State from './state.js';
@@ -1470,6 +1470,163 @@ function sampleCentralPlateMeshSurfaceY(wx, wz) {
 /** Pathfinding / nav: same as internal plate sampler; `null` outside the 200×200 m mesh or before grid init. */
 export function sampleNavPlateMeshY(wx, wz) {
   return sampleCentralPlateMeshSurfaceY(wx, wz);
+}
+
+/**
+ * Height span and steepest rise across a disk. A cliff lip fails even when the
+ * center point itself is level, because one side of the disk drops away.
+ * @param {number} x
+ * @param {number} z
+ * @param {number} radius
+ */
+function measureFlatPad(x, z, radius) {
+  const h0 = sampleNavPlateMeshY(x, z);
+  if (!Number.isFinite(h0)) return { ok: false, range: 99, slope: 99 };
+  let min = h0;
+  let max = h0;
+  let maxSlope = 0;
+  const rings = [radius * 0.5, radius];
+  for (let ri = 0; ri < rings.length; ri++) {
+    const rr = rings[ri];
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2 + ri;
+      const h = sampleNavPlateMeshY(x + Math.cos(a) * rr, z + Math.sin(a) * rr);
+      if (!Number.isFinite(h)) return { ok: false, range: 99, slope: 99 };
+      if (h < min) min = h;
+      if (h > max) max = h;
+      const slope = Math.atan(Math.abs(h - h0) / rr) * (180 / Math.PI);
+      if (slope > maxSlope) maxSlope = slope;
+    }
+  }
+  const range = max - min;
+  return { ok: range <= 3 && maxSlope <= 7, range, slope: maxSlope };
+}
+
+/**
+ * Move a match HQ off a canyon lip onto a flat pad, staying in the same corner.
+ * @param {{x:number,z:number,rotation?:number}} spawn
+ */
+export function snapMatchSpawnToFlat(spawn) {
+  const sx = Math.sign(spawn.x) || 1;
+  const sz = Math.sign(spawn.z) || 1;
+  const limit = MAP_UNIT_NAV_RADIUS - 30;
+  let best = null;
+  for (let dz = -110; dz <= 110; dz += 10) {
+    for (let dx = -110; dx <= 110; dx += 10) {
+      const x = spawn.x + dx;
+      const z = spawn.z + dz;
+      if (Math.sign(x) !== sx || Math.sign(z) !== sz) continue;
+      if (x * x + z * z > limit * limit) continue;
+      const pad = measureFlatPad(x, z, 26);
+      if (!pad.ok) continue;
+      const score = pad.range + pad.slope * 0.15 + Math.hypot(dx, dz) * 0.015;
+      if (!best || score < best.score) best = { x, z, score };
+    }
+  }
+  if (!best) return spawn;
+  return { x: best.x, z: best.z, rotation: spawn.rotation };
+}
+
+/**
+ * Crystal on a flat shelf near a base, inward from the HQ, not in the ravine below it.
+ * @param {{x:number,z:number}} spawn
+ * @returns {{x:number,z:number}}
+ */
+export function snapCrystalNearSpawn(spawn) {
+  const len = Math.hypot(spawn.x, spawn.z) || 1;
+  const ix = -spawn.x / len;
+  const iz = -spawn.z / len;
+  let best = null;
+  for (let dist = 36; dist <= 90; dist += 6) {
+    for (let lat = -28; lat <= 28; lat += 7) {
+      const x = spawn.x + ix * dist + (-iz) * lat;
+      const z = spawn.z + iz * dist + ix * lat;
+      if (x * x + z * z > (MAP_UNIT_NAV_RADIUS - 16) * (MAP_UNIT_NAV_RADIUS - 16)) continue;
+      const pad = measureFlatPad(x, z, 16);
+      if (!pad.ok) continue;
+      const score = pad.range + pad.slope * 0.15 + Math.abs(lat) * 0.01;
+      if (!best || score < best.score) best = { x, z, score };
+    }
+  }
+  if (best) return { x: best.x, z: best.z };
+  return { x: spawn.x + ix * 48, z: spawn.z + iz * 48 };
+}
+
+/**
+ * One crystal per angle, on the flattest low ground inside [r0, r1].
+ * Skips cliffs (slope > 12°) and spots within 64 m of a site already chosen.
+ * @param {number[]} angles
+ * @param {number} r0
+ * @param {number} r1
+ * @param {Array<{x:number,z:number}>} sites
+ * @param {Array<{x:number,z:number}>} [blocked]
+ */
+function placeOreOnFlats(angles, r0, r1, sites, blocked) {
+  if (!(r1 > r0 + 16)) return;
+  const occupied = blocked ? sites.concat(blocked) : sites;
+  for (let i = 0; i < angles.length; i++) {
+    const base = angles[i];
+    let best = null;
+    for (let da = -0.22; da <= 0.22; da += 0.055) {
+      const ang = base + da;
+      for (let r = r0; r <= r1; r += 8) {
+        const x = Math.cos(ang) * r;
+        const z = Math.sin(ang) * r;
+        const pad = measureFlatPad(x, z, 16);
+        if (!pad.ok) continue;
+        const tooClose = occupied.some(s => {
+          const dx = s.x - x;
+          const dz = s.z - z;
+          return dx * dx + dz * dz < 64 * 64;
+        });
+        if (tooClose) continue;
+        const score = pad.range + pad.slope * 0.15;
+        if (!best || score < best.score) best = { x, z, score };
+      }
+    }
+    if (best) {
+      sites.push({ x: best.x, z: best.z });
+      occupied.push(best);
+    }
+  }
+}
+
+/**
+ * Crystals in the 2v2 / FFA land outside the 1v1 disk.
+ * Earlier rings stay: 4 cardinals, then 6. The doubled outer disk adds 18 more,
+ * split across two rings so the new land is filled, each on flat low ground.
+ * @returns {Array<{x:number,z:number}>}
+ */
+export function layoutLargeSkirmishOreSites() {
+  const r1v1 = MAP_UNIT_PLAYABLE_RADIUS * Math.sqrt(MAP_SKIRMISH_NAV_AREA_SCALE);
+  const rMid = r1v1 * Math.sqrt(1.5);
+  const rPrev = r1v1 * 1.5;
+  const rOuter = MAP_UNIT_NAV_RADIUS - 20;
+  const ring = MAP_UNIT_NAV_RADIUS - MATCH_HQ_SPAWN_MARGIN - MATCH_SPAWN_NEAR_CRYSTAL_OFFSET_M;
+  const s = 1 / Math.SQRT2;
+  const blocked = (SKIRMISH_CORNER_RESOURCE_POSITIONS && SKIRMISH_CORNER_RESOURCE_POSITIONS.length)
+    ? SKIRMISH_CORNER_RESOURCE_POSITIONS.map(p => ({ x: p.x, z: p.z }))
+    : [
+      { x: s * ring, z: s * ring },
+      { x: -s * ring, z: s * ring },
+      { x: s * ring, z: -s * ring },
+      { x: -s * ring, z: -s * ring },
+    ];
+  const sites = [];
+  placeOreOnFlats([0, Math.PI * 0.5, Math.PI, -Math.PI * 0.5], r1v1 + 12, rMid - 8, sites, blocked);
+  const six = [];
+  for (let i = 0; i < 6; i++) six.push(Math.PI / 9 + (i * Math.PI) / 3);
+  placeOreOnFlats(six, rMid + 12, rPrev - 8, sites, blocked);
+  const midR = (rPrev + rOuter) * 0.5;
+  const nineA = [];
+  const nineB = [];
+  for (let i = 0; i < 9; i++) {
+    nineA.push((i * 2 * Math.PI) / 9);
+    nineB.push(Math.PI / 9 + (i * 2 * Math.PI) / 9);
+  }
+  placeOreOnFlats(nineA, rPrev + 12, midR - 4, sites, blocked);
+  placeOreOnFlats(nineB, midR + 8, rOuter, sites, blocked);
+  return sites;
 }
 
 /**
