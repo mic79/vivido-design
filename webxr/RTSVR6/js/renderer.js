@@ -2084,12 +2084,6 @@ function createProjectileMesh() {
 const FOG_OVERLAY_ABOVE_M = 1.6;
 /** Upsample fog canvas so LinearFilter feathers a readable circular vision rim. */
 const FOG_OVERLAY_UPSAMPLE = 8;
-/** 1v1 fog grid 40 stays at 320². The 2v2 grid of 84 must not upload a 672² texture. */
-function fogOverlayUpsample() {
-  const cap = 320;
-  if (!(FOG_GRID_SIZE > 0)) return FOG_OVERLAY_UPSAMPLE;
-  return Math.max(2, Math.min(FOG_OVERLAY_UPSAMPLE, Math.floor(cap / FOG_GRID_SIZE)));
-}
 
 /** Surface Y under a fog vertex — max(visual, nav) + neighborhood so veil never sinks under ground. */
 function fogSurfaceClearanceY(wx, wz, halfCell) {
@@ -2251,7 +2245,7 @@ function createFogPlane() {
 
   disposeFogOverlayMeshes();
 
-  const fogRes = FOG_GRID_SIZE * fogOverlayUpsample();
+  const fogRes = FOG_GRID_SIZE * FOG_OVERLAY_UPSAMPLE;
   fogOverlayRes = fogRes;
   // DataTexture — CanvasTexture often uploads as opaque black under Quest WebXR, which
   // makes terrain-shader FoW multiply to full black the instant fog turns on.
@@ -2606,7 +2600,7 @@ function updateWorldFogOverlay() {
   if (hash === _fogOverlayGridHash) return;
   _fogOverlayGridHash = hash;
 
-  const up = fogOverlayUpsample();
+  const up = FOG_OVERLAY_UPSAMPLE;
   const fogRes = FOG_GRID_SIZE * up;
   if (fogRes !== fogOverlayRes || fogOverlayPixels.length < fogRes * fogRes * 4) {
     resizeWorldFogOverlay();

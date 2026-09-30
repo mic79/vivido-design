@@ -294,8 +294,9 @@ function unstickHarvesterIfFrozen(unit, dt) {
   unit._stuckZ = unit.z;
   unit.path = null;
   unit.pathIndex = 0;
-  unit._pathRetryAt = 0;
   unit._preferGridPath = true;
+  // Do not clear a failed-search wait. Zeroing it started another full search immediately.
+  if (!(unit._pathRetryAt > performance.now())) harvesterSchedulePathRetry(unit, 4000);
   // A player move order stays until they arrive. Only a frozen auto-haul is dropped.
   if (unit.playerCommanded && unit.state === 'moving' && unit.targetPos) return;
   unit.playerCommanded = false;
@@ -827,12 +828,8 @@ function moveAlongPathSimple(unit, dt) {
     Pathfinding.notePathfindSlot(false);
     const smooth = !unit._preferGridPath;
     unit._preferGridPath = false;
-    const path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z, smooth, true);
-    if (Pathfinding.lastPathfindDeferred()) {
-      harvesterSchedulePathRetry(unit, 0);
-      return;
-    }
-
+    const path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z, smooth);
+    
     // If we've reached the closest point to destination but can't proceed,
     // explicitly try to transition to the required action state instead of just aborting to idle and losing our action sequence.
     if (!path || path.length === 0) {
@@ -891,7 +888,7 @@ function moveAlongPathSimple(unit, dt) {
             if (unit.targetPos) {
               harvesterCreepTowardPos(unit, unit.targetPos.x, unit.targetPos.z, dt);
             }
-            harvesterSchedulePathRetry(unit, 120);
+            harvesterSchedulePathRetry(unit, 4000);
           }
         } else {
           unit.assignedField = null;
@@ -904,7 +901,7 @@ function moveAlongPathSimple(unit, dt) {
         // Explore relocate with no path — creep toward goal instead of idling.
         if (unit.targetPos) {
           harvesterCreepTowardPos(unit, unit.targetPos.x, unit.targetPos.z, dt);
-          harvesterSchedulePathRetry(unit, 100);
+          harvesterSchedulePathRetry(unit, 4000);
         } else {
           unit.state = 'idle';
           unit.targetPos = null;

@@ -57,7 +57,6 @@ function reallocateNavGridBuffers() {
   astarStamp = null;
   astarGen = 1;
   astarVisited.length = 0;
-  astarJob = null;
 }
 
 function ensureAstarBuffers() {
@@ -79,27 +78,10 @@ let navRebuildPending = false;
 /** Per simulation tick — shared by combat units, harvesters, and reachability spirals. */
 let simPathfindUsed = 0;
 let playerPathfindUsed = 0;
-/** Expansions actually run this tick. A 2v2 canyon search used to spend 80k in one frame. */
-let astarItersThisTick = 0;
-/** One in-progress search. Other callers wait so two armies cannot stack full searches. */
-let astarJob = null;
-let findStatus = 'none';
-const ASTAR_ITERS_PER_TICK = 2500;
-const ASTAR_JOB_STALE_MS = 700;
 
 export function resetPathfindBudgetForTick() {
   simPathfindUsed = 0;
   playerPathfindUsed = 0;
-  astarItersThisTick = 0;
-}
-
-export function lastPathfindDeferred() {
-  return findStatus === 'deferred';
-}
-
-/** Drop an in-progress route so a new order cannot inherit it. */
-export function cancelActiveSearch() {
-  astarJob = null;
 }
 
 export function canTakePathfindSlot(playerPriority = false) {
@@ -500,7 +482,7 @@ export function trimPathFromUnit(path, ux, uz, reach = 1.05) {
   return i > 0 ? path.slice(i) : path;
 }
 
-function findPathGridAStar(startX, startZ, endX, endZ, persist) {
+function findPathGridAStar(startX, startZ, endX, endZ) {
   let sc = worldToCol(startX);
   let sr = worldToRow(startZ);
   let ec = worldToCol(endX);
@@ -513,8 +495,7 @@ function findPathGridAStar(startX, startZ, endX, endZ, persist) {
     sr = snapped.r;
   }
   if (!isWalkable(ec, er)) {
-    // A player order must not jump to a walkable cell tens of metres away.
-    const snapped = findNearestWalkable(ec, er, persist ? 8 : 48);
+    const snapped = findNearestWalkable(ec, er);
     if (!snapped) return null;
     ec = snapped.c;
     er = snapped.r;
@@ -524,25 +505,23 @@ function findPathGridAStar(startX, startZ, endX, endZ, persist) {
     return [{ x: colToWorld(ec), z: rowToWorld(er) }];
   }
 
+  ensureAstarBuffers();
+  if (++astarGen === 0xffffffff) {
+    astarStamp.fill(0);
+    astarGen = 1;
+  }
+  const stamp = astarGen;
+  astarVisited.length = 0;
+
   const startKey = sr * COLS + sc;
   const endKey = er * COLS + ec;
-  const now = typeof performance !== 'undefined' ? performance.now() : 0;
 
-  if (astarJob && (astarJob.startKey !== startKey || astarJob.endKey !== endKey)) {
-    // A new persisted order replaces the old search. Probes wait their turn.
-    if (persist) {
-      astarJob = null;
-    } else if (now - astarJob.touched < ASTAR_JOB_STALE_MS) {
-      findStatus = 'deferred';
-      return null;
-    } else {
-      astarJob = null;
-    }
-  }
-  if (astarItersThisTick >= ASTAR_ITERS_PER_TICK) {
-    findStatus = 'deferred';
-    return null;
-  }
+  astarG[startKey] = 0;
+  astarFrom[startKey] = -1;
+  astarStamp[startKey] = stamp;
+  astarVisited.push(startKey);
+
+  const open = [[heuristic(sc, sr, ec, er), startKey]];
 
   const dirs = [
     [-1, 0, 1],
@@ -555,65 +534,26 @@ function findPathGridAStar(startX, startZ, endX, endZ, persist) {
     [1, 1, Math.SQRT2],
   ];
 
-  let job = astarJob;
-  if (!job) {
-    ensureAstarBuffers();
-    if (++astarGen === 0xffffffff) {
-      astarStamp.fill(0);
-      astarGen = 1;
-    }
-    const stamp = astarGen;
-    astarVisited.length = 0;
-    astarG[startKey] = 0;
-    astarFrom[startKey] = -1;
-    astarStamp[startKey] = stamp;
-    astarVisited.push(startKey);
-    const cellDist = Math.abs(sc - ec) + Math.abs(sr - er);
-    // Long 2v2 routes need the higher cap. Only ASTAR_ITERS_PER_TICK run per frame.
-    const maxIter = Math.min(
-      GRID_CELLS,
-      Math.max(1200, Math.min(48000, 600 + cellDist * 90)),
-    );
-    job = {
-      startKey,
-      endKey,
-      ec,
-      er,
-      stamp,
-      open: [[heuristic(sc, sr, ec, er), startKey]],
-      iterations: 0,
-      maxIter,
-      touched: now,
-      persist: !!persist,
-    };
-    if (persist) astarJob = job;
-  }
+  let iterations = 0;
+  const cellDist = Math.abs(sc - ec) + Math.abs(sr - er);
+  // Long canyon detours fill a wide pocket before the way around is found.
+  // A short cap returned a partial path that ended on the near lip.
+  const MAX_ITER = Math.min(
+    GRID_CELLS,
+    Math.max(4000, Math.min(80000, 2000 + cellDist * 280)),
+  );
 
-  while (job.open.length > 0) {
-    if (job.iterations >= job.maxIter) {
-      astarJob = null;
-      return null;
-    }
-    if (astarItersThisTick >= ASTAR_ITERS_PER_TICK) {
-      if (job.persist) {
-        job.touched = now;
-        astarJob = job;
-      }
-      findStatus = 'deferred';
-      return null;
-    }
-    job.iterations++;
-    astarItersThisTick++;
+  while (open.length > 0) {
+    if (++iterations > MAX_ITER) return null;
 
-    const [, currentKey] = heapPop(job.open);
-    if (astarClosed[currentKey] === job.stamp) continue;
+    const [, currentKey] = heapPop(open);
+    if (astarClosed[currentKey] === stamp) continue;
 
-    if (currentKey === job.endKey) {
-      astarJob = null;
-      return reconstructPathArray(job.endKey);
+    if (currentKey === endKey) {
+      return reconstructPathArray(endKey);
     }
 
-    astarClosed[currentKey] = job.stamp;
+    astarClosed[currentKey] = stamp;
 
     const cr = Math.floor(currentKey / COLS);
     const cc = currentKey % COLS;
@@ -630,23 +570,22 @@ function findPathGridAStar(startX, startZ, endX, endZ, persist) {
       }
 
       const nKey = nr * COLS + nc;
-      if (astarClosed[nKey] === job.stamp) continue;
+      if (astarClosed[nKey] === stamp) continue;
 
       const tentativeG = currentG + cost;
-      const prevG = astarStamp[nKey] === job.stamp ? astarG[nKey] : Infinity;
+      const prevG = astarStamp[nKey] === stamp ? astarG[nKey] : Infinity;
 
       if (tentativeG < prevG) {
         astarG[nKey] = tentativeG;
         astarFrom[nKey] = currentKey;
-        astarStamp[nKey] = job.stamp;
+        astarStamp[nKey] = stamp;
         astarVisited.push(nKey);
-        const f = tentativeG + heuristic(nc, nr, job.ec, job.er);
-        heapPush(job.open, [f, nKey]);
+        const f = tentativeG + heuristic(nc, nr, ec, er);
+        heapPush(open, [f, nKey]);
       }
     }
   }
 
-  astarJob = null;
   return null;
 }
 
@@ -680,10 +619,8 @@ function findPathNavMesh(startX, startZ, endX, endZ) {
  * Find a path from (startX,startZ) to (endX,endZ) on the nav `grid` (same cells as debug overlay).
  * 8-connected A* + LOS string-pull (classic staircase Manhattan paths were the detour source).
  */
-export function findPath(startX, startZ, endX, endZ, smooth = true, persist = false) {
-  findStatus = 'none';
-  const path = findPathGridAStar(startX, startZ, endX, endZ, persist);
-  if (findStatus === 'deferred') return null;
+export function findPath(startX, startZ, endX, endZ, smooth = true) {
+  const path = findPathGridAStar(startX, startZ, endX, endZ);
   if (!path || path.length === 0) return null;
   if (!isPathValidOnGrid(path)) return null;
 
@@ -906,19 +843,12 @@ export function resolveNavMotion(x0, z0, x1, z1) {
 }
 
 export function snapWorldXZToWalkable(wx, wz) {
-  const near = snapWorldXZToWalkableWithin(wx, wz, 96);
-  return near || { x: wx, z: wz };
-}
-
-/** Nearest walkable point within `maxMeters`, or null. Does not jump across a canyon. */
-export function snapWorldXZToWalkableWithin(wx, wz, maxMeters) {
   const c = worldToCol(wx);
   const r = worldToRow(wz);
   if (isWalkable(c, r)) return { x: wx, z: wz };
-  const cells = Math.max(1, Math.ceil(maxMeters / CELL));
-  const n = findNearestWalkable(c, r, cells);
-  if (!n) return null;
-  return { x: colToWorld(n.c), z: rowToWorld(n.r) };
+  const n = findNearestWalkable(c, r);
+  if (n) return { x: colToWorld(n.c), z: rowToWorld(n.r) };
+  return { x: wx, z: wz };
 }
 
 function reconstructPathArray(endKey) {
@@ -1244,7 +1174,6 @@ export function findNearestReachable(fromX, fromZ, targetX, targetZ, maxRadius =
     if (findPath(fromX, fromZ, targetX, targetZ)) {
       return { x: targetX, z: targetZ };
     }
-    if (lastPathfindDeferred()) return null;
   }
 
   // Prefer local walkable snap without A* (formation slots, near-goal clicks)
@@ -1253,7 +1182,6 @@ export function findNearestReachable(fromX, fromZ, targetX, targetZ, maxRadius =
     if (!canTakePathfindSlot(playerPriority)) return snapped;
     notePathfindSlot(playerPriority);
     if (findPath(fromX, fromZ, snapped.x, snapped.z)) return snapped;
-    if (lastPathfindDeferred()) return null;
   }
 
   const step = CELL * 0.5;
@@ -1271,7 +1199,6 @@ export function findNearestReachable(fromX, fromZ, targetX, targetZ, maxRadius =
       if (findPath(fromX, fromZ, tx, tz)) {
         return { x: tx, z: tz };
       }
-      if (lastPathfindDeferred()) return null;
     }
   }
   return isPositionWalkable(snapped.x, snapped.z) ? snapped : null;
