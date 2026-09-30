@@ -2195,6 +2195,48 @@ function standWithFormSlot(unit, x, z) {
   return clampWorldToPlayableDisk(x + ox, z + oz, 0);
 }
 
+const ordersByOwner = new Map();
+
+function bumpOrder(ownerId, key, n = 1) {
+  const id = ownerId | 0;
+  let row = ordersByOwner.get(id);
+  if (!row) {
+    row = { move: 0, attackMove: 0, attackUnit: 0, attackBuilding: 0, units: 0, build: 0, train: 0, hvOrders: 0, hvUnits: 0 };
+    ordersByOwner.set(id, row);
+  }
+  row[key] += n;
+}
+
+export function noteStructureOrder(ownerId, key) {
+  bumpOrder(ownerId, key);
+}
+
+const orderedByType = new Map();
+
+function noteOrderedTypes(units) {
+  for (let i = 0; i < units.length; i++) {
+    const t = units[i].type;
+    if (!t) continue;
+    orderedByType.set(t, (orderedByType.get(t) || 0) + 1);
+  }
+}
+
+export function copyOrderedTypes() {
+  const out = {};
+  orderedByType.forEach((n, t) => {
+    out[t] = n;
+  });
+  return out;
+}
+
+export function copyOrderStats() {
+  const out = {};
+  ordersByOwner.forEach((row, id) => {
+    out[id] = { ...row };
+  });
+  return out;
+}
+
 // --- Player commands ---
 export function commandMove(unitIds, targetX, targetZ, options = {}) {
   const playerCommanded = options.playerCommanded !== false;
@@ -2221,6 +2263,16 @@ export function commandMove(unitIds, targetX, targetZ, options = {}) {
   }
 
   const ownerId = unitsArray[0].ownerId;
+  if (options.traceKind === 'attackMove') bumpOrder(ownerId, 'attackMove');
+  else bumpOrder(ownerId, 'move');
+  bumpOrder(ownerId, 'units', numUnits);
+  let hv = 0;
+  for (let i = 0; i < numUnits; i++) if (unitsArray[i].type === 'harvester') hv++;
+  if (hv > 0) {
+    bumpOrder(ownerId, 'hvOrders');
+    bumpOrder(ownerId, 'hvUnits', hv);
+  }
+  noteOrderedTypes(unitsArray);
   const typeCounts = {};
   let mhqFrom = null;
   for (let i = 0; i < numUnits; i++) {
@@ -2305,6 +2357,12 @@ export function commandAttackUnit(unitIds, targetUnitId) {
     const u = State.units.get(allIds[i]);
     if (u && u.team === target.team) return;
   }
+  const attackOwner = State.units.get(allIds[0]);
+  if (attackOwner) {
+    bumpOrder(attackOwner.ownerId, 'attackUnit');
+    bumpOrder(attackOwner.ownerId, 'units', allIds.length);
+  }
+  noteOrderedTypes(allIds.map(id => State.units.get(id)).filter(u => u && u.hp > 0));
 
   Renderer.showOrderConfirm(target.x, target.z, 'attack');
   if (allIds[0] != null) {
@@ -2362,6 +2420,12 @@ export function commandAttackBuilding(unitIds, targetBuildingId) {
     const u = State.units.get(allIds[i]);
     if (u && u.team === target.team) return;
   }
+  const attackOwner = State.units.get(allIds[0]);
+  if (attackOwner) {
+    bumpOrder(attackOwner.ownerId, 'attackBuilding');
+    bumpOrder(attackOwner.ownerId, 'units', allIds.length);
+  }
+  noteOrderedTypes(allIds.map(id => State.units.get(id)).filter(u => u && u.hp > 0));
 
   Renderer.showOrderConfirm(target.x, target.z, 'attack');
   if (allIds[0] != null) {

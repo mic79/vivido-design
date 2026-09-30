@@ -25,7 +25,7 @@ function section(name) {
 }
 
 section('config budgets');
-assert.ok(BOT_TARGET_APM === 150, 'BOT_TARGET_APM should be 150');
+assert.ok(BOT_TARGET_APM === 30, 'BOT_TARGET_APM should be 30');
 assert.ok(BOT_TICK_RATE > 0);
 assert.ok(COMBAT_ACQUIRE_PER_FRAME >= 8 && COMBAT_ACQUIRE_PER_FRAME <= 64);
 assert.ok(MINIMAP_REDRAW_HZ >= 4 && MINIMAP_REDRAW_HZ <= 30);
@@ -110,7 +110,7 @@ assert.equal(Fog.shouldDrawWorldFogOverlay(), false, 'menu has no overlay');
 section('bot APM accumulator');
 let budget = 0;
 const perTick = BOT_TARGET_APM / 60 / BOT_TICK_RATE;
-const cap = BOT_TARGET_APM / 60;
+const cap = Math.max(1, BOT_TARGET_APM / 60);
 let spent = 0;
 for (let tick = 0; tick < BOT_TICK_RATE * 60; tick++) {
   budget = Math.min(cap, budget + perTick);

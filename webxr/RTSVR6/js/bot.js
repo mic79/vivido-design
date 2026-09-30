@@ -89,7 +89,9 @@ function botTrySpendOrders(mem, n = 1) {
 
 function refillBotOrderBudget(mem) {
   const perTick = BOT_TARGET_APM / 60 / BOT_TICK_RATE;
-  mem._orderBudget = Math.min(BOT_TARGET_APM / 60, (mem._orderBudget || 0) + perTick);
+  // APM/60 is half an order at 30/min, and an order costs 1, so the bank must hold one.
+  const bank = Math.max(1, BOT_TARGET_APM / 60);
+  mem._orderBudget = Math.min(bank, (mem._orderBudget || 0) + perTick);
 }
 
 /**
@@ -587,7 +589,7 @@ function performProductionLogic(player, buildings, combatUnits, elapsed) {
   const hasRefinery = buildings.some(b => b.type === 'refinery' && b.hp > 0);
   const hasFactory = buildings.some(b => b.type === 'warFactory' && b.hp > 0);
   if (!hasRefinery && credits < 600) return;
-
+  
   // Hold $600 until the war factory is placed — do not spam army the tick cash hits 600.
   const savingForFactory = hasRefinery && !hasFactory;
   const expandFieldId = hasFactory ? findUnclaimedDiscoveredFieldId(player) : null;
@@ -879,7 +881,7 @@ function performProductionLogic(player, buildings, combatUnits, elapsed) {
       } else if (!isExpandMhq && !isScoutBike && credits >= cost * 0.55) {
         creditReservation = Math.max(creditReservation, cost);
       }
-    }
+    } 
     else if (b.type === 'barracks') {
       // Siege profiles answer guns with artillery, not a rifleman parade.
       const siegeGuns = (personality.artilleryAffinity ?? 0) >= 0.65 || !!mem._seenEnemyArtillery;
@@ -1523,8 +1525,8 @@ function manageMissions(player, combatUnits, elapsed) {
   let strikeThreshold = Math.max(
     baseMin,
     Math.min(baseMax + 5, baseMin + personalityModifier + Math.floor(mem.threatLevel / 2))
-  );
-
+  ); 
+  
   // Available units must NOT be scout bikes (they are too weak for striking)
   const siegeGuns = (personality.artilleryAffinity ?? 0) >= 0.7;
   const availableStrikeUnits = combatUnits.filter(u =>
@@ -1551,12 +1553,12 @@ function manageMissions(player, combatUnits, elapsed) {
 
   if (!alreadyStriking && buildingTargets.length > 0 && botCanSpendOrder(mem)) {
     buildingTargets.sort((a, b) => {
-      const bA = State.buildings.get(a.id);
-      const bB = State.buildings.get(b.id);
-      const scoreA = bA.type === 'hq' ? 100 : (bA.type === 'warFactory' || bA.type === 'barracks' ? 50 : 10);
-      const scoreB = bB.type === 'hq' ? 100 : (bB.type === 'warFactory' || bB.type === 'barracks' ? 50 : 10);
-      return scoreB - scoreA;
-    });
+        const bA = State.buildings.get(a.id);
+        const bB = State.buildings.get(b.id);
+        const scoreA = bA.type === 'hq' ? 100 : (bA.type === 'warFactory' || bA.type === 'barracks' ? 50 : 10);
+        const scoreB = bB.type === 'hq' ? 100 : (bB.type === 'warFactory' || bB.type === 'barracks' ? 50 : 10);
+        return scoreB - scoreA;
+      });
     let target = null;
     let tb = null;
     for (let ti = 0; ti < buildingTargets.length; ti++) {
@@ -1598,11 +1600,11 @@ function manageMissions(player, combatUnits, elapsed) {
         );
         if (squadSize >= minPush) {
           const strikeSquad = availableStrikeUnits.slice(0, squadSize);
-          const ids = strikeSquad.map(u => u.id);
+      const ids = strikeSquad.map(u => u.id);
           if (canFullStrike && squadSize >= neededForTarget) {
-            mem.currentMissions.push({ type: 'STRIKE', targetId: target.id, unitIds: ids, status: 'active' });
-            Units.commandAttackBuilding(ids, target.id);
-            UI.showStatus(`🤖 P${pid} is launching a ${strikeSquad.length}-unit strike!`);
+      mem.currentMissions.push({ type: 'STRIKE', targetId: target.id, unitIds: ids, status: 'active' });
+      Units.commandAttackBuilding(ids, target.id);
+      UI.showStatus(`🤖 P${pid} is launching a ${strikeSquad.length}-unit strike!`);
           } else {
             // Coordinated group attack-move toward the objective (forms before full overrun force).
             mem.currentMissions.push({
@@ -2039,7 +2041,7 @@ function assignBotScoutMissions(player, combatUnits, elapsed) {
   if (target._intel) {
     Units.commandMove([candidate.id], target.x, target.z, { playerCommanded: true });
   } else {
-    Units.commandAttackMove([candidate.id], target.x, target.z);
+  Units.commandAttackMove([candidate.id], target.x, target.z);
   }
 }
 
@@ -2244,7 +2246,7 @@ function tickScoutMissions(player, elapsed) {
         if (next._intel) {
           Units.commandMove([u.id], next.x, next.z, { playerCommanded: true });
         } else {
-          Units.commandAttackMove([u.id], next.x, next.z);
+        Units.commandAttackMove([u.id], next.x, next.z);
         }
       } else {
         m.status = 'complete';
@@ -2262,7 +2264,7 @@ function tickScoutMissions(player, elapsed) {
       if (m._intel) {
         Units.commandMove([u.id], m.targetPos.x, m.targetPos.z, { playerCommanded: true });
       } else {
-        Units.commandAttackMove([u.id], m.targetPos.x, m.targetPos.z);
+      Units.commandAttackMove([u.id], m.targetPos.x, m.targetPos.z);
       }
     }
   });
@@ -2286,7 +2288,7 @@ function doAttackMission(player, combatUnits, elapsed) {
     if (strike.type === 'PUSH') {
       Units.commandAttackMove(needOrders.map(u => u.id), target.x, target.z);
     } else {
-      Units.commandAttackBuilding(needOrders.map(u => u.id), strike.targetId);
+    Units.commandAttackBuilding(needOrders.map(u => u.id), strike.targetId);
     }
   }
 }
@@ -3611,14 +3613,14 @@ function getScoutTarget(player, hq, elapsed, excludePrev, harvesters = []) {
 
   // Only park ONE scout on an empty known field (not every scout → same crystal).
   if (priorityEco && !excludePrev) {
-    for (const fieldId of mem.discoveredResources) {
-      const field = State.resourceFields.get(fieldId);
-      if (!field || field.depleted) continue;
+  for (const fieldId of mem.discoveredResources) {
+    const field = State.resourceFields.get(fieldId);
+    if (!field || field.depleted) continue;
 
-      const nearbyUnits = unitGrid.queryRadius(field.x, field.z, 15).filter(u => u.team === team);
-      if (nearbyUnits.length === 0) {
-        const danger = scoutWaypointDanger(mem, elapsed, field.x, field.z);
-        if (danger < 4.2 || priorityEco) return { x: field.x, z: field.z };
+    const nearbyUnits = unitGrid.queryRadius(field.x, field.z, 15).filter(u => u.team === team);
+    if (nearbyUnits.length === 0) {
+      const danger = scoutWaypointDanger(mem, elapsed, field.x, field.z);
+      if (danger < 4.2 || priorityEco) return { x: field.x, z: field.z };
       }
     }
   } else if (priorityEco && excludePrev) {

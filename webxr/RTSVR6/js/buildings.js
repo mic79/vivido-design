@@ -292,6 +292,7 @@ export function placeBuilding(type, ownerId, x, z) {
       x: Math.round(x),
       z: Math.round(z),
     });
+    Units.noteStructureOrder(ownerId, 'build');
   }
 
   return building;
@@ -371,6 +372,7 @@ export function queueUnit(buildingId, unitType) {
     x: Math.round(building.x),
     z: Math.round(building.z),
   });
+  Units.noteStructureOrder(building.ownerId, 'train');
 
   return true;
 }

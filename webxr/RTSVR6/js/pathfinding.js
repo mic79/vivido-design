@@ -94,6 +94,35 @@ export function notePathfindSlot(playerPriority = false) {
   else simPathfindUsed++;
 }
 
+/** Call counts only. Search decisions are unchanged. */
+const pathStats = {
+  findPath: 0,
+  searches: 0,
+  iters: 0,
+  cap: 0,
+  empty: 0,
+  ok: 0,
+  trivial: 0,
+  rejected: 0,
+  nearest: 0,
+  searchMs: 0,
+  maxIters: 0,
+  maxSearchMs: 0,
+};
+
+function noteSearch(kind, iterations, t0) {
+  pathStats[kind]++;
+  pathStats.iters += iterations;
+  if (iterations > pathStats.maxIters) pathStats.maxIters = iterations;
+  const ms = performance.now() - t0;
+  pathStats.searchMs += ms;
+  if (ms > pathStats.maxSearchMs) pathStats.maxSearchMs = ms;
+}
+
+export function copyPathStats() {
+  return { ...pathStats };
+}
+
 function worldToCol(wx) { return Math.floor((wx + NAV_GRID_HALF) / CELL); }
 function worldToRow(wz) { return Math.floor((wz + NAV_GRID_HALF) / CELL); }
 function colToWorld(c) { return c * CELL - NAV_GRID_HALF + CELL * 0.5; }
@@ -490,18 +519,25 @@ function findPathGridAStar(startX, startZ, endX, endZ) {
 
   if (!isWalkable(sc, sr)) {
     const snapped = findNearestWalkable(sc, sr);
-    if (!snapped) return null;
+    if (!snapped) {
+      pathStats.rejected++;
+      return null;
+    }
     sc = snapped.c;
     sr = snapped.r;
   }
   if (!isWalkable(ec, er)) {
     const snapped = findNearestWalkable(ec, er);
-    if (!snapped) return null;
+    if (!snapped) {
+      pathStats.rejected++;
+      return null;
+    }
     ec = snapped.c;
     er = snapped.r;
   }
 
   if (sc === ec && sr === er) {
+    pathStats.trivial++;
     return [{ x: colToWorld(ec), z: rowToWorld(er) }];
   }
 
@@ -522,6 +558,8 @@ function findPathGridAStar(startX, startZ, endX, endZ) {
   astarVisited.push(startKey);
 
   const open = [[heuristic(sc, sr, ec, er), startKey]];
+  pathStats.searches++;
+  const tSearch = performance.now();
 
   const dirs = [
     [-1, 0, 1],
@@ -544,12 +582,16 @@ function findPathGridAStar(startX, startZ, endX, endZ) {
   );
 
   while (open.length > 0) {
-    if (++iterations > MAX_ITER) return null;
+    if (++iterations > MAX_ITER) {
+      noteSearch('cap', iterations, tSearch);
+      return null;
+    }
 
     const [, currentKey] = heapPop(open);
     if (astarClosed[currentKey] === stamp) continue;
 
     if (currentKey === endKey) {
+      noteSearch('ok', iterations, tSearch);
       return reconstructPathArray(endKey);
     }
 
@@ -586,6 +628,7 @@ function findPathGridAStar(startX, startZ, endX, endZ) {
     }
   }
 
+  noteSearch('empty', iterations, tSearch);
   return null;
 }
 
@@ -620,6 +663,7 @@ function findPathNavMesh(startX, startZ, endX, endZ) {
  * 8-connected A* + LOS string-pull (classic staircase Manhattan paths were the detour source).
  */
 export function findPath(startX, startZ, endX, endZ, smooth = true) {
+  pathStats.findPath++;
   const path = findPathGridAStar(startX, startZ, endX, endZ);
   if (!path || path.length === 0) return null;
   if (!isPathValidOnGrid(path)) return null;
@@ -1165,6 +1209,7 @@ export function bestEscapeStep(x, z, gx, gz) {
  * @returns {{x:number,z:number}|null}
  */
 export function findNearestReachable(fromX, fromZ, targetX, targetZ, maxRadius = 36, playerPriority = false) {
+  pathStats.nearest++;
   // Cheap accept: already walkable + budgeted path exists
   if (isPositionWalkable(targetX, targetZ)) {
     if (!canTakePathfindSlot(playerPriority)) {

@@ -906,8 +906,8 @@ export const FORMATION_SPACING = 9;
 
 // --- Bot AI (fair: no fog/vision/economy cheats — scale these down for easier bots) ---
 export const BOT_TICK_RATE = 4.0;              // Decision cadence (orders still gated by APM budget)
-/** Soft cap like a competent human (~2.5 intentional orders/sec). Group selects count as 1. */
-export const BOT_TARGET_APM = 150;
+/** Temporary play cap: 30 intentional orders/min per bot. Normal cap is 150. Group selects count as 1. */
+export const BOT_TARGET_APM = 30;
 export const BOT_SCOUT_DELAY = 12;
 export const BOT_SCOUT_DELAY_ECON = 3;       // When no known ore, start scouting almost immediately
 export const BOT_ATTACK_THRESHOLD = 8;         // Don't poke until a real squad exists
