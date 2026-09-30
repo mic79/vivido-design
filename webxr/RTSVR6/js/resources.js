@@ -829,8 +829,7 @@ function moveAlongPathSimple(unit, dt) {
     unit._preferGridPath = false;
     const path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z, smooth, true);
     if (Pathfinding.lastPathfindDeferred()) {
-      harvesterCreepTowardPos(unit, unit.targetPos.x, unit.targetPos.z, dt);
-      harvesterSchedulePathRetry(unit, 40);
+      harvesterSchedulePathRetry(unit, 0);
       return;
     }
 

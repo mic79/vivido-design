@@ -689,24 +689,21 @@ function moveAlongPath(unit, dt) {
 
     // Never keep an unwalkable goal — corner fog / building centers freeze movers.
     if (!Pathfinding.isPositionWalkable(unit.targetPos.x, unit.targetPos.z)) {
-      const snapped = Pathfinding.snapWorldXZToWalkable(unit.targetPos.x, unit.targetPos.z);
-      const snapOk = Pathfinding.isPositionWalkable(snapped.x, snapped.z);
+      const snapped = Pathfinding.snapWorldXZToWalkableWithin(unit.targetPos.x, unit.targetPos.z, 12);
+      const snapOk = !!(snapped && Pathfinding.isPositionWalkable(snapped.x, snapped.z));
       const nearSnap = snapOk && Math.hypot(snapped.x - unit.x, snapped.z - unit.z) < 2.8;
       const nearRaw = Math.hypot(unit.targetPos.x - unit.x, unit.targetPos.z - unit.z) < 6;
-      if (!snapOk || nearSnap || nearRaw) {
-        // As close as nav allows — finish the move order instead of grinding the obstacle.
+      if (nearSnap || nearRaw) {
         if (unit.state === 'moving') {
           unit.targetPos = null;
           unit.path = null;
           unit.pathIndex = 0;
           unit.state = 'idle';
           unit.playerCommanded = false;
-        } else if (snapOk) {
-          unit.targetPos = { x: snapped.x, z: snapped.z };
         }
         return;
       }
-      unit.targetPos = { x: snapped.x, z: snapped.z };
+      if (snapOk) unit.targetPos = { x: snapped.x, z: snapped.z };
     }
 
     if (!canRunPathfindNow(unit)) {
@@ -726,8 +723,8 @@ function moveAlongPath(unit, dt) {
     unit._preferGridPath = false;
     let path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z, smooth, true);
     if (Pathfinding.lastPathfindDeferred()) {
-      schedulePathRetry(unit, 30);
-      creepTowardGoal(unit, dt);
+      // Stay on this cell so the same search resumes next frame.
+      schedulePathRetry(unit, 0);
       return;
     }
     if (!path || path.length === 0) {
@@ -798,6 +795,17 @@ function moveAlongPath(unit, dt) {
     }
 
     unit.path = Pathfinding.trimPathFromUnit(path, unit.x, unit.z);
+    const pathEnd = unit.path[unit.path.length - 1];
+    if (
+      unit.targetPos &&
+      Math.hypot(pathEnd.x - unit.targetPos.x, pathEnd.z - unit.targetPos.z) > 18
+    ) {
+      unit.path = null;
+      unit.pathIndex = 0;
+      Pathfinding.cancelActiveSearch();
+      schedulePathRetry(unit, 0);
+      return;
+    }
     unit.pathIndex = 0;
     clearPathBlockStreak(unit);
     unit._slideStreak = 0;
@@ -2047,24 +2055,10 @@ export function checkWinCondition() {
  */
 function resolveMoveOrderGoal(fromX, fromZ, targetX, targetZ) {
   const goal = clampWorldToPlayableDisk(targetX, targetZ, 0);
-  const reach = Pathfinding.findNearestReachable(fromX, fromZ, goal.x, goal.z, 72, true);
-  if (reach) return { x: reach.x, z: reach.z };
-
-  const pushed = Pathfinding.snapOutOfObstacle(goal.x, goal.z);
-  const pushedGoal = clampWorldToPlayableDisk(pushed.x, pushed.z, 0);
-  if (Pathfinding.isPositionWalkable(pushedGoal.x, pushedGoal.z)) {
-    if (Pathfinding.canTakePathfindSlot(true)) {
-      Pathfinding.notePathfindSlot(true);
-      if (Pathfinding.findPath(fromX, fromZ, pushedGoal.x, pushedGoal.z)) {
-        return pushedGoal;
-      }
-    } else {
-      return pushedGoal;
-    }
-  }
-
-  const home = Pathfinding.snapOutOfObstacle(fromX, fromZ);
-  return clampWorldToPlayableDisk(home.x, home.z, 0);
+  if (Pathfinding.isPositionWalkable(goal.x, goal.z)) return goal;
+  const near = Pathfinding.snapWorldXZToWalkableWithin(goal.x, goal.z, 12);
+  if (near) return clampWorldToPlayableDisk(near.x, near.z, 0);
+  return goal;
 }
 
 /**
@@ -2132,12 +2126,10 @@ function claimFormationPoint(preferX, preferZ, spacing, claimed) {
       let x = preferX + Math.cos(ang) * rad;
       let z = preferZ + Math.sin(ang) * rad;
       let t = clampWorldToPlayableDisk(x, z, 0);
-      const pushed = Pathfinding.snapOutOfObstacle(t.x, t.z);
+      const pushed = Pathfinding.snapWorldXZToWalkableWithin(t.x, t.z, 8);
+      if (!pushed) continue;
       t = clampWorldToPlayableDisk(pushed.x, pushed.z, 0);
-      if (!Pathfinding.isPositionWalkable(t.x, t.z)) {
-        const again = Pathfinding.snapWorldXZToWalkable(t.x, t.z);
-        t = { x: again.x, z: again.z };
-      }
+      if (Math.hypot(t.x - x, t.z - z) > 8) continue;
       let clear = Pathfinding.isPositionWalkable(t.x, t.z);
       for (let c = 0; clear && c < claimed.length; c++) {
         if (Math.hypot(claimed[c].x - t.x, claimed[c].z - t.z) < minD) clear = false;
@@ -2201,6 +2193,7 @@ export function commandMove(unitIds, targetX, targetZ, options = {}) {
 
   // Formation center = actual reachable destination (not raw click on hills / blocked cells).
   const goal = resolveMoveOrderGoal(fromX, fromZ, targetX, targetZ);
+  Pathfinding.cancelActiveSearch();
 
   if (playerCommanded) {
     Renderer.showOrderConfirm(goal.x, goal.z, 'move');

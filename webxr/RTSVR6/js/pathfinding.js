@@ -97,6 +97,11 @@ export function lastPathfindDeferred() {
   return findStatus === 'deferred';
 }
 
+/** Drop an in-progress route so a new order cannot inherit it. */
+export function cancelActiveSearch() {
+  astarJob = null;
+}
+
 export function canTakePathfindSlot(playerPriority = false) {
   if (playerPriority) return playerPathfindUsed < PATHFIND_PLAYER_PER_TICK;
   return simPathfindUsed < PATHFIND_SIM_PER_TICK;
@@ -508,7 +513,8 @@ function findPathGridAStar(startX, startZ, endX, endZ, persist) {
     sr = snapped.r;
   }
   if (!isWalkable(ec, er)) {
-    const snapped = findNearestWalkable(ec, er);
+    // A player order must not jump to a walkable cell tens of metres away.
+    const snapped = findNearestWalkable(ec, er, persist ? 8 : 48);
     if (!snapped) return null;
     ec = snapped.c;
     er = snapped.r;
@@ -523,11 +529,15 @@ function findPathGridAStar(startX, startZ, endX, endZ, persist) {
   const now = typeof performance !== 'undefined' ? performance.now() : 0;
 
   if (astarJob && (astarJob.startKey !== startKey || astarJob.endKey !== endKey)) {
-    if (now - astarJob.touched < ASTAR_JOB_STALE_MS) {
+    // A new persisted order replaces the old search. Probes wait their turn.
+    if (persist) {
+      astarJob = null;
+    } else if (now - astarJob.touched < ASTAR_JOB_STALE_MS) {
       findStatus = 'deferred';
       return null;
+    } else {
+      astarJob = null;
     }
-    astarJob = null;
   }
   if (astarItersThisTick >= ASTAR_ITERS_PER_TICK) {
     findStatus = 'deferred';
@@ -559,10 +569,10 @@ function findPathGridAStar(startX, startZ, endX, endZ, persist) {
     astarStamp[startKey] = stamp;
     astarVisited.push(startKey);
     const cellDist = Math.abs(sc - ec) + Math.abs(sr - er);
-    // Same cap as before the 80k canyon change. Spread across frames below.
+    // Long 2v2 routes need the higher cap. Only ASTAR_ITERS_PER_TICK run per frame.
     const maxIter = Math.min(
       GRID_CELLS,
-      Math.max(1200, Math.min(16000, 600 + cellDist * 90)),
+      Math.max(1200, Math.min(48000, 600 + cellDist * 90)),
     );
     job = {
       startKey,
@@ -598,9 +608,9 @@ function findPathGridAStar(startX, startZ, endX, endZ, persist) {
     const [, currentKey] = heapPop(job.open);
     if (astarClosed[currentKey] === job.stamp) continue;
 
-    if (currentKey === endKey) {
+    if (currentKey === job.endKey) {
       astarJob = null;
-      return reconstructPathArray(endKey);
+      return reconstructPathArray(job.endKey);
     }
 
     astarClosed[currentKey] = job.stamp;
@@ -896,12 +906,19 @@ export function resolveNavMotion(x0, z0, x1, z1) {
 }
 
 export function snapWorldXZToWalkable(wx, wz) {
+  const near = snapWorldXZToWalkableWithin(wx, wz, 96);
+  return near || { x: wx, z: wz };
+}
+
+/** Nearest walkable point within `maxMeters`, or null. Does not jump across a canyon. */
+export function snapWorldXZToWalkableWithin(wx, wz, maxMeters) {
   const c = worldToCol(wx);
   const r = worldToRow(wz);
   if (isWalkable(c, r)) return { x: wx, z: wz };
-  const n = findNearestWalkable(c, r);
-  if (n) return { x: colToWorld(n.c), z: rowToWorld(n.r) };
-  return { x: wx, z: wz };
+  const cells = Math.max(1, Math.ceil(maxMeters / CELL));
+  const n = findNearestWalkable(c, r, cells);
+  if (!n) return null;
+  return { x: colToWorld(n.c), z: rowToWorld(n.r) };
 }
 
 function reconstructPathArray(endKey) {
