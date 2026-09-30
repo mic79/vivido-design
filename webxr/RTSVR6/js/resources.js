@@ -296,6 +296,8 @@ function unstickHarvesterIfFrozen(unit, dt) {
   unit.pathIndex = 0;
   unit._pathRetryAt = 0;
   unit._preferGridPath = true;
+  // A player move order stays until they arrive. Only a frozen auto-haul is dropped.
+  if (unit.playerCommanded && unit.state === 'moving' && unit.targetPos) return;
   unit.playerCommanded = false;
 
   if ((unit.cargo || 0) > 0) {
@@ -335,10 +337,11 @@ function unstickHarvesterIfFrozen(unit, dt) {
   unit.assignedField = null;
 }
 
-/** Finish scout/explore relocate, then resume the normal harvest loop. */
+/** Finish a move order or a bot scout wander, then resume the normal harvest loop. */
 function moveHarvesterRelocate(unit, dt) {
-  // Ore discovered while wandering — abort explore and mine immediately.
-  if ((unit.cargo || 0) === 0 && findNearestResourceField(unit)) {
+  const ordered = !!unit.playerCommanded;
+  // Bot explore only. A player move keeps its destination until arrival.
+  if (!ordered && (unit.cargo || 0) === 0 && findNearestResourceField(unit)) {
     unit.state = 'idle';
     unit.playerCommanded = false;
     unit.targetPos = null;
@@ -348,7 +351,7 @@ function moveHarvesterRelocate(unit, dt) {
     assignHarvesterTask(unit);
     return;
   }
-  if ((unit.cargo || 0) > 0) {
+  if (!ordered && (unit.cargo || 0) > 0) {
     const refinery = findNearestRefinery(unit);
     if (refinery) {
       sendHarvesterToRefinery(unit, refinery);
@@ -382,9 +385,10 @@ function moveHarvesterRelocate(unit, dt) {
     }
     return;
   }
-  // Path dead for a long time — retry harvest, else keep seeking (never freeze idle).
+  // Unordered wander that never gets a path drops back into auto-harvest.
+  // A player move keeps trying until the destination.
   unit._relocateAge = (unit._relocateAge || 0) + dt;
-  if (unit._relocateAge > 35 || (!unit.path && unit._relocateAge > 12)) {
+  if (!ordered && (unit._relocateAge > 35 || (!unit.path && unit._relocateAge > 12))) {
     unit.state = 'idle';
     unit.playerCommanded = false;
     unit.targetPos = null;
@@ -823,8 +827,13 @@ function moveAlongPathSimple(unit, dt) {
     Pathfinding.notePathfindSlot(false);
     const smooth = !unit._preferGridPath;
     unit._preferGridPath = false;
-    const path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z, smooth);
-    
+    const path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z, smooth, true);
+    if (Pathfinding.lastPathfindDeferred()) {
+      harvesterCreepTowardPos(unit, unit.targetPos.x, unit.targetPos.z, dt);
+      harvesterSchedulePathRetry(unit, 40);
+      return;
+    }
+
     // If we've reached the closest point to destination but can't proceed,
     // explicitly try to transition to the required action state instead of just aborting to idle and losing our action sequence.
     if (!path || path.length === 0) {

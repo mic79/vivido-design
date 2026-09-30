@@ -123,7 +123,7 @@ function buildPayload() {
   const bot = events.filter(e => e.who === 'bot' && (e.kind === 'build' || e.kind === 'train' || e.kind === 'deploy'));
   const turnbacks = events.filter(e => e.why && String(e.why).includes('turnback'));
   return {
-    build: '0.7.110',
+    build: '0.7.112',
     mode: State.gameSession.matchMode,
     elapsed: +State.gameSession.elapsedTime.toFixed(1),
     summary: {

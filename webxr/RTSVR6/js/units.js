@@ -724,7 +724,12 @@ function moveAlongPath(unit, dt) {
     // to façades. Grid staircases are uglier but they complete.
     const smooth = false;
     unit._preferGridPath = false;
-    let path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z, smooth);
+    let path = Pathfinding.findPath(unit.x, unit.z, unit.targetPos.x, unit.targetPos.z, smooth, true);
+    if (Pathfinding.lastPathfindDeferred()) {
+      schedulePathRetry(unit, 30);
+      creepTowardGoal(unit, dt);
+      return;
+    }
     if (!path || path.length === 0) {
       const reachAt = unit._reachRetryAt || 0;
       if (simNowMs() < reachAt) {
