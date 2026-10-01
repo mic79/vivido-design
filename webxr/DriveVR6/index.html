@@ -432,6 +432,20 @@
             bottom: 20px;
             right: 20px;
         }
+
+        /* Track switch: keep WebGL/XR running, cover with splash (and VR blackout mesh). */
+        body.drivevr-track-loading #drivevr-splash {
+            display: flex;
+        }
+        body.drivevr-track-loading #drivevr-splash-start {
+            display: none;
+        }
+        body.drivevr-track-loading .drivevr-splash-bg {
+            background: #000000;
+        }
+        body.drivevr-track-loading .drivevr-splash-vignette {
+            opacity: 0.35;
+        }
     </style>
 </head>
 
@@ -573,7 +587,7 @@
             </div>
         </div>
     </div>
-    <div id="info">DriveVR6 — forest dirt road · free roam + chase<br>WASD/VR · <b>B</b> menu · <b>C</b> camera · <b>R</b> last checkpoint · <b>Shift+R</b> start · Ghost bot in menu · <b>T</b> track editor · <b>P</b> wireframes<br>Multi/Single in menu · <code>?chase=1</code> · Fly: WASD · Mouse · Q/E · <b>J</b> spawn car</div>
+    <div id="info">DriveVR6 — forest dirt road · free roam + chase<br>WASD/VR · <b>B</b> menu · <b>C</b> camera · <b>R</b> / VR <b>left X</b> last checkpoint · <b>Shift+R</b> start · Ghost bot in menu · <b>T</b> track editor · <b>P</b> wireframes<br>Multi/Single in menu · <code>?chase=1</code> · Fly: WASD · Mouse · Q/E · <b>J</b> spawn car</div>
     
     <!-- Background Music -->
     <audio id="backgroundMusic" loop preload="auto">
@@ -756,14 +770,27 @@
             function markReady(msg) {
                 ready = true;
                 setProgress(100, msg || 'Ready');
-                if (startBtn) startBtn.disabled = false;
+                // During in-place track switch, keep the loading dialog up until the
+                // game finishes spawn/physics and calls hide().
+                if (document.body.classList.contains('drivevr-track-loading')) {
+                    if (startBtn) {
+                        startBtn.disabled = true;
+                        startBtn.style.display = 'none';
+                    }
+                    return;
+                }
+                if (startBtn) {
+                    startBtn.disabled = false;
+                    startBtn.style.display = '';
+                }
                 var vrBtn = document.getElementById('vrButton');
                 if (vrBtn) vrBtn.disabled = false;
             }
 
             /** Same path as the Start button — hide splash and notify the game boot hook. */
             function beginGameIfReady() {
-                if (document.body.classList.contains('drivevr-game-started')) {
+                if (document.body.classList.contains('drivevr-game-started')
+                    && !document.body.classList.contains('drivevr-track-loading')) {
                     return true;
                 }
                 if (!ready) return false;
@@ -786,13 +813,37 @@
                 if (!splash) return;
                 splash.classList.add('drivevr-splash--hidden');
                 document.body.classList.add('drivevr-game-started');
+                document.body.classList.remove('drivevr-track-loading');
+                if (startBtn) startBtn.style.display = '';
                 var vrBtn = document.getElementById('vrButton');
                 if (vrBtn && vrBtn.parentNode && vrBtn.parentNode.classList.contains('drivevr-splash-actions')) {
                     document.body.appendChild(vrBtn);
                 }
                 window.setTimeout(function() {
-                    if (splash.parentNode) splash.style.display = 'none';
+                    if (splash.parentNode && splash.classList.contains('drivevr-splash--hidden')) {
+                        splash.style.display = 'none';
+                    }
                 }, 480);
+            }
+
+            /** Re-show splash for an in-place track switch (stay in VR; cover with black). */
+            function showLoading(msg, trackLabel) {
+                ready = false;
+                document.body.classList.add('drivevr-track-loading');
+                // Keep drivevr-game-started so the WebXR canvas stays alive.
+                document.body.classList.add('drivevr-game-started');
+                if (splash) {
+                    splash.style.display = 'flex';
+                    splash.classList.remove('drivevr-splash--hidden');
+                }
+                var sub = splash && splash.querySelector('.drivevr-splash-title p');
+                if (sub && trackLabel) sub.textContent = trackLabel;
+                if (startBtn) {
+                    startBtn.disabled = true;
+                    startBtn.style.display = 'none';
+                }
+                mountVrButtonForSplash();
+                setProgress(4, msg || 'Loading…');
             }
 
             mountVrButtonForSplash();
@@ -812,6 +863,7 @@
                 setProgress: setProgress,
                 markReady: markReady,
                 hide: hideSplash,
+                showLoading: showLoading,
                 beginGameIfReady: beginGameIfReady,
                 isReady: function() { return ready; },
                 getProgress: function() { return progress; }
@@ -1335,7 +1387,7 @@
             var trackEditorVrRepeatAt = {};
             var trackEditorVrButtonState = {};
             var trackEditorVrLastToggleTime = 0;
-            /** Quest / xr-standard: X on left, A on right (same index, per hand). */
+            /** Quest / xr-standard: X on left controller (index 4). Resets to last checkpoint — does not open the track editor. */
             var TRACK_EDITOR_VR_BTN_FACE_LEFT_X = 4;
             /** If last control point is within this horizontal distance of the first, treat as closed-loop duplicate. */
             var TRACK_LOOP_CLOSE_EPS = 4;
@@ -1546,12 +1598,34 @@
             var activeForestTrack = forestTrackById(new URLSearchParams(window.location.search).get('track'));
             var trackAssetVersion = new URLSearchParams(window.location.search).get('v') || '';
             var SPAWN_DIRT_ROAD_URL = activeForestTrack.url + (trackAssetVersion ? ('?v=' + trackAssetVersion) : '');
+            var forestTrackSwitchGen = 0;
+            var forestTrackSwitching = false;
             function selectForestTrack(id) {
                 var next = forestTrackById(id);
                 if (!next || next.id === activeForestTrack.id) return;
+                if (forestTrackSwitching) {
+                    console.warn('⏳ Track switch already in progress');
+                    return;
+                }
+                // Never navigate — a page reload ends the WebXR session.
                 var params = new URLSearchParams(window.location.search);
                 params.set('track', next.id);
-                window.location.search = params.toString();
+                var qs = params.toString();
+                try {
+                    history.replaceState(
+                        null,
+                        '',
+                        window.location.pathname + (qs ? ('?' + qs) : '') + window.location.hash
+                    );
+                } catch (e) { /* ignore */ }
+                activeForestTrack = next;
+                SPAWN_DIRT_ROAD_URL = (activeForestTrack.url || '') +
+                    (trackAssetVersion ? ('?v=' + trackAssetVersion) : '');
+                if (typeof updateMenuDisplay === 'function') updateMenuDisplay();
+                if (typeof updateVRMenuDisplay === 'function' && vrMenu && vrMenu.visible) {
+                    updateVRMenuDisplay();
+                }
+                switchForestTrackInPlace();
             }
             var vrRunnerCityRoot = null;
             var spawnDirtRoadRoot = null;
@@ -4193,7 +4267,7 @@
                     yPos += lineHeight;
                     context.font = '24px Arial';
                     context.fillText(
-                        'R stick move · trig/grip height · L stick pt/bank · left X exit',
+                        'R stick move · trig/grip height · L stick pt/bank · T exit',
                         20, yPos
                     );
                     context.font = 'bold 32px Arial';
@@ -6589,6 +6663,10 @@
             function driveSplashProgress(pct, msg) {
                 if (window.__driveVrSplash) {
                     window.__driveVrSplash.setProgress(pct, msg);
+                }
+                if (typeof updateVrTrackLoadBlackoutProgress === 'function'
+                    && document.body.classList.contains('drivevr-track-loading')) {
+                    updateVrTrackLoadBlackoutProgress(pct);
                 }
             }
 
@@ -10084,14 +10162,14 @@
                 var info = document.getElementById('info');
                 if (!info) return;
                 if (!trackEditorMode) {
-                    info.innerHTML = 'DriveVR6 — forest dirt road · free roam + chase<br>WASD/VR · <b>B</b> menu · <b>C</b> camera · <b>R</b> reset · <b>T</b> / VR <b>left X</b> track editor · <b>PageUp</b> next waypoint · <b>PageDown</b> previous · <b>P</b> wireframes<br>Multi/Single in menu · <code>?chase=1</code> · Fly: WASD · Mouse · Q/E · <b>J</b> spawn car';
+                    info.innerHTML = 'DriveVR6 — forest dirt road · free roam + chase<br>WASD/VR · <b>B</b> menu · <b>C</b> camera · <b>R</b> / VR <b>left X</b> last checkpoint · <b>T</b> track editor · <b>PageUp</b> next waypoint · <b>PageDown</b> previous · <b>P</b> wireframes<br>Multi/Single in menu · <code>?chase=1</code> · Fly: WASD · Mouse · Q/E · <b>J</b> spawn car';
                     return;
                 }
                 if (dirtRoadPathPoints && dirtRoadPathPoints.length >= 8 && dirtEditWaypoints.length) {
                     var di = ((trackEditorEditIndex % dirtEditWaypoints.length) + dirtEditWaypoints.length) % dirtEditWaypoints.length;
                     var dp = dirtEditWaypoints[di].position;
                     var dirtVr = renderer.xr.isPresenting
-                        ? '<br>VR: right stick moves · trigger/grip height · left stick tilt and prev/next · <b>left X</b> exit'
+                        ? '<br>VR: right stick moves · trigger/grip height · left stick tilt and prev/next · <b>T</b> exit · <b>left X</b> reset car'
                         : '<br>←→ strafe · ↑↓ forward (1 m) · Shift+↑↓ height (1 m) · Shift+←→ tilt (5°)';
                     info.innerHTML =
                         '<b>PATH EDIT</b> — <b>T</b> exit · waypoint <b>' + (di + 1) + '</b>/' + dirtEditWaypoints.length +
@@ -10105,7 +10183,7 @@
                 var idx = getTrackEditorEditIndex();
                 var p = trackEditorControlPoints[idx];
                 var vrHint = renderer.xr.isPresenting
-                    ? '<br>VR: right stick move (head-relative) · trigger/grip height · left stick prev/next pt & bank · <b>left X</b> exit'
+                    ? '<br>VR: right stick move (head-relative) · trigger/grip height · left stick prev/next pt & bank · <b>T</b> exit · <b>left X</b> reset car'
                     : '<br>←→ strafe · ↑↓ forward (camera-relative, 1m) · Shift+↑↓ Y · Shift+←→ bank · PgUp/PgDn change edit point (you stand at the previous point)';
                 info.innerHTML =
                     '<b>TRACK EDITOR</b> — <b>T</b> exit · editing next checkpoint point <b>' + (idx + 1) + '</b>/' + trackEditorControlPoints.length +
@@ -10190,10 +10268,16 @@
                     if (!gamepad) continue;
 
                     if (inputSource.handedness === 'left') {
-                        if (trackEditorVrButtonPressed('toggle', gamepad.buttons && gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_X] && gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_X].pressed)) {
+                        // Left X: reset to last checkpoint (same as keyboard R). Never enter editor from VR.
+                        if (trackEditorVrButtonPressed('xReset', gamepad.buttons && gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_X] && gamepad.buttons[TRACK_EDITOR_VR_BTN_FACE_LEFT_X].pressed)) {
                             if (!trackEditorVrLastToggleTime || Date.now() - trackEditorVrLastToggleTime > 500) {
-                                toggleTrackEditor();
                                 trackEditorVrLastToggleTime = Date.now();
+                                if (trackEditorMode) {
+                                    toggleTrackEditor(); // exit only if somehow already editing
+                                }
+                                if (!isMenuVisible) {
+                                    resetCar();
+                                }
                             }
                         }
                         if (trackEditorMode && gamepad.axes && gamepad.axes.length >= 4) {
@@ -10341,9 +10425,11 @@
                         if (botVehicleRef) botVehicleRef._dirtEditHoldIndex = botVehicleRef.currentWaypointIndex || 5;
                         ensureDirtBotOnTrack(botVehicleRef && botVehicleRef._dirtEditHoldIndex != null ? botVehicleRef._dirtEditHoldIndex : 5);
                         spawnPlayerAtDenseWaypoint(start);
+                        showDirtPathWaypoints();
                         console.log('✏️ Path edit ON — PageUp next waypoint, PageDown previous. T exits.');
                     } else {
                         hideTrackEditorMarker();
+                        showDirtPathWaypoints(); // clears cyan spheres when leaving editor
                         var holdIndex = botVehicleRef && botVehicleRef._dirtEditHoldIndex != null ? botVehicleRef._dirtEditHoldIndex : 5;
                         ensureDirtBotOnTrack(holdIndex);
                         console.log('✏️ Path edit OFF');
@@ -21363,9 +21449,11 @@
                     dirtPathMarkers.material.dispose();
                     dirtPathMarkers = null;
                 }
-                // Cyan waypoint spheres are editor/debug only (?pathviz=1 or track editor).
+                // Cyan waypoint spheres are editor/debug only (?pathviz=1 or T track editor).
+                // Do NOT key off dirtPathEditActive() — that is true whenever a dirt
+                // centerline exists (always on Forest), which kept spheres visible in play.
                 var _pv = new URLSearchParams(window.location.search);
-                var wantViz = _pv.get('pathviz') === '1' || trackEditorMode || dirtPathEditActive();
+                var wantViz = _pv.get('pathviz') === '1' || trackEditorMode;
                 if (!wantViz) return;
                 var shown = dirtEditWaypoints.length ? dirtEditWaypoints : denseWaypoints;
                 if (!shown.length) return;
@@ -26409,6 +26497,262 @@
                         if (window.__driveVrSplash) window.__driveVrSplash.markReady('Ready — tap Start');
                     }
                 );
+            }
+
+            function clearAmmoBodyList(list) {
+                if (!list || !list.length) return;
+                for (var i = 0; i < list.length; i++) {
+                    var body = list[i];
+                    if (!body) continue;
+                    try {
+                        if (physicsWorld) physicsWorld.removeRigidBody(body);
+                    } catch (e) { /* already removed */ }
+                    try {
+                        Ammo.destroy(body);
+                    } catch (e2) { /* noop */ }
+                }
+                list.length = 0;
+            }
+
+            function disposeObject3DDeep(root) {
+                if (!root) return;
+                if (root.parent) root.parent.remove(root);
+                else if (scene) scene.remove(root);
+                root.traverse(function(o) {
+                    if (o.geometry) {
+                        o.geometry.dispose();
+                        o.geometry = null;
+                    }
+                    var mats = o.material;
+                    if (!mats) return;
+                    (Array.isArray(mats) ? mats : [mats]).forEach(function(m) {
+                        if (!m) return;
+                        for (var key in m) {
+                            if (!Object.prototype.hasOwnProperty.call(m, key)) continue;
+                            var val = m[key];
+                            if (val && val.isTexture) {
+                                try { val.dispose(); } catch (e) { /* noop */ }
+                            }
+                        }
+                        try { m.dispose(); } catch (e2) { /* noop */ }
+                    });
+                    o.material = null;
+                });
+            }
+
+            /** Tear down the current forest/loop/hollow environment without touching WebXR. */
+            function unloadCurrentForestEnvironment() {
+                vrRunnerCityBvhPending.length = 0;
+                vrRunnerCityPhysicsPending.length = 0;
+                vrRunnerCitySolidPending.length = 0;
+                vrRunnerCityBvhBuilding = false;
+                vrRunnerCityPhysicsBuilding = false;
+                vrRunnerCitySolidBuilding = false;
+
+                if (spawnDirtRoadRoot) {
+                    spawnDirtRoadRoot.traverse(function(mesh) {
+                        if (!mesh.isMesh) return;
+                        dropDriveBody(mesh, 'driveWalkBody', [vrRunnerCityPhysicsBodies, dirtCarriageBodies]);
+                        dropDriveBody(mesh, 'driveSolidBody', [vrRunnerCitySolidBodies]);
+                    });
+                }
+                clearAmmoBodyList(vrRunnerCityPhysicsBodies);
+                clearAmmoBodyList(vrRunnerCitySolidBodies);
+                clearAmmoBodyList(dirtCarriageBodies);
+                dirtCarriageBodiesHidden = false;
+
+                if (typeof disposeTrackMeshesAndPhysics === 'function') {
+                    disposeTrackMeshesAndPhysics();
+                }
+                if (typeof clearDirtRibbonCollision === 'function') {
+                    clearDirtRibbonCollision();
+                }
+                if (dirtRibbonMesh) {
+                    scene.remove(dirtRibbonMesh);
+                    if (dirtRibbonMesh.geometry) dirtRibbonMesh.geometry.dispose();
+                    dirtRibbonMesh = null;
+                }
+                if (dirtPathMarkers) {
+                    scene.remove(dirtPathMarkers);
+                    if (dirtPathMarkers.geometry) dirtPathMarkers.geometry.dispose();
+                    if (dirtPathMarkers.material) dirtPathMarkers.material.dispose();
+                    dirtPathMarkers = null;
+                }
+                if (nextCheckpointMarker) {
+                    scene.remove(nextCheckpointMarker);
+                    if (nextCheckpointMarker.geometry) nextCheckpointMarker.geometry.dispose();
+                    if (nextCheckpointMarker.material) nextCheckpointMarker.material.dispose();
+                    nextCheckpointMarker = null;
+                }
+                if (spawnDirtRoadPhysicsDebugGroup) {
+                    scene.remove(spawnDirtRoadPhysicsDebugGroup);
+                    spawnDirtRoadPhysicsDebugGroup = null;
+                }
+
+                disposeObject3DDeep(spawnDirtRoadRoot);
+                spawnDirtRoadRoot = null;
+                spawnDirtRoadEnvironmentMeshes = [];
+                vrRunnerCityCollisionMeshes = [];
+                spawnDirtRoadReady = false;
+                vrRunnerCityReady = false;
+                driveLoopBakedLighting = false;
+                window.__pathDressed = false;
+
+                dirtRoadPathPoints = null;
+                dirtRoadPathClosed = false;
+                denseWaypoints = [];
+                dirtEditWaypoints = [];
+                pathPoints = [];
+                checkpointMarkers = [];
+                racingPath = null;
+                invalidateDirtSpawnWaypointCache();
+            }
+
+            function switchForestTrackInPlace() {
+                var gen = ++forestTrackSwitchGen;
+                forestTrackSwitching = true;
+                var trackLabel = (activeForestTrack && activeForestTrack.label) || activeForestTrack.id;
+                console.log('🛤️ Switching track in-place →', activeForestTrack.id,
+                    renderer && renderer.xr && renderer.xr.isPresenting ? '(keeping VR)' : '');
+
+                // Black loading dialog (DOM splash + VR blackout plane). Stay in XR.
+                if (window.__driveVrSplash && typeof window.__driveVrSplash.showLoading === 'function') {
+                    window.__driveVrSplash.showLoading('Loading ' + trackLabel + '…', trackLabel);
+                }
+                showVrTrackLoadBlackout(trackLabel);
+                if (isMenuVisible) {
+                    try { toggleMenu(); } catch (e) { /* noop */ }
+                }
+
+                removeBotVehicle();
+                unloadCurrentForestEnvironment();
+
+                pendingInitialCitySpawn = !!driveGameStarted;
+                playerLastPassedCheckpoint = 0;
+                playerCurrentCheckpoint = 1;
+                currentLapNumber = 1;
+                currentLapStartTime = Date.now();
+
+                initEnvironment();
+
+                var waitFrames = 0;
+                function waitReady() {
+                    if (gen !== forestTrackSwitchGen) return;
+                    waitFrames++;
+                    if (spawnDirtRoadReady && isCityDrivePhysicsReady() && denseWaypoints && denseWaypoints.length >= 2) {
+                        forestTrackSwitching = false;
+                        if (driveGameStarted) {
+                            trySpawnPlayerVehicleOnRoad();
+                            resetCarToStart();
+                            if (botEnabled && !chaseEnabled && !isMultiplayer) {
+                                restoreBotVehicleIfNeeded();
+                            }
+                        }
+                        hideVrTrackLoadBlackout();
+                        if (window.__driveVrSplash && typeof window.__driveVrSplash.hide === 'function') {
+                            window.__driveVrSplash.hide();
+                        }
+                        if (typeof updateMenuDisplay === 'function') updateMenuDisplay();
+                        if (typeof updateVRMenuDisplay === 'function' && vrMenu && vrMenu.visible) {
+                            updateVRMenuDisplay();
+                        }
+                        console.log('🛤️ Track switch complete:', activeForestTrack.id,
+                            'VR presenting:', !!(renderer && renderer.xr && renderer.xr.isPresenting));
+                        return;
+                    }
+                    if (waitFrames > 3600) {
+                        forestTrackSwitching = false;
+                        hideVrTrackLoadBlackout();
+                        if (window.__driveVrSplash && typeof window.__driveVrSplash.hide === 'function') {
+                            window.__driveVrSplash.hide();
+                        }
+                        console.warn('⚠️ Track switch timed out for', activeForestTrack.id);
+                        return;
+                    }
+                    if ((waitFrames % 30) === 0) {
+                        updateVrTrackLoadBlackoutProgress(
+                            window.__driveVrSplash ? window.__driveVrSplash.getProgress() : 0
+                        );
+                    }
+                    requestAnimationFrame(waitReady);
+                }
+                requestAnimationFrame(waitReady);
+            }
+
+            var vrTrackLoadBlackout = null;
+            function showVrTrackLoadBlackout(trackLabel) {
+                if (!cameraRig) return;
+                if (!vrTrackLoadBlackout) {
+                    var group = new THREE.Group();
+                    group.name = 'vrTrackLoadBlackout';
+                    var black = new THREE.Mesh(
+                        new THREE.PlaneGeometry(4, 4),
+                        new THREE.MeshBasicMaterial({
+                            color: 0x000000,
+                            depthTest: false,
+                            depthWrite: false,
+                            transparent: false
+                        })
+                    );
+                    black.position.z = -0.35;
+                    black.renderOrder = 10000;
+                    group.add(black);
+                    var canvas = document.createElement('canvas');
+                    canvas.width = 512;
+                    canvas.height = 256;
+                    var tex = new THREE.CanvasTexture(canvas);
+                    var panel = new THREE.Mesh(
+                        new THREE.PlaneGeometry(0.55, 0.28),
+                        new THREE.MeshBasicMaterial({
+                            map: tex,
+                            transparent: true,
+                            depthTest: false,
+                            depthWrite: false
+                        })
+                    );
+                    panel.position.z = -0.32;
+                    panel.renderOrder = 10001;
+                    group.add(panel);
+                    group.userData = { canvas: canvas, tex: tex, panel: panel };
+                    vrTrackLoadBlackout = group;
+                }
+                if (vrTrackLoadBlackout.parent !== cameraRig) {
+                    cameraRig.add(vrTrackLoadBlackout);
+                }
+                vrTrackLoadBlackout.visible = true;
+                vrTrackLoadBlackout.userData.trackLabel = trackLabel || 'Track';
+                updateVrTrackLoadBlackoutProgress(4);
+            }
+            function updateVrTrackLoadBlackoutProgress(pct) {
+                if (!vrTrackLoadBlackout || !vrTrackLoadBlackout.userData.canvas) return;
+                var canvas = vrTrackLoadBlackout.userData.canvas;
+                var ctx = canvas.getContext('2d');
+                var label = vrTrackLoadBlackout.userData.trackLabel || 'Track';
+                var p = Math.max(0, Math.min(100, pct || 0));
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'rgba(0,0,0,0.55)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 36px system-ui, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('DriveVR6', canvas.width / 2, 70);
+                ctx.font = '28px system-ui, sans-serif';
+                ctx.fillText('Loading ' + label + '…', canvas.width / 2, 120);
+                ctx.fillStyle = '#334433';
+                ctx.fillRect(64, 170, canvas.width - 128, 28);
+                ctx.fillStyle = '#66cc88';
+                ctx.fillRect(64, 170, (canvas.width - 128) * (p / 100), 28);
+                ctx.fillStyle = '#cccccc';
+                ctx.font = '22px system-ui, sans-serif';
+                ctx.fillText(Math.round(p) + '%', canvas.width / 2, 230);
+                vrTrackLoadBlackout.userData.tex.needsUpdate = true;
+            }
+            function hideVrTrackLoadBlackout() {
+                if (!vrTrackLoadBlackout) return;
+                vrTrackLoadBlackout.visible = false;
+                if (vrTrackLoadBlackout.parent) {
+                    vrTrackLoadBlackout.parent.remove(vrTrackLoadBlackout);
+                }
             }
 
             function initEnvironment() {
