@@ -2639,6 +2639,15 @@
                     // Quest immersive throttles window.rAF — pump build/switch work here.
                     pumpDriveEnvironmentBuildQueues();
                     pumpForestTrackSwitchWait();
+                    if (pendingBotRespawnAfterTrackSwitch && !forestTrackSwitching) {
+                        pendingBotRespawnTries++;
+                        if (respawnDirtBotAfterTrackSwitch() || pendingBotRespawnTries > 120) {
+                            if (pendingBotRespawnTries > 120 && !botVehicleRef) {
+                                console.warn('🤖 Bot respawn gave up after track switch');
+                            }
+                            pendingBotRespawnAfterTrackSwitch = false;
+                        }
+                    }
                     for (var i = 0; i < syncList.length; i++)
                         syncList[i](dt);
                     chaseSimFrameId++;
@@ -6873,7 +6882,8 @@
             }
 
             /** Create player car on road, or reposition if it already exists. */
-            function trySpawnPlayerVehicleOnRoad() {
+            function trySpawnPlayerVehicleOnRoad(opts) {
+                opts = opts || {};
                 if (!driveGameStarted) return false;
                 if (!spawnDirtRoadReady || !isCityDrivePhysicsReady()) {
                     pendingInitialCitySpawn = true;
@@ -6894,7 +6904,7 @@
                 }
 
                 recordLastCarDropPosition(pose.position);
-                if (botEnabled && !chaseEnabled && !isMultiplayer) {
+                if (!opts.skipBot && botEnabled && !chaseEnabled && !isMultiplayer) {
                     spawnOrResetBotAheadOfPlayer();
                 }
                 var floorY = findPlayerSpawnFloorY(pose.position.x, pose.position.z);
@@ -8351,8 +8361,12 @@
                 // Create bot chassis mesh with GLTF dune buggy model
                 var chassisMesh = null;
                 
-                // Load dune buggy model for bot (async)
+                // Load dune buggy model for bot (async) — ignore if this bot was removed.
                 loadDuneBuggyModel(1.0).then((model) => {
+                    if (!botRef || botRef._destroyed) {
+                        if (model) scene.remove(model);
+                        return;
+                    }
                     model.traverse(function(child) {
                         if (!child.isMesh || !child.material) return;
                         var list = Array.isArray(child.material) ? child.material : [child.material];
@@ -8367,6 +8381,7 @@
                         scene.remove(chassisMesh);
                     }
                     chassisMesh = model;
+                    if (!chassisMesh.parent) scene.add(chassisMesh);
                     if (botRef) {
                         botRef.chassisMesh = chassisMesh;
                         if (botRef.chaseMode) {
@@ -8423,6 +8438,7 @@
                     wheelMeshes: wheelMeshes,
                     physicsWireframe: physicsWireframe,
                     chassisCollision: chassisCollision,
+                    _destroyed: false,
                     currentWaypointIndex: 0,
                     targetSpeed: 60, // km/h
                     waypointReachDistance: 8.0, // Distance to consider waypoint "reached" (increased)
@@ -8515,10 +8531,15 @@
                     
                     if (!isChaseBot) {
                         loadTireModel(isRightSide, 1.0).then((tireModel) => {
+                            if (!botRef || botRef._destroyed) {
+                                if (tireModel) scene.remove(tireModel);
+                                return;
+                            }
                             if (wheelMeshes[index] && wheelMeshes[index].parent) {
                                 scene.remove(wheelMeshes[index]);
                             }
                             wheelMeshes[index] = tireModel;
+                            if (tireModel && !tireModel.parent) scene.add(tireModel);
                         }).catch(function(error) {
                             console.error('❌ Failed to load bot tire', index, ':', error);
                         });
@@ -8533,6 +8554,7 @@
                 // Bot AI sync function
                 function botSync(dt) {
                     if (trackEditorMode) return;
+                    if (botRef._destroyed) return;
                     if (!botRef.chaseMode && (!botVehicleRef || botVehicleRef !== botRef)) return;
                     var botMaxEngine = botRef.maxEngineForce || maxEngineForce;
                     botRef.debugCounter++;
@@ -10332,9 +10354,17 @@
                 raycastLines = [];
             }
 
+            /** Bumped on every bot remove so late GLTF/tire promises cannot touch the new bot. */
+            var botAssetEpoch = 0;
+            /** Retry bot spawn for a few XR frames after a track switch if waypoints lag. */
+            var pendingBotRespawnAfterTrackSwitch = false;
+            var pendingBotRespawnTries = 0;
+
             function removeBotVehicle() {
+                botAssetEpoch++;
                 clearBotRaycastDebugLines();
                 if (!botVehicleRef) return;
+                botVehicleRef._destroyed = true;
                 if (botVehicleRef.vehicle) {
                     physicsWorld.removeAction(botVehicleRef.vehicle);
                 }
@@ -10367,13 +10397,101 @@
                 if (botEngineSound && typeof botEngineSound.stop === 'function') {
                     botEngineSound.stop();
                 }
-                console.log('🤖 Bot removed (track editor)');
+                console.log('🤖 Bot removed');
+            }
+
+            /** Configure a dirt-road bot for the CURRENT track's denseWaypoints. */
+            function configureDirtRoadBot(botRef, waypointIndex) {
+                if (!botRef) return;
+                botRef.dirtRoadFollow = true;
+                botRef.cityPathMode = false;
+                botRef.pathWaypoints = [];
+                botRef.chaseMode = false;
+                botRef.waypointReachDistance = 4.5;
+                botRef.targetSpeed = 60;
+                botRef.maxCornerSpeed = 80;
+                botRef.currentWaypointIndex = waypointIndex || 0;
+                botRef.lastWaypointReached = waypointIndex || 0;
+                botRef._dirtDone = false;
+                botRef._dirtIdle = 0;
+                botRef._dirtOff = 0;
+                botRef._dirtLaps = 0;
+                botRef._ghostIndex = 0;
+                botRef._ghostWall0 = Date.now();
+                botRef._ghostRecover = 0;
+                botRef.stuckCounter = 0;
+                botRef.lowSpeedCounter = 0;
+                botRef.previousSteering = 0;
+                botRef.needsReplan = false;
+                if (botRef.vehicleBody) {
+                    try {
+                        botRef.vehicleBody.activate(true);
+                        botRef.vehicleBody.setActivationState(DISABLE_DEACTIVATION);
+                    } catch (eAct) { /* noop */ }
+                }
+                if (botRef.chassisMesh) botRef.chassisMesh.visible = true;
+                if (botRef.wheelMeshes) {
+                    for (var wi = 0; wi < botRef.wheelMeshes.length; wi++) {
+                        if (botRef.wheelMeshes[wi]) botRef.wheelMeshes[wi].visible = true;
+                    }
+                }
+            }
+
+            /**
+             * Hard recreate the dirt bot on the new track — always remove first so stale
+             * sync/GLTF/tires cannot leak. Called at the end of every in-place track switch.
+             */
+            function respawnDirtBotAfterTrackSwitch() {
+                if (trackEditorMode || isMultiplayer || !botEnabled || chaseEnabled) {
+                    pendingBotRespawnAfterTrackSwitch = false;
+                    return false;
+                }
+                if (!denseWaypoints || denseWaypoints.length < 2) {
+                    pendingBotRespawnAfterTrackSwitch = true;
+                    return false;
+                }
+                // Always destroy leftovers from the previous track (sync, meshes, physics).
+                if (botVehicleRef) removeBotVehicle();
+                else botAssetEpoch++;
+
+                var ahead = computeBotStartAheadOfPlayer(GHOST_START_AHEAD_M);
+                botVehicleRef = createBotVehicle(ahead.position, ahead.rotation, 0x2266cc);
+                if (!botVehicleRef) {
+                    pendingBotRespawnAfterTrackSwitch = true;
+                    console.warn('🤖 Bot create failed after track switch — will retry');
+                    return false;
+                }
+                configureDirtRoadBot(botVehicleRef, ahead.waypointIndex);
+                applyGhostChassisPose(botVehicleRef, {
+                    x: ahead.position.x, y: ahead.position.y, z: ahead.position.z,
+                    qx: ahead.rotation.x, qy: ahead.rotation.y,
+                    qz: ahead.rotation.z, qw: ahead.rotation.w
+                }, null);
+                if (botVehicleRef.chassisMesh) {
+                    botVehicleRef.chassisMesh.position.copy(ahead.position);
+                    botVehicleRef.chassisMesh.quaternion.copy(ahead.rotation);
+                    botVehicleRef.chassisMesh.visible = true;
+                }
+                if (ghostBotEnabled) {
+                    try { resetGhostBotToStart(); } catch (eGh) { /* path AI still valid */ }
+                }
+                if (botEngineSound && typeof botEngineSound.start === 'function') {
+                    botEngineSound.start();
+                }
+                pendingBotRespawnAfterTrackSwitch = false;
+                pendingBotRespawnTries = 0;
+                console.log(
+                    '🤖 Bot respawned after track switch @ wp',
+                    ahead.waypointIndex, '/', denseWaypoints.length,
+                    ghostBotEnabled ? '(ghost)' : '(path AI)'
+                );
+                return true;
             }
 
             /** Same ahead-of-player dirt bot as the initial race spawn (not grid / start-line). */
             function spawnOrResetBotAheadOfPlayer() {
                 if (trackEditorMode || isMultiplayer || !botEnabled || chaseEnabled) return false;
-                if (!denseWaypoints || denseWaypoints.length < 16) return false;
+                if (!denseWaypoints || denseWaypoints.length < 2) return false;
                 var ahead = computeBotStartAheadOfPlayer(GHOST_START_AHEAD_M);
                 if (!botVehicleRef) {
                     botVehicleRef = createBotVehicle(ahead.position, ahead.rotation, 0x2266cc);
@@ -10390,17 +10508,7 @@
                     }
                 }
                 if (!botVehicleRef) return false;
-                botVehicleRef.dirtRoadFollow = true;
-                botVehicleRef.waypointReachDistance = 4.5;
-                botVehicleRef.targetSpeed = 60;
-                botVehicleRef.maxCornerSpeed = 80;
-                botVehicleRef.currentWaypointIndex = ahead.waypointIndex;
-                botVehicleRef._ghostIndex = 0;
-                botVehicleRef._ghostWall0 = Date.now();
-                botVehicleRef._ghostRecover = 0;
-                botVehicleRef._dirtDone = false;
-                botVehicleRef._dirtIdle = 0;
-                botVehicleRef._dirtOff = 0;
+                configureDirtRoadBot(botVehicleRef, ahead.waypointIndex);
                 if (botEngineSound && typeof botEngineSound.start === 'function') {
                     botEngineSound.start();
                 }
@@ -27228,15 +27336,18 @@
                     if (driveGameStarted) {
                         resetVRSeatOffsetToDefault();
                         setPlayerVehicleVisible(true);
-                        trySpawnPlayerVehicleOnRoad();
+                        trySpawnPlayerVehicleOnRoad({ skipBot: true });
                         resetCarToStart();
                         unlockPlayerVehicleAfterTrackSwitch();
                         syncPlayerChassisFromPhysics();
                         ensureCameraRigOnDriverSeat();
-                        // trySpawn / resetCar already place the dirt bot ahead; this covers
-                        // the case where the player car existed but the bot was removed.
-                        if (botEnabled && !chaseEnabled && !isMultiplayer && !botVehicleRef) {
-                            spawnOrResetBotAheadOfPlayer();
+                        // Always hard-recreate the dirt bot LAST for this track's path.
+                        // trySpawn/resetCar alone left stale sync, wrong waypoints, or no bot.
+                        if (botEnabled && !chaseEnabled && !isMultiplayer) {
+                            if (!respawnDirtBotAfterTrackSwitch()) {
+                                pendingBotRespawnAfterTrackSwitch = true;
+                                pendingBotRespawnTries = 0;
+                            }
                         }
                         restoreVRHandsAndMenuAfterTrackSwitch();
                     }
