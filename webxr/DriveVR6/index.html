@@ -1617,6 +1617,112 @@
             var SPAWN_DIRT_ROAD_URL = activeForestTrack.url + (trackAssetVersion ? ('?v=' + trackAssetVersion) : '');
             var forestTrackSwitchGen = 0;
             var forestTrackSwitching = false;
+            /** Polled from the XR animation loop — window.rAF is unreliable on Quest immersive. */
+            var forestTrackSwitchWait = null;
+
+            /**
+             * Schedule follow-up work that must run during immersive VR.
+             * Prefer the live XR session rAF; fall back to window.rAF / timeout.
+             */
+            function scheduleDriveWork(fn) {
+                try {
+                    if (renderer && renderer.xr && renderer.xr.isPresenting) {
+                        var session = renderer.xr.getSession && renderer.xr.getSession();
+                        if (session && typeof session.requestAnimationFrame === 'function') {
+                            session.requestAnimationFrame(function() { fn(); });
+                            return;
+                        }
+                    }
+                } catch (eSched) { /* fall through */ }
+                if (typeof requestAnimationFrame === 'function') {
+                    requestAnimationFrame(fn);
+                } else {
+                    setTimeout(fn, 16);
+                }
+            }
+
+            /** Drain BVH / walkable / solid queues on the XR frame loop (not window.rAF). */
+            function pumpDriveEnvironmentBuildQueues() {
+                if (vrRunnerCityBvhPending && vrRunnerCityBvhPending.length) {
+                    processCityMeshBvhQueue();
+                } else if (vrRunnerCityBvhBuilding) {
+                    processCityMeshBvhQueue();
+                }
+                if (vrRunnerCityPhysicsPending && vrRunnerCityPhysicsPending.length) {
+                    processCityWalkablePhysicsQueue();
+                } else if (vrRunnerCityPhysicsBuilding) {
+                    processCityWalkablePhysicsQueue();
+                }
+                if (vrRunnerCitySolidPending && vrRunnerCitySolidPending.length) {
+                    processCitySolidObstaclePhysicsQueue();
+                } else if (vrRunnerCitySolidBuilding) {
+                    processCitySolidObstaclePhysicsQueue();
+                }
+            }
+
+            function pumpForestTrackSwitchWait() {
+                if (!forestTrackSwitchWait) return;
+                if (forestTrackSwitchWait.gen !== forestTrackSwitchGen) {
+                    forestTrackSwitchWait = null;
+                    return;
+                }
+                forestTrackSwitchWait.frames++;
+                var pathOk = denseWaypoints && denseWaypoints.length >= 2;
+                var envOk = spawnDirtRoadReady && isCityDrivePhysicsReady();
+                if (pathOk && envOk) {
+                    var waiter = forestTrackSwitchWait;
+                    forestTrackSwitchWait = null;
+                    if (typeof waiter.finish === 'function') waiter.finish();
+                    return;
+                }
+                if (forestTrackSwitchWait.frames > 9000) {
+                    console.warn('⚠️ Track switch timed out for', activeForestTrack.id,
+                        'ready=', spawnDirtRoadReady, 'phys=', isCityDrivePhysicsReady());
+                    var waiter2 = forestTrackSwitchWait;
+                    forestTrackSwitchWait = null;
+                    if (typeof waiter2.finish === 'function') waiter2.finish();
+                    return;
+                }
+                if ((forestTrackSwitchWait.frames % 8) === 0) {
+                    updateVrTrackLoadUiProgress(
+                        window.__driveVrSplash ? window.__driveVrSplash.getProgress() : 0,
+                        window.__driveVrSplash && window.__driveVrSplash.getStatus
+                            ? window.__driveVrSplash.getStatus()
+                            : null
+                    );
+                }
+            }
+
+            function unlockPlayerVehicleAfterTrackSwitch() {
+                if (!vehicleRef || !vehicleRef.vehicleBody) return;
+                var body = vehicleRef.vehicleBody;
+                try {
+                    body.activate(true);
+                    body.setActivationState(DISABLE_DEACTIVATION);
+                    if (body.setCollisionFlags && body.getCollisionFlags) {
+                        // Ensure not left kinematic / no-contact from any editor path.
+                        var flags = body.getCollisionFlags();
+                        body.setCollisionFlags(flags & ~2 & ~4);
+                    }
+                    body.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
+                    body.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+                    if (vehicleRef.vehicle && vehicleRef.vehicle.resetSuspension) {
+                        vehicleRef.vehicle.resetSuspension();
+                    }
+                    var ms = body.getMotionState();
+                    if (ms) ms.setWorldTransform(body.getWorldTransform());
+                } catch (eUnlock) {
+                    console.warn('unlockPlayerVehicleAfterTrackSwitch', eUnlock);
+                }
+                playerVehicleSpawnLockFrames = 0;
+                if (cameraMode !== 'firstperson' && renderer && renderer.xr && renderer.xr.isPresenting) {
+                    cameraMode = 'firstperson';
+                }
+                try {
+                    releaseVRWheelGrab(0);
+                    releaseVRWheelGrab(1);
+                } catch (eGrab2) { /* noop */ }
+            }
             function selectForestTrack(id) {
                 var next = forestTrackById(id);
                 if (!next || next.id === activeForestTrack.id) return;
@@ -2277,6 +2383,13 @@
                             // Set up VR controllers
                             console.log('🥽 Setting up VR controllers...');
                             setupVRControllers();
+                            session.addEventListener('inputsourceschange', function() {
+                                try {
+                                    if (typeof restoreVRHandsAndMenuAfterTrackSwitch === 'function') {
+                                        restoreVRHandsAndMenuAfterTrackSwitch();
+                                    }
+                                } catch (eIn) { /* noop */ }
+                            });
                             
                             // Skip cube layer for Quest compatibility
                             console.log('🥽 Skipping cube layer setup for Quest compatibility');
@@ -2523,10 +2636,14 @@
                 renderer.setAnimationLoop(function(time, frame) {
                     var dt = clock.getDelta();
                     var inXR = renderer.xr.isPresenting;
+                    // Quest immersive throttles window.rAF — pump build/switch work here.
+                    pumpDriveEnvironmentBuildQueues();
+                    pumpForestTrackSwitchWait();
                     for (var i = 0; i < syncList.length; i++)
                         syncList[i](dt);
                     chaseSimFrameId++;
-                    if (pendingInitialCitySpawn && driveGameStarted && spawnDirtRoadReady && isCityDrivePhysicsReady()) {
+                    if (pendingInitialCitySpawn && driveGameStarted && !forestTrackSwitching
+                        && spawnDirtRoadReady && isCityDrivePhysicsReady()) {
                         trySpawnPlayerVehicleOnRoad();
                     }
                     if (playerVehicleSpawnLockFrames > 0 && vehicleRef && vehicleRef.vehicleBody) {
@@ -14242,13 +14359,15 @@
 
             function processCitySolidObstaclePhysicsQueue() {
                 if (!vrRunnerCitySolidPending.length) {
-                    vrRunnerCitySolidBuilding = false;
-                    if (vrRunnerCitySolidBodies.length) {
-                        console.log(
-                            '🪵 Solid obstacle physics —',
-                            vrRunnerCitySolidBodies.length,
-                            'bodies (trunks/fences · Bullet vs green chassis box)'
-                        );
+                    if (vrRunnerCitySolidBuilding) {
+                        vrRunnerCitySolidBuilding = false;
+                        if (vrRunnerCitySolidBodies.length) {
+                            console.log(
+                                '🪵 Solid obstacle physics —',
+                                vrRunnerCitySolidBodies.length,
+                                'bodies (trunks/fences · Bullet vs green chassis box)'
+                            );
+                        }
                     }
                     return;
                 }
@@ -14262,7 +14381,7 @@
                 for (var i = 0; i < end; i++) {
                     addCityMeshSolidObstaclePhysics(vrRunnerCitySolidPending.shift());
                 }
-                requestAnimationFrame(processCitySolidObstaclePhysicsQueue);
+                // Continuation is pumped by the XR animation loop (Quest throttles window.rAF).
             }
 
             function finishCityDrivePhysicsBuild() {
@@ -14274,22 +14393,24 @@
 
             function processCityWalkablePhysicsQueue() {
                 if (!vrRunnerCityPhysicsPending.length) {
-                    vrRunnerCityPhysicsBuilding = false;
-                    if (vrRunnerCityPhysicsBodies.length) {
-                        console.log(
-                            '✅ City drive physics —',
-                            vrRunnerCityPhysicsBodies.length,
-                            'walkable mesh bodies (up-facing tris only)'
-                        );
-                        if (driveFallbackGroundBody &&
-                            vrRunnerCityPhysicsBodies.length >= 8 &&
-                            vrRunnerCityCollisionMeshes.length >= 8) {
-                            maybeRemoveDriveFallbackGroundAfterSpawn();
+                    if (vrRunnerCityPhysicsBuilding) {
+                        vrRunnerCityPhysicsBuilding = false;
+                        if (vrRunnerCityPhysicsBodies.length) {
+                            console.log(
+                                '✅ City drive physics —',
+                                vrRunnerCityPhysicsBodies.length,
+                                'walkable mesh bodies (up-facing tris only)'
+                            );
+                            if (driveFallbackGroundBody &&
+                                vrRunnerCityPhysicsBodies.length >= 8 &&
+                                vrRunnerCityCollisionMeshes.length >= 8) {
+                                maybeRemoveDriveFallbackGroundAfterSpawn();
+                            }
                         }
-                    }
-                    finishCityDrivePhysicsBuild();
-                    if (isCityDrivePhysicsReady()) {
-                        onDriveEnvironmentReady();
+                        finishCityDrivePhysicsBuild();
+                        if (isCityDrivePhysicsReady()) {
+                            onDriveEnvironmentReady();
+                        }
                     }
                     return;
                 }
@@ -14314,7 +14435,7 @@
                 if (addedTris > 0 && (vrRunnerCityPhysicsBodies.length & 31) === 0) {
                     console.log('🔧 City drive physics…', vrRunnerCityPhysicsBodies.length, 'bodies');
                 }
-                requestAnimationFrame(processCityWalkablePhysicsQueue);
+                // Continuation is pumped by the XR animation loop (Quest throttles window.rAF).
             }
 
             /** Highest walkable city surface under (x,z) — same idea as VRrunner getGlbFloorY. */
@@ -20563,12 +20684,12 @@
                 });
             }
 
-            /** rAF pauses in background tabs; setTimeout(0) keeps building (Chrome may throttle to ~1 s). */
+            /** rAF pauses in background tabs and Quest immersive; prefer XR session / drive scheduler. */
             function scheduleCityNavBuildTick(fn) {
                 if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
                     setTimeout(fn, 0);
                 } else {
-                    requestAnimationFrame(fn);
+                    scheduleDriveWork(fn);
                 }
             }
 
@@ -21164,33 +21285,35 @@
 
             function processCityMeshBvhQueue() {
                 if (!vrRunnerCityBvhPending.length) {
-                    vrRunnerCityBvhBuilding = false;
-                    markSpawnDirtRoadReadyWhenBvhDone();
-                    if (vrRunnerCityCollisionMeshes.length && !vrRunnerCityReady) {
-                        if (vrRunnerCityRoot) {
-                            finalizeVrRunnerCityPlacement(vrRunnerCityRoot, vrRunnerCityCollisionMeshes);
-                        } else if (spawnDirtRoadRoot) {
-                            spawnDirtRoadRoot.updateMatrixWorld(true);
-                            vrRunnerCityWorldBox.setFromObject(spawnDirtRoadRoot);
-                            if (!driveFallbackGroundAdded) {
-                                createDriveFallbackGroundPhysics();
+                    if (vrRunnerCityBvhBuilding) {
+                        vrRunnerCityBvhBuilding = false;
+                        markSpawnDirtRoadReadyWhenBvhDone();
+                        if (vrRunnerCityCollisionMeshes.length && !vrRunnerCityReady) {
+                            if (vrRunnerCityRoot) {
+                                finalizeVrRunnerCityPlacement(vrRunnerCityRoot, vrRunnerCityCollisionMeshes);
+                            } else if (spawnDirtRoadRoot) {
+                                spawnDirtRoadRoot.updateMatrixWorld(true);
+                                vrRunnerCityWorldBox.setFromObject(spawnDirtRoadRoot);
+                                if (!driveFallbackGroundAdded) {
+                                    createDriveFallbackGroundPhysics();
+                                }
                             }
+                            applyVrRunnerAtmosphere();
+                            vrRunnerCityReady = true;
+                            if (isCityNavEnvironment()) {
+                                refreshCityNavWaterMeshList(vrRunnerCityCollisionMeshes);
+                                onCityNavMapReady();
+                            }
+                            console.log(
+                                '✅ Environment collision ready —',
+                                vrRunnerCityCollisionMeshes.length,
+                                'BVH meshes · hull',
+                                ENVIRONMENT_BVH_HULL_ENABLED ? 'ON (magenta = solid)' : 'OFF (?hullCollision=0)'
+                            );
+                            queueCityWalkablePhysicsBuild(vrRunnerCityCollisionMeshes);
+                            queueCitySolidObstaclePhysicsBuild(vrRunnerCityCollisionMeshes);
+                            resumePendingPlayerNavBake();
                         }
-                        applyVrRunnerAtmosphere();
-                        vrRunnerCityReady = true;
-                        if (isCityNavEnvironment()) {
-                            refreshCityNavWaterMeshList(vrRunnerCityCollisionMeshes);
-                            onCityNavMapReady();
-                        }
-                        console.log(
-                            '✅ Environment collision ready —',
-                            vrRunnerCityCollisionMeshes.length,
-                            'BVH meshes · hull',
-                            ENVIRONMENT_BVH_HULL_ENABLED ? 'ON (magenta = solid)' : 'OFF (?hullCollision=0)'
-                        );
-                        queueCityWalkablePhysicsBuild(vrRunnerCityCollisionMeshes);
-                        queueCitySolidObstaclePhysicsBuild(vrRunnerCityCollisionMeshes);
-                        resumePendingPlayerNavBake();
                     }
                     return;
                 }
@@ -21228,7 +21351,7 @@
                     var bvhPct = 40 + Math.round((envBvhBuildDone / envBvhBuildTotal) * 35);
                     driveSplashProgress(bvhPct, 'Building road collision… ' + envBvhBuildDone + '/' + envBvhBuildTotal);
                 }
-                requestAnimationFrame(processCityMeshBvhQueue);
+                // Continuation is pumped by the XR animation loop (Quest throttles window.rAF).
             }
 
             function isDirtCarriageMaterial(mat) {
@@ -27090,13 +27213,15 @@
                 // Kick the next track immediately — boot-rate BVH/physics while switching.
                 initEnvironment();
 
-                var waitFrames = 0;
                 function finishTrackSwitch() {
+                    // Unlock driving FIRST so the very next XR frame can steer/throttle.
                     forestTrackSwitching = false;
+                    forestTrackSwitchWait = null;
                     hideVrTrackLoadUi();
                     if (window.__driveVrSplash && typeof window.__driveVrSplash.hide === 'function') {
                         window.__driveVrSplash.hide();
                     }
+                    document.body.classList.remove('drivevr-track-loading');
                     if (usesDriveAtmosphere()) {
                         try { applyVrRunnerAtmosphere(); } catch (eAtm) { /* noop */ }
                     }
@@ -27105,6 +27230,7 @@
                         setPlayerVehicleVisible(true);
                         trySpawnPlayerVehicleOnRoad();
                         resetCarToStart();
+                        unlockPlayerVehicleAfterTrackSwitch();
                         syncPlayerChassisFromPhysics();
                         ensureCameraRigOnDriverSeat();
                         // trySpawn / resetCar already place the dirt bot ahead; this covers
@@ -27130,32 +27256,14 @@
                         phys: typeof isCityDrivePhysicsReady === 'function' ? isCityDrivePhysicsReady() : null
                     };
                 }
-                function waitReady() {
-                    if (gen !== forestTrackSwitchGen) return;
-                    waitFrames++;
-                    var pathOk = denseWaypoints && denseWaypoints.length >= 2;
-                    var envOk = spawnDirtRoadReady && isCityDrivePhysicsReady();
-                    if (pathOk && envOk) {
-                        finishTrackSwitch();
-                        return;
-                    }
-                    if (waitFrames > 9000) {
-                        console.warn('⚠️ Track switch timed out for', activeForestTrack.id,
-                            'ready=', spawnDirtRoadReady, 'phys=', isCityDrivePhysicsReady());
-                        finishTrackSwitch();
-                        return;
-                    }
-                    if ((waitFrames % 8) === 0) {
-                        updateVrTrackLoadUiProgress(
-                            window.__driveVrSplash ? window.__driveVrSplash.getProgress() : 0,
-                            window.__driveVrSplash && window.__driveVrSplash.getStatus
-                                ? window.__driveVrSplash.getStatus()
-                                : null
-                        );
-                    }
-                    requestAnimationFrame(waitReady);
-                }
-                requestAnimationFrame(waitReady);
+
+                // Wait on the XR animation loop — window.rAF does not run reliably on Quest
+                // immersive, which left forestTrackSwitching stuck until the 2D browser opened.
+                forestTrackSwitchWait = {
+                    gen: gen,
+                    frames: 0,
+                    finish: finishTrackSwitch
+                };
             }
 
             /** VR-only loading panel (status + bar). World is already unloaded/cleared. */
