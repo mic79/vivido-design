@@ -1644,6 +1644,7 @@
                 }
                 switchForestTrackInPlace();
             }
+            window.__driveSelectForestTrack = selectForestTrack;
             var vrRunnerCityRoot = null;
             var spawnDirtRoadRoot = null;
             var dirtRoadPathPoints = null;
@@ -2816,34 +2817,9 @@
                     console.log('⚠️ Not in VR mode');
                     return;
                 }
-                
-                if (vehicleRef && vehicleRef.vehicle) {
-                    var tm = vehicleRef.vehicle.getChassisWorldTransform();
-                    var carY = tm.getOrigin().y();
-                    
-                    // Get actual VR camera world position
-                    var cameraWorldPos = new THREE.Vector3();
-                    firstPersonCamera.getWorldPosition(cameraWorldPos);
-                    var cameraY = cameraWorldPos.y;
-                    var difference = cameraY - carY;
-                    
-                    console.log('📍 Before - Car Y:', carY.toFixed(3) + 'm | Camera Y:', cameraY.toFixed(3) + 'm | Difference:', difference.toFixed(3) + 'm');
-                    
-                    // Adjust camera rig to make the actual VR camera 0.65m above car
-                    var targetDifference = 0.65;
-                    var adjustment = targetDifference - difference;
-                    
-                    console.log('🔧 Calculating adjustment: target=' + targetDifference + ', current=' + difference.toFixed(3) + ', adjustment=' + adjustment.toFixed(3));
-                    
-                    // Update the global VR camera offset that the sync function uses
-                    var currentOffset = window.vrCameraYOffset || -1.1;
-                    var newOffset = currentOffset + adjustment;
-                    window.vrCameraYOffset = newOffset;
-                    
-                    console.log('📍 VR camera offset updated from', currentOffset.toFixed(3) + 'm to', newOffset.toFixed(3) + 'm (adjustment:', adjustment.toFixed(3) + 'm)');
-                } else {
-                    console.log('⚠️ Vehicle not available');
-                }
+                var seatY = updateVRSeatOffset();
+                var headY = vrHeadTrackingY();
+                console.log('📍 VR seat local Y', seatY.toFixed(3), 'head tracking Y', headY == null ? 'n/a' : headY.toFixed(3));
             }
             
             function setupVRControllers() {
@@ -4347,6 +4323,7 @@
                     if (vrMenu) {
                         // Rebuild if layout is missing race controls (pre-ghost menus).
                         createVRMenu();
+                        ensureVRMenuMounted();
                         vrMenu.visible = isMenuVisible;
                         console.log('VR Menu visibility set to:', isMenuVisible);
                         if (isMenuVisible) {
@@ -4361,6 +4338,7 @@
                         console.log('Creating new VR menu...');
                         try {
                             createVRMenu();
+                            ensureVRMenuMounted();
                             if (vrMenu) vrMenu.visible = true;
                             console.log('VR Menu created successfully');
                         } catch (error) {
@@ -4399,12 +4377,76 @@
                 console.log('Menu toggled:', isMenuVisible ? 'visible' : 'hidden');
             }
 
+            function ensureVRMenuMounted() {
+                if (!vrMenu) return;
+                var menuParent = (firstPersonCamera && renderer && renderer.xr && renderer.xr.isPresenting)
+                    ? firstPersonCamera
+                    : (cameraRig || scene);
+                if (vrMenu.parent !== menuParent) {
+                    menuParent.add(vrMenu);
+                }
+                // Eye-space: directly in front of the headset, not 2m above the car seat.
+                vrMenu.position.set(0, 0, -1.35);
+                vrMenu.rotation.set(0, 0, 0);
+                vrMenu.quaternion.identity();
+                vrMenu.traverse(function(o) {
+                    if (!o.isMesh || !o.material) return;
+                    o.material.depthTest = false;
+                    o.material.depthWrite = false;
+                    o.material.toneMapped = false;
+                    o.renderOrder = Math.max(o.renderOrder || 0, 1000);
+                    o.frustumCulled = false;
+                });
+            }
+
+            function restoreVRHandsAndMenuAfterTrackSwitch() {
+                try {
+                    releaseVRWheelGrab(0);
+                    releaseVRWheelGrab(1);
+                } catch (eRel) { /* noop */ }
+                for (var hi = 0; hi < vrControllerModels.length; hi++) {
+                    var grip = vrControllerModels[hi];
+                    var hand = vrHandMeshes[hi];
+                    if (grip) {
+                        grip.visible = true;
+                        if (hand && hand.parent !== grip) {
+                            if (hand.parent) hand.parent.remove(hand);
+                            grip.add(hand);
+                            hand.position.set(0, 0, 0);
+                            hand.rotation.set(0, 0, 0);
+                        }
+                        if (!hand && grip.children.length === 0) {
+                            hand = buildVRHandMesh(hi === 0 ? 'left' : 'right');
+                            grip.add(hand);
+                            vrHandMeshes[hi] = hand;
+                        }
+                        if (hand) {
+                            hand.visible = true;
+                            hand.traverse(function(o) {
+                                if (o.isMesh || o.isLine || o.isPoints) o.visible = true;
+                            });
+                        }
+                    }
+                    if (vrControllers[hi]) vrControllers[hi].visible = true;
+                }
+                if (vrMenu) {
+                    ensureVRMenuMounted();
+                    vrMenu.visible = !!isMenuVisible;
+                }
+                if (typeof updateLaserPointers === 'function') {
+                    updateLaserPointers();
+                }
+            }
+
             function createVRMenu() {
                 if (vrMenu) {
                     var hasGhost = vrMenuButtons.some(function(b) {
                         return b && b.userData && b.userData.id === 'ghost-toggle';
                     });
-                    if (hasGhost) return;
+                    if (hasGhost) {
+                        ensureVRMenuMounted();
+                        return;
+                    }
                     // Stale layout from before race controls — rebuild.
                     if (vrMenu.parent) vrMenu.parent.remove(vrMenu);
                     vrMenu = null;
@@ -4412,38 +4454,44 @@
                 }
                 
                 vrMenu = new THREE.Group();
-                
-                // Position menu in front of user (adjusted for new camera position)
-                vrMenu.position.set(0, 2.0, -2.0); // 2m up, right in front of camera at 2m distance
-                
-                // Add to camera rig so it follows the user's head
-                if (cameraRig) {
-                    cameraRig.add(vrMenu);
-                    console.log('VR Menu added to camera rig');
-                } else {
-                    scene.add(vrMenu);
-                    console.log('VR Menu added to scene (fallback)');
-                }
+                vrMenu.name = 'vrMenu';
+
+                // Mount on the HMD camera so the panel sits in front of the eyes.
+                // Parenting to cameraRig at y=2 put the menu above the headset FOV
+                // (lasers visible, panel missing) — especially after track-switch reattach.
+                var menuParent = (firstPersonCamera && renderer && renderer.xr && renderer.xr.isPresenting)
+                    ? firstPersonCamera
+                    : (cameraRig || scene);
+                menuParent.add(vrMenu);
+                vrMenu.position.set(0, 0, -1.35);
+                vrMenu.rotation.set(0, 0, 0);
+                console.log('VR Menu added to', menuParent.name || menuParent.type || 'parent');
                 console.log('VR Menu positioned at:', vrMenu.position);
                 
                 const bgGeometry = new THREE.PlaneGeometry(1.55, 1.72);
                 const bgMaterial = new THREE.MeshBasicMaterial({ 
                     color: 0x000000,
                     transparent: true, 
-                    opacity: 0.1
+                    opacity: 0.82,
+                    depthTest: false,
+                    depthWrite: false
                 });
                 const background = new THREE.Mesh(bgGeometry, bgMaterial);
                 background.position.z = -0.01;
+                background.renderOrder = 998;
                 vrMenu.add(background);
                 
                 const borderGeometry = new THREE.PlaneGeometry(1.6, 1.78);
                 const borderMaterial = new THREE.MeshBasicMaterial({ 
                     color: 0x0088ff,
                     transparent: true, 
-                    opacity: 0.8 
+                    opacity: 0.9,
+                    depthTest: false,
+                    depthWrite: false
                 });
                 const border = new THREE.Mesh(borderGeometry, borderMaterial);
                 border.position.z = -0.02;
+                border.renderOrder = 997;
                 vrMenu.add(border);
                 
                 const titleGeometry = new THREE.PlaneGeometry(0.8, 0.1);
@@ -5877,6 +5925,80 @@
 
             var botDriverCam = false;
 
+            // Desktop driver eye on the visual chassis mesh.
+            var DRIVER_SEAT_DESKTOP = new THREE.Vector3(0.3, 1.2, 0.3);
+            // VR seat XZ on the same mesh (Z sits a bit rearward of desktop).
+            var DRIVER_SEAT_VR_X = 0.3;
+            var DRIVER_SEAT_VR_Z = -0.2;
+            // Eye target above the PHYSICS chassis (mesh is DUNE_CHASSIS_OFFSET below it).
+            var VR_SEAT_EYE_ABOVE_PHYSICS = 0.65;
+
+            // firstPersonCamera.position is NOT the drawn XR eye — that buried seats under the car.
+            // Sample the ArrayCamera eye; seat Y = eyeTarget - meshOffsetY - headY. Same on every track.
+            function vrHeadTrackingY() {
+                if (!renderer || !renderer.xr || !renderer.xr.isPresenting) return null;
+                var xrCam = renderer.xr.getCamera ? renderer.xr.getCamera() : null;
+                var eye = xrCam && xrCam.cameras && xrCam.cameras.length ? xrCam.cameras[0] : null;
+                if (!eye || !isFinite(eye.position.y)) return null;
+                if (eye.position.y < -0.75 || eye.position.y > 2.5) return null;
+                return eye.position.y;
+            }
+
+            function vrSeatMeshOffsetY() {
+                if (vehicleRef && vehicleRef.chassisMesh && typeof getChassisMeshOffset === 'function') {
+                    try {
+                        return getChassisMeshOffset(vehicleRef.chassisMesh).y;
+                    } catch (eOff) { /* fall through */ }
+                }
+                return (DUNE_CHASSIS_OFFSET && isFinite(DUNE_CHASSIS_OFFSET.y)) ? DUNE_CHASSIS_OFFSET.y : -0.45;
+            }
+
+            function updateVRSeatOffset() {
+                var headY = vrHeadTrackingY();
+                var meshOffY = vrSeatMeshOffsetY();
+                if (headY == null) {
+                    if (window.vrCameraYOffset == null) {
+                        window.vrCameraYOffset = VR_SEAT_EYE_ABOVE_PHYSICS - meshOffY - 1.25;
+                    }
+                    return window.vrCameraYOffset;
+                }
+                window.vrCameraYOffset = VR_SEAT_EYE_ABOVE_PHYSICS - meshOffY - headY;
+                return window.vrCameraYOffset;
+            }
+
+            function vrSeatLocalY() {
+                return window.vrCameraYOffset == null
+                    ? (VR_SEAT_EYE_ABOVE_PHYSICS - vrSeatMeshOffsetY() - 1.25)
+                    : window.vrCameraYOffset;
+            }
+
+            function resetVRSeatOffsetToDefault() {
+                window.vrCameraYOffset = null;
+                updateVRSeatOffset();
+            }
+
+            /** Dolly on chassis so XR eyes land at a fixed height above physics — same seat every track. */
+            function ensureCameraRigOnDriverSeat() {
+                if (!cameraRig || !vehicleRef || !vehicleRef.chassisMesh) return;
+                if (cameraRig.parent !== vehicleRef.chassisMesh) {
+                    if (cameraRig.parent) cameraRig.parent.remove(cameraRig);
+                    vehicleRef.chassisMesh.add(cameraRig);
+                }
+                if (renderer && renderer.xr && renderer.xr.isPresenting) {
+                    updateVRSeatOffset();
+                    cameraRig.position.set(DRIVER_SEAT_VR_X, vrSeatLocalY(), DRIVER_SEAT_VR_Z);
+                } else {
+                    cameraRig.position.copy(DRIVER_SEAT_DESKTOP);
+                }
+                cameraRig.rotation.set(0, Math.PI, 0);
+                cameraRig.quaternion.setFromEuler(cameraRig.rotation);
+                if (firstPersonCamera && !(renderer && renderer.xr && renderer.xr.isPresenting)) {
+                    firstPersonCamera.position.set(0, 0, 0);
+                    firstPersonCamera.rotation.set(0, 0, 0);
+                }
+                cameraRig.updateMatrixWorld(true);
+            }
+
             function attachCameraRigToVehicle() {
                 if (botDriverCam) {
                     if (!cameraRig || !botVehicleRef || !botVehicleRef.vehicle) return;
@@ -5901,21 +6023,7 @@
                     firstPersonCamera.rotation.set(0, 0, 0);
                     return;
                 }
-                if (!cameraRig || !vehicleRef || !vehicleRef.chassisMesh) return;
-                if (cameraRig.parent !== vehicleRef.chassisMesh) {
-                    if (cameraRig.parent) {
-                        cameraRig.parent.remove(cameraRig);
-                    }
-                    vehicleRef.chassisMesh.add(cameraRig);
-                }
-                if (renderer.xr.isPresenting) {
-                    cameraRig.position.set(0.3, window.vrCameraYOffset || -1.1, -0.2);
-                } else {
-                    cameraRig.position.set(0.3, 1.2, 0.3);
-                }
-                cameraRig.rotation.set(0, Math.PI, 0);
-                firstPersonCamera.position.set(0, 0, 0);
-                firstPersonCamera.rotation.set(0, 0, 0);
+                ensureCameraRigOnDriverSeat();
             }
 
             function switchCamera() {
@@ -6334,6 +6442,47 @@
                 return sIdx;
             }
 
+            /**
+             * Hollow: do NOT use "straightest stretch" — the bridge deck wins that heuristic
+             * and puts you on top facing the wrong way. Spawn ~40 m before the tunnel bore
+             * (low path at the grade-sep crossing), driving toward the tunnel.
+             */
+            function findHollowTunnelApproachSpawnWaypointIndex() {
+                var n = denseWaypoints && denseWaypoints.length;
+                if (!n || n < 8) return 0;
+                var maxY = -Infinity;
+                var maxI = 0;
+                for (var i = 0; i < n; i++) {
+                    var y = denseWaypoints[i].position.y;
+                    if (y > maxY) { maxY = y; maxI = i; }
+                }
+                var bx = denseWaypoints[maxI].position.x;
+                var bz = denseWaypoints[maxI].position.z;
+                var tunI = 0;
+                var bestD = Infinity;
+                for (var j = 0; j < n; j++) {
+                    var p = denseWaypoints[j].position;
+                    if (p.y > maxY - 4) continue;
+                    var d = Math.hypot(p.x - bx, p.z - bz);
+                    if (d < bestD) { bestD = d; tunI = j; }
+                }
+                // Back up along the path so we start before the tunnel, facing into it.
+                var backM = 40;
+                var idx = tunI;
+                var travelled = 0;
+                var guard = 0;
+                while (travelled < backM && guard++ < n) {
+                    var prev = (idx - 1 + n) % n;
+                    travelled += denseWaypoints[prev].position.distanceTo(denseWaypoints[idx].position);
+                    idx = prev;
+                }
+                console.log(
+                    '🏁 Hollow spawn before tunnel @ wp', idx, '/', n,
+                    '· tunnel wp', tunI, '· bridge crest wp', maxI
+                );
+                return idx;
+            }
+
             /** Waypoint index matching player dirt/forest spawn. */
             function getPlayerDirtSpawnWaypointIndex() {
                 if (!denseWaypoints || denseWaypoints.length < 2) return 0;
@@ -6342,7 +6491,11 @@
                     cachedDirtSpawnWpIndex < denseWaypoints.length) {
                     return cachedDirtSpawnWpIndex;
                 }
-                cachedDirtSpawnWpIndex = findStraightestDirtSpawnWaypointIndex();
+                if (activeForestTrack && activeForestTrack.id === 'hollow') {
+                    cachedDirtSpawnWpIndex = findHollowTunnelApproachSpawnWaypointIndex();
+                } else {
+                    cachedDirtSpawnWpIndex = findStraightestDirtSpawnWaypointIndex();
+                }
                 return cachedDirtSpawnWpIndex;
             }
 
@@ -6421,8 +6574,8 @@
                 var pos = denseWaypoints[idx].position.clone();
                 if (activeForestTrack && activeForestTrack.generated) {
                     pos.y = chassisYFromFloorY(denseWaypoints[idx].position.y) + 0.8;
-                } else {
-                    snapSpawnYToWalkableRoad(pos);
+                } else if (!snapSpawnYToWalkableRoad(pos)) {
+                    pos.y = chassisYFromFloorY(denseWaypoints[idx].position.y);
                 }
                 var fwd = new THREE.Vector3().subVectors(denseWaypoints[nextIdx].position, denseWaypoints[idx].position);
                 fwd.y = 0;
@@ -6585,10 +6738,13 @@
                     var yaw = Math.atan2(forward.x, forward.z);
                     var spawnRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
                     var spawnPos = p0.clone();
-                    if (activeForestTrack.generated) {
+                    // Generated Loop/Hollow: sit on the authored path height (+0.8 clearance).
+                    // Do not sky-probe here — Hollow's bridge deck is the highest hit at the
+                    // crossing and used to yank the car onto the bridge.
+                    if (activeForestTrack && activeForestTrack.generated) {
                         spawnPos.y = chassisYFromFloorY(p0.y) + 0.8;
-                    } else {
-                        snapSpawnYToWalkableRoad(spawnPos);
+                    } else if (!snapSpawnYToWalkableRoad(spawnPos)) {
+                        spawnPos.y = chassisYFromFloorY(p0.y);
                     }
                     return { position: spawnPos, rotation: spawnRot };
                 }
@@ -6618,25 +6774,11 @@
                     attachCameraRigToVehicle();
                 } else {
                     applyDefaultPlayerCitySpawn();
-                    return true;
                 }
 
                 recordLastCarDropPosition(pose.position);
-                if (botEnabled && !botVehicleRef && denseWaypoints.length > 16) {
-                    var ahead = computeBotStartAheadOfPlayer(GHOST_START_AHEAD_M);
-                    botVehicleRef = createBotVehicle(ahead.position, ahead.rotation, 0x2266cc);
-                    if (botVehicleRef) {
-                        botVehicleRef.dirtRoadFollow = true;
-                        botVehicleRef.waypointReachDistance = 4.5;
-                        botVehicleRef.targetSpeed = 60;
-                        botVehicleRef.maxCornerSpeed = 80;
-                        botVehicleRef.currentWaypointIndex = ahead.waypointIndex;
-                        botVehicleRef._ghostIndex = 0;
-                        botVehicleRef._ghostWall0 = Date.now();
-                        botVehicleRef._ghostRecover = 0;
-                        console.log('🤖 Bot ahead of player spawn, waypoint', ahead.waypointIndex, '/', denseWaypoints.length,
-                            ghostBotEnabled ? '(ghost)' : '');
-                    }
+                if (botEnabled && !chaseEnabled && !isMultiplayer) {
+                    spawnOrResetBotAheadOfPlayer();
                 }
                 var floorY = findPlayerSpawnFloorY(pose.position.x, pose.position.z);
                 console.log(
@@ -7259,8 +7401,9 @@
                 if (!_sharedGltfLoader) {
                     _sharedGltfLoader = new THREE.GLTFLoader();
                     _sharedDracoLoader = new THREE.DRACOLoader();
-                    _sharedDracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.4.3/');
-                    _sharedDracoLoader.setDecoderConfig({ type: 'js' });
+                    // Local WASM decoder — CDN + type:'js' was hanging Loop decode at ~67%.
+                    _sharedDracoLoader.setDecoderPath('js/libs/draco/gltf/');
+                    _sharedDracoLoader.setDecoderConfig({ type: 'wasm' });
                     var isQuest = navigator.userAgent.includes('Quest') || navigator.userAgent.includes('Oculus');
                     if (isQuest) {
                         _sharedDracoLoader.setWorkerLimit(1);
@@ -7268,6 +7411,72 @@
                     _sharedGltfLoader.setDRACOLoader(_sharedDracoLoader);
                 }
                 return _sharedGltfLoader;
+            }
+
+            /**
+             * Proven path: GLTFLoader.load(url). Progress from XHR when available;
+             * after bytes arrive, a heartbeat covers the DRACO decode gap.
+             * onProgress(xhrOrInfo) — may include .phase 'download'|'decode'|'decode-beat'.
+             */
+            function loadTrackGlb(url, onLoad, onProgress, onError) {
+                var loader = getSharedGltfLoader();
+                var decodeBeat = null;
+                var decodeStartedAt = 0;
+                var finished = false;
+                function clearBeat() {
+                    if (decodeBeat) {
+                        clearInterval(decodeBeat);
+                        decodeBeat = null;
+                    }
+                }
+                function armDecodeBeat() {
+                    if (decodeBeat || finished) return;
+                    decodeStartedAt = Date.now();
+                    if (onProgress) {
+                        onProgress({ loaded: 1, total: 1, phase: 'decode' });
+                    }
+                    decodeBeat = setInterval(function() {
+                        if (finished || !onProgress) return;
+                        onProgress({
+                            loaded: Date.now() - decodeStartedAt,
+                            total: 0,
+                            phase: 'decode-beat'
+                        });
+                    }, 1500);
+                }
+                loader.load(
+                    url,
+                    function(gltf) {
+                        finished = true;
+                        clearBeat();
+                        if (onLoad) onLoad(gltf);
+                    },
+                    function(xhr) {
+                        if (!xhr) return;
+                        if (xhr.lengthComputable && xhr.total > 0) {
+                            if (xhr.loaded >= xhr.total) armDecodeBeat();
+                            else if (onProgress) {
+                                onProgress({
+                                    loaded: xhr.loaded,
+                                    total: xhr.total,
+                                    phase: 'download'
+                                });
+                            }
+                        } else if (xhr.loaded > 0 && onProgress) {
+                            onProgress({
+                                loaded: xhr.loaded,
+                                total: 0,
+                                phase: 'download'
+                            });
+                        }
+                    },
+                    function(err) {
+                        finished = true;
+                        clearBeat();
+                        console.error('❌ GLB load failed:', url, err);
+                        if (onError) onError(err);
+                    }
+                );
             }
 
             function prepareTireTemplate(root) {
@@ -9014,7 +9223,8 @@
                             useCityMeshes: !!vrRunnerCityReady
                         });
                     }
-                    return checkNavObstacles(carPos, carQuat, carForward, botRef, { showDebug: true });
+                    // Never leave debug rays in the world after track switches / bot respawns.
+                    return checkNavObstacles(carPos, carQuat, carForward, botRef, { showDebug: false });
                 }
                 
 
@@ -9232,6 +9442,7 @@
                         }
                         
                         wheelMeshes[index] = tireModel;
+                        if (forestTrackSwitching) tireModel.visible = false;
                         console.log('🛞 Tire', index, 'loaded, right side:', isRightSide);
                     }).catch((error) => {
                         console.error('❌ Failed to load tire', index, ':', error);
@@ -9243,11 +9454,22 @@
                 addWheel(true, new Ammo.btVector3(-wheelHalfTrackFront, wheelAxisHeightFront, wheelAxisFrontPosition), wheelRadiusFront, wheelWidthFront, FRONT_RIGHT);
                 addWheel(false, new Ammo.btVector3(wheelHalfTrackBack, wheelAxisHeightBack, wheelAxisPositionBack), wheelRadiusBack, wheelWidthBack, BACK_LEFT);
                 addWheel(false, new Ammo.btVector3(-wheelHalfTrackBack, wheelAxisHeightBack, wheelAxisPositionBack), wheelRadiusBack, wheelWidthBack, BACK_RIGHT);
+                vehicleRef.wheelMeshes = wheelMeshes;
 
                 attachCameraRigToVehicle();
 
                 // Sync keyboard/VR actions and physics and graphics
                 function sync(dt) {
+                    // Track switch: freeze driving, but KEEP the XR dolly on the seat.
+                    // Do not yank the camera to world-origin fallback (that caused under-car seats).
+                    if (forestTrackSwitching) {
+                        if (playerEngineSound) playerEngineSound.updateEngine(0, 0, 0, 0);
+                        engineForce = 0;
+                        breakingForce = 0;
+                        vehicleSteering = 0;
+                        if (cameraMode === 'firstperson') ensureCameraRigOnDriverSeat();
+                        return;
+                    }
                     var speed = vehicle.getCurrentSpeedKmHour();
                     speedometer.innerHTML = (speed < 0 ? '(R) ' : '') + Math.abs(speed).toFixed(1) + ' km/h';
                     
@@ -9694,13 +9916,19 @@
                     // Update camera position (works for both desktop and VR)
                     if (cameraMode === 'firstperson') {
                         if (renderer.xr.isPresenting) {
-                            // Camera rig now follows car automatically as a child
-                            // Maintain full VR driver's seat position
+                            // Live XR head height → eye stays 0.65m above physics chassis on every track.
+                            updateVRSeatOffset();
+                            var seatY = vrSeatLocalY();
+                            if (cameraRig.parent !== vehicleRef.chassisMesh) {
+                                if (cameraRig.parent) cameraRig.parent.remove(cameraRig);
+                                vehicleRef.chassisMesh.add(cameraRig);
+                                cameraRig.rotation.set(0, Math.PI, 0);
+                            }
                             if (cameraRig.parent === vehicleRef.chassisMesh) {
-                                cameraRig.position.set(0.3, window.vrCameraYOffset || -1.1, -0.2);
+                                cameraRig.position.set(DRIVER_SEAT_VR_X, seatY, DRIVER_SEAT_VR_Z);
                             } else {
                                 // Fallback: manual positioning if not attached to car yet
-                                var cameraOffset = new THREE.Vector3(0.3, window.vrCameraYOffset || -1.1, -0.2);
+                                var cameraOffset = new THREE.Vector3(DRIVER_SEAT_VR_X, seatY, DRIVER_SEAT_VR_Z);
                                 var carQuaternion = new THREE.Quaternion(q.x(), q.y(), q.z(), q.w());
                                 var forwardRotation = new THREE.Quaternion();
                                 forwardRotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
@@ -9718,7 +9946,7 @@
                             // Desktop Mode: Position the camera rig for desktop view (same driver's seat as VR)
                             if (cameraRig.parent === vehicleRef.chassisMesh) {
                                 // Camera rig is attached to car, set desktop-specific local offset (50cm more forward than VR)
-                                cameraRig.position.set(0.3, 1.2, 0.3); // 50cm forward from VR position (-0.2 + 0.5 = 0.3)
+                                cameraRig.position.copy(DRIVER_SEAT_DESKTOP);
                                 cameraRig.rotation.set(0, Math.PI, 0); // Face forward (180° turn since car model faces backward)
                                 
                                 // Reset firstPersonCamera to origin within the rig (review look offset optional)
@@ -9975,7 +10203,20 @@
                 return cachedRoadStripTexture;
             }
 
+            function clearBotRaycastDebugLines() {
+                if (!raycastLines || !raycastLines.length) return;
+                for (var ri = 0; ri < raycastLines.length; ri++) {
+                    if (raycastLines[ri] && raycastLines[ri].parent) {
+                        raycastLines[ri].parent.remove(raycastLines[ri]);
+                    } else if (raycastLines[ri] && scene) {
+                        scene.remove(raycastLines[ri]);
+                    }
+                }
+                raycastLines = [];
+            }
+
             function removeBotVehicle() {
+                clearBotRaycastDebugLines();
                 if (!botVehicleRef) return;
                 if (botVehicleRef.vehicle) {
                     physicsWorld.removeAction(botVehicleRef.vehicle);
@@ -10012,15 +10253,47 @@
                 console.log('🤖 Bot removed (track editor)');
             }
 
-            function restoreBotVehicleIfNeeded() {
-                if (trackEditorMode || isMultiplayer || !botEnabled || botVehicleRef || !racingPath || chaseEnabled) return;
-                var sp = getTrackStartSpawnPose();
-                var botStartPosition = getBotGridSpawnPose(sp.position, sp.rotation);
-                botVehicleRef = createBotVehicle(botStartPosition, sp.rotation, 0x0066ff);
+            /** Same ahead-of-player dirt bot as the initial race spawn (not grid / start-line). */
+            function spawnOrResetBotAheadOfPlayer() {
+                if (trackEditorMode || isMultiplayer || !botEnabled || chaseEnabled) return false;
+                if (!denseWaypoints || denseWaypoints.length < 16) return false;
+                var ahead = computeBotStartAheadOfPlayer(GHOST_START_AHEAD_M);
+                if (!botVehicleRef) {
+                    botVehicleRef = createBotVehicle(ahead.position, ahead.rotation, 0x2266cc);
+                } else if (botVehicleRef.vehicleBody) {
+                    applyGhostChassisPose(botVehicleRef, {
+                        x: ahead.position.x, y: ahead.position.y, z: ahead.position.z,
+                        qx: ahead.rotation.x, qy: ahead.rotation.y,
+                        qz: ahead.rotation.z, qw: ahead.rotation.w
+                    }, null);
+                    if (botVehicleRef.chassisMesh) {
+                        botVehicleRef.chassisMesh.position.copy(ahead.position);
+                        botVehicleRef.chassisMesh.quaternion.copy(ahead.rotation);
+                        botVehicleRef.chassisMesh.visible = true;
+                    }
+                }
+                if (!botVehicleRef) return false;
+                botVehicleRef.dirtRoadFollow = true;
+                botVehicleRef.waypointReachDistance = 4.5;
+                botVehicleRef.targetSpeed = 60;
+                botVehicleRef.maxCornerSpeed = 80;
+                botVehicleRef.currentWaypointIndex = ahead.waypointIndex;
+                botVehicleRef._ghostIndex = 0;
+                botVehicleRef._ghostWall0 = Date.now();
+                botVehicleRef._ghostRecover = 0;
+                botVehicleRef._dirtDone = false;
+                botVehicleRef._dirtIdle = 0;
+                botVehicleRef._dirtOff = 0;
                 if (botEngineSound && typeof botEngineSound.start === 'function') {
                     botEngineSound.start();
                 }
-                console.log('🤖 Bot restored after track editor');
+                console.log('🤖 Bot ahead of player, waypoint', ahead.waypointIndex, '/', denseWaypoints.length);
+                return true;
+            }
+
+            function restoreBotVehicleIfNeeded() {
+                if (botVehicleRef) return;
+                spawnOrResetBotAheadOfPlayer();
             }
 
             function disposeTrackMeshesAndPhysics() {
@@ -10551,10 +10824,17 @@
             var dirtEditRaycaster = null;
 
             function getDirtCarriageMeshes() {
-                if (dirtCarriageMeshes && dirtCarriageMeshes.length) return dirtCarriageMeshes;
+                if (dirtCarriageMeshes && dirtCarriageMeshes.length) {
+                    // Drop disposed meshes left over from an in-place track unload.
+                    dirtCarriageMeshes = dirtCarriageMeshes.filter(function(m) {
+                        return m && m.isMesh && m.geometry && m.geometry.attributes;
+                    });
+                    if (dirtCarriageMeshes.length) return dirtCarriageMeshes;
+                    dirtCarriageMeshes = null;
+                }
                 var found = [];
                 scene.traverse(function(o) {
-                    if (!o.isMesh) return;
+                    if (!o.isMesh || !o.geometry || !o.geometry.attributes) return;
                     var mats = Array.isArray(o.material) ? o.material : [o.material];
                     for (var i = 0; i < mats.length; i++) {
                         if (isDirtCarriageMaterial(mats[i])) {
@@ -10570,6 +10850,13 @@
             var dirtEdgeVertsCache = null;
             var dirtCrossSections = null;
 
+            function invalidateDirtCarriageCaches() {
+                dirtCarriageMeshes = null;
+                dirtEdgeVertsCache = null;
+                dirtCrossSections = null;
+                dirtRibbonMaterial = null;
+            }
+
             function dirtEdgeVerts() {
                 if (dirtEdgeVertsCache && dirtEdgeVertsCache.length) return dirtEdgeVertsCache;
                 var meshes = getDirtCarriageMeshes();
@@ -10577,6 +10864,7 @@
                 var v = new THREE.Vector3();
                 for (var m = 0; m < meshes.length; m++) {
                     var mesh = meshes[m];
+                    if (!mesh || !mesh.geometry || !mesh.geometry.attributes) continue;
                     var pos = mesh.geometry.attributes.position;
                     var uv = mesh.geometry.attributes.uv;
                     if (!pos || !uv) continue;
@@ -21617,6 +21905,13 @@
                     eu = Math.min(eu, 0.999999);
                     var editPos = racingPath.getPointAt(eu);
                     var editTan = racingPath.getTangentAt(eu);
+                    var profile;
+                    try {
+                        profile = dirtProfileAtPoint(editPos, editTan.x, editTan.z);
+                    } catch (profErr) {
+                        console.warn('⚠️ dirtProfileAtPoint failed, using default width', profErr);
+                        profile = { latL: -3.2, yL: 0, latR: 3.2, yR: 0 };
+                    }
                     dirtEditWaypoints.push({
                         position: editPos,
                         direction: editTan,
@@ -21625,7 +21920,7 @@
                         bank: 0,
                         lift: 0,
                         origin: editPos.clone(),
-                        profile: dirtProfileAtPoint(editPos, editTan.x, editTan.z)
+                        profile: profile
                     });
                 }
                 smoothDirtEditProfiles();
@@ -22361,7 +22656,7 @@
             function loadSpawnDirtRoadEnvironment() {
                 console.log('🛤️ Loading dirt road:', SPAWN_DIRT_ROAD_URL);
                 driveSplashProgress(30, 'Downloading forest road…');
-                getSharedGltfLoader().load(
+                loadTrackGlb(
                     SPAWN_DIRT_ROAD_URL,
                     function(gltf) {
                         var road = gltf.scene;
@@ -22412,13 +22707,31 @@
                             '· Y [', box.min.y.toFixed(2), ',', box.max.y.toFixed(2), '] · building BVH…'
                         );
                     },
-                    function(xhr) {
-                        if (xhr.lengthComputable && xhr.total > 0) {
-                            var dl = 30 + Math.round((xhr.loaded / xhr.total) * 38);
-                            driveSplashProgress(dl, 'Downloading forest road…');
-                        } else if (xhr.loaded > 0) {
-                            // Quest / some hosts omit Content-Length — still show MB progress.
-                            var mb = xhr.loaded / (1024 * 1024);
+                    function(info) {
+                        var phase = info && info.phase;
+                        if (phase === 'decode') {
+                            driveSplashProgress(70, 'Decoding forest road…');
+                            return;
+                        }
+                        if (phase === 'decode-beat') {
+                            var secs = Math.max(1, Math.round((info.loaded || 0) / 1000));
+                            driveSplashProgress(
+                                Math.min(80, 70 + Math.min(10, Math.floor(secs / 2))),
+                                'Decoding forest road… (' + secs + 's)'
+                            );
+                            return;
+                        }
+                        var loaded = (info && info.loaded) || 0;
+                        var total = (info && info.total) || 0;
+                        var mb = loaded / (1024 * 1024);
+                        if (total > 0) {
+                            var dl = 30 + Math.round((loaded / total) * 36);
+                            driveSplashProgress(
+                                Math.min(66, dl),
+                                'Downloading forest road… ' +
+                                    mb.toFixed(1) + '/' + (total / (1024 * 1024)).toFixed(1) + ' MB'
+                            );
+                        } else if (loaded > 0) {
                             driveSplashProgress(
                                 Math.min(66, 30 + Math.round(mb * 0.35)),
                                 'Downloading forest road… ' + mb.toFixed(1) + ' MB'
@@ -25885,23 +26198,9 @@
                 var loopPcgTrack = activeForestTrack.id === 'glen' || activeForestTrack.baked === 'pcg';
                 var hollowTrack = activeForestTrack.id === 'hollow';
                 var ridgeLoop = loopTrack || loopPcgTrack;
-                driveSplashProgress(
-                    15,
-                    loopPcgTrack
-                        ? 'Loading LoopPCG…'
-                        : (loopTrack
-                            ? 'Loading the forest loop…'
-                            : (hollowTrack ? 'Loading Hollow…' : 'Loading the Blender path…'))
-                );
-                var pts = hollowTrack
-                    ? hollowTrackPoints()
-                    : (ridgeLoop ? ridgeTrackPoints() : originalPathPoints());
-                var group = new THREE.Group();
-                group.name = hollowTrack ? 'hollow_track' : (ridgeLoop ? 'ridge_loop' : 'original_path');
-                scene.add(group);
-                spawnDirtRoadRoot = group;
-                installDirtRoadDrivePath({ points: pts, closed: true });
-                if (dirtPathMarkers) dirtPathMarkers.visible = false;
+                var loadLabel = loopPcgTrack
+                    ? 'LoopPCG'
+                    : (loopTrack ? 'Loop' : (hollowTrack ? 'Hollow' : 'Path'));
                 var bakedQ = new URLSearchParams(window.location.search).get('baked');
                 // Latest Production Lightmass bake is the Loop default. Opt out with ?baked=0
                 // (realtime compose) or force RGB moon path with ?baked=rgb.
@@ -25919,6 +26218,22 @@
                         : 'assets/tracks/loop-track-baked-ue.glb?v=7');
                 var LOOP_COMPOSE_GLB = 'assets/tracks/loop-track.glb?v=131';
                 var HOLLOW_COMPOSE_GLB = 'assets/tracks/hollow-track.glb?v=39';
+                var trackUrl = hollowTrack
+                    ? HOLLOW_COMPOSE_GLB
+                    : (ridgeLoop
+                        ? (wantBakedLoop ? bakedGlb : LOOP_COMPOSE_GLB)
+                        : 'assets/tracks/path-track.glb?v=177');
+
+                driveSplashProgress(12, 'Downloading ' + loadLabel + '…');
+                var pts = hollowTrack
+                    ? hollowTrackPoints()
+                    : (ridgeLoop ? ridgeTrackPoints() : originalPathPoints());
+                var group = new THREE.Group();
+                group.name = hollowTrack ? 'hollow_track' : (ridgeLoop ? 'ridge_loop' : 'original_path');
+                scene.add(group);
+                spawnDirtRoadRoot = group;
+                installDirtRoadDrivePath({ points: pts, closed: true });
+                if (dirtPathMarkers) dirtPathMarkers.visible = false;
                 // Bake already includes FR roadside. Grafting compose again doubled
                 // foliage + ScanPatch cost. Opt-in only: ?froverlay=1
                 var wantFrOverlay = wantBakedLoop && loopTrack && !loopPcgTrack
@@ -26099,24 +26414,15 @@
                     });
                 }
 
-                getSharedGltfLoader().load(
-                    hollowTrack
-                        ? HOLLOW_COMPOSE_GLB
-                        : (ridgeLoop
-                            ? (wantBakedLoop
-                                ? bakedGlb
-                                : LOOP_COMPOSE_GLB)
-                            : 'assets/tracks/path-track.glb?v=177'),
+                loadTrackGlb(
+                    trackUrl,
                     async function(gltf) {
-                        var loadLabel = loopPcgTrack
-                            ? 'LoopPCG'
-                            : (loopTrack ? 'Loop' : (hollowTrack ? 'Hollow' : 'Path'));
-                        driveSplashProgress(70, 'Decoding ' + loadLabel + '…');
+                        driveSplashProgress(82, 'Setting up ' + loadLabel + '…');
                         var road = gltf.scene;
                         road.name = hollowTrack ? 'hollow_track_blender' : 'path_track_blender';
                         group.add(road);
                         road.updateMatrixWorld(true);
-                        driveSplashProgress(78, 'Setting up ' + loadLabel + '…');
+                        driveSplashProgress(85, 'Building ' + loadLabel + '…');
                         var tris = 0;
                         var fenceSolids = [];
                         var mudSolids = [];
@@ -26531,19 +26837,34 @@
                             countPathTrackMeshes(road), 'meshes'
                         );
                     },
-                    function(xhr) {
-                        var label = loopPcgTrack
-                            ? 'LoopPCG'
-                            : (loopTrack ? 'Loop' : (hollowTrack ? 'Hollow' : 'Path'));
-                        if (xhr.lengthComputable && xhr.total > 0) {
-                            var pct = 15 + Math.round((xhr.loaded / xhr.total) * 52);
-                            driveSplashProgress(pct, 'Downloading ' + label + '…');
-                        } else if (xhr.loaded > 0) {
-                            // Quest / some hosts omit Content-Length — still show MB progress.
-                            var mb = xhr.loaded / (1024 * 1024);
+                    function(info) {
+                        var phase = info && info.phase;
+                        if (phase === 'decode') {
+                            driveSplashProgress(70, 'Decoding ' + loadLabel + '…');
+                            return;
+                        }
+                        if (phase === 'decode-beat') {
+                            var secs = Math.max(1, Math.round((info.loaded || 0) / 1000));
                             driveSplashProgress(
-                                Math.min(66, 15 + Math.round(mb * 1.2)),
-                                'Downloading ' + label + '… ' + mb.toFixed(1) + ' MB'
+                                Math.min(80, 70 + Math.min(10, Math.floor(secs / 2))),
+                                'Decoding ' + loadLabel + '… (' + secs + 's)'
+                            );
+                            return;
+                        }
+                        var loaded = (info && info.loaded) || 0;
+                        var total = (info && info.total) || 0;
+                        var mb = loaded / (1024 * 1024);
+                        if (total > 0) {
+                            var pct = 12 + Math.round((loaded / total) * 55);
+                            driveSplashProgress(
+                                Math.min(66, pct),
+                                'Downloading ' + loadLabel + '… ' +
+                                    mb.toFixed(1) + '/' + (total / (1024 * 1024)).toFixed(1) + ' MB'
+                            );
+                        } else if (loaded > 0) {
+                            driveSplashProgress(
+                                Math.min(66, 12 + Math.round(mb * 0.85)),
+                                'Downloading ' + loadLabel + '… ' + mb.toFixed(1) + ' MB'
                             );
                         }
                     },
@@ -26599,6 +26920,7 @@
 
             /** Tear down the current forest/loop/hollow environment without touching WebXR. */
             function unloadCurrentForestEnvironment() {
+                clearBotRaycastDebugLines();
                 vrRunnerCityBvhPending.length = 0;
                 vrRunnerCityPhysicsPending.length = 0;
                 vrRunnerCitySolidPending.length = 0;
@@ -26655,6 +26977,12 @@
                 driveLoopBakedLighting = false;
                 window.__pathDressed = false;
 
+                // Must clear before installDirtRoadDrivePath rebuilds profiles —
+                // stale Dirt_Road meshes have disposed geometry and crash dirtEdgeVerts.
+                if (typeof invalidateDirtCarriageCaches === 'function') {
+                    invalidateDirtCarriageCaches();
+                }
+
                 dirtRoadPathPoints = null;
                 dirtRoadPathClosed = false;
                 denseWaypoints = [];
@@ -26667,13 +26995,35 @@
 
             function setPlayerVehicleVisible(vis) {
                 if (!vehicleRef) return;
-                if (vehicleRef.chassisMesh) vehicleRef.chassisMesh.visible = vis;
-                if (vehicleRef.wheelMeshes) {
-                    for (var wi = 0; wi < vehicleRef.wheelMeshes.length; wi++) {
-                        if (vehicleRef.wheelMeshes[wi]) vehicleRef.wheelMeshes[wi].visible = vis;
+                if (vehicleRef.chassisMesh) {
+                    vehicleRef.chassisMesh.visible = vis;
+                    vehicleRef.chassisMesh.traverse(function(o) {
+                        // Never toggle the XR dolly / hands / menu / load UI parented under the chassis.
+                        if (o === cameraRig || (cameraRig && cameraRig.children && isUnderCameraRig(o))) return;
+                        if (o.isMesh || o.isLine || o.isPoints) o.visible = vis;
+                    });
+                }
+                var wheels = vehicleRef.wheelMeshes;
+                if (wheels) {
+                    for (var wi = 0; wi < wheels.length; wi++) {
+                        if (!wheels[wi]) continue;
+                        wheels[wi].visible = vis;
+                        wheels[wi].traverse(function(o) {
+                            if (o.isMesh || o.isLine || o.isPoints) o.visible = vis;
+                        });
                     }
                 }
+                if (vehicleRef.steeringWheelMesh) vehicleRef.steeringWheelMesh.visible = vis;
                 if (vehicleRef.physicsWireframe) vehicleRef.physicsWireframe.visible = false;
+            }
+
+            function isUnderCameraRig(obj) {
+                var p = obj;
+                while (p) {
+                    if (p === cameraRig) return true;
+                    p = p.parent;
+                }
+                return false;
             }
 
             function switchForestTrackInPlace() {
@@ -26687,6 +27037,13 @@
                     try { toggleMenu(); } catch (e) { /* noop */ }
                 }
 
+                // Hands may be parented to the steering wheel — release before hiding the car
+                // or traverse(visible=false) leaves them stuck/invisible after the switch.
+                try {
+                    releaseVRWheelGrab(0);
+                    releaseVRWheelGrab(1);
+                } catch (eGrab) { /* noop */ }
+
                 // Stop driving presentation immediately — unload world, don't cover it.
                 try {
                     if (playerEngineSound && typeof playerEngineSound.stop === 'function') playerEngineSound.stop();
@@ -26699,13 +27056,10 @@
                 if (vrRearviewMirror) vrRearviewMirror.visible = false;
                 if (vrMenu) vrMenu.visible = false;
 
-                // Park camera in world space so load UI isn't parented to a hidden car.
-                if (cameraRig && cameraRig.parent && cameraRig.parent !== scene) {
-                    scene.add(cameraRig);
-                    cameraRig.position.set(0, 1.5, 0);
-                    cameraRig.rotation.set(0, 0, 0);
-                    cameraRig.quaternion.identity();
-                }
+                // Stay on the driver seat through the unload/load. Always the same
+                // chassis-local offset — never retune Y from world measurements per track.
+                resetVRSeatOffsetToDefault();
+                ensureCameraRigOnDriverSeat();
                 if (vehicleRef && vehicleRef.vehicleBody) {
                     try {
                         vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
@@ -26747,21 +27101,34 @@
                         try { applyVrRunnerAtmosphere(); } catch (eAtm) { /* noop */ }
                     }
                     if (driveGameStarted) {
+                        resetVRSeatOffsetToDefault();
                         setPlayerVehicleVisible(true);
                         trySpawnPlayerVehicleOnRoad();
                         resetCarToStart();
-                        attachCameraRigToVehicle();
-                        if (botEnabled && !chaseEnabled && !isMultiplayer) {
-                            restoreBotVehicleIfNeeded();
+                        syncPlayerChassisFromPhysics();
+                        ensureCameraRigOnDriverSeat();
+                        // trySpawn / resetCar already place the dirt bot ahead; this covers
+                        // the case where the player car existed but the bot was removed.
+                        if (botEnabled && !chaseEnabled && !isMultiplayer && !botVehicleRef) {
+                            spawnOrResetBotAheadOfPlayer();
                         }
+                        restoreVRHandsAndMenuAfterTrackSwitch();
                     }
-                    if (vrHUD) vrHUD.visible = true;
+                    if (vrHUD) vrHUD.visible = !isMenuVisible;
+                    restoreVRHandsAndMenuAfterTrackSwitch();
                     try {
                         if (renderer && renderer.xr && renderer.xr.isPresenting) startEngineAudio();
                     } catch (e3) { /* noop */ }
                     if (typeof updateMenuDisplay === 'function') updateMenuDisplay();
                     console.log('🛤️ Track switch complete:', activeForestTrack.id,
                         'VR presenting:', !!(renderer && renderer.xr && renderer.xr.isPresenting));
+                    window.__PROOF_TRACK_SWITCH__ = {
+                        ok: true,
+                        track: activeForestTrack.id,
+                        ready: !!spawnDirtRoadReady,
+                        waypoints: denseWaypoints ? denseWaypoints.length : 0,
+                        phys: typeof isCityDrivePhysicsReady === 'function' ? isCityDrivePhysicsReady() : null
+                    };
                 }
                 function waitReady() {
                     if (gen !== forestTrackSwitchGen) return;
