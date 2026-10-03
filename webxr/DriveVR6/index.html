@@ -89,6 +89,27 @@
                 display: none;
             }
 
+        #raceCountdownOverlay {
+            display: none;
+            position: fixed;
+            left: 50%;
+            top: 42%;
+            transform: translate(-50%, -50%);
+            z-index: 2200;
+            pointer-events: none;
+            font: 900 120px/1 Impact, Haettenschweiler, 'Arial Black', sans-serif;
+            color: #fff;
+            text-shadow: 0 0 24px rgba(0,0,0,0.85), 0 4px 0 #222;
+            letter-spacing: 0.04em;
+        }
+        #raceCountdownOverlay.go {
+            color: #7dff7d;
+            font-size: 140px;
+        }
+        .vr-mode #raceCountdownOverlay {
+            display: none !important;
+        }
+
         /* Rearview mirror (desktop driving UI) */
         #rearviewMirrorUI {
             display: none;
@@ -485,6 +506,7 @@
 
     <div id="container"><br /><br /><br /><br /><br />Loading...</div>
     <div id="speedometer">0.0 km/h</div>
+    <div id="raceCountdownOverlay" aria-hidden="true"></div>
     
     <!-- Desktop HUD for non-VR users -->
     <div id="desktopHUD">
@@ -1723,11 +1745,21 @@
                     releaseVRWheelGrab(1);
                 } catch (eGrab2) { /* noop */ }
             }
-            function selectForestTrack(id) {
+            function selectForestTrack(id, opts) {
+                opts = opts || {};
+                var fromNetwork = !!opts.fromNetwork;
+                // Clients must follow the host — never diverge.
+                if (isMultiplayer && !isHost && !fromNetwork) {
+                    console.warn('🛤️ Only the host can change the track in multiplayer');
+                    return;
+                }
                 var next = forestTrackById(id);
-                if (!next || next.id === activeForestTrack.id) return;
+                if (!next) return;
+                if (next.id === activeForestTrack.id && !opts.force) return;
                 if (forestTrackSwitching) {
-                    console.warn('⏳ Track switch already in progress');
+                    // Queue the latest requested track (host spam or late network msg).
+                    pendingNetworkTrackId = next.id;
+                    console.warn('⏳ Track switch already in progress — queued', next.id);
                     return;
                 }
                 // Never navigate — a page reload ends the WebXR session.
@@ -1748,9 +1780,39 @@
                 if (typeof updateVRMenuDisplay === 'function' && vrMenu && vrMenu.visible) {
                     updateVRMenuDisplay();
                 }
+                // Host tells every client before/while unloading so they stay in sync.
+                if (isMultiplayer && isHost && !fromNetwork) {
+                    broadcastForestTrackChange(activeForestTrack.id);
+                }
                 switchForestTrackInPlace();
             }
             window.__driveSelectForestTrack = selectForestTrack;
+
+            /** Host → all peers: stay on the same track always. */
+            function getForestTrackSyncPayload(trackId) {
+                return {
+                    type: 'track-change',
+                    trackId: trackId || (activeForestTrack && activeForestTrack.id) || 'forest',
+                    v: trackAssetVersion || ''
+                };
+            }
+
+            function broadcastForestTrackChange(trackId) {
+                if (!isMultiplayer || !isHost) return;
+                var payload = getForestTrackSyncPayload(trackId);
+                sendToAllPlayers(payload);
+                console.log('🛤️ Broadcast track-change →', payload.trackId,
+                    'to', connections ? connections.size : 0, 'client(s)');
+            }
+
+            /** Apply a host track sync (join welcome or mid-session change). */
+            function applyNetworkForestTrack(trackId) {
+                if (!trackId) return;
+                if (isHost) return;
+                selectForestTrack(trackId, { fromNetwork: true });
+            }
+
+            var pendingNetworkTrackId = null;
             var vrRunnerCityRoot = null;
             var spawnDirtRoadRoot = null;
             var dirtRoadPathPoints = null;
@@ -2639,6 +2701,7 @@
                     // Quest immersive throttles window.rAF — pump build/switch work here.
                     pumpDriveEnvironmentBuildQueues();
                     pumpForestTrackSwitchWait();
+                    pumpMultiplayerRaceRestart();
                     if (pendingBotRespawnAfterTrackSwitch && !forestTrackSwitching) {
                         pendingBotRespawnTries++;
                         if (respawnDirtBotAfterTrackSwitch() || pendingBotRespawnTries > 120) {
@@ -2825,7 +2888,7 @@
                 
                 // Reset car: R = last checkpoint, Shift+R = track start / new lap
                 if (e.code === 'KeyR') {
-                    if (e.shiftKey) resetCarToStart();
+                    if (e.shiftKey) requestResetToStart();
                     else resetCar();
                     e.preventDefault();
                     e.stopPropagation();
@@ -3010,6 +3073,8 @@
                         geometry = new THREE.BufferGeometry();
                         geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, -5], 3));
                         
+                        // renderOrder must beat the VR menu (menu ~5xxx). Same order +
+                        // depthTest:false made the opaque panel paint over the lasers.
                         material = new THREE.LineBasicMaterial({
                             color: 0x00ff00,
                             transparent: true,
@@ -3020,7 +3085,7 @@
                         
                         const line = new THREE.Line(geometry, material);
                         line.name = 'laser';
-                        line.renderOrder = 1000;
+                        line.renderOrder = 12000;
                         line.frustumCulled = false;
                         
                         // Also create a cylinder as backup visualization
@@ -3035,7 +3100,7 @@
                         const cylinder = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
                         cylinder.position.set(0, 0, -2.5);
                         cylinder.rotation.x = Math.PI / 2;
-                        cylinder.renderOrder = 1000;
+                        cylinder.renderOrder = 12000;
                         cylinder.frustumCulled = false;
                         line.add(cylinder);
                         
@@ -3206,8 +3271,14 @@
                 vrLaserPointers.forEach(function(laser, index) {
                     if (!laser) return;
                     laser.visible = showLasers;
+                    laser.renderOrder = 12000;
                     laser.traverse(function(child) {
+                        child.renderOrder = 12000;
+                        child.frustumCulled = false;
                         if (child.material) {
+                            child.material.depthTest = false;
+                            child.material.depthWrite = false;
+                            child.material.transparent = true;
                             child.material.opacity = showLasers ? 1.0 : 0;
                             if (showLasers && child.material.color) {
                                 child.material.color.setHex(0x00ff00);
@@ -3257,15 +3328,27 @@
                 });
             }
 
+            function applyVRButtonBaseVisual(button) {
+                if (!button || !button.userData || !button.userData.material) return;
+                var material = button.userData.material;
+                if (button.userData.disabled) {
+                    material.color.setHex(0x666666);
+                    material.opacity = 0.5;
+                } else if (button.userData.active) {
+                    // Active (e.g. Mirror ON) — keep brand blue, not "no hover forever".
+                    material.color.setHex(0x0088ff);
+                    material.opacity = 1.0;
+                } else {
+                    material.color.copy(button.userData.originalColor);
+                    material.opacity = 0.8;
+                }
+            }
+
             function updateVRMenuHoverAll(session) {
                 if (!vrMenuRaycaster || !vrMenu || !session || !session.inputSources) return;
 
                 vrMenuButtons.forEach(function(button) {
-                    var material = button.userData.material;
-                    if (!button.userData.active && material) {
-                        material.color.copy(button.userData.originalColor);
-                        material.opacity = 0.8;
-                    }
+                    applyVRButtonBaseVisual(button);
                 });
 
                 var hoveredButton = null;
@@ -3286,12 +3369,10 @@
                     }
                 }
 
-                if (hoveredButton) {
-                    var hoverMat = hoveredButton.userData.material;
-                    if (hoverMat && !hoveredButton.userData.active) {
-                        hoverMat.color.setHex(0xffffff);
-                        hoverMat.opacity = 1.0;
-                    }
+                // Hover wins over active — Mirror/Music/Ghost ON still need a lit state.
+                if (hoveredButton && hoveredButton.userData.material) {
+                    hoveredButton.userData.material.color.setHex(0xffffff);
+                    hoveredButton.userData.material.opacity = 1.0;
                 }
             }
 
@@ -4286,11 +4367,22 @@
                     console.warn('Audio system not initialized yet');
                     return;
                 }
+
+                function startBotEngineIfPresent() {
+                    // No phantom bot drone in multiplayer / when the AI car is gone.
+                    if (isMultiplayer || chaseEnabled || !botEnabled || !botVehicleRef) {
+                        if (botEngineSound && typeof botEngineSound.stop === 'function') {
+                            botEngineSound.stop();
+                        }
+                        return;
+                    }
+                    botEngineSound.start();
+                }
                 
                 if (audioContext.state === 'suspended') {
                     audioContext.resume().then(() => {
                         playerEngineSound.start();
-                        botEngineSound.start();
+                        startBotEngineIfPresent();
                         startChaseBotEngineSounds();
                         console.log('🔊 Engine sounds started (resumed context)');
                         // Start background music if enabled
@@ -4306,7 +4398,7 @@
                     });
                 } else {
                     playerEngineSound.start();
-                    botEngineSound.start();
+                    startBotEngineIfPresent();
                     startChaseBotEngineSounds();
                     console.log('🔊 Engine sounds started');
                     // Start background music if enabled
@@ -4360,6 +4452,18 @@
                 }
                 context.fillText('SPEED: ' + Math.round(currentSpeed) + ' km/h', 20, yPos);
                 yPos += lineHeight;
+
+                if (mpRaceRestart) {
+                    context.fillStyle = '#ffee66';
+                    context.font = 'bold 72px Arial';
+                    context.textAlign = 'center';
+                    var cd = mpRaceRestart.displayCount;
+                    context.fillText(cd > 0 ? String(cd) : 'GO!', canvas.width / 2, canvas.height * 0.55);
+                    context.textAlign = 'left';
+                    context.font = 'bold 32px Arial';
+                    context.fillStyle = '#ffffff';
+                    yPos += lineHeight;
+                }
 
                 if (!chaseEnabled || !chaseActive) {
                     currentLapTime = currentLapStartTime ? (Date.now() - currentLapStartTime) / 1000 : 0;
@@ -4515,13 +4619,16 @@
                 vrMenu.position.set(0, 0, -1.35);
                 vrMenu.rotation.set(0, 0, 0);
                 vrMenu.quaternion.identity();
+                // Menu ~5xxx, lasers 12000 — keep panel above world but under pointers.
                 vrMenu.traverse(function(o) {
                     if (!o.isMesh || !o.material) return;
                     o.material.depthTest = false;
                     o.material.depthWrite = false;
                     o.material.toneMapped = false;
-                    o.renderOrder = Math.max(o.renderOrder || 0, 1000);
                     o.frustumCulled = false;
+                    var isBg = o.geometry && o.geometry.parameters
+                        && o.geometry.parameters.width >= 1.5;
+                    o.renderOrder = isBg ? 5000 : 5100;
                 });
             }
 
@@ -4604,7 +4711,7 @@
                 });
                 const background = new THREE.Mesh(bgGeometry, bgMaterial);
                 background.position.z = -0.01;
-                background.renderOrder = 998;
+                background.renderOrder = 5000;
                 vrMenu.add(background);
                 
                 const borderGeometry = new THREE.PlaneGeometry(1.6, 1.78);
@@ -4617,7 +4724,7 @@
                 });
                 const border = new THREE.Mesh(borderGeometry, borderMaterial);
                 border.position.z = -0.02;
-                border.renderOrder = 997;
+                border.renderOrder = 4990;
                 vrMenu.add(border);
                 
                 const titleGeometry = new THREE.PlaneGeometry(0.8, 0.1);
@@ -4741,9 +4848,12 @@
                 const material = new THREE.MeshBasicMaterial({ 
                     color: new THREE.Color(color), 
                     transparent: true, 
-                    opacity: 0.8 
+                    opacity: 0.8,
+                    depthTest: false,
+                    depthWrite: false
                 });
                 const button = new THREE.Mesh(geometry, material);
+                button.renderOrder = 5100;
                 group.add(button);
                 
                 // Button text
@@ -4757,9 +4867,15 @@
                 ctx.fillText(text, 128, 40);
                 
                 const textTexture = new THREE.CanvasTexture(textCanvas);
-                const textMaterial = new THREE.MeshBasicMaterial({ map: textTexture, transparent: true });
+                const textMaterial = new THREE.MeshBasicMaterial({
+                    map: textTexture,
+                    transparent: true,
+                    depthTest: false,
+                    depthWrite: false
+                });
                 const textMesh = new THREE.Mesh(new THREE.PlaneGeometry(width * 0.9, height * 0.7), textMaterial);
                 textMesh.position.z = 0.001;
+                textMesh.renderOrder = 5110;
                 group.add(textMesh);
                 
                 group.userData.originalColor = new THREE.Color(color);
@@ -4860,34 +4976,39 @@
                     else if (id === 'mirror-toggle') active = rearviewMirrorEnabled;
                     else if (id === 'music-toggle') active = musicEnabled;
                     else if (id === 'ghost-toggle') active = ghostBotEnabled;
-                    else if (id === 'track-forest') active = activeForestTrack.id === 'forest';
-                    else if (id === 'track-path') active = activeForestTrack.id === 'path';
-                    else if (id === 'track-loop') active = activeForestTrack.id === 'loop';
-                    else if (id === 'track-glen') active = activeForestTrack.id === 'glen';
-                    else if (id === 'track-hollow') active = activeForestTrack.id === 'hollow';
-                    else if (id === 'connect') {
+                    else if (id === 'track-forest') {
+                        active = activeForestTrack.id === 'forest';
+                        disabled = isMultiplayer && !isHost;
+                    } else if (id === 'track-path') {
+                        active = activeForestTrack.id === 'path';
+                        disabled = isMultiplayer && !isHost;
+                    } else if (id === 'track-loop') {
+                        active = activeForestTrack.id === 'loop';
+                        disabled = isMultiplayer && !isHost;
+                    } else if (id === 'track-glen') {
+                        active = activeForestTrack.id === 'glen';
+                        disabled = isMultiplayer && !isHost;
+                    } else if (id === 'track-hollow') {
+                        active = activeForestTrack.id === 'hollow';
+                        disabled = isMultiplayer && !isHost;
+                    } else if (id === 'connect') {
                         disabled = (connectionState === 'connecting');
                         active = connectionState === 'connected';
                         setVRButtonLabel(button,
                             connectionState === 'connected' ? 'DISCONNECT' :
                             connectionState === 'connecting' ? 'CONNECTING...' : 'CONNECT',
                             16);
+                    } else if (id === 'reset-start') {
+                        disabled = isMultiplayer && !isHost;
+                        setVRButtonLabel(button, isMultiplayer
+                            ? (isHost ? 'RESET ALL' : 'HOST RESET')
+                            : 'RESET TO START', 18);
                     }
                     
                     if (active !== button.userData.active || disabled !== button.userData.disabled) {
                         button.userData.active = active;
                         button.userData.disabled = disabled;
-                        const material = button.userData.material;
-                        if (disabled) {
-                            material.color.setHex(0x666666);
-                            material.opacity = 0.5;
-                        } else if (active) {
-                            material.color.setHex(0x0088ff);
-                            material.opacity = 1.0;
-                        } else {
-                            material.color.copy(button.userData.originalColor);
-                            material.opacity = 0.8;
-                        }
+                        applyVRButtonBaseVisual(button);
                     }
                     if (id === 'mirror-toggle') setVRButtonLabel(button, rearviewMirrorEnabled ? 'ON' : 'OFF');
                     if (id === 'music-toggle') setVRButtonLabel(button, musicEnabled ? 'ON' : 'OFF');
@@ -5004,7 +5125,7 @@
                             selectForestTrack('hollow');
                             break;
                         case 'reset-start':
-                            resetCarToStart();
+                            requestResetToStart();
                             toggleMenu();
                             break;
                         case 'start-race':
@@ -5121,8 +5242,26 @@
                 }
 
                 document.querySelectorAll('#trackSection [data-track]').forEach(function(btn) {
-                    btn.classList.toggle('active', btn.getAttribute('data-track') === activeForestTrack.id);
+                    var tid = btn.getAttribute('data-track');
+                    btn.classList.toggle('active', tid === activeForestTrack.id);
+                    var clientLocked = isMultiplayer && !isHost;
+                    btn.disabled = clientLocked;
+                    btn.style.opacity = clientLocked ? '0.45' : '';
+                    btn.title = clientLocked ? 'Host controls the track' : '';
                 });
+
+                var resetBtn = document.getElementById('resetStartBtn');
+                if (resetBtn) {
+                    var resetLocked = isMultiplayer && !isHost;
+                    resetBtn.disabled = resetLocked;
+                    resetBtn.style.opacity = resetLocked ? '0.45' : '';
+                    resetBtn.textContent = isMultiplayer
+                        ? (isHost ? 'RESET TO START (ALL)' : 'RESET (HOST ONLY)')
+                        : 'RESET TO START';
+                    resetBtn.title = resetLocked
+                        ? 'Only the host can reset the race'
+                        : (isMultiplayer ? 'Reset all players with countdown' : '');
+                }
             }
 
             function setupMenuEventListeners() {
@@ -5160,7 +5299,7 @@
                     updateMenuDisplay();
                 });
                 document.getElementById('resetStartBtn')?.addEventListener('click', () => {
-                    resetCarToStart();
+                    requestResetToStart();
                     toggleMenu();
                 });
                 document.getElementById('closeMenuBtn')?.addEventListener('click', () => {
@@ -5183,11 +5322,11 @@
                 isMultiplayer = false;
                 isHost = false;
                 multiplayerStatus = 'Disconnected';
+                mpRaceRestart = null;
+                updateRaceCountdownUi(null);
                 
                 if (!botVehicleRef && botEnabled && !chaseEnabled && vehicleRef) {
-                    var sp = getDefaultPlayerCitySpawnPose();
-                    var botStartPosition = getBotGridSpawnPose(sp.position, sp.rotation);
-                    botVehicleRef = createBotVehicle(botStartPosition, sp.rotation, 0x0066ff);
+                    spawnOrResetBotAheadOfPlayer();
                     console.log('Bot car created for singleplayer mode');
                 }
                 
@@ -5202,24 +5341,12 @@
                 
                 removeChaseVehicles();
 
+                // Full teardown — the old path only scene.remove()'d the mesh and checked
+                // chassisBody (wrong; the rigid body is vehicleBody), so an invisible collider
+                // + engine sound stayed in the world after MULTI / host connect.
                 if (botVehicleRef) {
                     console.log('Removing bot car for multiplayer...');
-                    // Remove bot from physics world
-                    if (botVehicleRef.vehicle) {
-                        physicsWorld.removeAction(botVehicleRef.vehicle);
-                    }
-                    if (botVehicleRef.chassisBody) {
-                        physicsWorld.removeRigidBody(botVehicleRef.chassisBody);
-                    }
-                    // Remove bot from scene
-                    if (botVehicleRef.chassisMesh) {
-                        scene.remove(botVehicleRef.chassisMesh);
-                    }
-                    if (botVehicleRef.wheelMeshes) {
-                        botVehicleRef.wheelMeshes.forEach(wheel => scene.remove(wheel));
-                    }
-                    botVehicleRef = null;
-                    console.log('Bot car removed for multiplayer mode');
+                    removeBotVehicle();
                 }
                 
                 updateMenuDisplay();
@@ -5246,17 +5373,25 @@
                 updateMenuDisplay();
                 updateVRMenuDisplay();
                 
-                // Enable/disable bot in the scene
-                if (botCar && botCar.chassisMesh) {
-                    botCar.chassisMesh.visible = botEnabled;
-                    if (botCar.chassisBody) {
-                        // Enable/disable physics
-                        const flags = botCar.chassisBody.getCollisionFlags();
-                        if (botEnabled) {
-                            botCar.chassisBody.setCollisionFlags(flags & ~4); // Remove NO_CONTACT_RESPONSE
-                        } else {
-                            botCar.chassisBody.setCollisionFlags(flags | 4); // Add NO_CONTACT_RESPONSE
+                if (!botEnabled) {
+                    if (botVehicleRef) removeBotVehicle();
+                } else if (!isMultiplayer && !chaseEnabled && !botVehicleRef && vehicleRef) {
+                    spawnOrResetBotAheadOfPlayer();
+                } else if (botVehicleRef) {
+                    if (botVehicleRef.chassisMesh) botVehicleRef.chassisMesh.visible = true;
+                    if (botVehicleRef.wheelMeshes) {
+                        for (var wi = 0; wi < botVehicleRef.wheelMeshes.length; wi++) {
+                            if (botVehicleRef.wheelMeshes[wi]) botVehicleRef.wheelMeshes[wi].visible = true;
                         }
+                    }
+                    if (botVehicleRef.vehicleBody) {
+                        try {
+                            botVehicleRef.vehicleBody.activate(true);
+                            botVehicleRef.vehicleBody.setActivationState(DISABLE_DEACTIVATION);
+                        } catch (eBotOn) { /* noop */ }
+                    }
+                    if (botEngineSound && typeof botEngineSound.start === 'function') {
+                        botEngineSound.start();
                     }
                 }
                 
@@ -5430,6 +5565,8 @@
                 multiplayerStatus = 'Disconnected';
                 myPlayerId = null;
                 sessionID = null;
+                mpRaceRestart = null;
+                updateRaceCountdownUi(null);
                 
                 // Update display
                 updateMenuDisplay();
@@ -5441,6 +5578,8 @@
             // ========== PEERJS MULTIPLAYER FUNCTIONS ==========
             async function setupHost(lobbyNumber) {
                 ensureRemotePlayerCars();
+                // Host lobby: no local AI bot (visual, collider, sync, or engine).
+                if (botVehicleRef) removeBotVehicle();
                 return new Promise((resolve, reject) => {
                     isMultiplayer = true;
                     isHost = true;
@@ -5483,12 +5622,16 @@
                             updateMenuDisplay();
                             updateVRMenuDisplay();
                             
-                            // Send welcome message to new player
+                            // Send welcome message to new player — include current track so they sync.
                             conn.send({
                                 type: 'player-assignment',
                                 playerId: playerId,
-                                isHost: false
+                                isHost: false,
+                                trackId: activeForestTrack.id,
+                                v: trackAssetVersion || ''
                             });
+                            // Also send an explicit track-change (assignment may race UI).
+                            conn.send(getForestTrackSyncPayload(activeForestTrack.id));
                             
                             // Broadcast updated player list to all clients
                             broadcastPlayerList();
@@ -5570,16 +5713,21 @@
                         console.log('Attempting to connect to host:', hostID);
                         const conn = peer.connect(hostID);
                         connections.set('host', conn);
+
+                        // Register data BEFORE open so welcome track-change cannot be missed.
+                        conn.on("data", function(data) {
+                            handleMultiplayerMessage(data, 'host');
+                        });
                         
                         conn.on("open", function() {
                             multiplayerStatus = `Connected - Lobby ${lobbyNumber}`;
                             updateMenuDisplay();
                             updateVRMenuDisplay();
+                            // Ask host which track to load (covers join-from-different-track).
+                            try {
+                                conn.send({ type: 'track-sync-request' });
+                            } catch (eReq) { /* noop */ }
                             resolve();
-                        });
-                        
-                        conn.on("data", function(data) {
-                            handleMultiplayerMessage(data, 'host');
                         });
                         
                         conn.on("close", function() {
@@ -5615,6 +5763,10 @@
                     case 'player-assignment':
                         myPlayerId = data.playerId;
                         console.log('Assigned player ID:', myPlayerId);
+                        // Join mid-session on whatever track the host is already running.
+                        if (data.trackId) {
+                            applyNetworkForestTrack(data.trackId);
+                        }
                         break;
                         
                     case 'player-list':
@@ -5661,6 +5813,33 @@
                         // Handle bot state updates from host
                         if (!isHost && data.botState) {
                             updateRemoteBotState(data.botState);
+                        }
+                        break;
+
+                    case 'track-change':
+                        if (!isHost && data.trackId) {
+                            console.log('🛤️ Host track-change →', data.trackId);
+                            applyNetworkForestTrack(data.trackId);
+                        }
+                        break;
+
+                    case 'track-sync-request':
+                        // Client just joined (possibly on a different track) — reply with host track.
+                        if (isHost) {
+                            var replyConn = connections.get(fromPlayerId);
+                            if (replyConn && replyConn.open) {
+                                replyConn.send(getForestTrackSyncPayload(activeForestTrack.id));
+                                console.log('🛤️ Sent track sync to', fromPlayerId, '→', activeForestTrack.id);
+                            }
+                        }
+                        break;
+
+                    case 'race-restart':
+                        // Host broadcast: snap to unique grid slot + shared countdown.
+                        if (!isHost) {
+                            console.log('🏁 Client received race-restart', data && data.countdownSec,
+                                'slotMap', data && data.slots);
+                            applyRaceRestartLocal(data);
                         }
                         break;
                         
@@ -6881,6 +7060,348 @@
                 return { position: spawnPos, rotation: spawnRot };
             }
 
+            var MP_GRID_LATERAL_M = 3.6;
+            var MP_GRID_ROW_BACK_M = 6.5;
+            var mpRaceRestart = null; // { endsAt, displayCount, holdPose, slot }
+
+            function getSortedMultiplayerPlayerIds() {
+                var ids = [];
+                if (activePlayers && activePlayers.size) {
+                    activePlayers.forEach(function(_v, id) { ids.push(id); });
+                } else if (myPlayerId) {
+                    ids.push(myPlayerId);
+                }
+                ids.sort(function(a, b) {
+                    var na = parseInt(String(a).split('_')[1], 10);
+                    var nb = parseInt(String(b).split('_')[1], 10);
+                    if (!isFinite(na)) na = 99;
+                    if (!isFinite(nb)) nb = 99;
+                    return na - nb;
+                });
+                return ids;
+            }
+
+            function getMyMultiplayerSlotIndex() {
+                if (!myPlayerId) return 0;
+                var ids = getSortedMultiplayerPlayerIds();
+                var idx = ids.indexOf(myPlayerId);
+                if (idx >= 0) return idx;
+                var n = parseInt(String(myPlayerId).split('_')[1], 10);
+                return isFinite(n) ? n : 0;
+            }
+
+            function buildMultiplayerSlotMap() {
+                var ids = getSortedMultiplayerPlayerIds();
+                var slots = {};
+                for (var i = 0; i < ids.length; i++) slots[ids[i]] = i;
+                return slots;
+            }
+
+            /**
+             * Unique starting-grid pose per multiplayer slot (2-wide rows).
+             * slot 0 = host front-left, 1 = front-right, 2 = row-2 left, …
+             */
+            function computeMultiplayerGridSlotPose(slotIndex, basePose, totalPlayers) {
+                var base = basePose || computeDefaultPlayerCitySpawnPoseOnRoad();
+                var slot = Math.max(0, slotIndex | 0);
+                var col = slot % 2;
+                var row = (slot / 2) | 0;
+                var right = new THREE.Vector3(1, 0, 0).applyQuaternion(base.rotation);
+                var back = new THREE.Vector3(0, 0, -1).applyQuaternion(base.rotation);
+                right.y = 0;
+                back.y = 0;
+                if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
+                else right.normalize();
+                if (back.lengthSq() < 1e-6) back.set(0, 0, -1);
+                else back.normalize();
+                var n = totalPlayers != null ? totalPlayers : getSortedMultiplayerPlayerIds().length;
+                var lat = (col === 0 ? -0.5 : 0.5) * MP_GRID_LATERAL_M;
+                // Center a single car on the line; two+ cars straddle / fill the grid.
+                if (n <= 1) lat = 0;
+                var pos = base.position.clone();
+                pos.addScaledVector(right, lat);
+                pos.addScaledVector(back, row * MP_GRID_ROW_BACK_M);
+                if (activeForestTrack && activeForestTrack.generated) {
+                    pos.y = chassisYFromFloorY(base.position.y) + 0.8;
+                } else if (!snapSpawnYToWalkableRoad(pos)) {
+                    pos.y = base.position.y;
+                }
+                return { position: pos, rotation: base.rotation.clone() };
+            }
+
+            function computeLocalPlayerSpawnPose() {
+                var base = computeDefaultPlayerCitySpawnPoseOnRoad();
+                if (isMultiplayer && myPlayerId) {
+                    return computeMultiplayerGridSlotPose(getMyMultiplayerSlotIndex(), base);
+                }
+                return base;
+            }
+
+            function applyPlayerSpawnPose(pose, silent) {
+                if (!vehicleRef || !vehicleRef.vehicle || !vehicleRef.vehicleBody || !pose) return;
+                var spawnPos = pose.position;
+                var spawnRot = pose.rotation;
+                var spawnTransform = new Ammo.btTransform();
+                spawnTransform.setIdentity();
+                spawnTransform.setOrigin(new Ammo.btVector3(spawnPos.x, spawnPos.y, spawnPos.z));
+                spawnTransform.setRotation(new Ammo.btQuaternion(spawnRot.x, spawnRot.y, spawnRot.z, spawnRot.w));
+                vehicleRef.vehicleBody.setWorldTransform(spawnTransform);
+                vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
+                vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
+                vehicleRef.vehicle.resetSuspension();
+                try {
+                    vehicleRef.vehicleBody.activate(true);
+                    vehicleRef.vehicleBody.setActivationState(DISABLE_DEACTIVATION);
+                } catch (eAct) { /* noop */ }
+                syncPlayerChassisFromPhysics();
+                if (!silent) attachCameraRigToVehicle();
+                recordLastCarDropPosition(spawnPos);
+            }
+
+            function isMultiplayerRaceRestartFrozen() {
+                return !!(mpRaceRestart && !mpRaceRestart.released
+                    && performance.now() < mpRaceRestart.endsAt);
+            }
+
+            var vrRaceCountdownGroup = null;
+
+            function ensureVrRaceCountdownBillboard() {
+                // Head-locked like the VR menu — parent to firstPersonCamera so Quest
+                // clients actually see 3-2-1 in front of their eyes (cameraRig HUD is tiny/side).
+                var parent = firstPersonCamera || cameraRig;
+                if (!parent) return null;
+                if (vrRaceCountdownGroup) {
+                    if (vrRaceCountdownGroup.parent !== parent) {
+                        parent.add(vrRaceCountdownGroup);
+                    }
+                    return vrRaceCountdownGroup;
+                }
+                var canvas = document.createElement('canvas');
+                canvas.width = 512;
+                canvas.height = 512;
+                var tex = new THREE.CanvasTexture(canvas);
+                tex.needsUpdate = true;
+                var mat = new THREE.MeshBasicMaterial({
+                    map: tex,
+                    transparent: true,
+                    depthTest: false,
+                    depthWrite: false,
+                    toneMapped: false
+                });
+                var mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 0.85), mat);
+                mesh.renderOrder = 9999;
+                vrRaceCountdownGroup = new THREE.Group();
+                vrRaceCountdownGroup.position.set(0, 0, -1.25);
+                vrRaceCountdownGroup.add(mesh);
+                vrRaceCountdownGroup.visible = false;
+                vrRaceCountdownGroup.userData = {
+                    canvas: canvas,
+                    context: canvas.getContext('2d'),
+                    texture: tex,
+                    mesh: mesh
+                };
+                parent.add(vrRaceCountdownGroup);
+                return vrRaceCountdownGroup;
+            }
+
+            function paintVrRaceCountdown(secOrGo) {
+                var group = ensureVrRaceCountdownBillboard();
+                if (!group) return;
+                if (secOrGo == null) {
+                    group.visible = false;
+                    return;
+                }
+                var ctx = group.userData.context;
+                var canvas = group.userData.canvas;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'rgba(0,0,0,0.35)';
+                ctx.beginPath();
+                ctx.arc(canvas.width / 2, canvas.height / 2, 210, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                if (secOrGo <= 0) {
+                    ctx.fillStyle = '#7dff7d';
+                    ctx.font = 'bold 180px Impact, Arial Black, sans-serif';
+                    ctx.fillText('GO!', canvas.width / 2, canvas.height / 2 + 10);
+                } else {
+                    ctx.fillStyle = '#ffee66';
+                    ctx.font = 'bold 280px Impact, Arial Black, sans-serif';
+                    ctx.fillText(String(secOrGo), canvas.width / 2, canvas.height / 2 + 16);
+                }
+                group.userData.texture.needsUpdate = true;
+                group.visible = true;
+            }
+
+            function prepareLocalViewForRaceRestart() {
+                // Client/host VR: leave fly cam, close menu, show HUD + countdown.
+                if (renderer && renderer.xr && renderer.xr.isPresenting) {
+                    if (cameraMode === 'fly') {
+                        cameraMode = 'firstperson';
+                        attachCameraRigToVehicle();
+                    }
+                    if (isMenuVisible) {
+                        isMenuVisible = false;
+                        if (vrMenu) vrMenu.visible = false;
+                        var gm = document.getElementById('gameMenu');
+                        if (gm) gm.style.display = 'none';
+                    }
+                    if (vrHUD) vrHUD.visible = true;
+                    ensureVrRaceCountdownBillboard();
+                } else if (isMenuVisible) {
+                    var gm2 = document.getElementById('gameMenu');
+                    if (gm2) gm2.style.display = 'none';
+                    isMenuVisible = false;
+                }
+            }
+
+            function updateRaceCountdownUi(secOrGo) {
+                var el = document.getElementById('raceCountdownOverlay');
+                var inXr = !!(renderer && renderer.xr && renderer.xr.isPresenting);
+                if (el) {
+                    // Desktop overlay only — VR uses the in-world billboard.
+                    if (secOrGo == null || inXr) {
+                        el.style.display = 'none';
+                        el.textContent = '';
+                        el.classList.remove('go');
+                    } else if (secOrGo <= 0) {
+                        el.style.display = 'block';
+                        el.textContent = 'GO!';
+                        el.classList.add('go');
+                    } else {
+                        el.style.display = 'block';
+                        el.textContent = String(secOrGo);
+                        el.classList.remove('go');
+                    }
+                }
+                if (mpRaceRestart) {
+                    mpRaceRestart.displayCount = secOrGo == null ? -1
+                        : (secOrGo <= 0 ? 0 : secOrGo);
+                }
+                paintVrRaceCountdown(inXr ? secOrGo : null);
+            }
+
+            function holdMultiplayerRaceRestartPose() {
+                if (!mpRaceRestart || !mpRaceRestart.holdPose || mpRaceRestart.released) return;
+                if (!vehicleRef || !vehicleRef.vehicleBody) return;
+                applyPlayerSpawnPose(mpRaceRestart.holdPose, true);
+            }
+
+            function applyRaceRestartLocal(data) {
+                data = data || {};
+                var slots = data.slots || buildMultiplayerSlotMap();
+                var slot = 0;
+                if (myPlayerId && slots[myPlayerId] != null) slot = slots[myPlayerId] | 0;
+                else slot = getMyMultiplayerSlotIndex();
+                var nSlots = 0;
+                for (var k in slots) { if (Object.prototype.hasOwnProperty.call(slots, k)) nSlots++; }
+                if (nSlots < 1) nSlots = Math.max(1, getSortedMultiplayerPlayerIds().length);
+                if (data.trackId && activeForestTrack && data.trackId !== activeForestTrack.id && !isHost) {
+                    pendingNetworkTrackId = data.trackId;
+                    applyNetworkForestTrack(data.trackId);
+                }
+                prepareLocalViewForRaceRestart();
+                var pose = computeMultiplayerGridSlotPose(slot, null, nSlots);
+                applyPlayerSpawnPose(pose, true);
+                attachCameraRigToVehicle();
+                ensureCameraRigOnDriverSeat();
+                playerLastPassedCheckpoint = 0;
+                playerCurrentCheckpoint = 1;
+                if (checkpointMarkers && checkpointMarkers.length &&
+                    playerCurrentCheckpoint >= checkpointMarkers.length) {
+                    playerCurrentCheckpoint = 1;
+                }
+                currentLapNumber = 1;
+                lapRecordingActive = false;
+                var sec = data.countdownSec != null ? data.countdownSec : 3;
+                mpRaceRestart = {
+                    endsAt: performance.now() + Math.max(0.5, sec) * 1000,
+                    displayCount: Math.ceil(sec),
+                    holdPose: {
+                        position: pose.position.clone(),
+                        rotation: pose.rotation.clone()
+                    },
+                    slot: slot,
+                    lastShown: -999,
+                    released: false,
+                    goUntil: 0
+                };
+                updateRaceCountdownUi(Math.ceil(sec));
+                updateNextCheckpointMarker();
+                if (typeof updateVRHUD === 'function') updateVRHUD();
+                console.log('🏁 Race restart — slot', slot, '/', nSlots, 'countdown', sec + 's');
+            }
+
+            function beginMultiplayerRaceRestart(countdownSec) {
+                if (!isMultiplayer || !isHost) return false;
+                countdownSec = countdownSec != null ? countdownSec : 3;
+                // Ensure host is in the slot map even if activePlayers was briefly empty.
+                if (myPlayerId && !activePlayers.has(myPlayerId)) {
+                    activePlayers.set(myPlayerId, { isConnected: true, isHost: true });
+                }
+                var payload = {
+                    type: 'race-restart',
+                    countdownSec: countdownSec,
+                    slots: buildMultiplayerSlotMap(),
+                    trackId: activeForestTrack.id
+                };
+                sendToAllPlayers(payload);
+                applyRaceRestartLocal(payload);
+                return true;
+            }
+
+            function pumpMultiplayerRaceRestart() {
+                if (!mpRaceRestart) return;
+                var leftMs = mpRaceRestart.endsAt - performance.now();
+                if (leftMs > 0) {
+                    holdMultiplayerRaceRestartPose();
+                    var sec = Math.max(1, Math.ceil(leftMs / 1000));
+                    var needPaint = sec !== mpRaceRestart.lastShown;
+                    if (!needPaint && renderer && renderer.xr && renderer.xr.isPresenting) {
+                        // Recover if billboard wasn't ready on the first network tick.
+                        needPaint = !vrRaceCountdownGroup || !vrRaceCountdownGroup.visible;
+                    }
+                    if (needPaint) {
+                        if (sec !== mpRaceRestart.lastShown) console.log('🏁', sec + '…');
+                        mpRaceRestart.lastShown = sec;
+                        updateRaceCountdownUi(sec);
+                    }
+                    return;
+                }
+                if (!mpRaceRestart.released) {
+                    mpRaceRestart.released = true;
+                    mpRaceRestart.goUntil = performance.now() + 800;
+                    mpRaceRestart.lastShown = 0;
+                    updateRaceCountdownUi(0);
+                    currentLapStartTime = Date.now();
+                    beginLapRecording();
+                    updateNextCheckpointMarker();
+                    console.log('🏁 GO!');
+                    return;
+                }
+                if (performance.now() < mpRaceRestart.goUntil) {
+                    updateRaceCountdownUi(0);
+                    return;
+                }
+                mpRaceRestart = null;
+                updateRaceCountdownUi(null);
+            }
+
+            /** Menu / Shift+R / VR — host syncs countdown grid restart in multiplayer. */
+            function requestResetToStart() {
+                if (isMultiplayer) {
+                    if (!isHost) {
+                        console.warn('🏁 Only the host can Reset to Start');
+                        var st = document.getElementById('statusText');
+                        if (st) st.textContent = 'Only host can Reset to Start';
+                        return;
+                    }
+                    beginMultiplayerRaceRestart(3);
+                    return;
+                }
+                resetCarToStart();
+            }
+
             /** Create player car on road, or reposition if it already exists. */
             function trySpawnPlayerVehicleOnRoad(opts) {
                 opts = opts || {};
@@ -6891,7 +7412,7 @@
                 }
                 pendingInitialCitySpawn = false;
 
-                var pose = computeDefaultPlayerCitySpawnPoseOnRoad();
+                var pose = computeLocalPlayerSpawnPose();
                 var faceDir = new THREE.Vector3(0, 0, 1).applyQuaternion(pose.rotation);
 
                 if (!vehicleRef) {
@@ -6922,29 +7443,17 @@
                 if (!vehicleRef || !vehicleRef.vehicle || !vehicleRef.vehicleBody) {
                     return;
                 }
-                var pose = computeDefaultPlayerCitySpawnPoseOnRoad();
+                var pose = computeLocalPlayerSpawnPose();
                 var spawnPos = pose.position;
                 var spawnRot = pose.rotation;
                 var faceDir = new THREE.Vector3(0, 0, 1).applyQuaternion(spawnRot);
-
-                var spawnTransform = new Ammo.btTransform();
-                spawnTransform.setIdentity();
-                spawnTransform.setOrigin(new Ammo.btVector3(spawnPos.x, spawnPos.y, spawnPos.z));
-                spawnTransform.setRotation(new Ammo.btQuaternion(spawnRot.x, spawnRot.y, spawnRot.z, spawnRot.w));
-                vehicleRef.vehicleBody.setWorldTransform(spawnTransform);
-                vehicleRef.vehicleBody.setLinearVelocity(new Ammo.btVector3(0, 0, 0));
-                vehicleRef.vehicleBody.setAngularVelocity(new Ammo.btVector3(0, 0, 0));
-                vehicleRef.vehicle.resetSuspension();
-                syncPlayerChassisFromPhysics();
-                if (!silent) {
-                    attachCameraRigToVehicle();
-                }
-                recordLastCarDropPosition(spawnPos);
+                applyPlayerSpawnPose(pose, !!silent);
                 if (!silent) {
                     console.log(
                         '🚗 Car spawned at default road pose:',
                         spawnPos.x.toFixed(1), spawnPos.y.toFixed(1), spawnPos.z.toFixed(1),
-                        'yaw', (Math.atan2(faceDir.x, faceDir.z) * 180 / Math.PI).toFixed(0) + '°'
+                        'yaw', (Math.atan2(faceDir.x, faceDir.z) * 180 / Math.PI).toFixed(0) + '°',
+                        isMultiplayer ? ('slot ' + getMyMultiplayerSlotIndex()) : ''
                     );
                 }
             }
@@ -7893,6 +8402,49 @@
                 if (Math.abs(value) < deadzone) return 0;
                 var sign = value < 0 ? -1 : 1;
                 return sign * (Math.abs(value) - deadzone) / (1 - deadzone);
+            }
+
+            /**
+             * Rising-edge only for VR face/click buttons.
+             * Tracking loss used to set prev=false; on reconnect Quest often still reports
+             * A pressed=true → fake rising edge → fly/driver flip. First sample after
+             * (re)connect syncs state only — never fires an edge.
+             */
+            var vrGamepadEdgePrev = Object.create(null);
+            var vrGamepadSeenHands = Object.create(null);
+            var vrCameraSwitchCooldownUntil = 0;
+
+            function vrGamepadButtonJustPressed(handKey, buttonIndex, isPressed) {
+                var key = handKey + ':' + buttonIndex;
+                var pressed = !!isPressed;
+                if (!Object.prototype.hasOwnProperty.call(vrGamepadEdgePrev, key)) {
+                    vrGamepadEdgePrev[key] = pressed;
+                    return false;
+                }
+                var was = !!vrGamepadEdgePrev[key];
+                vrGamepadEdgePrev[key] = pressed;
+                return pressed && !was;
+            }
+
+            function beginVRGamepadEdgeFrame() {
+                vrGamepadSeenHands.left = false;
+                vrGamepadSeenHands.right = false;
+            }
+
+            function markVRGamepadHandSeen(handedness) {
+                if (handedness === 'left' || handedness === 'right') {
+                    vrGamepadSeenHands[handedness] = true;
+                }
+            }
+
+            function endVRGamepadEdgeFrame() {
+                // Drop unknown keys so the next frame re-syncs without a fake edge.
+                ['left', 'right'].forEach(function(hand) {
+                    if (vrGamepadSeenHands[hand]) return;
+                    Object.keys(vrGamepadEdgePrev).forEach(function(key) {
+                        if (key.indexOf(hand + ':') === 0) delete vrGamepadEdgePrev[key];
+                    });
+                });
             }
 
             /** Meta Quest Touch — GamepadHapticActuator pulse (DodgeVR-style). */
@@ -9641,9 +10193,12 @@
                     if (renderer.xr.isPresenting) {
                         const session = renderer.xr.getSession();
                         if (session && session.inputSources) {
+                            beginVRGamepadEdgeFrame();
                             for (let i = 0; i < session.inputSources.length; i++) {
                                 const inputSource = session.inputSources[i];
                                 const gamepad = inputSource.gamepad;
+                                const hand = inputSource.handedness || ('hand' + i);
+                                if (gamepad) markVRGamepadHandSeen(hand);
 
                                 // Start audio on first VR controller interaction (either hand)
                                 if (!vrAudioStarted && gamepad && gamepad.buttons) {
@@ -9657,12 +10212,10 @@
                                     }
                                 }
 
-                                // B button (index 5) for menu toggle — either hand
-                                if (gamepad && gamepad.buttons && gamepad.buttons[5] && gamepad.buttons[5].pressed) {
-                                    if (!this.lastMenuToggleTime || (Date.now() - this.lastMenuToggleTime) > 500) {
-                                        toggleMenu();
-                                        this.lastMenuToggleTime = Date.now();
-                                    }
+                                // B button (index 5) for menu toggle — either hand (rising edge)
+                                if (gamepad && gamepad.buttons &&
+                                    vrGamepadButtonJustPressed(hand, 5, gamepad.buttons[5] && gamepad.buttons[5].pressed)) {
+                                    toggleMenu();
                                 }
                                 
                                 if (gamepad && inputSource.handedness === 'right') {
@@ -9685,25 +10238,22 @@
                                         vrBraking = 0;
                                     }
                                     
-                                    // A button (index 4) for camera switching (only when menu is not visible)
-                                    if (!isMenuVisible && !trackEditorMode && gamepad.buttons && gamepad.buttons[4] && gamepad.buttons[4].pressed) {
-                                        // Prevent rapid switching with a simple debounce
-                                        if (!this.lastCameraSwitchTime || (Date.now() - this.lastCameraSwitchTime) > 500) {
-                                            switchCamera();
-                                            this.lastCameraSwitchTime = Date.now();
-                                        }
+                                    // A button (index 4): camera switch — rising edge ONLY.
+                                    // Blocked during race-restart freeze + short cooldown after any switch.
+                                    if (!isMenuVisible && !trackEditorMode && !isMultiplayerRaceRestartFrozen() &&
+                                        performance.now() >= vrCameraSwitchCooldownUntil &&
+                                        vrGamepadButtonJustPressed('right', 4, gamepad.buttons && gamepad.buttons[4] && gamepad.buttons[4].pressed)) {
+                                        vrCameraSwitchCooldownUntil = performance.now() + 500;
+                                        switchCamera();
                                     }
                                     
                                     // Thumbstick click (index 3): reset in drive modes, spawn car in fly
-                                    if (!isMenuVisible && !trackEditorMode && gamepad.buttons && gamepad.buttons[3] && gamepad.buttons[3].pressed) {
+                                    if (!isMenuVisible && !trackEditorMode &&
+                                        vrGamepadButtonJustPressed('right', 3, gamepad.buttons && gamepad.buttons[3] && gamepad.buttons[3].pressed)) {
                                         if (cameraMode === 'fly') {
-                                            if (!this.lastFlySpawnTime || (Date.now() - this.lastFlySpawnTime) > 500) {
-                                                spawnCarAtFlyCamera();
-                                                this.lastFlySpawnTime = Date.now();
-                                            }
-                                        } else if (!this.lastResetTime || (Date.now() - this.lastResetTime) > 500) {
+                                            spawnCarAtFlyCamera();
+                                        } else {
                                             resetCar();
-                                            this.lastResetTime = Date.now();
                                         }
                                     }
                                     
@@ -9750,38 +10300,25 @@
                                             vrBraking = gamepad.buttons[0].value || 0;
                                         }
                                     } else if (cameraMode === 'fly') {
-                                        var flyDelta = dt * vrFlySpeed * (actions['flyBoost'] ? flyBoostMultiplier : 1);
-                                        var rotationSpeed = 2.0; // Rotation speed multiplier
+                                        var flyDeltaL = dt * vrFlySpeed * (actions['flyBoost'] ? flyBoostMultiplier : 1);
+                                        var rotationSpeedL = 2.0;
                                         
                                         // Left controller thumbstick: X = rotation, Y = up/down movement
                                         if (gamepad.axes && gamepad.axes.length >= 4) {
-                                            var rotateY = gamepad.axes[2] || 0; // Left thumbstick X = Y rotation
-                                            var moveY = gamepad.axes[3] || 0;   // Left thumbstick Y = vertical movement
-                                            
-                                            // Debug logging
-                                            if (Math.abs(rotateY) > 0.1 || Math.abs(moveY) > 0.1) {
-                                                console.log('🎮 Left controller - Rotate:', rotateY.toFixed(2), 'MoveY:', moveY.toFixed(2));
-                                            }
-                                            
-                                            // Apply Y rotation (turning left/right) - inverted for natural feel
-                                            vrFlyRotation.y -= rotateY * rotationSpeed * dt;
-                                            
-                                            // Apply vertical movement (up/down)
-                                            vrFlyPosition.y -= moveY * flyDelta; // Inverted for natural feel
+                                            var rotateY = gamepad.axes[2] || 0;
+                                            var moveY = gamepad.axes[3] || 0;
+                                            vrFlyRotation.y -= rotateY * rotationSpeedL * dt;
+                                            vrFlyPosition.y -= moveY * flyDeltaL;
                                         }
                                     }
                                     
-                                    // Left thumbstick press to show VR camera Y position
-                                    if (gamepad.buttons && gamepad.buttons[3]) {
-                                        if (gamepad.buttons[3].pressed && !window.leftThumbstickPressed) {
-                                            window.leftThumbstickPressed = true;
-                                            showVRCameraPosition();
-                                        } else if (!gamepad.buttons[3].pressed) {
-                                            window.leftThumbstickPressed = false;
-                                        }
+                                    // Left thumbstick press to show VR camera Y position (edge)
+                                    if (vrGamepadButtonJustPressed('left', 3, gamepad.buttons && gamepad.buttons[3] && gamepad.buttons[3].pressed)) {
+                                        showVRCameraPosition();
                                     }
                                 }
                             }
+                            endVRGamepadEdgeFrame();
                             if (!isMenuVisible) {
                                 handleTrackEditorVRInput(session, dt);
                             }
@@ -9793,7 +10330,9 @@
 
                     // Combine keyboard and VR input (but disable car controls in desktop fly mode)
                     var isDesktopFlyMode = (cameraMode === 'fly' && !renderer.xr.isPresenting);
-                    var driveDisabled = isDesktopFlyMode || trackEditorMode || forestTrackSwitching;
+                    var raceRestartFrozen = isMultiplayerRaceRestartFrozen();
+                    var driveDisabled = isDesktopFlyMode || trackEditorMode || forestTrackSwitching
+                        || raceRestartFrozen;
                     var throttleInput = 0;
                     var brakeInput = 0;
                     if (!driveDisabled) {
@@ -9882,13 +10421,13 @@
                         }
                     }
 
-                    if (trackEditorMode) {
+                    if (trackEditorMode || raceRestartFrozen) {
                         engineForce = 0;
                         breakingForce = maxBreakingForce;
                         vehicleSteering = 0;
                     }
 
-                    if (!trackEditorMode && driveGameStarted) {
+                    if (!trackEditorMode && !raceRestartFrozen && driveGameStarted) {
                         var thrN = maxEngineForce > 0 ? Math.max(0, Math.min(1, engineForce / maxEngineForce)) : 0;
                         var brkN = maxBreakingForce > 0 ? Math.max(0, Math.min(1, breakingForce / maxBreakingForce)) : 0;
                         pushLapRecordingSample(vehicleSteering, thrN, brkN);
@@ -27366,6 +27905,16 @@
                         waypoints: denseWaypoints ? denseWaypoints.length : 0,
                         phys: typeof isCityDrivePhysicsReady === 'function' ? isCityDrivePhysicsReady() : null
                     };
+                    // Apply a track that arrived while we were already switching.
+                    if (pendingNetworkTrackId && pendingNetworkTrackId !== activeForestTrack.id) {
+                        var queued = pendingNetworkTrackId;
+                        pendingNetworkTrackId = null;
+                        scheduleDriveWork(function() {
+                            selectForestTrack(queued, { fromNetwork: !isHost });
+                        });
+                    } else {
+                        pendingNetworkTrackId = null;
+                    }
                 }
 
                 // Wait on the XR animation loop — window.rAF does not run reliably on Quest
