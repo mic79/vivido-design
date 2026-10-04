@@ -520,6 +520,14 @@
             <span class="hud-value" id="desktopHudFps">0</span>
         </div>
         <div class="hud-line">
+            <span class="hud-label">DRAW:</span>
+            <span class="hud-value" id="desktopHudDraws">0</span>
+        </div>
+        <div class="hud-line">
+            <span class="hud-label">TRI:</span>
+            <span class="hud-value" id="desktopHudTris">0</span>
+        </div>
+        <div class="hud-line">
             <span class="hud-label">LAP:</span>
             <span class="hud-value" id="desktopLap">1</span>
         </div>
@@ -999,6 +1007,27 @@
             // App version and FPS
             const APP_VERSION = 'DriveVR6 v6.0 (forest road)';
             let currentFPS = 0;
+            /** Last completed frame's WebGL render stats (for VR/desktop HUD compare). */
+            var hudRenderCalls = 0;
+            var hudRenderTris = 0;
+            var hudRenderGeometries = 0;
+            var hudRenderTextures = 0;
+
+            function formatHudTriCount(n) {
+                n = n || 0;
+                if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+                if (n >= 1000) return (n / 1000).toFixed(0) + 'K';
+                return String(n);
+            }
+
+            function captureHudRenderStats() {
+                if (!renderer || !renderer.info || !renderer.info.render) return;
+                hudRenderCalls = renderer.info.render.calls || 0;
+                hudRenderTris = renderer.info.render.triangles || 0;
+                var mem = renderer.info.memory;
+                hudRenderGeometries = mem && mem.geometries != null ? mem.geometries : 0;
+                hudRenderTextures = mem && mem.textures != null ? mem.textures : 0;
+            }
             let frameCount = 0;
             let lastFPSTime = performance.now();
             let fpsHistory = [];
@@ -1594,6 +1623,7 @@
             var _vehHullQuatInv = new THREE.Quaternion();
             var _vehHullNL = new THREE.Vector3();
             var _vehHullPush = new THREE.Vector3();
+            var _vehHullNearPos = new THREE.Vector3();
             var _vehHullBestPen = 0;
             var _vehHullChassisBox = new THREE.Box3();
             var cityNavMapGroup = null;
@@ -2790,15 +2820,21 @@
                     if (!forestTrackSwitching && typeof updateLoopForestDistanceCull === 'function') {
                         updateLoopForestDistanceCull();
                     }
+                    if (!forestTrackSwitching && typeof updateHollowSectionResidency === 'function') {
+                        updateHollowSectionResidency();
+                    }
 
                     if (renderer.xr.isPresenting) {
-                        if (!forestTrackSwitching) updateVRHUD();
                         if (!forestTrackSwitching) processVRMenuPresentation(frame);
-                    } else if (!forestTrackSwitching) {
-                        updateDesktopHUD();
                     }
                     
                     renderer.render(scene, camera);
+                    captureHudRenderStats();
+                    // HUD after render so DRAW/TRI match this frame (XR = both eyes combined).
+                    if (!forestTrackSwitching) {
+                        if (renderer.xr.isPresenting) updateVRHUD();
+                        else updateDesktopHUD();
+                    }
                     time += dt;
                     if (!shouldSkipStatsInQuestVR(renderer) && stats) {
                         stats.update();
@@ -3388,10 +3424,10 @@
                 // Position HUD in front of player (relative to camera rig) - adjusted for new camera position
                 vrHUD.position.set(0.35, 1.0, -0.45); // 35cm right; 30cm rear, 30cm lower than original
                 
-                // Create canvas for text rendering
+                // Create canvas for text rendering (taller for FPS + draw/tri lines)
                 var canvas = document.createElement('canvas');
                 canvas.width = 512;
-                canvas.height = 256;
+                canvas.height = 320;
                 var context = canvas.getContext('2d');
                 
                 // Create texture from canvas
@@ -3399,7 +3435,7 @@
                 hudTexture.needsUpdate = true;
                 
                 // Create HUD plane
-                var hudGeometry = new THREE.PlaneGeometry(1, 0.5);
+                var hudGeometry = new THREE.PlaneGeometry(1, 0.625);
                 var hudMaterial = new THREE.MeshBasicMaterial({
                     map: hudTexture,
                     transparent: true,
@@ -4445,6 +4481,42 @@
                 
                 context.fillText('FPS: ' + currentFPS, 20, yPos);
                 yPos += lineHeight;
+
+                context.fillStyle = '#aaddff';
+                context.font = 'bold 28px Arial';
+                context.fillText(
+                    'DRAW: ' + hudRenderCalls + '   TRI: ' + formatHudTriCount(hudRenderTris),
+                    20, yPos
+                );
+                yPos += lineHeight;
+                context.fillStyle = '#99aabb';
+                context.font = 'bold 22px Arial';
+                context.fillText(
+                    'GEO: ' + hudRenderGeometries + '   TEX: ' + hudRenderTextures,
+                    20, yPos
+                );
+                yPos += 32;
+                if (typeof HOLLOW_SECTIONS_ENABLED !== 'undefined' && HOLLOW_SECTIONS_ENABLED) {
+                    var hs = window.__driveHollowSections || {};
+                    var res = hs.resident || {};
+                    var streamLabel = 'H'
+                        + (res.E ? '+E' : '')
+                        + (res.W ? '+W' : '');
+                    context.fillStyle = '#ffcc66';
+                    context.font = 'bold 24px Arial';
+                    context.fillText(
+                        'STREAM ' + streamLabel
+                            + (hs.carSect ? (' @' + hs.carSect) : '')
+                            + (hs.reason ? (' ' + hs.reason) : '')
+                            + (hs.viewR ? (' r' + hs.viewR) : '')
+                            + (hs.usedStreamDraws != null ? (' d' + hs.usedStreamDraws) : '')
+                            + (hs.hidden ? (' out ' + hs.hidden) : ' out 0'),
+                        20, yPos
+                    );
+                    yPos += lineHeight;
+                }
+                context.fillStyle = '#ffffff';
+                context.font = 'bold 32px Arial';
                 
                 var currentSpeed = 0;
                 if (vehicleRef && vehicleRef.vehicle) {
@@ -4514,6 +4586,10 @@
                 updateChaseStarsUI();
                 var fpsEl = document.getElementById('desktopHudFps');
                 if (fpsEl) fpsEl.textContent = String(currentFPS);
+                var drawEl = document.getElementById('desktopHudDraws');
+                if (drawEl) drawEl.textContent = String(hudRenderCalls);
+                var triEl = document.getElementById('desktopHudTris');
+                if (triEl) triEl.textContent = formatHudTriCount(hudRenderTris);
                 currentLapTime = currentLapStartTime ? (Date.now() - currentLapStartTime) / 1000 : 0;
                 var lapEl = document.getElementById('desktopLap');
                 var timeEl = document.getElementById('desktopTime');
@@ -15848,6 +15924,13 @@
                     getVehicleChassisWorldProbeBox(vehicleData, probeMarginM, _cityNavBox);
                 }
 
+                // Spaceshooter pattern: only nearby BVH meshes — chassis AABB + radius gate.
+                var chassisPos = null;
+                if (vehicleData.chassisMesh) {
+                    vehicleData.chassisMesh.getWorldPosition(_vehHullNearPos);
+                    chassisPos = _vehHullNearPos;
+                }
+                var nearR2 = 48 * 48;
                 for (var mi = 0; mi < vrRunnerCityCollisionMeshes.length; mi++) {
                     var mesh = vrRunnerCityCollisionMeshes[mi];
                     if (meshPhysicsRegistrationDisabled(mesh)) continue;
@@ -15855,18 +15938,52 @@
                     // Trunk_Oak also get BVH impulse as a belt-and-suspenders backup —
                     // chunked Bullet alone was still missable when the chassis box
                     // sat between bark tris for a frame.
+                    // Fence collide-proxies (hollowStream join) also get nearby BVH.
+                    var isFenceProxy = !!(mesh.userData && mesh.userData._hollowCollideProxy);
                     if (mesh.userData.environmentClass === 'solid' &&
-                        !ENV_TRUNK_MESH_RE.test(mesh.name || '')) continue;
-                    if (useProbe) {
-                        var geo = mesh.geometry;
-                        if (geo) {
-                            if (!geo.boundingBox) geo.computeBoundingBox();
-                            _cityNavTriBox.copy(geo.boundingBox).applyMatrix4(mesh.matrixWorld);
-                            if (!_cityNavBox.intersectsBox(_cityNavTriBox)) continue;
+                        !ENV_TRUNK_MESH_RE.test(mesh.name || '') &&
+                        !isFenceProxy &&
+                        !/Wood_Fence|Metal_Fence|Wood_Log|Wood_Post/i.test(mesh.name || '')) {
+                        continue;
+                    }
+                    var collGeo = (typeof hollowCollisionGeometry === 'function')
+                        ? hollowCollisionGeometry(mesh)
+                        : mesh.geometry;
+                    if (!collGeo) continue;
+                    if (chassisPos) {
+                        var mcx = (mesh.userData && mesh.userData._hollowAabbCx != null)
+                            ? mesh.userData._hollowAabbCx
+                            : mesh.position.x;
+                        var mcz = (mesh.userData && mesh.userData._hollowAabbCz != null)
+                            ? mesh.userData._hollowAabbCz
+                            : mesh.position.z;
+                        // Prefer world AABB center when available.
+                        if (collGeo.boundingBox) {
+                            _cityNavTriBox.copy(collGeo.boundingBox).applyMatrix4(mesh.matrixWorld);
+                            mcx = (_cityNavTriBox.min.x + _cityNavTriBox.max.x) * 0.5;
+                            mcz = (_cityNavTriBox.min.z + _cityNavTriBox.max.z) * 0.5;
+                            var dxn = Math.max(_cityNavTriBox.min.x - chassisPos.x, 0,
+                                chassisPos.x - _cityNavTriBox.max.x);
+                            var dzn = Math.max(_cityNavTriBox.min.z - chassisPos.z, 0,
+                                chassisPos.z - _cityNavTriBox.max.z);
+                            if (dxn * dxn + dzn * dzn > nearR2) continue;
+                        } else {
+                            var ddx = mcx - chassisPos.x;
+                            var ddz = mcz - chassisPos.z;
+                            if (ddx * ddx + ddz * ddz > nearR2) continue;
                         }
                     }
-                    var bvh = mesh.geometry && mesh.geometry.boundsTree;
+                    if (useProbe) {
+                        if (!collGeo.boundingBox) collGeo.computeBoundingBox();
+                        _cityNavTriBox.copy(collGeo.boundingBox).applyMatrix4(mesh.matrixWorld);
+                        if (!_cityNavBox.intersectsBox(_cityNavTriBox)) continue;
+                    }
+                    var bvh = collGeo.boundsTree;
                     if (!bvh || !bvh.shapecast) continue;
+                    // Temporarily bind collision geo for local-space chassis box (stream may
+                    // have swapped mesh.geometry to empty for non-collide foliage).
+                    var prevGeo = mesh.geometry;
+                    if (prevGeo !== collGeo) mesh.geometry = collGeo;
                     getVehicleChassisBoundsInMeshLocalSpace(vehicleData, mesh, _cityNavLocalBox);
                     bvh.shapecast({
                         intersectsBounds: function(nodeBox) {
@@ -15879,6 +15996,7 @@
                             return false;
                         }
                     });
+                    if (prevGeo !== collGeo) mesh.geometry = prevGeo;
                 }
 
                 if (_vehHullBestPen < 1e-5) return;
@@ -25363,6 +25481,7 @@
                 cameraRig.updateMatrixWorld(true);
                 if (typeof updateVrRunnerSunAndFog === 'function') updateVrRunnerSunAndFog();
                 if (typeof updateLoopForestDistanceCull === 'function') updateLoopForestDistanceCull();
+                if (typeof updateHollowSectionResidency === 'function') updateHollowSectionResidency();
                 return true;
             }
 
@@ -25374,6 +25493,166 @@
                 sample: sampleDriveRenderStats,
                 poseAlong: poseDriveCameraForBench,
                 poseCarAlong: poseDriveCarForBench,
+                /** Checkpoint count / positions for bot-cam benches. */
+                listCheckpoints: function() {
+                    if (!checkpointMarkers || !checkpointMarkers.length) return [];
+                    return checkpointMarkers.map(function(cp, i) {
+                        return {
+                            index: i,
+                            x: cp.position ? +cp.position.x.toFixed(1) : null,
+                            y: cp.position ? +cp.position.y.toFixed(1) : null,
+                            z: cp.position ? +cp.position.z.toFixed(1) : null,
+                            wpIndex: cp.wpIndex != null ? cp.wpIndex : null
+                        };
+                    });
+                },
+                /**
+                 * Teleport dirt bot to checkpoint i, mount camera in bot, refresh hollow sections.
+                 * Used by tools/bench-hollow-sections.mjs.
+                 */
+                poseBotAtCheckpoint: function(cpIndex) {
+                    if (!checkpointMarkers || !checkpointMarkers.length) return false;
+                    if (!botEnabled) botEnabled = true;
+                    if (!botVehicleRef && typeof spawnOrResetBotAheadOfPlayer === 'function') {
+                        spawnOrResetBotAheadOfPlayer();
+                    }
+                    if (!botVehicleRef || !botVehicleRef.vehicleBody || !botVehicleRef.chassisMesh) {
+                        return false;
+                    }
+                    var n = checkpointMarkers.length;
+                    var i = ((cpIndex % n) + n) % n;
+                    var checkpoint = checkpointMarkers[i];
+                    if (!checkpoint || !checkpoint.position) return false;
+                    var nextCheckpoint = checkpointMarkers[(i + 1) % n];
+                    var faceDir = new THREE.Vector3(0, 0, 1);
+                    if (nextCheckpoint && nextCheckpoint.position) {
+                        faceDir.subVectors(nextCheckpoint.position, checkpoint.position);
+                        faceDir.y = 0;
+                        if (faceDir.lengthSq() > 1e-4) faceDir.normalize();
+                        else faceDir.set(0, 0, 1);
+                    }
+                    var roadPose = (typeof computeVehiclePoseOnRoad === 'function')
+                        ? computeVehiclePoseOnRoad(checkpoint.position.x, checkpoint.position.z, faceDir)
+                        : null;
+                    var pos = roadPose && roadPose.position
+                        ? roadPose.position
+                        : checkpoint.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+                    var rot = roadPose && roadPose.rotation
+                        ? roadPose.rotation
+                        : new THREE.Quaternion().setFromAxisAngle(
+                            new THREE.Vector3(0, 1, 0), Math.atan2(faceDir.x, faceDir.z)
+                        );
+                    applyGhostChassisPose(botVehicleRef, {
+                        x: pos.x, y: pos.y, z: pos.z,
+                        qx: rot.x, qy: rot.y, qz: rot.z, qw: rot.w
+                    }, null);
+                    if (botVehicleRef.currentWaypointIndex != null && checkpoint.wpIndex != null) {
+                        botVehicleRef.currentWaypointIndex = checkpoint.wpIndex;
+                    }
+                    botVehicleRef.chassisMesh.position.copy(pos);
+                    botVehicleRef.chassisMesh.quaternion.copy(rot);
+                    botVehicleRef.chassisMesh.visible = true;
+                    botVehicleRef.chassisMesh.updateMatrixWorld(true);
+                    // Bot chase cam (attachCameraRigToVehicle follows chassis each frame).
+                    botDriverCam = true;
+                    cameraMode = 'firstperson';
+                    if (controls) controls.enabled = false;
+                    camera = firstPersonCamera;
+                    if (typeof attachCameraRigToVehicle === 'function') {
+                        attachCameraRigToVehicle();
+                    }
+                    cameraRig.updateMatrixWorld(true);
+                    firstPersonCamera.updateMatrixWorld(true);
+                    if (typeof updateHollowSectionResidency === 'function') {
+                        _hollowSectionLastKey = ''; // force re-apply after teleport
+                        _hollowStreamHoldUntil = 0; // don't inherit hub hold across teleports
+                        _hollowViewFwdOverride = null; // checkpoint teleport: use camera again
+                        // Clear sticky so teleports don't inherit far-away shown set.
+                        if (_hollowSectionEntries) {
+                            for (var _hs = 0; _hs < _hollowSectionEntries.length; _hs++) {
+                                var _hm = _hollowSectionEntries[_hs].mesh;
+                                if (_hm && _hm.userData) _hm.userData._hollowStickyShow = false;
+                                _hollowSectionEntries[_hs]._hollowSettled = false;
+                            }
+                        }
+                        updateHollowSectionResidency();
+                    }
+                    if (typeof updateLoopForestDistanceCull === 'function') {
+                        updateLoopForestDistanceCull();
+                    }
+                    return {
+                        index: i,
+                        x: +pos.x.toFixed(1),
+                        y: +pos.y.toFixed(1),
+                        z: +pos.z.toFixed(1),
+                        lobe: _hollowSectionActiveLobe,
+                        carSect: window.__driveHollowSections && window.__driveHollowSections.carSect,
+                        reason: window.__driveHollowSections && window.__driveHollowSections.reason,
+                        dist: window.__driveHollowSections && window.__driveHollowSections.dist
+                    };
+                },
+                /** Scrub pose: move bot without clearing sticky (simulates continuous drive). */
+                poseBotAtWorld: function(x, y, z, faceX, faceZ) {
+                    if (!botVehicleRef || !botVehicleRef.vehicleBody || !botVehicleRef.chassisMesh) {
+                        if (typeof spawnOrResetBotAheadOfPlayer === 'function') spawnOrResetBotAheadOfPlayer();
+                    }
+                    if (!botVehicleRef || !botVehicleRef.chassisMesh) return false;
+                    botEnabled = true;
+                    var faceDir = new THREE.Vector3(
+                        isFinite(faceX) ? faceX : 0, 0, isFinite(faceZ) ? faceZ : 1
+                    );
+                    if (faceDir.lengthSq() < 1e-6) faceDir.set(0, 0, 1);
+                    else faceDir.normalize();
+                    var roadPose = (typeof computeVehiclePoseOnRoad === 'function')
+                        ? computeVehiclePoseOnRoad(x, z, faceDir)
+                        : null;
+                    var pos = roadPose && roadPose.position
+                        ? roadPose.position
+                        : new THREE.Vector3(x, isFinite(y) ? y : 1.2, z);
+                    // Prefer caller face (scrub travel dir). Road snap can point opposite when
+                    // lerp shortcuts a loop — that made residency cull the travel corridor.
+                    var rot = new THREE.Quaternion().setFromAxisAngle(
+                        new THREE.Vector3(0, 1, 0), Math.atan2(faceDir.x, faceDir.z)
+                    );
+                    if (roadPose && roadPose.rotation) {
+                        var roadFwd = new THREE.Vector3(0, 0, 1).applyQuaternion(roadPose.rotation);
+                        roadFwd.y = 0;
+                        if (roadFwd.lengthSq() > 1e-6) {
+                            roadFwd.normalize();
+                            // Keep road yaw only when it agrees with travel (≥cos60°).
+                            if (roadFwd.dot(faceDir) >= 0.5) rot.copy(roadPose.rotation);
+                        }
+                    }
+                    applyGhostChassisPose(botVehicleRef, {
+                        x: pos.x, y: pos.y, z: pos.z,
+                        qx: rot.x, qy: rot.y, qz: rot.z, qw: rot.w
+                    }, null);
+                    botVehicleRef.chassisMesh.position.copy(pos);
+                    botVehicleRef.chassisMesh.quaternion.copy(rot);
+                    botVehicleRef.chassisMesh.visible = true;
+                    botVehicleRef.chassisMesh.updateMatrixWorld(true);
+                    botDriverCam = true;
+                    cameraMode = 'firstperson';
+                    if (controls) controls.enabled = false;
+                    camera = firstPersonCamera;
+                    if (typeof attachCameraRigToVehicle === 'function') attachCameraRigToVehicle();
+                    cameraRig.updateMatrixWorld(true);
+                    firstPersonCamera.updateMatrixWorld(true);
+                    // Lock residency look to travel face across following rAFs — clearing
+                    // override immediately let the game loop re-read a lagging camera
+                    // (often opposite on loop cuts) and cull the corridor → pop-in.
+                    _hollowViewFwdOverride = { x: faceDir.x, z: faceDir.z };
+                    if (typeof updateHollowSectionResidency === 'function') {
+                        _hollowSectionLastKey = ''; // re-apply, but KEEP sticky
+                        updateHollowSectionResidency();
+                    }
+                    return {
+                        x: +pos.x.toFixed(1), y: +pos.y.toFixed(1), z: +pos.z.toFixed(1),
+                        lobe: _hollowSectionActiveLobe,
+                        faceX: +faceDir.x.toFixed(3),
+                        faceZ: +faceDir.z.toFixed(3)
+                    };
+                },
                 /** Top-down fly cam for spawn berm review. */
                 overheadAt: function(x, y, z, height) {
                     height = height == null ? 22 : height;
@@ -25399,6 +25678,15 @@
                     return true;
                 },
                 trackRoot: function() { return spawnDirtRoadRoot; },
+                hollowSections: function() {
+                    return {
+                        enabled: !!HOLLOW_SECTIONS_ENABLED,
+                        hubR: HOLLOW_HUB_RADIUS_M,
+                        activeLobe: _hollowSectionActiveLobe,
+                        entryCount: _hollowSectionEntries ? _hollowSectionEntries.length : 0,
+                        debug: window.__driveHollowSections || null
+                    };
+                },
                 /** Bullet walkable floor Y under (x,z) — null if no hit. */
                 physicsFloorY: function(x, z) {
                     return raycastPhysicsWalkableFloorY(x, z);
@@ -26434,9 +26722,1228 @@
                 return stats;
             }
 
+            /**
+             * Hollow STREAMING (?hollowSections=1 / ?hollowStream=1).
+             * Hard residency: deep wing = hub + that lobe ONLY (far lobe out).
+             * Both lobes only inside a tight hub corridor (load-before-unload).
+             * Path/tunnel always hub. No fail-open “keep everything ahead”.
+             */
+            var HOLLOW_SECTIONS_ENABLED = (function() {
+                try {
+                    var p = new URLSearchParams(window.location.search);
+                    var v = (p.get('hollowStream') || p.get('hollowSections') || '').toLowerCase();
+                    if (v === '0' || v === 'false' || v === 'off') return false;
+                    if (v === '1' || v === 'true' || v === 'on') return true;
+                    // Hollow track defaults to streaming on (opt out with hollowStream=0).
+                    var tr = (p.get('track') || '').toLowerCase();
+                    return tr === 'hollow';
+                } catch (e) { return false; }
+            })();
+            var HOLLOW_HUB_RADIUS_M = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowHubR'));
+                    return (isFinite(v) && v > 20) ? v : 48;
+                } catch (e2) { return 48; }
+            })();
+            /** Tight chokepoint: both lobes resident. Outside = single wing. */
+            var HOLLOW_BOTH_RADIUS_M = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowBothR'));
+                    // Hub corridor keeps both wings for tunnel portals without bloating deep wings.
+                    return (isFinite(v) && v > 30) ? v : 62;
+                } catch (e3) { return 62; }
+            })();
+            /** Preload opposite wing when driving toward hub (before bothR). */
+            var HOLLOW_APPROACH_RADIUS_M = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowApproachR'));
+                    return (isFinite(v) && v > HOLLOW_BOTH_RADIUS_M) ? v : 100;
+                } catch (e4) { return 100; }
+            })();
+            /**
+             * Side/near candidate radius. Ahead uses HOLLOW_AHEAD_RADIUS_M (preload).
+             * Unload only behind + past hysteresis — never budget-evict the forward cone.
+             */
+            var HOLLOW_VIEW_RADIUS_M = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowViewR'));
+                    return (isFinite(v) && v > 30) ? v : 85;
+                } catch (e5) { return 85; }
+            })();
+            /** Forward preload — must be GPU-resident + visible long before screen entry. */
+            var HOLLOW_AHEAD_RADIUS_M = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowAheadR'));
+                    return (isFinite(v) && v > 50) ? v : 320;
+                } catch (e5a) { return 320; }
+            })();
+            /** Behind-car GPU-unload radius (only firmly behind may dispose). */
+            var HOLLOW_VIEW_REAR_SCALE = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowViewRear'));
+                    return (isFinite(v) && v > 0.15 && v <= 1) ? v : 0.38;
+                } catch (e5b) { return 0.38; }
+            })();
+            /** Keep already-loaded meshes until this × enter radius (anti pop-in). */
+            var HOLLOW_UNLOAD_HYST = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowHyst'));
+                    return (isFinite(v) && v > 1 && v < 2.5) ? v : 1.7;
+                } catch (e5h) { return 1.7; }
+            })();
+            /** Extra tighten while both wings are resident (hub/preload). */
+            var HOLLOW_VIEW_HUB_SCALE = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowViewHub'));
+                    return (isFinite(v) && v > 0.4 && v <= 1) ? v : 0.95;
+                } catch (e5c) { return 0.95; }
+            })();
+            /** Total resident tri/draw budget (incl. path keep). XR ≈2× desktop. */
+            var HOLLOW_BUDGET_TRIS = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowBudgetTris'));
+                    return (isFinite(v) && v > 50000) ? v : 580000;
+                } catch (e5d) { return 580000; }
+            })();
+            var HOLLOW_BUDGET_DRAWS = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowBudgetDraws'));
+                    return (isFinite(v) && v > 20) ? v : 165;
+                } catch (e5e) { return 165; }
+            })();
+            var HOLLOW_FOLIAGE_RE = /tree|pine|fir|oak|birch|leaf|leaves|bush|foliage|shrub|hedge|plant|fern|grass|ivy|willow|trunk_kit|trunk|FR_Forest|FR_Grass/i;
+            /** Always-visible forward distance (m). Side/rear use tighter rings (see apply). */
+            var HOLLOW_SHOW_RADIUS_M = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowShowR'));
+                    return (isFinite(v) && v > 40) ? v : 260;
+                } catch (e5s) { return 260; }
+            })();
+            var HOLLOW_SHOW_SIDE_M = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowShowSide'));
+                    return (isFinite(v) && v > 20) ? v : 70;
+                } catch (e5ss) { return 70; }
+            })();
+            var HOLLOW_SHOW_REAR_M = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowShowRear'));
+                    return (isFinite(v) && v > 15) ? v : 40;
+                } catch (e5sr) { return 40; }
+            })();
+            /**
+             * Min camera-forward align to count as "on screen" for must-show.
+             * Wide: bank trees often have AABB centers slightly behind while canopy fills FOV.
+             */
+            var HOLLOW_FOV_ALIGN = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowFovAlign'));
+                    return (isFinite(v) && v > -0.9 && v < 0.5) ? v : -0.35;
+                } catch (e5fa) { return -0.35; }
+            })();
+            /** Omnidirectional foliage/fence keep (m) — roadside density. */
+            var HOLLOW_FOLIAGE_NEAR_M = (function() {
+                try {
+                    var v = parseFloat(new URLSearchParams(window.location.search).get('hollowFoliageNear'));
+                    return (isFinite(v) && v > 20) ? v : 115;
+                } catch (e5fn) { return 115; }
+            })();
+            var _hollowBudgetFwd = [];
+            var _hollowBudgetRear = [];
+            var _hollowKeepTris = 0;
+            var _hollowKeepDraws = 0;
+            var _hollowSectionEntries = null;
+            var _hollowStreamGroups = null; // { H, E, W } THREE.Group
+            var _hollowStreamRoot = null;
+            var _hollowSectionActiveLobe = 'E';
+            var _hollowSectionLastKey = '';
+            var _hollowStreamHoldUntil = 0;
+            var _hollowStreamResident = { H: true, E: true, W: false };
+            var _hollowSectionScratch = new THREE.Vector3();
+            var _hollowSectionFwd = new THREE.Vector3();
+            var _hollowSectionBox = new THREE.Box3();
+            var _hollowFrustum = new THREE.Frustum();
+            var _hollowProjScreen = new THREE.Matrix4();
+            var _hollowFrustumBox = new THREE.Box3();
+            var _hollowViewFwdX = 0;
+            var _hollowViewFwdZ = 1;
+            var _hollowViewHasFwd = false;
+            /** When set, residency look uses this XZ dir instead of camera (scrub travel). */
+            var _hollowViewFwdOverride = null;
+
+            function classifyHollowSectionXZ(x, z) {
+                if (Math.hypot(x, z) < HOLLOW_HUB_RADIUS_M) return 'H';
+                return x >= 0 ? 'E' : 'W';
+            }
+
+            function isHollowAlwaysResidentMesh(o) {
+                if (!o) return false;
+                var n = o.name || '';
+                // Drive ribbon + terrain shell — wings still carry foliage cost.
+                if (/^Path_Dirt|^Path_Grass|^Path_Gravel|^Path_Roadbed|^Path_Leaves|^Path_Pebbles/i.test(n)) return true;
+                if (/Highway_Tunnel|Tunnel_Abutment/i.test(n)) return true;
+                if (/^Terrain_Hollow/i.test(n)) return true;
+                return false;
+            }
+
+            function classifyHollowMeshSection(o) {
+                if (isHollowAlwaysResidentMesh(o)) return 'H';
+                _hollowSectionBox.setFromObject(o);
+                if (!_hollowSectionBox.isEmpty()) {
+                    // Only true cross-lobe spans stay hub (narrow band).
+                    if (_hollowSectionBox.min.x < -12 && _hollowSectionBox.max.x > 12) {
+                        return 'H';
+                    }
+                    _hollowSectionBox.getCenter(_hollowSectionScratch);
+                } else {
+                    o.getWorldPosition(_hollowSectionScratch);
+                }
+                return classifyHollowSectionXZ(_hollowSectionScratch.x, _hollowSectionScratch.z);
+            }
+
+            function hollowEnsureGeoTemplate(mesh) {
+                if (!mesh || !mesh.geometry) return;
+                if (mesh.userData._hollowGeoTemplate) return;
+                // Immutable master kept for the mesh lifetime. We REATTACH this same
+                // geometry on load (no clone) so reload is instant and can't go empty.
+                var src = mesh.geometry;
+                try {
+                    if (!src.boundingSphere) src.computeBoundingSphere();
+                    if (!src.boundingBox) src.computeBoundingBox();
+                } catch (eB) { /* noop */ }
+                mesh.userData._hollowGeoTemplate = src;
+                mesh.userData._hollowGeoResident = true;
+                // Geo swap to empty/back poisons world-sphere frustum tests → false culls
+                // (meshes "shown" but 0 draws). Streaming visibility already gates cost.
+                mesh.frustumCulled = false;
+                if (!mesh.userData._hollowEmptyGeo) {
+                    mesh.userData._hollowEmptyGeo = new THREE.BufferGeometry();
+                    mesh.userData._hollowEmptyGeo.name = 'hollowStreamEmpty';
+                }
+            }
+
+            /** Collision/BVH meshes must NEVER get empty-geo swap — that killed fence/trunk hits. */
+            function hollowMeshNeedsCollisionGeo(mesh) {
+                if (!mesh) return false;
+                if (mesh.userData.driveSolidBody || mesh.userData.driveTrunkChunked) return true;
+                if (mesh.userData._hollowCollideProxy) return true;
+                var cls = mesh.userData.environmentClass;
+                if (cls === 'solid' || cls === 'ground') return true;
+                if (vrRunnerCityCollisionMeshes && vrRunnerCityCollisionMeshes.indexOf(mesh) >= 0) {
+                    return true;
+                }
+                var n = mesh.name || '';
+                if (/Wood_Fence|Metal_Fence|Trunk_|Wood_Log|Wood_Post|Mud_Pile|Terrain_|Path_Dirt|Path_Grass|Path_Gravel|Tunnel/i.test(n)) {
+                    return true;
+                }
+                return false;
+            }
+
+            /** Geometry used for BVH shapecast / raycasts (template if stream emptied draw geo). */
+            function hollowCollisionGeometry(mesh) {
+                if (!mesh) return null;
+                var g = mesh.geometry;
+                if (g && g.attributes && g.attributes.position && g.attributes.position.count > 0) {
+                    return g;
+                }
+                return mesh.userData._hollowGeoTemplate || g;
+            }
+
+            function hollowMeshHasDrawGeo(mesh) {
+                var g = mesh && mesh.geometry;
+                if (!g || !g.attributes || !g.attributes.position) return false;
+                return (g.attributes.position.count || 0) > 0;
+            }
+
+            function hollowUnloadMeshGpu(mesh) {
+                if (!mesh || !mesh.isMesh) return 0;
+                // Spaceshooter-style: keep full BVH geo resident; only hide draws.
+                // Emptying solid/ground geo made Bullet build empty trimeshes + killed shapecast.
+                if (hollowMeshNeedsCollisionGeo(mesh)) {
+                    mesh.visible = false;
+                    mesh.userData._hollowStickyShow = false;
+                    mesh.userData._hollowDrawCulled = true;
+                    // Keep geometry + boundsTree attached.
+                    mesh.userData._hollowGeoResident = true;
+                    return 0;
+                }
+                hollowEnsureGeoTemplate(mesh);
+                if (!mesh.userData._hollowGeoResident && !hollowMeshHasDrawGeo(mesh)) {
+                    mesh.visible = false;
+                    return 0;
+                }
+                var tmpl = mesh.userData._hollowGeoTemplate;
+                var g = mesh.geometry;
+                // Never dispose the template — only detach it.
+                if (g && g !== tmpl && g !== mesh.userData._hollowEmptyGeo) {
+                    try { g.dispose(); } catch (e0) { /* noop */ }
+                }
+                mesh.geometry = mesh.userData._hollowEmptyGeo;
+                mesh.userData._hollowGeoResident = false;
+                mesh.visible = false;
+                mesh.userData._hollowDrawCulled = true;
+                return 1;
+            }
+
+            function hollowLoadMeshGpu(mesh) {
+                if (!mesh || !mesh.isMesh) return 0;
+                hollowEnsureGeoTemplate(mesh);
+                var tmpl = mesh.userData._hollowGeoTemplate;
+                if (!tmpl) return 0;
+                // Repair: resident flag set but geometry empty / missing.
+                if (mesh.userData._hollowGeoResident && hollowMeshHasDrawGeo(mesh)) {
+                    mesh.visible = mesh.userData._hollowBaseVisible !== false;
+                    return 0;
+                }
+                var g = mesh.geometry;
+                if (g && g !== tmpl && g !== mesh.userData._hollowEmptyGeo) {
+                    try { g.dispose(); } catch (e2) { /* noop */ }
+                }
+                // Reattach master — no clone hitch, no empty-geometry pop-in.
+                mesh.geometry = tmpl;
+                if (tmpl && !tmpl.boundingSphere) {
+                    try { tmpl.computeBoundingSphere(); } catch (eBs) { /* noop */ }
+                }
+                if (tmpl && !tmpl.boundingBox) {
+                    try { tmpl.computeBoundingBox(); } catch (eBb) { /* noop */ }
+                }
+                mesh.userData._hollowGeoResident = true;
+                mesh.userData._hollowDrawCulled = false;
+                mesh.visible = mesh.userData._hollowBaseVisible !== false;
+                return 1;
+            }
+
+            function clearHollowSectionResidency() {
+                if (_hollowSectionEntries) {
+                    for (var i = 0; i < _hollowSectionEntries.length; i++) {
+                        var ch = _hollowSectionEntries[i].mesh;
+                        if (!ch) continue;
+                        if (ch.userData && ch.userData._hollowFenceJoined) {
+                            // Joined fence mesh owned by holder — dispose on rebuild.
+                            try {
+                                if (ch.geometry) ch.geometry.dispose();
+                            } catch (eFj) { /* noop */ }
+                            if (ch.parent) ch.parent.remove(ch);
+                            continue;
+                        }
+                        if (ch.userData && ch.userData._hollowFenceMergedAway) {
+                            // Restore originals if stream rebuilt.
+                            ch.userData._hollowBaseVisible = true;
+                        }
+                        if (ch.userData && ch.userData._hollowGeoTemplate) {
+                            var empty = ch.userData._hollowEmptyGeo;
+                            if (ch.geometry && ch.geometry !== ch.userData._hollowGeoTemplate
+                                && ch.geometry !== empty) {
+                                try { ch.geometry.dispose(); } catch (e3) { /* noop */ }
+                            }
+                            ch.geometry = ch.userData._hollowGeoTemplate;
+                            ch.userData._hollowGeoResident = true;
+                        }
+                        if (ch.userData && ch.userData._hollowBaseVisible !== undefined) {
+                            ch.visible = ch.userData._hollowBaseVisible;
+                        }
+                    }
+                }
+                if (_hollowStreamRoot) {
+                    var hold = _hollowStreamRoot.getObjectByName('hollow_fence_draw_join');
+                    if (hold) {
+                        _hollowStreamRoot.remove(hold);
+                    }
+                }
+                _hollowStreamGroups = null;
+                _hollowStreamRoot = null;
+                _hollowSectionEntries = null;
+                _hollowSectionLastKey = '';
+                _hollowStreamHoldUntil = 0;
+                _hollowStreamResident = { H: true, E: true, W: false };
+            }
+
+            /**
+             * Join high-count low-value draws (fences, trunk kits, logs) per spatial cell.
+             * Without this, 200+ fence posts + trunk pieces starve dead-ahead tree residency
+             * under the 300-draw cap → user-visible pop-in.
+             */
+            function hollowMergeFenceDraws(root, entries) {
+                var mergeFn = typeof mergeGeometries === 'function'
+                    ? mergeGeometries
+                    : window.__mergeGeometries;
+                if (!root || !entries || !entries.length || typeof mergeFn !== 'function') {
+                    return { entries: entries, joined: 0, removed: 0 };
+                }
+                var CELL = 64;
+                // Fences only — Trunk_Kit merge balloons cell tris into single sacred draws (>1M).
+                var joinRe = /Wood_Fence|Metal_Fence/i;
+                var groups = new Map();
+                var keepEntries = [];
+                var _fc = new THREE.Vector3();
+                for (var i = 0; i < entries.length; i++) {
+                    var e = entries[i];
+                    var m = e.mesh;
+                    if (!m || e.alwaysKeep || !joinRe.test(m.name || '')) {
+                        keepEntries.push(e);
+                        continue;
+                    }
+                    if (Array.isArray(m.material) || !m.material) {
+                        keepEntries.push(e);
+                        continue;
+                    }
+                    m.getWorldPosition(_fc);
+                    var cx = Math.floor(_fc.x / CELL);
+                    var cz = Math.floor(_fc.z / CELL);
+                    var mat = m.material;
+                    var mapId = (mat.map && mat.map.uuid) || 'nomap';
+                    var stem = (m.name || 'mesh').replace(/_\d+$/, '').replace(/_c-?\d.*$/, '');
+                    var key = e.sect + '|' + stem + '|' + (mat.uuid || mat.name || 'mat') + '|' + mapId
+                        + '|c' + cx + '_' + cz;
+                    if (!groups.has(key)) groups.set(key, []);
+                    groups.get(key).push(e);
+                }
+                var holder = new THREE.Group();
+                holder.name = 'hollow_fence_draw_join';
+                root.add(holder);
+                var invRoot = new THREE.Matrix4().copy(root.matrixWorld).invert();
+                var joined = 0;
+                var removed = 0;
+                groups.forEach(function(list) {
+                    if (list.length < 2) {
+                        keepEntries.push(list[0]);
+                        return;
+                    }
+                    var geos = [];
+                    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+                    var minZ = Infinity, maxZ = -Infinity;
+                    var tris = 0;
+                    var sect = list[0].sect;
+                    for (var mi = 0; mi < list.length; mi++) {
+                        var srcE = list[mi];
+                        var src = srcE.mesh;
+                        var geo = src.geometry.clone();
+                        geo.applyMatrix4(src.matrixWorld);
+                        geo.applyMatrix4(invRoot);
+                        geos.push(geo);
+                        if (srcE.minX < minX) minX = srcE.minX;
+                        if (srcE.maxX > maxX) maxX = srcE.maxX;
+                        if (srcE.minY < minY) minY = srcE.minY;
+                        if (srcE.maxY > maxY) maxY = srcE.maxY;
+                        if (srcE.minZ < minZ) minZ = srcE.minZ;
+                        if (srcE.maxZ > maxZ) maxZ = srcE.maxZ;
+                        tris += srcE.tris || 0;
+                    }
+                    var merged = null;
+                    try { merged = mergeFn(geos, false); }
+                    catch (eM) { merged = null; }
+                    for (var di = 0; di < geos.length; di++) {
+                        try { geos[di].dispose(); } catch (eD) { /* noop */ }
+                    }
+                    if (!merged) {
+                        for (var fi = 0; fi < list.length; fi++) keepEntries.push(list[fi]);
+                        return;
+                    }
+                    var out = new THREE.Mesh(merged, list[0].mesh.material);
+                    out.name = 'HollowFenceJoin_' + sect + '_' + joined;
+                    out.frustumCulled = false;
+                    out.userData.hollowSection = sect;
+                    out.userData._hollowAlwaysKeep = false;
+                    out.userData._hollowBaseVisible = true;
+                    out.userData._hollowFenceJoined = true;
+                    // Visual-only join — collision stays on invisible original posts (full BVH/Bullet).
+                    out.userData.environmentClass = 'nocoll';
+                    holder.add(out);
+                    hollowEnsureGeoTemplate(out);
+                    for (var hi = 0; hi < list.length; hi++) {
+                        var old = list[hi].mesh;
+                        // Keep full geometry as collision proxy (Spaceshooter-style: geo always resident).
+                        // NEVER empty-geo unload — that made queueCitySolidObstaclePhysicsBuild
+                        // bake empty Bullet trimeshes after hollowStream ran.
+                        old.visible = false;
+                        old.userData._hollowBaseVisible = false;
+                        old.userData._hollowFenceMergedAway = true;
+                        old.userData._hollowCollideProxy = true;
+                        old.userData._hollowDrawCulled = true;
+                        if (!old.userData.environmentClass || old.userData.environmentClass === 'nocoll') {
+                            old.userData.environmentClass = 'solid';
+                        }
+                        // Stay out of stream residency budget (collision-only).
+                        old.userData._hollowStreamSkip = true;
+                        removed++;
+                    }
+                    keepEntries.push({
+                        mesh: out,
+                        sect: sect,
+                        cx: (minX + maxX) * 0.5,
+                        cz: (minZ + maxZ) * 0.5,
+                        minX: minX, maxX: maxX, minY: minY, maxY: maxY, minZ: minZ, maxZ: maxZ,
+                        tris: tris,
+                        alwaysKeep: false,
+                        baseVisible: true
+                    });
+                    joined++;
+                });
+                console.log('📡 Hollow fence join:', removed, 'posts →', joined, 'draws (collision proxies kept)');
+                return { entries: keepEntries, joined: joined, removed: removed };
+            }
+
+            function buildHollowSectionEntries(root) {
+                clearHollowSectionResidency();
+                if (!HOLLOW_SECTIONS_ENABLED || !root) return null;
+                root.updateMatrixWorld(true);
+                _hollowStreamRoot = root;
+                // No reparenting — keep glTF hierarchy so world transforms stay correct.
+                _hollowStreamGroups = { H: true, E: true, W: true };
+                var entries = [];
+                var counts = { H: 0, E: 0, W: 0 };
+                var meshes = [];
+                root.traverse(function(o) {
+                    if (!o.isMesh || !o.geometry) return;
+                    meshes.push(o);
+                });
+                for (var mi = 0; mi < meshes.length; mi++) {
+                    var o = meshes[mi];
+                    if (o.userData && o.userData._hollowStreamSkip) continue;
+                    var sect = classifyHollowMeshSection(o);
+                    var alwaysKeep = isHollowAlwaysResidentMesh(o);
+                    o.userData.hollowSection = sect;
+                    o.userData._hollowAlwaysKeep = alwaysKeep;
+                    o.userData._hollowBaseVisible = o.visible !== false;
+                    _hollowSectionBox.setFromObject(o);
+                    if (!_hollowSectionBox.isEmpty()) _hollowSectionBox.getCenter(_hollowSectionScratch);
+                    else o.getWorldPosition(_hollowSectionScratch);
+                    var cx = _hollowSectionScratch.x;
+                    var cz = _hollowSectionScratch.z;
+                    if (!alwaysKeep) hollowEnsureGeoTemplate(o);
+                    else {
+                        o.userData._hollowGeoResident = true;
+                        // Keep meshes also skip geo-swap, but disable bad frustum tests.
+                        o.frustumCulled = false;
+                    }
+                    var minX = cx, maxX = cx, minY = 0, maxY = 40, minZ = cz, maxZ = cz;
+                    if (!_hollowSectionBox.isEmpty()) {
+                        minX = _hollowSectionBox.min.x;
+                        maxX = _hollowSectionBox.max.x;
+                        minY = _hollowSectionBox.min.y;
+                        maxY = _hollowSectionBox.max.y;
+                        minZ = _hollowSectionBox.min.z;
+                        maxZ = _hollowSectionBox.max.z;
+                    }
+                    var tris = 0;
+                    try {
+                        var geo = o.geometry;
+                        if (geo) {
+                            if (geo.index) tris = geo.index.count / 3;
+                            else if (geo.attributes && geo.attributes.position) {
+                                tris = geo.attributes.position.count / 3;
+                            }
+                        }
+                    } catch (eTris) { tris = 0; }
+                    entries.push({
+                        mesh: o,
+                        sect: sect,
+                        cx: cx,
+                        cz: cz,
+                        minX: minX,
+                        maxX: maxX,
+                        minY: minY,
+                        maxY: maxY,
+                        minZ: minZ,
+                        maxZ: maxZ,
+                        tris: tris,
+                        alwaysKeep: alwaysKeep,
+                        baseVisible: o.userData._hollowBaseVisible
+                    });
+                    counts[sect]++;
+                }
+                if (!entries.length) {
+                    clearHollowSectionResidency();
+                    return null;
+                }
+                // Merge Wood/Metal fence posts (234 draws / ~10k tris) — they starved tree
+                // residency and caused dead-ahead pop-in under the 300-draw cap.
+                var fenceJoin = hollowMergeFenceDraws(root, entries);
+                if (fenceJoin && fenceJoin.entries) entries = fenceJoin.entries;
+                _hollowSectionEntries = entries;
+                _hollowSectionLastKey = '';
+                _hollowKeepTris = 0;
+                _hollowKeepDraws = 0;
+                for (var ki = 0; ki < entries.length; ki++) {
+                    if (!entries[ki].alwaysKeep) continue;
+                    _hollowKeepTris += entries[ki].tris || 0;
+                    _hollowKeepDraws++;
+                }
+                _hollowStreamResident = { H: true, E: true, W: false };
+                _hollowSectionActiveLobe = 'E';
+                applyHollowStreamResidency('E', true, 0, 0);
+                console.log(
+                    '📡 Hollow STREAM ON — hubR', HOLLOW_HUB_RADIUS_M + 'm,',
+                    'bothR', HOLLOW_BOTH_RADIUS_M + 'm,',
+                    'aheadR', HOLLOW_AHEAD_RADIUS_M + 'm,',
+                    'showR', HOLLOW_SHOW_RADIUS_M + 'm,',
+                    'viewR', HOLLOW_VIEW_RADIUS_M + 'm,',
+                    'hyst×', HOLLOW_UNLOAD_HYST + ',',
+                    'budget', Math.round(HOLLOW_BUDGET_TRIS / 1000) + 'Ktri/' + HOLLOW_BUDGET_DRAWS + 'd',
+                    'keep', Math.round(_hollowKeepTris / 1000) + 'Ktri/' + _hollowKeepDraws + 'd',
+                    'meshes H/E/W', counts.H + '/' + counts.E + '/' + counts.W,
+                    '(no reparent)'
+                );
+                return counts;
+            }
+
+            function applyHollowStreamResidency(activeLobe, force, carX, carZ) {
+                if (!_hollowStreamGroups || !_hollowSectionEntries) return;
+                if (activeLobe !== 'E' && activeLobe !== 'W' && activeLobe !== 'B') activeLobe = 'E';
+                if (carX == null) carX = 0;
+                if (carZ == null) carZ = 0;
+                // Fine quantize so ahead preload refreshes before assets enter view.
+                var fwdQ = _hollowViewHasFwd
+                    ? (Math.round(_hollowViewFwdX * 6) + ':' + Math.round(_hollowViewFwdZ * 6))
+                    : '0';
+                var key = activeLobe + '|' + Math.round(carX / 2) + '|' + Math.round(carZ / 2) + '|' + fwdQ;
+                if (!force && key === _hollowSectionLastKey) return;
+                var prev = _hollowSectionLastKey;
+                var wantE = (activeLobe === 'B' || activeLobe === 'E');
+                var wantW = (activeLobe === 'B' || activeLobe === 'W');
+                var nearPortal = false;
+                for (var ti = 0; ti < _hollowSectionEntries.length; ti++) {
+                    var te = _hollowSectionEntries[ti];
+                    if (!/Tunnel|Abutment/i.test(te.mesh.name || '')) continue;
+                    // AABB-near (big tunnel meshes have far centers).
+                    var tqx = carX < te.minX ? te.minX : (carX > te.maxX ? te.maxX : carX);
+                    var tqz = carZ < te.minZ ? te.minZ : (carZ > te.maxZ ? te.maxZ : carZ);
+                    var tddx = tqx - carX;
+                    var tddz = tqz - carZ;
+                    var tDist2 = tddx * tddx + tddz * tddz;
+                    if (tDist2 < (140 * 140)) { nearPortal = true; break; }
+                    // Or center ahead within 260m (through-portal preload).
+                    var tdx = te.cx - carX;
+                    var tdz = te.cz - carZ;
+                    var tc2 = tdx * tdx + tdz * tdz;
+                    if (tc2 < (260 * 260) && _hollowViewHasFwd && tc2 > 1) {
+                        var tinv = 1 / Math.sqrt(tc2);
+                        var tal = tdx * tinv * _hollowViewFwdX + tdz * tinv * _hollowViewFwdZ;
+                        if (tal > 0.25) { nearPortal = true; break; }
+                    }
+                }
+                _hollowStreamResident.H = true;
+                _hollowStreamResident.E = wantE;
+                _hollowStreamResident.W = wantW;
+
+                var viewR = HOLLOW_VIEW_RADIUS_M;
+                if (activeLobe === 'B') viewR *= HOLLOW_VIEW_HUB_SCALE;
+                var aheadR = HOLLOW_AHEAD_RADIUS_M;
+                if (activeLobe === 'B') aheadR *= HOLLOW_VIEW_HUB_SCALE;
+                if (nearPortal) aheadR = Math.max(aheadR, 280);
+                var rearR = viewR * HOLLOW_VIEW_REAR_SCALE;
+                var hyst = HOLLOW_UNLOAD_HYST;
+                var shown = 0;
+                var hidden = 0;
+                var gpuLoaded = 0;
+                var gpuUnloaded = 0;
+                var budgetTris = HOLLOW_BUDGET_TRIS - _hollowKeepTris;
+                var budgetDraws = HOLLOW_BUDGET_DRAWS - _hollowKeepDraws;
+                if (nearPortal) {
+                    budgetTris = Math.max(budgetTris, 420000);
+                    budgetDraws = Math.max(budgetDraws, 185);
+                }
+                if (budgetTris < 80000) budgetTris = 80000;
+                if (budgetDraws < 24) budgetDraws = 24;
+                _hollowBudgetFwd.length = 0;
+                _hollowBudgetRear.length = 0;
+                var showR = HOLLOW_SHOW_RADIUS_M;
+                var sideR = HOLLOW_SHOW_SIDE_M;
+                var rearShowR = HOLLOW_SHOW_REAR_M;
+                // Hub/preload has BOTH wings — keep show rings tight or draws explode.
+                if (activeLobe === 'B') {
+                    showR *= 0.62; // hub both-wings — still tight, but covers 110m scrub band
+                    sideR *= 0.75;
+                    showR = Math.max(showR, 125);
+                    if (nearPortal) showR = Math.max(showR, 140);
+                } else if (nearPortal) {
+                    showR = Math.max(showR, 210);
+                }
+                var showR2 = showR * showR;
+                var sideR2 = sideR * sideR;
+                var rearShowR2 = rearShowR * rearShowR;
+                // Real camera frustum — cone/align alone misses bank canopies with behind-centers.
+                var hasFrustum = false;
+                if (camera) {
+                    try {
+                        camera.updateMatrixWorld(true);
+                        _hollowProjScreen.multiplyMatrices(
+                            camera.projectionMatrix,
+                            camera.matrixWorldInverse
+                        );
+                        _hollowFrustum.setFromProjectionMatrix(_hollowProjScreen);
+                        hasFrustum = true;
+                    } catch (eFr) { hasFrustum = false; }
+                }
+                for (var i = 0; i < _hollowSectionEntries.length; i++) {
+                    var e = _hollowSectionEntries[i];
+                    e._hollowSettled = false; // MUST clear each apply — else budget-hide sticks forever
+                    var mesh = e.mesh;
+                    if (!e.baseVisible) {
+                        mesh.visible = false;
+                        continue;
+                    }
+                    if (e.alwaysKeep) {
+                        gpuLoaded += hollowLoadMeshGpu(mesh);
+                        mesh.visible = true;
+                        mesh.userData._hollowStickyShow = true;
+                        shown++;
+                        continue;
+                    }
+                    var qx = carX < e.minX ? e.minX : (carX > e.maxX ? e.maxX : carX);
+                    var qz = carZ < e.minZ ? e.minZ : (carZ > e.maxZ ? e.maxZ : carZ);
+                    var dx = qx - carX;
+                    var dz = qz - carZ;
+                    var dist2 = dx * dx + dz * dz;
+                    var fdx = e.cx - carX;
+                    var fdz = e.cz - carZ;
+                    var fdist2 = fdx * fdx + fdz * fdz;
+                    var align = 0;
+                    if (_hollowViewHasFwd && fdist2 > 1) {
+                        var inv = 1 / Math.sqrt(fdist2);
+                        align = fdx * inv * _hollowViewFwdX + fdz * inv * _hollowViewFwdZ;
+                    } else if (!_hollowViewHasFwd) {
+                        align = dist2 < (viewR * viewR) ? 0.5 : 0;
+                    }
+                    // AABB-corner align + real frustum intersection.
+                    var inFov = false;
+                    var bestAlign = align;
+                    if (_hollowViewHasFwd) {
+                        var cxs = [e.minX, e.minX, e.maxX, e.maxX];
+                        var czs = [e.minZ, e.maxZ, e.minZ, e.maxZ];
+                        for (var ci = 0; ci < 4; ci++) {
+                            var cdx = cxs[ci] - carX;
+                            var cdz = czs[ci] - carZ;
+                            var cd2 = cdx * cdx + cdz * cdz;
+                            if (cd2 < 4) { inFov = true; bestAlign = 1; break; }
+                            var cinv = 1 / Math.sqrt(cd2);
+                            var cal = cdx * cinv * _hollowViewFwdX + cdz * cinv * _hollowViewFwdZ;
+                            if (cal > bestAlign) bestAlign = cal;
+                            if (cal > HOLLOW_FOV_ALIGN) inFov = true;
+                        }
+                    } else {
+                        inFov = dist2 < showR2;
+                    }
+                    // Loose AABB∩frustum is too greedy on 100m cell meshes — use corner-FOV.
+                    // Optional confirm: only upgrade inFov, never sole reason to must-show.
+                    if (hasFrustum && !inFov && dist2 <= showR2) {
+                        _hollowFrustumBox.min.set(e.minX, e.minY != null ? e.minY : -50, e.minZ);
+                        _hollowFrustumBox.max.set(e.maxX, e.maxY != null ? e.maxY : 80, e.maxZ);
+                        // Require center also not firmly rear (avoids wrapping huge AABBs).
+                        if (bestAlign > -0.35 && _hollowFrustum.intersectsBox(_hollowFrustumBox)) {
+                            inFov = true;
+                        }
+                    }
+                    var isFwd = bestAlign > -0.08 || inFov;
+                    var isRear = !inFov && bestAlign < -0.55;
+                    var wasRes = !!mesh.userData._hollowGeoResident && hollowMeshHasDrawGeo(mesh);
+                    var wasShown = !!mesh.userData._hollowStickyShow;
+                    var fnameEarly = (mesh.name || '') + ' ' + ((mesh.parent && mesh.parent.name) || '');
+                    var isFoliageEarly = HOLLOW_FOLIAGE_RE.test(fnameEarly);
+                    var foliageNearM = HOLLOW_FOLIAGE_NEAR_M;
+                    // Hub both-wings: keep ≥ closePop band so E/W roadside isn't born at 80–100m.
+                    if (activeLobe === 'B') foliageNearM = Math.max(foliageNearM * 0.9, 110);
+                    else foliageNearM = Math.max(foliageNearM, 175);
+                    var foliageNearR2 = foliageNearM * foliageNearM;
+                    var isFence = /Wood_Fence|Metal_Fence|Guardrail|Guard_Rail|HollowFenceJoin_/i.test(mesh.name || '');
+                    var isGrass = /FR_Grass|Grass_Dry|Grass_Green/i.test(mesh.name || '');
+                    var fenceNearM = activeLobe === 'B' ? 110 : 150;
+                    var fenceNearR2 = fenceNearM * fenceNearM;
+                    // Dead-ahead / near omni — sticky WELL before screen-large.
+                    // Visual review proved FR_Grass + HollowFenceJoin at al≈1 / 70–120m
+                    // were still born late because grass was excluded from sacred.
+                    var imminent = (isFoliageEarly || isFence)
+                        && bestAlign > 0.05 && dist2 <= (320 * 320);
+                    var deadAhead = inFov && bestAlign > 0.12 && dist2 <= (280 * 280);
+                    var treeNearR2 = (activeLobe === 'B' ? 130 : 160);
+                    treeNearR2 *= treeNearR2;
+                    var inMustShow = (inFov && dist2 <= showR2)
+                        || imminent
+                        || deadAhead
+                        || (isFoliageEarly && !isGrass && dist2 <= Math.max(foliageNearR2, treeNearR2))
+                        || (isGrass && (dist2 <= (120 * 120)
+                            || (bestAlign > 0.35 && dist2 <= (220 * 220))
+                            || (inFov && bestAlign > 0.2 && dist2 <= (200 * 200))))
+                        || (isFence && (dist2 <= fenceNearR2
+                            || (bestAlign > 0.25 && dist2 <= (220 * 220))))
+                        || (dist2 <= (40 * 40))
+                        || (wasShown && (inFov || bestAlign > -0.42));
+                    var inShowRing = inMustShow
+                        || (!isRear && dist2 <= sideR2)
+                        || (isRear && dist2 <= rearShowR2);
+                    var inAhead = dist2 <= aheadR * aheadR;
+                    var lobeOk = (e.sect === 'H')
+                        || (e.sect === 'E' && wantE)
+                        || (e.sect === 'W' && wantW)
+                        || inShowRing
+                        || (isFwd && inAhead);
+
+                    // GPU dispose ONLY firmly behind outside show ring, or opposite-lobe far.
+                    // NEVER unload anything currently in FOV — that is late-in-view pop-in.
+                    var firmRear = !inFov && isRear && !inShowRing && dist2 > rearR * rearR * hyst;
+                    var farOpp = !inFov && !lobeOk && !inShowRing && !(isFwd && inAhead);
+                    if (firmRear || farOpp) {
+                        gpuUnloaded += hollowUnloadMeshGpu(mesh);
+                        mesh.visible = false;
+                        mesh.userData._hollowStickyShow = false;
+                        hidden++;
+                        continue;
+                    }
+                    // Too far to preload yet (and not sticky).
+                    if (!wasRes && !wasShown && dist2 > aheadR * aheadR) {
+                        mesh.visible = false;
+                        mesh.userData._hollowStickyShow = false;
+                        hidden++;
+                        continue;
+                    }
+                    // Side/rear outside view ring and never sticky — soft-hide, keep geo if loaded.
+                    if (!isFwd && !inShowRing && dist2 > viewR * viewR * hyst && !wasShown) {
+                        mesh.visible = false;
+                        mesh.userData._hollowStickyShow = false;
+                        hidden++;
+                        continue;
+                    }
+
+                    var fname = fnameEarly;
+                    var foliage = isFoliageEarly;
+                    e._hollowDist2 = dist2;
+                    e._hollowAlign = bestAlign;
+                    e._hollowFoliage = foliage;
+                    e._hollowFence = isFence;
+                    e._hollowGrass = isGrass;
+                    e._hollowInFrustum = inFov;
+                    e._hollowIsFwd = isFwd;
+                    e._hollowWasShown = wasShown;
+                    // Sacred / dead-ahead — prioritize al≈1 cone. Hysteresis on wasShown
+                    // stops align-flicker re-hide → bornInView at the same mesh.
+                    var deadR = (activeLobe === 'B') ? 180 : 210;
+                    var deadAl = (activeLobe === 'B') ? 0.5 : 0.48;
+                    var deadAlKeep = deadAl - 0.15;
+                    var inDeadCone = dist2 <= (deadR * deadR)
+                        && (bestAlign > deadAl || (wasShown && bestAlign > deadAlKeep));
+                    // Hub grass still dead-forced inside 120m (hidden at ~110m al≈0.6).
+                    // Hub grass: dead-force when al≥0.55 (review caught al≈0.58 @140m hidden).
+                    e._hollowDeadAhead = inDeadCone
+                        && !(activeLobe === 'B' && isGrass && bestAlign < 0.55 && dist2 > (120 * 120));
+                    // Soft sacred is intentionally NARROW — hub diag showed 118 soft
+                    // visibles vs 5 hidden dead-ahead (soft ate the 1M tri budget).
+                    e._hollowSacred = (
+                        e._hollowDeadAhead
+                        || (dist2 <= (85 * 85))
+                        || (inFov && bestAlign > 0.4 && dist2 <= (160 * 160))
+                        || (bestAlign > 0.55 && dist2 <= (180 * 180))
+                        || (wasShown && bestAlign > 0.4 && dist2 <= (190 * 190))
+                        || (isFence && (dist2 <= (90 * 90)
+                            || (bestAlign > 0.45 && dist2 <= (160 * 160))))
+                        || (isGrass && (bestAlign > 0.55 && dist2 <= (150 * 150)
+                            || (wasShown && bestAlign > 0.45 && dist2 <= (140 * 140))))
+                    );
+                    e._hollowMustShow = inMustShow || e._hollowSacred || (isFwd && wasShown);
+                    if (isFwd || e._hollowMustShow || dist2 < (45 * 45) || wasShown) {
+                        e._hollowSort = (foliage ? dist2 * 0.5 : dist2) - bestAlign * 3000;
+                        _hollowBudgetFwd.push(e);
+                    } else {
+                        e._hollowSort = foliage ? dist2 * 0.7 : dist2;
+                        _hollowBudgetRear.push(e);
+                    }
+                }
+
+                // Caps — near-hard → dead-ahead → soft sacred. measured ≈ usedTris + car.
+                var hardMustR2 = (activeLobe === 'B' ? 75 : 95);
+                hardMustR2 *= hardMustR2;
+                var mustDrawCap = nearPortal ? 250 : (activeLobe === 'B' ? 230 : 255);
+                var hardAbsCap = activeLobe === 'B' ? 265 : 275;
+                var emergCap = 288;
+                var mustTriCap = 720000;
+                var hardTriCap = 820000;
+                var usedTris = _hollowKeepTris;
+                var usedDraws = _hollowKeepDraws;
+                function hollowBudgetSortSacred(a, b) {
+                    // Dead-ahead cone BEFORE omni near-ring — near side trees were eating
+                    // the tri budget and forcing al≈1 Trunk_Kit to birth at ~150m.
+                    if (!!a._hollowDeadAhead !== !!b._hollowDeadAhead) return a._hollowDeadAhead ? -1 : 1;
+                    var aDead = a._hollowAlign > 0.55;
+                    var bDead = b._hollowAlign > 0.55;
+                    if (aDead !== bDead) return aDead ? -1 : 1;
+                    // Forward near-hard next (not pure side).
+                    var ah = a._hollowDist2 <= hardMustR2 && (a._hollowAlign > -0.15 || a._hollowInFrustum);
+                    var bh = b._hollowDist2 <= hardMustR2 && (b._hollowAlign > -0.15 || b._hollowInFrustum);
+                    if (ah !== bh) return ah ? -1 : 1;
+                    if (!!a._hollowSacred !== !!b._hollowSacred) return a._hollowSacred ? -1 : 1;
+                    if (!aDead) {
+                        if (!!a._hollowFence !== !!b._hollowFence) return a._hollowFence ? 1 : -1;
+                        if (!!a._hollowGrass !== !!b._hollowGrass) return a._hollowGrass ? 1 : -1;
+                    }
+                    if (!!a._hollowInFrustum !== !!b._hollowInFrustum) return a._hollowInFrustum ? -1 : 1;
+                    return a._hollowDist2 - b._hollowDist2;
+                }
+                var nearSacredR2 = 130 * 130;
+                var aheadSacredR2 = 190 * 190;
+                // Hub tight; E/W allow dead cone up to ~1M measured (car +~40k).
+                var emergTriCap = activeLobe === 'B' ? 840000 : 900000;
+                var deadTriCap = activeLobe === 'B' ? 920000 : 950000;
+                // Ultra-center (al>0.75) may push a bit further — hub scrub born at al≈1 / 140m.
+                var ultraTriCap = activeLobe === 'B' ? 980000 : 990000;
+                _hollowBudgetFwd.sort(hollowBudgetSortSacred);
+                for (var fa0 = 0; fa0 < _hollowBudgetFwd.length; fa0++) {
+                    var fe0 = _hollowBudgetFwd[fa0];
+                    var inHard0 = fe0._hollowDist2 <= hardMustR2;
+                    if (!fe0._hollowSacred && !inHard0) continue;
+                    gpuLoaded += hollowLoadMeshGpu(fe0.mesh);
+                    var nextT0 = usedTris + (fe0.tris || 0);
+                    var ultra = fe0._hollowAlign > 0.75 && fe0._hollowDist2 <= (180 * 180);
+                    var dead = !!fe0._hollowDeadAhead || ultra
+                        || (fe0._hollowAlign > 0.65 && fe0._hollowDist2 <= (190 * 190));
+                    var nearS = inHard0 || dead || fe0._hollowDist2 <= nearSacredR2
+                        || (fe0._hollowAlign > 0.5 && fe0._hollowDist2 <= aheadSacredR2);
+                    var keepStickyDead = dead && fe0._hollowWasShown && fe0._hollowAlign > 0.45;
+                    var triCeil = ultra ? ultraTriCap
+                        : keepStickyDead ? (deadTriCap + 40000)
+                        : (dead || inHard0) ? deadTriCap
+                        : (nearS ? emergTriCap : hardTriCap);
+                    var feet = fe0._hollowDist2 <= (55 * 55);
+                    if (!feet && (usedDraws >= emergCap || nextT0 > triCeil)) {
+                        fe0.mesh.visible = false;
+                        fe0.mesh.userData._hollowStickyShow = false;
+                        fe0._hollowSettled = true;
+                        hidden++;
+                        continue;
+                    }
+                    if (feet && usedDraws >= emergCap) {
+                        fe0.mesh.visible = false;
+                        fe0.mesh.userData._hollowStickyShow = false;
+                        fe0._hollowSettled = true;
+                        hidden++;
+                        continue;
+                    }
+                    fe0.mesh.visible = true;
+                    fe0.mesh.userData._hollowStickyShow = true;
+                    fe0._hollowSettled = true;
+                    shown++;
+                    usedTris = nextT0;
+                    usedDraws += 1;
+                }
+                // Pass A0b: only close must-show leftovers — never after dead cone filled.
+                for (var fa0b = 0; fa0b < _hollowBudgetFwd.length; fa0b++) {
+                    var feb0 = _hollowBudgetFwd[fa0b];
+                    if (feb0._hollowSettled || !feb0._hollowMustShow) continue;
+                    if (usedTris >= emergTriCap) {
+                        feb0.mesh.visible = false;
+                        feb0.mesh.userData._hollowStickyShow = false;
+                        feb0._hollowSettled = true;
+                        hidden++;
+                        continue;
+                    }
+                    if (feb0._hollowDist2 > (120 * 120) && feb0._hollowAlign < 0.5) {
+                        feb0.mesh.visible = false;
+                        feb0.mesh.userData._hollowStickyShow = false;
+                        feb0._hollowSettled = true;
+                        hidden++;
+                        continue;
+                    }
+                    gpuLoaded += hollowLoadMeshGpu(feb0.mesh);
+                    var nextTb = usedTris + (feb0.tris || 0);
+                    if (usedDraws >= emergCap || nextTb > emergTriCap) {
+                        feb0.mesh.visible = false;
+                        feb0.mesh.userData._hollowStickyShow = false;
+                        feb0._hollowSettled = true;
+                        hidden++;
+                        continue;
+                    }
+                    feb0.mesh.visible = true;
+                    feb0.mesh.userData._hollowStickyShow = true;
+                    feb0._hollowSettled = true;
+                    shown++;
+                    usedTris = nextTb;
+                    usedDraws += 1;
+                }
+                // Pass A1: sticky forward only if under emerg — don't let soft sticky starve dead.
+                for (var fa = 0; fa < _hollowBudgetFwd.length; fa++) {
+                    var fea = _hollowBudgetFwd[fa];
+                    if (fea._hollowSettled) continue;
+                    if (!fea._hollowWasShown || !(fea._hollowIsFwd || fea._hollowInFrustum)) continue;
+                    if (usedTris >= emergTriCap || usedDraws >= hardAbsCap
+                        || (fea._hollowAlign < 0.35 && fea._hollowDist2 > hardMustR2)) {
+                        fea.mesh.visible = false;
+                        fea.mesh.userData._hollowStickyShow = false;
+                        fea._hollowSettled = true;
+                        hidden++;
+                        continue;
+                    }
+                    gpuLoaded += hollowLoadMeshGpu(fea.mesh);
+                    fea.mesh.visible = true;
+                    fea.mesh.userData._hollowStickyShow = true;
+                    fea._hollowSettled = true;
+                    shown++;
+                    usedTris += (fea.tris || 0);
+                    usedDraws += 1;
+                }
+                    // Pass A2: far must-show. Yield early when dead-ahead already filled tris.
+                    var fenceStrideIdx = 0;
+                    for (var fa2 = 0; fa2 < _hollowBudgetFwd.length; fa2++) {
+                    var fe2 = _hollowBudgetFwd[fa2];
+                    if (fe2._hollowSettled || !fe2._hollowMustShow) continue;
+                    if (usedTris >= emergTriCap && !fe2._hollowSacred) {
+                        fe2.mesh.visible = false;
+                        fe2.mesh.userData._hollowStickyShow = false;
+                        fe2._hollowSettled = true;
+                        hidden++;
+                        continue;
+                    }
+                    gpuLoaded += hollowLoadMeshGpu(fe2.mesh);
+                    var nextT = usedTris + (fe2.tris || 0);
+                    // Only stride individual posts — never HollowFenceJoin_ (one join = whole span).
+                    var isJoinFence = /HollowFenceJoin_/i.test(fe2.mesh.name || '');
+                    if (fe2._hollowFence && !isJoinFence && !fe2._hollowSacred
+                        && fe2._hollowDist2 > (75 * 75)) {
+                        fenceStrideIdx++;
+                        // Keep ~50% of far fence posts when near cap.
+                        if ((usedDraws >= mustDrawCap || nextT > mustTriCap)
+                            && (fenceStrideIdx & 1)) {
+                            fe2.mesh.visible = false;
+                            fe2.mesh.userData._hollowStickyShow = false;
+                            fe2._hollowSettled = true;
+                            hidden++;
+                            continue;
+                        }
+                    }
+                    // Grass beyond 90m yields ONLY if not dead-ahead / sacred.
+                    if (fe2._hollowGrass && !fe2._hollowSacred && fe2._hollowAlign < 0.45
+                        && fe2._hollowDist2 > (90 * 90)
+                        && usedDraws >= mustDrawCap) {
+                        fe2.mesh.visible = false;
+                        fe2.mesh.userData._hollowStickyShow = false;
+                        fe2._hollowSettled = true;
+                        hidden++;
+                        continue;
+                    }
+                    var overSoft = (usedDraws >= mustDrawCap || nextT > mustTriCap);
+                    var overHard = (usedDraws >= hardAbsCap || nextT > hardTriCap);
+                    // Never soft-hide sacred (should already be settled in A0).
+                    if (fe2._hollowSacred) { overSoft = false; overHard = usedDraws >= emergCap; }
+                    if (overSoft || overHard) {
+                        fe2.mesh.visible = false;
+                        fe2.mesh.userData._hollowStickyShow = false;
+                        fe2._hollowSettled = true;
+                        hidden++;
+                        continue;
+                    }
+                    fe2.mesh.visible = true;
+                    fe2.mesh.userData._hollowStickyShow = true;
+                    fe2._hollowSettled = true;
+                    shown++;
+                    usedTris = nextT;
+                    usedDraws += 1;
+                }
+                // Pass B: GPU preload only — never spend visible tris after A0/A1.
+                for (var fb = 0; fb < _hollowBudgetFwd.length; fb++) {
+                    var feb = _hollowBudgetFwd[fb];
+                    if (feb._hollowSettled) continue;
+                    gpuLoaded += hollowLoadMeshGpu(feb.mesh);
+                    feb.mesh.visible = false;
+                    if (!feb._hollowWasShown) feb.mesh.userData._hollowStickyShow = false;
+                    hidden++;
+                }
+                // Pass C: rear/side — preload only when over emerg; else tiny leftover.
+                _hollowBudgetRear.sort(function(a, b) { return a._hollowSort - b._hollowSort; });
+                for (var ri = 0; ri < _hollowBudgetRear.length; ri++) {
+                    var re = _hollowBudgetRear[ri];
+                    gpuLoaded += hollowLoadMeshGpu(re.mesh);
+                    var nextTris = usedTris + (re.tris || 0);
+                    var nextDraws = usedDraws + 1;
+                    if (usedTris >= emergTriCap || usedDraws >= mustDrawCap
+                        || nextTris > budgetTris || nextDraws > budgetDraws) {
+                        re.mesh.visible = false;
+                        re.mesh.userData._hollowStickyShow = false;
+                        hidden++;
+                        continue;
+                    }
+                    re.mesh.visible = true;
+                    re.mesh.userData._hollowStickyShow = true;
+                    shown++;
+                    usedTris = nextTris;
+                    usedDraws = nextDraws;
+                }
+
+                _hollowSectionLastKey = key;
+                _hollowSectionActiveLobe = activeLobe;
+                var outLobe = (activeLobe === 'E') ? 'W' : (activeLobe === 'W') ? 'E' : '';
+                if (window.__driveHollowSections) {
+                    window.__driveHollowSections.activeLobe = activeLobe;
+                    window.__driveHollowSections.shown = shown;
+                    window.__driveHollowSections.hidden = hidden;
+                    window.__driveHollowSections.out = outLobe;
+                    window.__driveHollowSections.prev = prev;
+                    window.__driveHollowSections.streaming = true;
+                    window.__driveHollowSections.viewR = HOLLOW_VIEW_RADIUS_M;
+                    window.__driveHollowSections.aheadR = HOLLOW_AHEAD_RADIUS_M;
+                    window.__driveHollowSections.budgetTris = HOLLOW_BUDGET_TRIS;
+                    window.__driveHollowSections.budgetDraws = HOLLOW_BUDGET_DRAWS;
+                    window.__driveHollowSections.usedStreamTris = usedTris;
+                    window.__driveHollowSections.usedStreamDraws = usedDraws;
+                    window.__driveHollowSections.gpuLoaded = gpuLoaded;
+                    window.__driveHollowSections.gpuUnloaded = gpuUnloaded;
+                    window.__driveHollowSections.resident = {
+                        H: !!_hollowStreamResident.H,
+                        E: !!_hollowStreamResident.E,
+                        W: !!_hollowStreamResident.W
+                    };
+                    // Diag: drawable geo + whether world pos still matches build-time center.
+                    var drawGeo = 0, noGeo = 0, noParent = 0, nearW = 0, farW = 0, misplaced = 0;
+                    for (var di = 0; di < _hollowSectionEntries.length; di++) {
+                        var de = _hollowSectionEntries[di];
+                        if (!de.mesh.visible) continue;
+                        if (!de.mesh.parent) { noParent++; continue; }
+                        if (hollowMeshHasDrawGeo(de.mesh)) drawGeo++;
+                        else { noGeo++; continue; }
+                        de.mesh.updateMatrixWorld(true);
+                        de.mesh.getWorldPosition(_hollowSectionScratch);
+                        var wdx = _hollowSectionScratch.x - carX;
+                        var wdz = _hollowSectionScratch.z - carZ;
+                        if ((wdx * wdx + wdz * wdz) < (80 * 80)) nearW++;
+                        else farW++;
+                        var mdx = _hollowSectionScratch.x - de.cx;
+                        var mdz = _hollowSectionScratch.z - de.cz;
+                        if ((mdx * mdx + mdz * mdz) > 25) misplaced++;
+                    }
+                    window.__driveHollowSections.diagDrawGeo = drawGeo;
+                    window.__driveHollowSections.diagNoGeo = noGeo;
+                    window.__driveHollowSections.diagNoParent = noParent;
+                    window.__driveHollowSections.diagNearW = nearW;
+                    window.__driveHollowSections.diagFarW = farW;
+                    window.__driveHollowSections.diagMisplaced = misplaced;
+                }
+                // Dev hook for benches / pop-in diagnosis.
+                window.__driveHollowEntries = _hollowSectionEntries;
+            }
+
+            function pickHollowResidencyLobe(x, z, chassis) {
+                var dist = Math.hypot(x, z);
+                var here = classifyHollowSectionXZ(x, z);
+                var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                if (dist < HOLLOW_BOTH_RADIUS_M || here === 'H') {
+                    _hollowStreamHoldUntil = now + 500;
+                    return { lobe: 'B', here: here, reason: 'hub', dist: dist };
+                }
+                if (chassis && chassis.getWorldDirection) {
+                    chassis.getWorldDirection(_hollowSectionFwd);
+                    _hollowSectionFwd.y = 0;
+                    if (_hollowSectionFwd.lengthSq() > 1e-6) {
+                        _hollowSectionFwd.normalize();
+                        var tlen = dist || 1;
+                        var towardHub = (_hollowSectionFwd.x * (-x) + _hollowSectionFwd.z * (-z)) / tlen;
+                        // Load opposite wing early — before portal/hub is on screen.
+                        if (dist < HOLLOW_APPROACH_RADIUS_M && towardHub > 0.2) {
+                            _hollowStreamHoldUntil = now + 900;
+                            return { lobe: 'B', here: here, reason: 'preload', dist: dist };
+                        }
+                        var towardOther = (here === 'E') ? (-_hollowSectionFwd.x) : _hollowSectionFwd.x;
+                        if (dist < 180 && towardOther > 0.25) {
+                            _hollowStreamHoldUntil = now + 1000;
+                            return { lobe: 'B', here: here, reason: 'lookAcross', dist: dist };
+                        }
+                    }
+                }
+                if (now < _hollowStreamHoldUntil) {
+                    return { lobe: 'B', here: here, reason: 'hold', dist: dist };
+                }
+                return { lobe: here, here: here, reason: 'stream', dist: dist };
+            }
+
+            function updateHollowSectionResidency() {
+                if (!HOLLOW_SECTIONS_ENABLED) return;
+                if (!activeForestTrack || activeForestTrack.id !== 'hollow') return;
+                if (!_hollowSectionEntries || !_hollowSectionEntries.length) {
+                    if (spawnDirtRoadReady && spawnDirtRoadRoot) {
+                        buildHollowSectionEntries(spawnDirtRoadRoot);
+                    }
+                    if (!_hollowSectionEntries) return;
+                }
+                var x = 0;
+                var z = 0;
+                var chassis = null;
+                if (botDriverCam && botVehicleRef && botVehicleRef.chassisMesh) {
+                    chassis = botVehicleRef.chassisMesh;
+                    chassis.getWorldPosition(_hollowSectionScratch);
+                    x = _hollowSectionScratch.x;
+                    z = _hollowSectionScratch.z;
+                } else if (vehicleRef && vehicleRef.chassisMesh) {
+                    chassis = vehicleRef.chassisMesh;
+                    chassis.getWorldPosition(_hollowSectionScratch);
+                    x = _hollowSectionScratch.x;
+                    z = _hollowSectionScratch.z;
+                } else if (camera) {
+                    camera.getWorldPosition(_hollowSectionScratch);
+                    x = _hollowSectionScratch.x;
+                    z = _hollowSectionScratch.z;
+                }
+                var pick = pickHollowResidencyLobe(x, z, chassis);
+                // CRITICAL: use CAMERA look dir, not chassis +Z.
+                // Chassis getWorldDirection is model +Z (often ≠ view); using it marked
+                // ahead roadside trees as "rear" and culled them → pop-in / bare banks.
+                // Scrub may override with travel face when road yaw ≠ segment direction.
+                _hollowViewHasFwd = false;
+                var fwdSrc = 'none';
+                if (_hollowViewFwdOverride
+                    && isFinite(_hollowViewFwdOverride.x) && isFinite(_hollowViewFwdOverride.z)) {
+                    var ox = _hollowViewFwdOverride.x;
+                    var oz = _hollowViewFwdOverride.z;
+                    var ol = Math.sqrt(ox * ox + oz * oz) || 1;
+                    _hollowViewFwdX = ox / ol;
+                    _hollowViewFwdZ = oz / ol;
+                    _hollowViewHasFwd = true;
+                    fwdSrc = 'scrubFace';
+                } else if (camera) {
+                    camera.getWorldDirection(_hollowSectionFwd);
+                    _hollowSectionFwd.y = 0;
+                    if (_hollowSectionFwd.lengthSq() > 1e-6) {
+                        _hollowSectionFwd.normalize();
+                        _hollowViewFwdX = _hollowSectionFwd.x;
+                        _hollowViewFwdZ = _hollowSectionFwd.z;
+                        _hollowViewHasFwd = true;
+                        fwdSrc = 'camera';
+                    }
+                } else if (chassis && chassis.getWorldDirection) {
+                    chassis.getWorldDirection(_hollowSectionFwd);
+                    _hollowSectionFwd.y = 0;
+                    if (_hollowSectionFwd.lengthSq() > 1e-6) {
+                        _hollowSectionFwd.normalize();
+                        _hollowViewFwdX = _hollowSectionFwd.x;
+                        _hollowViewFwdZ = _hollowSectionFwd.z;
+                        _hollowViewHasFwd = true;
+                        fwdSrc = 'chassis';
+                    }
+                }
+                if (!window.__driveHollowSections) window.__driveHollowSections = {};
+                window.__driveHollowSections.carSect = pick.here;
+                window.__driveHollowSections.carX = +x.toFixed(1);
+                window.__driveHollowSections.carZ = +z.toFixed(1);
+                window.__driveHollowSections.reason = pick.reason;
+                window.__driveHollowSections.dist = +pick.dist.toFixed(1);
+                window.__driveHollowSections.bothR = HOLLOW_BOTH_RADIUS_M;
+                window.__driveHollowSections.approachR = HOLLOW_APPROACH_RADIUS_M;
+                window.__driveHollowSections.viewR = HOLLOW_VIEW_RADIUS_M;
+                window.__driveHollowSections.viewFwdX = _hollowViewHasFwd ? +_hollowViewFwdX.toFixed(3) : null;
+                window.__driveHollowSections.viewFwdZ = _hollowViewHasFwd ? +_hollowViewFwdZ.toFixed(3) : null;
+                window.__driveHollowSections.viewFwdSrc = fwdSrc;
+                applyHollowStreamResidency(pick.lobe, false, x, z);
+            }
+
+            // Back-compat name used by poseBotAtCheckpoint / benches.
+            function applyHollowSectionResidency(activeLobe, force) {
+                var x = window.__driveHollowSections && window.__driveHollowSections.carX;
+                var z = window.__driveHollowSections && window.__driveHollowSections.carZ;
+                applyHollowStreamResidency(activeLobe, force, x, z);
+            }
+
             function updateLoopForestDistanceCull() {
                 if (!_loopForestCullList || !_loopForestCullList.length) return;
                 if (!camera) return;
+                // Hollow streaming owns mesh visibility — don't fight it.
+                if (HOLLOW_SECTIONS_ENABLED && activeForestTrack && activeForestTrack.id === 'hollow'
+                    && _hollowSectionEntries && _hollowSectionEntries.length) {
+                    return;
+                }
                 camera.getWorldPosition(_loopForestCullEye);
                 var params = new URLSearchParams(window.location.search);
                 if (params.get('nofoliagecull') === '1') {
@@ -27441,6 +28948,19 @@
                             } else if (/Wood_Log|Wood_Post|Metal_Fence|Wood_Fence|Rocks_Kit/i.test(n)) {
                                 o.userData.environmentClass = 'solid';
                                 fenceSolids.push(o);
+                                // Nearby BVH shapecast (Spaceshooter-style) — not only Bullet.
+                                if (vrRunnerCityCollisionMeshes.indexOf(o) < 0) {
+                                    vrRunnerCityCollisionMeshes.push(o);
+                                }
+                                if (o.geometry && !o.geometry.boundsTree) {
+                                    try {
+                                        o.geometry.computeBoundsTree({
+                                            maxLeafTris: 8,
+                                            maxDepth: 30,
+                                            strategy: 0
+                                        });
+                                    } catch (bvhErr) { /* optional */ }
+                                }
                             } else if (/stranska|ScanRock_|TundraRock_|wd4icipcb/i.test(n)) {
                                 // Cliff rocks + standalone scan / tundra rock modules: collide.
                                 if (/\.001$|_0001$|_lod\d+$|part\d+$/i.test(n) && /stranska/i.test(n)) {
@@ -27575,13 +29095,30 @@
                                 console.warn('⚠️ Loop draw-budget restore failed:', joinErr);
                             }
                         }
-                        // Queue fences deferred; mud berms build NOW so hull tris
-                        // aren't delayed / dropped before the player drives.
+                        // Queue fences BEFORE hollowStream join/residency so Bullet/BVH bake
+                        // from full post geometry (join keeps invisible collide-proxies).
                         if (vrRunnerCityCollisionMeshes.length) {
                             vrRunnerCityReady = true;
                         }
                         if (fenceSolids.length) {
                             queueCitySolidObstaclePhysicsBuild(fenceSolids);
+                        }
+                        // Hollow stream after collision bake — visual join only; proxies stay solid.
+                        if (HOLLOW_SECTIONS_ENABLED && activeForestTrack
+                            && activeForestTrack.id === 'hollow') {
+                            try {
+                                window.__driveHollowSections = {
+                                    enabled: true,
+                                    hubR: HOLLOW_HUB_RADIUS_M,
+                                    counts: buildHollowSectionEntries(group)
+                                };
+                                updateHollowSectionResidency();
+                            } catch (hsErr) {
+                                console.warn('⚠️ Hollow soft sections failed:', hsErr);
+                            }
+                        } else {
+                            clearHollowSectionResidency();
+                            window.__driveHollowSections = { enabled: false };
                         }
                         var mudHull = 0;
                         for (var mi = 0; mi < mudSolids.length; mi++) {
