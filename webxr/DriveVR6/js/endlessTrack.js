@@ -1262,6 +1262,17 @@ function clearTreesOffDirt(groups, trail) {
         else if (backGap < BEHIND_M) extendBack();
     }
 
+    var lastPumpMs = 0;
+    var STREAM_MS = 400;
+
+    function pump() {
+        if (dead) return;
+        var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        if (lastPumpMs && (now - lastPumpMs) < STREAM_MS) return;
+        lastPumpMs = now;
+        tick(null);
+    }
+
     function stop() {
         dead = true;
         if (timer) clearInterval(timer);
@@ -1271,6 +1282,9 @@ function clearTreesOffDirt(groups, trail) {
     var handle = {
         stop: stop,
         sections: sections,
+        // Quest immersive throttles window timers. Call pump() from the XR
+        // animation loop. tickAt stays for forced tests.
+        pump: pump,
         tickAt: function(dist) { tick(dist); },
         get closed() { return false; },
         get endDist() { return sections.length ? sections[sections.length - 1].endDist : 0; },
@@ -1309,7 +1323,9 @@ function clearTreesOffDirt(groups, trail) {
                 if (dead) return;
                 api.splash(100, 'Ready');
                 api.onReady();
-                timer = setInterval(function() { tick(null); }, 400);
+                // Desktop backup only. Standalone Quest XR does not run this
+                // reliably once the immersive session has started — pump() does.
+                timer = setInterval(pump, STREAM_MS);
             }).catch(function(err) {
                 building = false;
                 console.error('Endless boot failed', err);

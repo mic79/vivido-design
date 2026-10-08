@@ -2961,10 +2961,14 @@
                 renderer.setAnimationLoop(function(time, frame) {
                     var dt = clock.getDelta();
                     var inXR = renderer.xr.isPresenting;
-                    // Quest immersive throttles window.rAF — pump build/switch work here.
+                    // Quest immersive throttles window.rAF / setInterval — pump
+                    // build, switch, and Endless streaming from this XR loop.
                     pumpDriveEnvironmentBuildQueues();
                     pumpForestTrackSwitchWait();
                     pumpMultiplayerRaceRestart();
+                    if (window.__endless && typeof window.__endless.pump === 'function') {
+                        window.__endless.pump();
+                    }
                     if (pendingBotRespawnAfterTrackSwitch && !forestTrackSwitching) {
                         pendingBotRespawnTries++;
                         if (respawnDirtBotAfterTrackSwitch() || pendingBotRespawnTries > 120) {
@@ -34368,6 +34372,10 @@ function queueCitySolidObstaclePhysicsBuild(meshes) {
                     armSolids: function(list) { armJsInstancedSolidPhysics(list, 400); },
                     started: function() { return !!driveGameStarted; },
                     carPos: function() {
+                        if (vehicleRef && vehicleRef.vehicleBody) {
+                            var origin = vehicleRef.vehicleBody.getWorldTransform().getOrigin();
+                            return { x: origin.x(), y: origin.y(), z: origin.z() };
+                        }
                         if (!vehicleRef || !vehicleRef.chassisMesh) return null;
                         vehicleRef.chassisMesh.updateMatrixWorld(true);
                         var p = new THREE.Vector3().setFromMatrixPosition(vehicleRef.chassisMesh.matrixWorld);
