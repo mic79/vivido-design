@@ -798,8 +798,21 @@ export function startEndlessTrack(api) {
     var backCursor = null;
     var backFailAt = 0;
     var everSeated = false;
+    var buildingSince = 0;
     var lowArchive = [];
     var highArchive = [];
+
+    function scheduleWork(fn) {
+        if (api.scheduleWork) {
+            api.scheduleWork(fn);
+            return;
+        }
+        if (typeof window !== 'undefined' && window.__scheduleDriveXrWork) {
+            window.__scheduleDriveXrWork(fn);
+            return;
+        }
+        setTimeout(fn, 0);
+    }
 
     function pathPoints() {
         var pts = [];
@@ -882,9 +895,9 @@ export function startEndlessTrack(api) {
                 var now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
                 if (now - t0 > 3) break;
             }
-            if (i < meshes.length) setTimeout(pump, 0);
+            if (i < meshes.length) scheduleWork(pump);
         }
-        setTimeout(pump, 0);
+        scheduleWork(pump);
     }
 
     function dropSection(section) {
@@ -1011,12 +1024,17 @@ function clearTreesOffDirt(groups, trail) {
     function dress(section) {
         if (dead || section.dropped || !section.group) return Promise.resolve();
         var local = rebaseFrames(section.frames);
+        // Boot sections keep the full FR roadside. Streamed sections only get
+        // the forest kit — placeFrRoadside on every 140 m section is a multi-
+        // frame hitch on Quest and was holding `building` across setTimeouts.
+        var streamed = section.id > 3;
         return placeForestKit(api.loader, local, section.group).then(function() {
             if (dead || section.dropped) return null;
+            if (streamed) return null;
             return placeFrRoadside(api.loader, local, section.group, { gltf: gltf });
         }).then(function() {
             if (dead || section.dropped || !section.group) return;
-            clearTreesOffDirt(sections.map(function(s) { return s.group; }), cursor.trail);
+            clearTreesOffDirt([section.group], cursor.trail);
             varySectionDress(section.group, section.style);
             var solids = [];
             section.group.traverse(function(o) {
@@ -1144,22 +1162,35 @@ function clearTreesOffDirt(groups, trail) {
         return finishSection(section, 'restored');
     }
 
+    function beginBuild(run) {
+        if (building || dead) return;
+        building = true;
+        buildingSince = Date.now();
+        // Do not build the ribbon inside the same XR frame as the stream
+        // decision — that hitch is what players feel as a freeze.
+        scheduleWork(function() {
+            if (dead) {
+                building = false;
+                return;
+            }
+            Promise.resolve()
+                .then(run)
+                .then(function() { building = false; buildingSince = 0; }, function(err) {
+                    building = false;
+                    buildingSince = 0;
+                    console.warn('Endless section failed', err);
+                });
+        });
+    }
+
     function extendForward() {
         var archived = highArchive.length ? highArchive[highArchive.length - 1] : null;
         if (archived) {
             highArchive.pop();
-            building = true;
-            restoreSection(archived, 'high').then(function() { building = false; }, function(err) {
-                building = false;
-                console.warn('Endless section failed', err);
-            });
+            beginBuild(function() { return restoreSection(archived, 'high'); });
             return;
         }
-        building = true;
-        addSection().then(function() { building = false; }, function(err) {
-            building = false;
-            console.warn('Endless section failed', err);
-        });
+        beginBuild(function() { return addSection(); });
     }
 
     function extendBack() {
@@ -1167,18 +1198,10 @@ function clearTreesOffDirt(groups, trail) {
         var archived = lowArchive.length ? lowArchive[lowArchive.length - 1] : null;
         if (archived) {
             lowArchive.pop();
-            building = true;
-            restoreSection(archived, 'low').then(function() { building = false; }, function(err) {
-                building = false;
-                console.warn('Endless back section failed', err);
-            });
+            beginBuild(function() { return restoreSection(archived, 'low'); });
             return;
         }
-        building = true;
-        addBackSection().then(function() { building = false; }, function(err) {
-            building = false;
-            console.warn('Endless back section failed', err);
-        });
+        beginBuild(function() { return addBackSection(); });
     }
 
     function retireSection(section, which) {
@@ -1214,7 +1237,15 @@ function clearTreesOffDirt(groups, trail) {
     }
 
     function tick(forcedDist) {
-        if (dead || building || !bag || !sections.length) return;
+        if (dead || !bag || !sections.length) return;
+        // A hung physics/dress promise used to leave building true forever on
+        // Quest (setTimeout between BVH cells never ran in immersive XR).
+        if (building && buildingSince && (Date.now() - buildingSince) > 12000) {
+            console.warn('Endless build watchdog — clearing stuck building flag');
+            building = false;
+            buildingSince = 0;
+        }
+        if (building) return;
         // The splash and the menu have no car on the road. Streaming then
         // would grow backward and drop the spawn section.
         if (forcedDist == null && api.started && !api.started()) return;
@@ -1233,6 +1264,9 @@ function clearTreesOffDirt(groups, trail) {
                 var home = frameNearDist(spawnDist);
                 if (!home) return;
                 if (Math.hypot(seat.x - home.x, seat.z - home.z) < 40) everSeated = true;
+                // Path distance past spawn also counts — mesh-based seating can
+                // miss when the chassis offset is large on Quest.
+                if (!everSeated && Math.abs(span.dist - spawnDist) > 8) everSeated = true;
                 if (!everSeated) return;
             }
             if (Math.abs(span.dist - spawnDist) < 50) return;
@@ -1293,6 +1327,28 @@ function clearTreesOffDirt(groups, trail) {
         get spawnPos() {
             var best = frameNearDist(spawnDist);
             return best ? { x: best.x, y: best.y, z: best.z } : null;
+        },
+        diag: function() {
+            var car = api.carPos && api.carPos();
+            var dist = carDist();
+            return {
+                dead: dead,
+                building: building,
+                buildingAgeMs: building && buildingSince ? (Date.now() - buildingSince) : 0,
+                everSeated: everSeated,
+                bag: !!bag,
+                sectionCount: sections.length,
+                endDist: sections.length ? sections[sections.length - 1].endDist : 0,
+                startDist: sections.length ? firstLongSection().startDist : 0,
+                spawnDist: spawnDist,
+                carDist: dist,
+                car: car,
+                lowArchive: lowArchive.length,
+                highArchive: highArchive.length,
+                xrQueue: (typeof window !== 'undefined' && window.__driveXrWorkQueueLen)
+                    ? window.__driveXrWorkQueueLen() : null,
+                forceXrQueue: !!(typeof window !== 'undefined' && window.__forceDriveXrWorkQueue)
+            };
         }
     };
     var spawnDist = SECTION_M;

@@ -1253,6 +1253,9 @@
             var ghostBotEnabled = false;
             var endlessPoliceEnabled = false;
             var endlessCopMode = false;
+            /** Review harness: dirt-road AI steers the player car on Endless. */
+            var endlessPlayerBotDrive = false;
+            var endlessPlayerBotRef = null;
             var endlessSpeeder = null;
             var endlessSpeederSpawnAt = 0;
             var endlessCopChaseStart = 0;
@@ -1890,8 +1893,32 @@
                 }
             }
 
+            /**
+             * Quest immersive throttles window.setTimeout / rAF. Physics and
+             * stream continuations must resume from the XR animation loop.
+             */
+            var driveXrWorkQueue = [];
+            function scheduleDriveXrWork(fn) {
+                if (typeof fn !== 'function') return;
+                var forceQueue = !!(window.__forceDriveXrWorkQueue);
+                if (forceQueue || (renderer && renderer.xr && renderer.xr.isPresenting)) {
+                    driveXrWorkQueue.push(fn);
+                    return;
+                }
+                setTimeout(fn, 0);
+            }
+            window.__scheduleDriveXrWork = scheduleDriveXrWork;
+            window.__driveXrWorkQueueLen = function() { return driveXrWorkQueue.length; };
+
             /** Drain BVH / walkable / solid queues on the XR frame loop (not window.rAF). */
             function pumpDriveEnvironmentBuildQueues() {
+                var xrBudget = 2;
+                while (xrBudget-- > 0 && driveXrWorkQueue.length) {
+                    var job = driveXrWorkQueue.shift();
+                    try { job(); } catch (eXr) {
+                        console.warn('XR work queue', eXr);
+                    }
+                }
                 if (vrRunnerCityBvhPending && vrRunnerCityBvhPending.length) {
                     processCityMeshBvhQueue();
                 } else if (vrRunnerCityBvhBuilding) {
@@ -11000,7 +11027,24 @@
                     }
                     
                     var navDrive = applyPlayerCityNavDrive(speed, maxEngineForce, maxBreakingForce);
-                    if (navDrive.handled) {
+                    if (endlessPlayerBotDrive && !driveDisabled && denseWaypoints && denseWaypoints.length > 8
+                        && typeof steerDirtRoadBot === 'function' && endlessPlayerBotRef) {
+                        endlessPlayerBotRef.vehicle = vehicle;
+                        endlessPlayerBotRef.vehicleBody = body;
+                        endlessPlayerBotRef.maxEngineForce = maxEngineForce;
+                        endlessPlayerBotRef._dirtDone = false;
+                        var tmP = vehicle.getChassisWorldTransform();
+                        var op = tmP.getOrigin();
+                        var oq = tmP.getRotation();
+                        var pPos = new THREE.Vector3(op.x(), op.y(), op.z());
+                        var pQuat = new THREE.Quaternion(oq.x(), oq.y(), oq.z(), oq.w());
+                        var pFwd = new THREE.Vector3(0, 0, 1).applyQuaternion(pQuat);
+                        var dirtPlayer = steerDirtRoadBot(
+                            pPos, pFwd, speed, endlessPlayerBotRef, denseWaypoints);
+                        vehicleSteering = dirtPlayer.steer;
+                        engineForce = dirtPlayer.engine;
+                        breakingForce = dirtPlayer.brake;
+                    } else if (navDrive.handled) {
                         engineForce = navDrive.engineForce;
                         breakingForce = navDrive.breakingForce;
                         vehicleSteering = navDrive.vehicleSteering;
@@ -15462,7 +15506,7 @@
                             onProgress(ki / keys.length);
                         }
                         if (ki < keys.length) {
-                            setTimeout(pump, 0);
+                            scheduleDriveXrWork(pump);
                             return;
                         }
                         if (mesh.userData.driveWalkCancel || !mesh.parent) {
@@ -16083,7 +16127,7 @@
                             return;
                         }
                         if (i < im.count) {
-                            setTimeout(pump, 0);
+                            scheduleDriveXrWork(pump);
                             return;
                         }
                         im.userData.driveInstSolidBodies = bodies;
@@ -23598,6 +23642,8 @@ function queueCitySolidObstaclePhysicsBuild(meshes) {
 
                 var nearI = idx;
                 var nearD = Infinity;
+                // Endless republishes a sliding waypoint window. A stale index
+                // after a section drop must not keep searching the wrong slice.
                 var search0 = dirtRoadPathClosed ? 0 : Math.max(0, idx - 5);
                 var search1 = dirtRoadPathClosed ? n - 1 : Math.min(n - 1, idx + 8);
                 if (!dirtRoadPathClosed) {
@@ -23607,6 +23653,17 @@ function queueCitySolidObstaclePhysicsBuild(meshes) {
                             nearD = d;
                             nearI = j;
                         }
+                    }
+                    if (nearD > 10) {
+                        for (var jWide = 0; jWide < n; jWide++) {
+                            var dWide = carPos.distanceTo(navWps[jWide].position);
+                            if (dWide < nearD) {
+                                nearD = dWide;
+                                nearI = jWide;
+                            }
+                        }
+                        botRef.currentWaypointIndex = nearI;
+                        idx = nearI;
                     }
                 } else {
                     for (var j2 = 0; j2 < n; j2++) {
@@ -26908,12 +26965,22 @@ function queueCitySolidObstaclePhysicsBuild(meshes) {
 
             function armJsInstancedSolidPhysics(solids, delayMs) {
                 if (!solids || !solids.length) return;
-                setTimeout(function() {
+                var wait = delayMs != null ? delayMs : 2500;
+                var start = (typeof performance !== 'undefined' && performance.now)
+                    ? performance.now() : Date.now();
+                function arm() {
+                    var now = (typeof performance !== 'undefined' && performance.now)
+                        ? performance.now() : Date.now();
+                    if (now - start < wait) {
+                        scheduleDriveXrWork(arm);
+                        return;
+                    }
                     if (!(activeForestTrack && activeForestTrack.id === 'endless')) {
                         console.log('🪵 JS arming instanced solids', solids.length);
                     }
                     deferJsInstancedSolids(solids);
-                }, delayMs != null ? delayMs : 2500);
+                }
+                scheduleDriveXrWork(arm);
             }
 
             /**
@@ -34326,6 +34393,93 @@ function queueCitySolidObstaclePhysicsBuild(meshes) {
                 });
             };
 
+            window.__endlessReview = {
+                enablePlayerBot: function(on) {
+                    endlessPlayerBotDrive = on !== false;
+                    if (endlessPlayerBotDrive) {
+                        var startIdx = 0;
+                        if (vehicleRef && vehicleRef.vehicleBody && denseWaypoints && denseWaypoints.length) {
+                            var o0 = vehicleRef.vehicleBody.getWorldTransform().getOrigin();
+                            var bestD = 1e18;
+                            for (var wi = 0; wi < denseWaypoints.length; wi++) {
+                                var wp = denseWaypoints[wi].position;
+                                var d = (wp.x - o0.x()) * (wp.x - o0.x()) + (wp.z - o0.z()) * (wp.z - o0.z());
+                                if (d < bestD) { bestD = d; startIdx = wi; }
+                            }
+                        }
+                        endlessPlayerBotRef = {
+                            dirtRoadFollow: true,
+                            // Treat like a road-chase bot so open-path end does not
+                            // latch _dirtDone while Endless is still streaming.
+                            endlessTraffic: true,
+                            direction: 1,
+                            cruiseKmh: 72,
+                            mode: 'run',
+                            targetSpeed: 72,
+                            maxEngineForce: 2500,
+                            currentWaypointIndex: startIdx,
+                            previousSteering: 0,
+                            debugCounter: 0,
+                            _dirtDone: false,
+                            _dirtIdle: 0,
+                            _dirtOff: 0,
+                            _policeDir: 1,
+                            _policeLane: 0,
+                            _policeSteerFast: false
+                        };
+                        window.__forceDriveXrWorkQueue = true;
+                    } else {
+                        endlessPlayerBotRef = null;
+                    }
+                    return {
+                        ok: !!endlessPlayerBotDrive,
+                        startIdx: endlessPlayerBotRef ? endlessPlayerBotRef.currentWaypointIndex : null,
+                        wps: denseWaypoints ? denseWaypoints.length : 0
+                    };
+                },
+                forceXrWorkQueue: function(on) {
+                    window.__forceDriveXrWorkQueue = on !== false;
+                    return !!window.__forceDriveXrWorkQueue;
+                },
+                sample: function() {
+                    var end = window.__endless;
+                    var diag = end && typeof end.diag === 'function' ? end.diag() : null;
+                    var info = renderer && renderer.info ? renderer.info : null;
+                    var mem = (performance && performance.memory) ? {
+                        usedMB: +(performance.memory.usedJSHeapSize / 1048576).toFixed(1),
+                        totalMB: +(performance.memory.totalJSHeapSize / 1048576).toFixed(1)
+                    } : null;
+                    var car = null;
+                    if (vehicleRef && vehicleRef.vehicleBody) {
+                        var o = vehicleRef.vehicleBody.getWorldTransform().getOrigin();
+                        var v = vehicleRef.vehicleBody.getLinearVelocity();
+                        car = {
+                            x: +o.x().toFixed(2),
+                            y: +o.y().toFixed(2),
+                            z: +o.z().toFixed(2),
+                            kmh: +(Math.hypot(v.x(), v.z()) * 3.6).toFixed(1)
+                        };
+                    }
+                    return {
+                        t: performance.now(),
+                        playerBot: !!endlessPlayerBotDrive,
+                        forceXrQueue: !!window.__forceDriveXrWorkQueue,
+                        xrQueueLen: typeof window.__driveXrWorkQueueLen === 'function'
+                            ? window.__driveXrWorkQueueLen() : null,
+                        wps: denseWaypoints ? denseWaypoints.length : 0,
+                        walkBodies: vrRunnerCityPhysicsBodies ? vrRunnerCityPhysicsBodies.length : 0,
+                        solidBodies: vrRunnerCitySolidBodies ? vrRunnerCitySolidBodies.length : 0,
+                        draws: info && info.render ? info.render.calls : null,
+                        tris: info && info.render ? info.render.triangles : null,
+                        geoms: info && info.memory ? info.memory.geometries : null,
+                        textures: info && info.memory ? info.memory.textures : null,
+                        heap: mem,
+                        car: car,
+                        endless: diag
+                    };
+                }
+            };
+
             function bootEndlessTrack() {
                 if (window.__endless && window.__endless.stop) window.__endless.stop();
                 clearEndlessTraffic();
@@ -34336,11 +34490,14 @@ function queueCitySolidObstaclePhysicsBuild(meshes) {
                 endlessSpeederSpawnAt = 0;
                 resetEndlessCopChaseClock(!!endlessCopMode);
                 botEnabled = false;
+                endlessPlayerBotDrive = false;
+                endlessPlayerBotRef = null;
                 if (botVehicleRef && typeof removeBotVehicle === 'function') removeBotVehicle();
                 window.__startEndlessTrack({
                     scene: scene,
                     loader: getSharedGltfLoader(),
                     splash: driveSplashProgress,
+                    scheduleWork: scheduleDriveXrWork,
                     setRoot: function(group) { spawnDirtRoadRoot = group; },
                     addGround: function(mesh) {
                         if (!mesh) return Promise.resolve();
