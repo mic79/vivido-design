@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "probe": {
+    "boot": {
+      "version": "0.1.1",
+      "box3d": true,
+      "fighter": true,
+      "cockpit": true
+    },
+    "match": true,
+    "fpInput": true,
+    "boardHook": true,
+    "tryBoard": true,
+    "leftHand": true,
+    "rightHand": true,
+    "rightLaserControls": true,
+    "rightRaycaster": true,
+    "boardBtn": true,
+    "boardBtnAction": "board",
+    "menu1v1": true,
+    "appStart": true
+  },
+  "errors": []
+}

@@ -1,0 +1,8 @@
+Poly Haven CC0 detail overlays for PCVR close-up (world-XZ tiling).
+
+  rocky_terrain_02_diff_4k.jpg / rocky_terrain_02_nor_gl_4k.jpg  (preferred)
+  aerial_rocks_02_diff_4k.jpg / aerial_rocks_02_nor_gl_4k.jpg    (fallback)
+
+Source: https://polyhaven.com/a/rocky_terrain_02
+         https://polyhaven.com/a/aerial_rocks_02
+License: CC0 1.0

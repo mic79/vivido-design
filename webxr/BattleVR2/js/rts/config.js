@@ -1,0 +1,1146 @@
+// ========================================
+// RTSVR4 — Game Configuration
+// All constants, stats, and tuning values
+// ========================================
+
+// --- Map (mutable profiles: standard skirmish vs Story 4× area) ---
+/** @typedef {'standard'|'story'} MapProfileId */
+
+export const GROUND_Y = 0; // Map-center reference. Entities sit on the curved navigable bowl (`sampleMoonTraversableBaseY`), not absolute Y=0 everywhere.
+export const MAP_UNIT_PLAYABLE_INSET = 15;
+/**
+ * Area scale for **shared** XZ navigation: camera rig, units, buildings, orders, and pathfinding
+ * all use `MAP_UNIT_NAV_RADIUS` (= `MAP_UNIT_PLAYABLE_RADIUS * √scale`). `4` ⇒ 2× linear radius vs inset disk.
+ */
+export const MAP_CAMERA_NAV_AREA_SCALE = 4;
+export const MAP_CAMERA_NAV_EXTENSION = 0.1;
+export const MAP_NAV_PLANE_CELL = 2;
+/** Pathfinding: block central-mesh cells steeper than this (°); A* routes around them. */
+export const NAV_MAX_TRAVERSABLE_SLOPE_DEG = 45;
+
+/**
+ * Standard skirmish plate (m) — crater ridges / RTSVR4 layout.
+ * Spawns, resources, and nav disk use this; match terrain mesh may be larger
+ * (Hera Planum ±200) without moving gameplay anchors.
+ */
+export const MAP_SIZE_STANDARD = 200;
+/** Story hills plate — match RTSVR4 (400). Larger tris at 640 crushed Quest fill (~50 vs ~100+ FPS). */
+export const MAP_SIZE_STORY = 400;
+/** Opt-in `?kit=1` Story plate — covers the ~540×630 m UE kit cluster. */
+export const MAP_SIZE_STORY_KIT = 640;
+
+/** Live map metrics — reassigned by `applyMapProfile`. Importers see updates (ES live bindings). */
+export let MAP_PROFILE = /** @type {MapProfileId} */ ('standard');
+/** Terrain: crater (1v1, RTSVR4 path) | hills (Story) | kit (opt-in `?kit=1`). */
+export let MAP_TERRAIN_STYLE = /** @type {'crater'|'hills'|'kit'} */ ('crater');
+/** Live nav-area multiplier (skirmish 4 = 2× radius; Story kit = 1 so play stays on the kit). */
+export let MAP_NAV_AREA_SCALE = 1;
+/** 1v1 skirmish walkable area. 2v2 / FFA use 4.5× this (double the previous large disk). */
+export const MAP_SKIRMISH_NAV_AREA_SCALE = 4;
+export const MAP_LARGE_SKIRMISH_NAV_AREA_SCALE = 18;
+export let MAP_SIZE = MAP_SIZE_STANDARD;
+export let MAP_HALF = MAP_SIZE / 2;
+export let MAP_PLAYABLE_RADIUS = MAP_HALF * Math.SQRT2;
+export let MAP_UNIT_PLAYABLE_RADIUS = MAP_PLAYABLE_RADIUS - MAP_UNIT_PLAYABLE_INSET;
+export let MAP_UNIT_NAV_RADIUS =
+  MAP_UNIT_PLAYABLE_RADIUS * Math.sqrt(MAP_NAV_AREA_SCALE);
+export let MAP_CAMERA_PAN_RADIUS = MAP_UNIT_NAV_RADIUS * (1 + MAP_CAMERA_NAV_EXTENSION);
+export let MAP_NAV_PLANE_COLS = Math.ceil((2 * MAP_UNIT_NAV_RADIUS) / MAP_NAV_PLANE_CELL);
+export let MAP_NAV_PLANE_SPAN_M = MAP_NAV_PLANE_COLS * MAP_NAV_PLANE_CELL;
+export let MAP_NAV_PLANE_HALF_M = MAP_NAV_PLANE_SPAN_M * 0.5;
+/** Finer grid keeps O(1) `isVisibleToTeam` accurate (disk∩cell bake in fog.js). */
+export let FOG_GRID_SIZE = 40;
+export let FOG_CELL_SIZE = MAP_NAV_PLANE_SPAN_M / FOG_GRID_SIZE;
+
+/** Optional Story override for crystal sites (set each Story run; null = default skirmish layout). */
+export let STORY_RESOURCE_FIELD_POSITIONS = /** @type {Array<{x:number,z:number}>|null} */ (null);
+/** Extra crystals for 2v2 / FFA, placed in the expanded ring. Null on 1v1. */
+export let SKIRMISH_EXTRA_RESOURCE_POSITIONS = /** @type {Array<{x:number,z:number}>|null} */ (null);
+/** Corner crystals snapped onto flat pads. Null uses the diagonal formula. */
+export let SKIRMISH_CORNER_RESOURCE_POSITIONS = /** @type {Array<{x:number,z:number}>|null} */ (null);
+
+export function setStoryResourcePositions(positions) {
+  STORY_RESOURCE_FIELD_POSITIONS =
+    positions && positions.length > 0
+      ? positions.map(p => ({ x: p.x, z: p.z }))
+      : null;
+}
+
+export function setSkirmishExtraResourcePositions(positions) {
+  SKIRMISH_EXTRA_RESOURCE_POSITIONS =
+    positions && positions.length > 0
+      ? positions.map(p => ({ x: p.x, z: p.z }))
+      : null;
+}
+
+export function setSkirmishCornerResourcePositions(positions) {
+  SKIRMISH_CORNER_RESOURCE_POSITIONS =
+    positions && positions.length > 0
+      ? positions.map(p => ({ x: p.x, z: p.z }))
+      : null;
+}
+
+/**
+ * 2v2 and FFA walk a disk whose area is 4.5× the 1v1 skirmish disk.
+ * Kit terrain stays on the kit footprint. Call after `applyMapProfile('standard')`.
+ * @param {string} mode
+ */
+export function applySkirmishNavForMode(mode) {
+  if (MAP_PROFILE === 'story') return;
+  const kit = wantKitTerrain() || MAP_TERRAIN_STYLE === 'kit';
+  const large = !kit && (mode === '2v2' || mode === 'ffa');
+  MAP_NAV_AREA_SCALE = kit ? 1 : (large ? MAP_LARGE_SKIRMISH_NAV_AREA_SCALE : MAP_SKIRMISH_NAV_AREA_SCALE);
+  FOG_GRID_SIZE = large ? 84 : 40;
+  if (!large) SKIRMISH_EXTRA_RESOURCE_POSITIONS = null;
+  SKIRMISH_CORNER_RESOURCE_POSITIONS = null;
+  recomputeMapDerived();
+}
+
+function recomputeMapDerived() {
+  MAP_HALF = MAP_SIZE / 2;
+  MAP_PLAYABLE_RADIUS = MAP_HALF * Math.SQRT2;
+  MAP_UNIT_PLAYABLE_RADIUS = MAP_PLAYABLE_RADIUS - MAP_UNIT_PLAYABLE_INSET;
+  MAP_UNIT_NAV_RADIUS =
+    MAP_UNIT_PLAYABLE_RADIUS * Math.sqrt(MAP_NAV_AREA_SCALE);
+  MAP_CAMERA_PAN_RADIUS = MAP_UNIT_NAV_RADIUS * (1 + MAP_CAMERA_NAV_EXTENSION);
+  MAP_NAV_PLANE_COLS = Math.ceil((2 * MAP_UNIT_NAV_RADIUS) / MAP_NAV_PLANE_CELL);
+  MAP_NAV_PLANE_SPAN_M = MAP_NAV_PLANE_COLS * MAP_NAV_PLANE_CELL;
+  MAP_NAV_PLANE_HALF_M = MAP_NAV_PLANE_SPAN_M * 0.5;
+  FOG_CELL_SIZE = MAP_NAV_PLANE_SPAN_M / FOG_GRID_SIZE;
+}
+
+/**
+ * Switch between standard skirmish map and Story.
+ * Default = RTSVR4 path (Quest ~100–120 FPS): 1v1 crater moon, Story hills.
+ * Sci-fi kit: `?kit=1` (or rocks-file / Quest `?leanrocks=1`).
+ * @param {MapProfileId} profile
+ */
+export function applyMapProfile(profile) {
+  MAP_PROFILE = profile === 'story' ? 'story' : 'standard';
+  const forceKit = wantKitTerrain();
+  if (MAP_PROFILE === 'story') {
+    MAP_SIZE = forceKit ? MAP_SIZE_STORY_KIT : MAP_SIZE_STORY;
+    MAP_TERRAIN_STYLE = forceKit ? 'kit' : 'hills';
+    FOG_GRID_SIZE = 48;
+    // Hills: RTSVR4 nav scale (×4). Kit: stay on the kit footprint (scale 1).
+    MAP_NAV_AREA_SCALE = forceKit ? 1 : 4;
+  } else {
+    MAP_SIZE = MAP_SIZE_STANDARD;
+    MAP_TERRAIN_STYLE = forceKit ? 'kit' : 'crater';
+    FOG_GRID_SIZE = 40;
+    MAP_NAV_AREA_SCALE = forceKit ? 1 : 4;
+    STORY_RESOURCE_FIELD_POSITIONS = null;
+  }
+  recomputeMapDerived();
+}
+
+/**
+ * Skirmish 1v1 scenery mode (crater moon base + optional dressing).
+ *   B0 (default on crater) — seated Prop_* from combined crater GLB, else quest rocks
+ *   A0 — moon / Hera plate only (`?scenery=A0` or `?noprops=1`)
+ *   A1 — moon + legacy groundscape (`?scenery=A1` or `?groundscape=1`)
+ * Hera mesa heightfield always forces A0 (no quest/UE rocks — they float on the new plate).
+ *   `?moononly=1` — force moon-only bake file (no embedded props)
+ * Full kit-as-terrain remains `?kit=1` (separate from these).
+ */
+export function skirmishSceneryMode() {
+  const q = searchQuery() + (typeof location !== 'undefined' ? location.hash || '' : '');
+  if (/(?:[?&#]scenery=A0\b)|(?:[?&#]noprops=1\b)/i.test(q)) return 'A0';
+  if (/(?:[?&#]scenery=A1\b)|(?:[?&#]groundscape=1\b)/i.test(q)) return 'A1';
+  if (/(?:[?&#]scenery=B0\b)/i.test(q)) return 'B0';
+  return 'B0';
+}
+
+/** Sci-fi kit GLB as full terrain (`?kit=1`, or rocks-file A/B / Quest leanrocks). */
+export function wantKitTerrain() {
+  const q = searchQuery() + (typeof location !== 'undefined' ? location.hash || '' : '');
+  if (/(?:[?&#]kit=1\b)/i.test(q)) return true;
+  if (/(?:[?&#]leanrocksFile=1\b)/i.test(q)) return true;
+  if (/(?:[?&#]rocksfile=[\w.-]+)/i.test(q)) return true;
+  // Quest leanrocks file path (desktop leanrocks remaps to full-kit look elsewhere).
+  if (/(?:[?&#]leanrocks=1\b)/i.test(q) && !isDesktopPcvrHost()) return true;
+  return false;
+}
+
+export function isKitTerrain() {
+  return MAP_TERRAIN_STYLE === 'kit';
+}
+
+export function isStoryMapProfile() {
+  return MAP_PROFILE === 'story';
+}
+
+/**
+ * Lean skirmish scenery (`?leanrocks=1`).
+ *
+ * On desktop PCVR the small rocks GLB does NOT buy FPS — Virtual Desktop's frame
+ * cadence follows which kit is resident, not triangle/texture count. Measured:
+ * full kit holds ~11.1 ms (90 Hz) even with buildings hidden; rocks GLB pins
+ * ~15.5 ms (64.5 Hz) at 0.8–1 ms GPU. So desktop `?leanrocks=1` keeps the full
+ * Story kit resident and applies depth occluders (same as `?leanlook=1`).
+ *
+ * Explicit rocks GLB A/B still available: `?leanrocksFile=1` or `?rocksfile=NAME`
+ * (diagnostic only — will not sustain 90 Hz on this stack).
+ * Quest / non-desktop still loads `scifi-rts-rocks.glb` for VRAM.
+ */
+let _leanVisualForce = /** @type {boolean|null} */ (null);
+
+/** @param {boolean|null} on */
+export function forceLeanRocksVisual(on) {
+  if (on === true || on === false) _leanVisualForce = on;
+  else _leanVisualForce = null;
+  return _leanVisualForce;
+}
+
+function searchQuery() {
+  try {
+    return typeof location !== 'undefined' ? location.search || '' : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+/** Desktop PCVR / Immersive Web host (not Quest standalone). */
+export function isDesktopPcvrHost() {
+  try {
+    const plat = typeof navigator !== 'undefined' ? navigator.platform || '' : '';
+    return /Win32|Win64|MacIntel|Linux x86_64|Linux i686/i.test(plat);
+  } catch (_) {
+    return false;
+  }
+}
+
+export function leanRocksVisualRequested() {
+  if (_leanVisualForce === true) return true;
+  if (_leanVisualForce === false) return false;
+  return /(?:^|[?&#])leanrocks=1(?:&|$)/i.test(searchQuery());
+}
+
+/** Explicit A/B: force the rocks GLB file (overrides desktop lean→story remap). */
+export function leanRocksFileRequested() {
+  return /(?:^|[?&#])leanrocksFile=1(?:&|$)/i.test(searchQuery());
+}
+
+/** `?rocksfile=NAME` — pick a specific rocks GLB for texture/tri A/B sweeps. */
+export function rocksFileParamRequested() {
+  return /(?:^|[?&#])rocksfile=[\w.-]+/i.test(searchQuery());
+}
+
+/** True when the rocks GLB must be loaded (Quest, or explicit file A/B). */
+export function rocksGlbLoadRequested() {
+  if (leanRocksFileRequested() || rocksFileParamRequested()) return true;
+  if (_leanVisualForce === true) return false;
+  if (!leanRocksVisualRequested()) return false;
+  // Desktop: remapped to full kit + lean look. Quest: still the small GLB.
+  return !isDesktopPcvrHost();
+}
+
+/** Runtime override for benches — swap kit without leaving the XR session. */
+let _skirmishKitForce = null;
+
+/** @param {'story'|'rocks'|null} kind */
+export function forceSkirmishKitKind(kind) {
+  if (kind === 'story' || kind === 'rocks') _skirmishKitForce = kind;
+  else _skirmishKitForce = null;
+  return _skirmishKitForce;
+}
+
+export function getForcedSkirmishKitKind() {
+  return _skirmishKitForce;
+}
+
+/**
+ * Skirmish kit file:
+ * - default → full Story kit
+ * - desktop ?leanrocks=1 → full Story kit (lean look applied separately)
+ * - Quest ?leanrocks=1 / ?leanrocksFile=1 / ?rocksfile= → rocks GLB
+ * - forceLeanRocksVisual(true) alone does not change the file
+ */
+export function skirmishKitKind() {
+  if (_skirmishKitForce) return _skirmishKitForce;
+  if (rocksGlbLoadRequested()) return 'rocks';
+  return 'story';
+}
+
+/**
+ * Lean rocks LOOK on a resident full Story kit (depth-only building occluders).
+ *
+ * Enabled by `?leanlook=1`, by desktop `?leanrocks=1` (product path), or by
+ * `forceLeanRocksVisual(true)`. Not applied when an explicit rocks GLB A/B is loaded.
+ */
+export function leanRocksStoryLeanRequested() {
+  if (_leanVisualForce === true) return true;
+  if (_leanVisualForce === false) return false;
+  if (/(?:^|[?&#])leanlook=1(?:&|$)/i.test(searchQuery())) return true;
+  // Desktop product leanrocks: same visual contract as leanlook, without loading the
+  // small GLB that pins Virtual Desktop at ~65 Hz.
+  if (
+    leanRocksVisualRequested() &&
+    isDesktopPcvrHost() &&
+    !leanRocksFileRequested() &&
+    !rocksFileParamRequested()
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Camera / minimap drag: pan limit (m from origin on XZ). Units/buildings use `MAP_UNIT_NAV_RADIUS` only. */
+export function clampWorldToCameraNavDisk(x, z) {
+  const R = MAP_CAMERA_PAN_RADIUS;
+  if (R <= 0) return { x, z };
+  const d2 = x * x + z * z;
+  if (d2 <= R * R) return { x, z };
+  const d = Math.sqrt(d2);
+  const s = R / d;
+  return { x: x * s, z: z * s };
+}
+
+/** Clamp world XZ to the closed disk of radius `MAP_UNIT_NAV_RADIUS - margin`. */
+export function clampWorldToPlayableDisk(x, z, margin = 0) {
+  const R = MAP_UNIT_NAV_RADIUS - margin;
+  if (R <= 0) return { x, z };
+  const d2 = x * x + z * z;
+  if (d2 <= R * R) return { x, z };
+  const d = Math.sqrt(d2);
+  const s = R / d;
+  return { x: x * s, z: z * s };
+}
+
+/**
+ * Ground “area of focus” radius (m) from camera rig height / zoom.
+ * Matches `input.js` CAMERA_Y_MIN/MAX (10…80): ~84m zoomed in → ~200m zoomed out,
+ * capped at 75% of the navigable disk (still inside the red rim).
+ */
+export function cameraFocusRadiusM(camY) {
+  const yMin = 10;
+  const yMax = 80;
+  const rMin = 84;
+  const rMax = 200;
+  const span = yMax - yMin;
+  const t = span > 1e-6 ? (Number(camY) - yMin) / span : 0;
+  const u = Math.max(0, Math.min(1, t));
+  const r = rMin + u * (rMax - rMin);
+  const cap = MAP_UNIT_NAV_RADIUS > 1 ? MAP_UNIT_NAV_RADIUS * 0.75 : r;
+  return Math.max(48, Math.min(r, cap));
+}
+
+/**
+ * Soft black fade band outside the blue ring (m). Scenery culls at ring+band so
+ * pop in/out happens only where the veil is fully opaque.
+ */
+export const CAMERA_FOCUS_FADE_BAND_M = 70;
+
+/** Outer radius where fade reaches full black + scenery is culled. */
+export function cameraFocusCullRadiusM(camY) {
+  return cameraFocusRadiusM(camY) + CAMERA_FOCUS_FADE_BAND_M;
+}
+
+const FOCUS_CULL_LS_KEY = 'rtsvr6-focusCull';
+const FOCUS_CULL_LS_KEY_LEGACY = 'rtsvr5-focusCull';
+/** @type {boolean | null} session override; null → resolve from URL / storage / Quest default */
+let _focusCullSession = null;
+
+function focusCullUrlOverride() {
+  try {
+    const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
+      typeof location !== 'undefined' ? location.hash || '' : ''
+    }`;
+    if (/(?:[?&#]focusCull=0\b)/i.test(q)) return false;
+    if (/(?:[?&#]focusCull=1\b)/i.test(q)) return true;
+  } catch (_) {
+    /* */
+  }
+  return null;
+}
+
+function focusCullStorage() {
+  try {
+    let v = localStorage.getItem(FOCUS_CULL_LS_KEY);
+    if (v == null) v = localStorage.getItem(FOCUS_CULL_LS_KEY_LEGACY);
+    if (v === '1' || v === 'true') return true;
+    if (v === '0' || v === 'false') return false;
+  } catch (_) {
+    /* */
+  }
+  return null;
+}
+
+function focusCullQuestDefault() {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+  return /Quest|OculusBrowser|\bOculus\b/i.test(ua);
+}
+
+/**
+ * Drop scenery (kit props / forest tiles) outside the blue focus ring.
+ * Default ON for Quest; OFF on desktop/PCVR until toggled.
+ * `?focusCull=0|1` overrides for one load; menu/HUD toggle persists in localStorage.
+ */
+export function getFocusSceneryCullEnabled() {
+  if (_focusCullSession != null) return _focusCullSession;
+  const url = focusCullUrlOverride();
+  if (url != null) return url;
+  const stored = focusCullStorage();
+  if (stored != null) return stored;
+  return focusCullQuestDefault();
+}
+
+export function setFocusSceneryCullEnabled(on) {
+  _focusCullSession = !!on;
+  try {
+    localStorage.setItem(FOCUS_CULL_LS_KEY, _focusCullSession ? '1' : '0');
+  } catch (_) {
+    /* */
+  }
+  return _focusCullSession;
+}
+
+export function toggleFocusSceneryCull() {
+  return setFocusSceneryCullEnabled(!getFocusSceneryCullEnabled());
+}
+
+/** @deprecated use getFocusSceneryCullEnabled — kept for call sites */
+export function wantFocusSceneryCull() {
+  return getFocusSceneryCullEnabled();
+}
+
+/** True if (x,z) lies inside the navigable disk (optional inset `margin` from the rim). */
+export function isWorldInsidePlayableDisk(x, z, margin = 0) {
+  const R = MAP_UNIT_NAV_RADIUS - margin;
+  if (R <= 0) return false;
+  return x * x + z * z <= R * R;
+}
+
+// --- Players ---
+export const MAX_PLAYERS = 4;
+export const UNIT_CAP_PER_PLAYER = 30;
+/** Story mode: higher army ceiling for the larger map. */
+export const STORY_UNIT_CAP_PER_PLAYER = 100;
+export const STARTING_CREDITS = 1000;
+export const PASSIVE_INCOME_PER_SEC = 2;
+
+/**
+ * Directional sun — must match `index.html` light position and renderer shadow placement.
+ * Light looks at world origin; XZ of this vector is “toward the sun” for yaw.
+ */
+export const SUN_LIGHT_OFFSET = { x: -0.005, y: 55, z: -48.83 };
+
+/** Yaw (rad) so a model’s +Z faces the sun on the XZ plane (unit rotation convention). */
+export function getSunFacingYaw() {
+  return Math.atan2(SUN_LIGHT_OFFSET.x, SUN_LIGHT_OFFSET.z);
+}
+
+/**
+ * Solar panel yaw: `painel_solar.glb` collecting-face normals point along local **−X**,
+ * not +Z — offset +π/2 so the panel faces the directional sun.
+ */
+export function getSolarPanelYaw() {
+  return getSunFacingYaw() + Math.PI / 2;
+}
+
+/** Defense building yaw slew (rad/s) while tracking a target. */
+export const DEFENSE_TURN_RATE = 3.2;
+/** Fire only when within this many radians of the aim yaw (after slew). */
+export const DEFENSE_AIM_FIRE_TOL = 0.45;
+
+/** Max distance (m) from unit center to a friendly built War Factory to sell a vehicle. */
+export const VEHICLE_SELL_WAR_FACTORY_RANGE = 16;
+
+export const PLAYER_COLORS = [
+  0xff3333, // P1 Red
+  0xff8800, // P2 Orange
+  0x3366ff, // P3 Blue
+  0x00cccc, // P4 Cyan
+];
+
+export const PLAYER_COLOR_HEX = ['#ff3333', '#ff8800', '#3366ff', '#00cccc'];
+
+// Spawn positions (corners, facing center). **180° vs earlier builds:** P0 starts NE (+,+), opposite SW (−,−).
+/** Lobby / default `State.initPlayers` only; **matches** use `getMatchStartSpawnForPlayer` (outside crater bowl). */
+export const SPAWN_POSITIONS = [
+  { x: 70, z: 70, rotation: -Math.PI * 0.75 }, // P1 — NE (default human / slot 0)
+  { x: -70, z: 70, rotation: -Math.PI * 0.25 }, // P2 — NW
+  { x: 70, z: -70, rotation: Math.PI * 0.75 }, // P3 — SE
+  { x: -70, z: -70, rotation: Math.PI * 0.25 }, // P4 — SW
+];
+
+/**
+ * Match-start HQ anchor: this far **inside** `MAP_UNIT_NAV_RADIUS` (m) so bases sit past the
+ * inner low bowl (`craterRimLift` starts near `MAP_PLAYABLE_RADIUS − 22`) — outside the crater
+ * depression, toward the rim / map corners. **Larger** = farther **in** from the nav rim (HQ less hugged to edge).
+ */
+export const MATCH_HQ_SPAWN_MARGIN = 38;
+
+/**
+ * Nearest crystal ring: this many metres **toward map center** from the HQ match ring along each diagonal
+ * (same corner layout as `getMatchStartSpawnForPlayer`).
+ */
+export const MATCH_SPAWN_NEAR_CRYSTAL_OFFSET_M = 18;
+
+/** Match-only spawns (1–4): same corner layout as `SPAWN_POSITIONS` but near the navigable rim. */
+export function getMatchStartSpawnForPlayer(playerIndex) {
+  const R = MAP_UNIT_NAV_RADIUS - MATCH_HQ_SPAWN_MARGIN;
+  const s = 1 / Math.SQRT2;
+  const corners = [
+    { x: s, z: s, rotation: -Math.PI * 0.75 },
+    { x: -s, z: s, rotation: -Math.PI * 0.25 },
+    { x: s, z: -s, rotation: Math.PI * 0.75 },
+    { x: -s, z: -s, rotation: Math.PI * 0.25 },
+  ];
+  const c = corners[playerIndex % 4];
+  return { x: c.x * R, z: c.z * R, rotation: c.rotation };
+}
+
+// Teams: P1+P2 = team 0,  P3+P4 = team 1
+export const PLAYER_TEAMS = [0, 0, 1, 1];
+
+// --- Resource Fields ---
+export const RESOURCE_FIELD_CAPACITY = 5000;
+export const HARVEST_AMOUNT = 100;      // Credits per harvester trip (was 50 — too little for 5k crystals)
+export const HARVEST_TIME = 2.5;        // Seconds to fill harvester at field
+export const DEPOSIT_TIME = 1.2;        // Seconds to unload at refinery
+
+/** Inner / contested crystal sites (world XZ). First four come from `getResourceFieldPositions` near spawns. */
+const RESOURCE_FIELD_CONTESTED_POSITIONS = [
+  // Outer contested ring (center of map, risky)
+  { x: 0, z: 30 }, // North center
+  { x: 0, z: -30 }, // South center
+  { x: 30, z: 0 }, // East center
+  { x: -30, z: 0 }, // West center
+];
+
+/**
+ * All harvest nodes: one near each match corner spawn (inward from HQ ring), plus contested ring.
+ * Story mode overrides via `STORY_RESOURCE_FIELD_POSITIONS` (random each run).
+ * Order matches player corners: NE, NW, SE, SW (same as `getMatchStartSpawnForPlayer` indices 0–3).
+ */
+export function getResourceFieldPositions() {
+  if (STORY_RESOURCE_FIELD_POSITIONS && STORY_RESOURCE_FIELD_POSITIONS.length > 0) {
+    return STORY_RESOURCE_FIELD_POSITIONS.map(p => ({ x: p.x, z: p.z }));
+  }
+  const invS = 1 / Math.SQRT2;
+  const corners = [
+    { x: invS, z: invS },
+    { x: -invS, z: invS },
+    { x: invS, z: -invS },
+    { x: -invS, z: -invS },
+  ];
+  const ring =
+    MAP_UNIT_NAV_RADIUS - MATCH_HQ_SPAWN_MARGIN - MATCH_SPAWN_NEAR_CRYSTAL_OFFSET_M;
+  const nearSpawn = (SKIRMISH_CORNER_RESOURCE_POSITIONS && SKIRMISH_CORNER_RESOURCE_POSITIONS.length === 4)
+    ? SKIRMISH_CORNER_RESOURCE_POSITIONS
+    : corners.map(c => ({ x: c.x * ring, z: c.z * ring }));
+  const extras = SKIRMISH_EXTRA_RESOURCE_POSITIONS || [];
+  return [...nearSpawn, ...RESOURCE_FIELD_CONTESTED_POSITIONS, ...extras];
+}
+
+// --- Unit Types ---
+export const UNIT_TYPES = {
+  rifleman: {
+    name: 'Rifleman',
+    category: 'infantry',
+    cost: 100,
+    buildTime: 4,
+    hp: 60,
+    damage: 8,
+    fireRate: 0.8,
+    range: 12,
+    speed: 3.0,
+    visionRange: 18,
+    dmgVsInfantry: 1.0,
+    dmgVsVehicle: 0.3,
+    dmgVsBuilding: 0.5,
+    aoe: 0,
+    description: 'General purpose infantry',
+  },
+  rocketSoldier: {
+    name: 'Rocket Soldier',
+    category: 'infantry',
+    cost: 175,
+    buildTime: 6,
+    hp: 50,
+    damage: 25,
+    fireRate: 1.5,
+    range: 14,
+    speed: 2.5,
+    visionRange: 16,
+    dmgVsInfantry: 0.4,
+    dmgVsVehicle: 2.0,
+    dmgVsBuilding: 1.5,
+    aoe: 0,
+    description: 'Anti-vehicle specialist',
+  },
+  sniper: {
+    name: 'Sniper',
+    category: 'infantry',
+    cost: 300,
+    buildTime: 8,
+    hp: 35,
+    damage: 80,
+    fireRate: 3.0,
+    range: 28,
+    speed: 2.0,
+    visionRange: 35,
+    dmgVsInfantry: 3.0,
+    dmgVsVehicle: 0.15,
+    dmgVsBuilding: 0.2,
+    aoe: 0,
+    description: 'Long-range infantry killer',
+  },
+  engineer: {
+    name: 'Engineer',
+    category: 'infantry',
+    cost: 150,
+    buildTime: 5,
+    hp: 40,
+    damage: 0,
+    fireRate: 0,
+    range: 0,
+    speed: 2.5,
+    visionRange: 24,
+    dmgVsInfantry: 0,
+    dmgVsVehicle: 0,
+    dmgVsBuilding: 0,
+    aoe: 0,
+    canCapture: true,
+    canRepair: true,
+    repairRate: 15, // HP/sec — vehicles and buildings
+    description: 'Captures enemy buildings; repairs friendly vehicles and buildings',
+  },
+  scoutBike: {
+    name: 'Scout buggy',
+    category: 'vehicle',
+    cost: 125,
+    buildTime: 4,
+    hp: 70,
+    damage: 6,
+    fireRate: 0.5,
+    range: 10,
+    speed: 6.0,
+    visionRange: 25,
+    dmgVsInfantry: 0.8,
+    dmgVsVehicle: 0.3,
+    dmgVsBuilding: 0.3,
+    aoe: 0,
+    description: 'Fast lunar rover for recon',
+  },
+  apc: {
+    name: 'APC',
+    category: 'vehicle',
+    cost: 250,
+    buildTime: 7,
+    hp: 150,
+    damage: 10,
+    fireRate: 1.0,
+    range: 10,
+    speed: 4.5,
+    visionRange: 16,
+    dmgVsInfantry: 1.2,
+    dmgVsVehicle: 0.4,
+    dmgVsBuilding: 0.5,
+    aoe: 0,
+    description: 'Armored transport',
+  },
+  lightTank: {
+    name: 'Light Tank',
+    category: 'vehicle',
+    cost: 350,
+    buildTime: 8,
+    hp: 200,
+    damage: 18,
+    fireRate: 1.2,
+    range: 14,
+    speed: 3.5,
+    visionRange: 16,
+    dmgVsInfantry: 1.0,
+    dmgVsVehicle: 1.0,
+    dmgVsBuilding: 1.0,
+    aoe: 0,
+    description: 'Versatile combat vehicle',
+  },
+  heavyTank: {
+    name: 'Heavy Tank',
+    category: 'vehicle',
+    cost: 550,
+    buildTime: 12,
+    hp: 400,
+    damage: 30,
+    fireRate: 2.0,
+    range: 14,
+    speed: 2.0,
+    visionRange: 25,
+    dmgVsInfantry: 0.8,
+    dmgVsVehicle: 1.5,
+    dmgVsBuilding: 1.5,
+    aoe: 0,
+    description: 'Heavy assault vehicle',
+  },
+  artillery: {
+    name: 'Artillery',
+    category: 'vehicle',
+    cost: 500,
+    buildTime: 14,
+    hp: 100,
+    damage: 40,
+    fireRate: 3.5,
+    range: 70,
+    speed: 1.5,
+    // Must be ≥ range: combat caps engage distance at min(range, visionRange).
+    visionRange: 70,
+    dmgVsInfantry: 1.5,
+    dmgVsVehicle: 1.0,
+    dmgVsBuilding: 2.5,
+    aoe: 5, // 5 unit AoE radius
+    description: 'Long-range siege unit',
+  },
+  harvester: {
+    name: 'Harvester',
+    category: 'vehicle',
+    cost: 200,
+    buildTime: 6,
+    hp: 250,
+    damage: 0,
+    fireRate: 0,
+    range: 0,
+    speed: 2.0,
+    visionRange: 18,
+    dmgVsInfantry: 0,
+    dmgVsVehicle: 0,
+    dmgVsBuilding: 0,
+    aoe: 0,
+    carryCapacity: HARVEST_AMOUNT,
+    description: 'Collects resources',
+  },
+  mobileHq: {
+    name: 'Mobile HQ',
+    category: 'vehicle',
+    cost: 750,
+    buildTime: 18,
+    hp: 450,
+    damage: 0,
+    fireRate: 0,
+    range: 0,
+    speed: 2.4,
+    visionRange: 20,
+    dmgVsInfantry: 0,
+    dmgVsVehicle: 0,
+    dmgVsBuilding: 0,
+    aoe: 0,
+    description: 'Deploys into a permanent HQ at its location (new build radius)',
+  },
+};
+
+// Types producible at each building (Harvester: Refinery only; APC removed from War Factory list)
+export const BARRACKS_UNITS = ['rifleman', 'rocketSoldier', 'sniper', 'engineer'];
+export const FACTORY_UNITS = ['scoutBike', 'lightTank', 'heavyTank', 'artillery', 'mobileHq'];
+
+// --- Engineer building capture (time-based; does not damage structure HP) ---
+export const CAPTURE_DURATION_MIN_SEC = 5;
+export const CAPTURE_DURATION_MAX_SEC = 10;
+/** HQ (2000) = longest capture; lowest building HP maps near min duration */
+export const CAPTURE_HP_REF_FOR_DURATION = 2000;
+/**
+ * Min distance from building rim (see units handleAttackState: dist = centerDist − size/2)
+ * at which capture still progresses. Nav-only edge distance was too tight in practice.
+ */
+export const ENGINEER_CAPTURE_EDGE_REACH = 10;
+/** Friendly vehicles/buildings within this range get HP from idle/moving engineers; same band when ordered to repair.
+ * Must clear HQ nav ring: hullDist ≈ OBSTACLE_BUFFER + HQ visualPad (+ approach pad) ≈ 5–6.5. */
+export const ENGINEER_REPAIR_RANGE = 7.5;
+
+/**
+ * HQ construction menu order (tech tree).
+ * Solar → Refinery → Barracks → (War Factory | Turret | Artillery).
+ */
+export const HQ_BUILD_MENU_TYPES = [
+  'solarPanel',
+  'refinery',
+  'barracks',
+  'warFactory',
+  'turret',
+  'artilleryTurret',
+];
+
+/** Prerequisite building type that must be built (alive) before this type unlocks. `null` = always available. */
+export const BUILDING_UNLOCK_REQUIRES = {
+  solarPanel: null,
+  refinery: 'solarPanel',
+  barracks: 'refinery',
+  warFactory: 'barracks',
+  turret: 'barracks',
+  artilleryTurret: 'barracks',
+};
+
+/** Power produced by one completed solar panel. */
+export const POWER_PER_SOLAR = 100;
+/** Construction / production speed while power surplus is negative. */
+export const LOW_POWER_RATE = 0.35;
+
+// --- Building Types ---
+export const BUILDING_TYPES = {
+  hq: {
+    name: 'HQ',
+    cost: 0,
+    buildTime: 0,
+    hp: 2000,
+    visionRange: 20,
+    size: 6,       // 6x6 footprint
+    producesUnits: [], // Removed engineer (moved to Barracks)
+    isHQ: true,
+    powerConsume: 0,
+  },
+  solarPanel: {
+    name: 'Solar Panel',
+    cost: 150,
+    buildTime: 5,
+    hp: 250,
+    visionRange: 8,
+    size: 2,
+    producesUnits: [],
+    powerProduce: POWER_PER_SOLAR,
+    powerConsume: 0,
+  },
+  barracks: {
+    name: 'Barracks',
+    cost: 300,
+    buildTime: 8,
+    hp: 600,
+    visionRange: 12,
+    size: 4,
+    producesUnits: BARRACKS_UNITS,
+    powerConsume: 30,
+  },
+  warFactory: {
+    name: 'War Factory',
+    cost: 600,
+    buildTime: 12,
+    hp: 1000,
+    visionRange: 12,
+    size: 5,
+    producesUnits: FACTORY_UNITS,
+    powerConsume: 50,
+  },
+  refinery: {
+    name: 'Refinery',
+    cost: 500,
+    buildTime: 8,
+    hp: 800,
+    visionRange: 12,
+    size: 4,
+    producesUnits: ['harvester'],
+    freeUnit: 'harvester', // Comes with 1 free harvester
+    powerConsume: 40,
+  },
+  /** Defensive AA-style gun (HQ menu "Turret"). */
+  turret: {
+    name: 'Turret',
+    cost: 400,
+    buildTime: 8,
+    hp: 500,
+    visionRange: 18,
+    size: 2,
+    producesUnits: [],
+    powerConsume: 25,
+    damage: 28,
+    range: 16,
+    cooldown: 0.7,
+    aoe: 0,
+    dmgVsInfantry: 1.25,
+    dmgVsVehicle: 1.0,
+    dmgVsBuilding: 0.55,
+  },
+  /** Long-range base artillery — same gun profile as the mobile artillery unit. */
+  artilleryTurret: {
+    name: 'Artillery',
+    cost: 700,
+    buildTime: 14,
+    hp: 450,
+    visionRange: 70,
+    size: 3,
+    producesUnits: [],
+    powerConsume: 40,
+    damage: 40,
+    range: 70,
+    cooldown: 3.5,
+    aoe: 5,
+    dmgVsInfantry: 1.5,
+    dmgVsVehicle: 1.0,
+    dmgVsBuilding: 2.5,
+  },
+};
+
+// Building placement radius from HQ
+export const BUILD_RADIUS_FROM_HQ = 35;
+
+// --- Pathfinding ---
+export const NAV_MESH_RESOLUTION = 40; // Subdivisions for nav mesh plane
+export const OBSTACLE_BUFFER = 2;      // Buffer around obstacles for nav mesh
+
+// --- Fog of War ---
+// `FOG_GRID_SIZE` / `FOG_CELL_SIZE` are live lets near the map profile block (recomputed by applyMapProfile).
+
+// --- Spatial Grid ---
+export const SPATIAL_CELL_SIZE = 15;
+
+// --- Rendering ---
+// Harvesters (4 players × refineries × queues) blow past small pools — overflow = invisible mesh but selection rings still draw.
+export const MAX_INSTANCES_PER_TYPE = 200; // Per unit-type InstancedMesh (THREE hard limit is buffer size; keep reasonable for mobile/VR)
+export const MAX_BUILDING_INSTANCES = 48; // Per building type (Story multi-base needs headroom)
+export const MAX_PROJECTILES = 100;
+export const MAX_PARTICLES = 620;
+export const HEALTH_BAR_WIDTH = 1.2;
+export const HEALTH_BAR_HEIGHT = 0.15;
+export const HEALTH_BAR_Y_OFFSET = 2.2;
+
+// --- Combat ---
+/**
+ * Unit↔unit soft-body push is REMOVED (user directive). Classic C&C-style overlap.
+ * Constants kept only so old tests / docs that import them still resolve.
+ */
+export const UNIT_SEPARATION_RADIUS = 0;
+export const UNIT_SEPARATION_ACCEL = 0;
+export const UNIT_CLEARANCE_MIN = 0;
+export const UNIT_SEPARATION_CONTACT_STAGGER = 1;
+/** Hex-slot pitch (m). Wider than artillery AoE (5) so one shell does not cover two centers. */
+export const FORMATION_SPACING = 9;
+
+// --- Bot AI (fair: no fog/vision/economy cheats — scale these down for easier bots) ---
+export const BOT_TICK_RATE = 4.0;              // Decision cadence (orders still gated by APM budget)
+/** Temporary play cap: 30 intentional orders/min per bot. Normal cap is 150. Group selects count as 1. */
+export const BOT_TARGET_APM = 30;
+export const BOT_SCOUT_DELAY = 12;
+export const BOT_SCOUT_DELAY_ECON = 3;       // When no known ore, start scouting almost immediately
+export const BOT_ATTACK_THRESHOLD = 8;         // Don't poke until a real squad exists
+export const BOT_FULL_ATTACK_THRESHOLD = 18;   // Larger late-game pushes
+export const BOT_STRIKE_RESERVE_MULT = 0.45;    // Hold more home — defense first
+export const BOT_MAX_PRODUCTION_QUEUE = 5;     // Deep queues (same as player could fill manually)
+export const BOT_FOCUS_FIRE_INTERVAL = 1.15;   // Human-scale focus-fire micro (also spends APM)
+/** Max units that run auto-acquire per sim frame (round-robin); attacking units always tick. */
+export const COMBAT_ACQUIRE_PER_FRAME = 24;
+/** Minimap redraw cadence (Hz) — shroud/units don't need 60 Hz canvas fills. */
+export const MINIMAP_REDRAW_HZ = 8;
+/** World fog tint texture refresh (Hz); keep in sync with minimap-class FoW cost. */
+export const FOG_OVERLAY_REDRAW_HZ = 8;
+export const BOT_SCOUT_CAP = 3;
+export const BOT_SCOUT_CAP_ECON = 7;           // Parallel scouts when economy must find new fields
+export const BOT_SCOUT_GAP_ECON = 0.45;        // Seconds between scout spawns in econ crisis
+/** After expand ore is known: keep probing for unknown enemy HQs (map-corner intel). */
+export const BOT_SCOUT_CAP_INTEL = 5;
+export const BOT_SCOUT_GAP_INTEL = 1.4;
+export const BOT_SCOUT_DELAY_INTEL = 8;
+export const BOT_SCOUT_REPATH_SEC = 3.5;       // Re-issue move if scout goes idle off-route
+export const BOT_SCOUT_ARRIVE_RADIUS = 11;     // World units: reached waypoint → pick next fog target
+export const BOT_SCOUT_DANGER_WEIGHT = 520;    // Higher = avoid last-seen enemies & death zones more
+export const BOT_SCOUT_DANGER_ZONE_TTL = 140;  // Seconds to treat a death location as hazardous
+/** Approach unknown enemy spawn pads from this standoff (m) so fog reveal of the HQ is likely. */
+export const BOT_INTEL_SPAWN_STANDOFF = 8;
+export const BOT_ECON_EXPAND_CREDITS = 520;    // ≈ refinery cost when field is already in HQ build radius
+/** Contested / far fields need Mobile HQ (750) before a 2nd refinery can place. */
+export const BOT_ECON_MOBILE_HQ_EXPAND_CREDITS = 750;
+/** Keep at least this many harvesters even near the military pop soft-cap. */
+export const BOT_MIN_HARVESTERS_KEEP = 4;
+/** Min living harvesters before Mobile HQ expand — keep low so MHQ leaves while home ore remains. */
+/** Min trucks before expand/MHQ logic runs — keep low so MHQ isn't gated behind HV spam. */
+export const BOT_EXPAND_MIN_HARVESTERS = 1;
+/** Cap trucks while banking/building the first Mobile HQ (then fill to GLOBAL_CAP). */
+export const BOT_HV_CAP_BEFORE_MHQ = 2;
+/** Before the war factory exists, only this many HVs — cash must rush the factory→MHQ. */
+export const BOT_HV_CAP_BEFORE_FACTORY = 2;
+export const BOT_STOP_HARVESTER_AT_POP = 32;   // Soft-cap only above min-harvester floor / per-refinery target
+/** Soft max refineries — bots keep expanding while unclaimed ore remains (map has ≤8 fields). */
+export const BOT_MAX_REFINERIES = 8;
+/** Owned refinery counts as covering a field within this distance (m). */
+export const BOT_FIELD_CLAIM_RADIUS = 32;
+/**
+ * Contested-ring crystals sit ~42m apart — one well-placed pad should cover a whole patch.
+ * Fields within this of a claimed field are treated as same-patch (no extra refinery).
+ */
+export const BOT_ORE_CLUSTER_RADIUS = 48;
+/** Skip expand targets with less remaining than this fraction of capacity (don't MHQ to scraps). */
+export const BOT_EXPAND_MIN_ORE_FRAC = 0.18;
+/** World distance: expand field near an enemy HQ is contested — prefer safer ore. */
+export const BOT_EXPAND_ENEMY_HQ_AVOID = 55;
+export const BOT_SECOND_WARFACTORY_CREDITS = 1150;
+/** Min combat units (excl. scouts) before striking an enemy HQ. */
+export const BOT_HQ_STRIKE_MIN = 10;
+/** Strike size ≥ known defenders near target × this factor. */
+export const BOT_STRIKE_DEFENDER_MULT = 1.35;
+export const BOT_RETALIATION_ENEMY_MULT = 1.25; // Required locals vs logged enemy strength
+export const BOT_DEFEND_RADIUS = 30;
+export const BOT_DEFENSE_RELEASE_SCOUT_DIST = 44; // HQ→threat: farther than this, keep scouts on exploration
+/** Auto-defend leash from guardPos (hold point): scaled per unit vision/range in units.js */
+export const GUARD_CHASE_LEASH_MULT = 1.1;
+export const GUARD_CHASE_LEASH_PAD_M = 4;
+/** Shared synchronous A* budget per 60 Hz sim tick (combat + harvesters). */
+export const PATHFIND_SIM_PER_TICK = 24;
+/** Extra budget for player-issued move/attack orders so clicks stay responsive. */
+export const PATHFIND_PLAYER_PER_TICK = 40;
+/** Cap findPath probes inside findNearestReachable spirals (bot retaliation used to fire hundreds). */
+export const PATHFIND_SPIRAL_MAX_ATTEMPTS = 12;
+export const BOT_HARVESTER_EXPLORE_PER_TICK = 6;
+export const BOT_HARVESTER_EXPLORE_THROTTLE_SEC = 2.2;
+export const BOT_EXPLORE_MIN_SEP = 22;           // Min distance between parallel explore targets (world units)
+export const BOT_EXPLORE_RESERVE_SEC = 32;       // Reserve a fog cell so other units pick elsewhere
+export const BOT_EXPLORE_SECTORS = 10;            // Angular buckets from HQ for spreading directions
+/** Bot harvesters: avoid fields / flee when this many world units show visible combat enemies */
+export const BOT_FIELD_ENEMY_CHECK_RADIUS = 24;
+/** Added to dist² when scoring fields — steers bots away from camped nodes (fair: visible only) */
+export const BOT_FIELD_THREAT_SCORE_SQ = 95000;
+export const BOT_HARVESTER_FLEE_ENEMY_RADIUS = 18;
+export const BOT_HARVESTER_ESCORT_RADIUS = 28;
+export const BOT_HARVESTER_ESCORT_MAX_UNITS = 12;
+export const BOT_HARVESTER_ESCORT_COOLDOWN = 0.55;
+export const BOT_BASE_VEHICLE_THREAT_RADIUS = 56;
+export const BOT_HARVESTER_VEHICLE_THREAT_RADIUS = 42;
+export const BOT_RETALIATION_FLANK_DIST = 28;
+export const BOT_HARASS_COOLDOWN_SEC = 75;
+export const BOT_SCOUT_MISSION_MAX_SEC = 180; // Corner-to-corner recon needs >95s at buggy speed
+export const BOT_MIN_HARVESTERS_BEFORE_SACRIFICE = 6;
+/** Target harvesters per live refinery — total capped by BOT_HARVESTER_GLOBAL_CAP. */
+export const BOT_HARVESTER_PER_REFINERY_TARGET = 5;
+/** Absolute harvester ceiling — tight ore flow (≤10), not endless trucks. */
+export const BOT_HARVESTER_GLOBAL_CAP = 10;
+/** Economy "stable" once this many HVs exist (and enough are working). */
+export const BOT_MIN_STABLE_HARVESTERS = 8;
+/** Min working (mining/hauling) HVs required for economyStable. */
+export const BOT_MIN_STABLE_WORKING = 5;
+/** Park this many combat units at each HQ. */
+export const BOT_GUARD_PER_HQ = 3;
+/** Park this many combat units at each refinery. */
+export const BOT_GUARD_PER_REFINERY = 2;
+/** Soft max non-scout combat while economy is still spinning up. */
+export const BOT_DEFENSE_ARMY_SOFT_CAP = 10;
+
+/**
+ * Named FFA / skirmish bot strategies (deterministic personality packs).
+ * Bench assigns one per seat to compare which wins.
+ */
+export const BOT_STRATEGY_PRESETS = {
+  eco_expand: {
+    label: 'Eco Expand',
+    aggression: 0.42,
+    expansiveness: 0.95,
+    defensiveness: 0.55,
+    techPreference: 0.55,
+    artilleryAffinity: 0.45,
+    staticDefenseBias: 0.55,
+  },
+  aggro_rush: {
+    label: 'Aggro Rush',
+    aggression: 0.72,
+    expansiveness: 0.7,
+    defensiveness: 0.4,
+    techPreference: 0.4,
+    artilleryAffinity: 0.35,
+    staticDefenseBias: 0.35,
+  },
+  tech_armor: {
+    label: 'Tech Armor',
+    aggression: 0.55,
+    expansiveness: 0.75,
+    defensiveness: 0.5,
+    techPreference: 0.95,
+    artilleryAffinity: 0.7,
+    staticDefenseBias: 0.5,
+  },
+  scout_harass: {
+    label: 'Scout Harass',
+    aggression: 0.58,
+    expansiveness: 0.88,
+    defensiveness: 0.45,
+    techPreference: 0.48,
+    artilleryAffinity: 0.55,
+    staticDefenseBias: 0.4,
+  },
+  /** 1v1 default — answers long-range pressure and holds the base. */
+  siege_answer: {
+    label: 'Siege Answer',
+    aggression: 0.58,
+    expansiveness: 0.8,
+    defensiveness: 0.65,
+    techPreference: 0.7,
+    artilleryAffinity: 0.9,
+    staticDefenseBias: 0.75,
+  },
+};
+export const BOT_STRATEGY_ORDER = ['eco_expand', 'aggro_rush', 'tech_armor', 'scout_harass'];
+/** Preferred seat strategy in 1v1 when only one bot. */
+export const BOT_STRATEGY_1V1 = 'siege_answer';
+
+// --- Networking ---
+/** Host → client world state cadence (Hz). Higher = smoother clients; more bandwidth. */
+export const NET_SNAPSHOT_RATE = 22;
+export const NET_INTERPOLATION_DELAY = 100; // ms — reserved for future buffered interpolation
+export const NET_CLIENT_CMD_TIMEOUT_MS = 8000; // Ack wait for multiplayer client commands
+/** Bidirectional WebRTC data-channel keepalive (ms). Slightly aggressive vs BattleVR-style idle to reduce “silent dead” links. */
+export const NET_KEEPALIVE_INTERVAL_MS = 2800;
+/** When the host tab is hidden, rAF is throttled — this interval still drives catch-up sim + snapshots (ms). */
+export const NET_HOST_BG_SIM_INTERVAL_MS = 280;
+/** After an unexpected lobby disconnect, client auto-rejoin attempts (same lobby #). */
+export const NET_CLIENT_AUTO_REJOIN_DELAY_MS = 2600;
+export const NET_CLIENT_AUTO_REJOIN_MAX = 2;
+/** Host: after a mid-match remote disconnect pause, auto-call resume (AI takes pending seats) if the host does not. */
+export const NET_HOST_PAUSE_AUTO_RESUME_MS = 30000;
+
+// --- Audio ---
+// - burst-128424 = rockets / energy
+// - ps-084 = artillery shell
+// - impact-cinematic-boom = tank fire + explosions (deaths)
+// - laser = sniper + capture progress (non-metal cues)
+// - submarine sonar = building construction complete + unit production ready
+// - metal-hit-* reserved for future real armor/ricochet hits only (not wired for capture/build)
+export const AUDIO_BASE_PATH = './audio/';
+/** Web Audio PannerNode — world units (m). */
+export const AUDIO_SPATIAL_REF_DISTANCE = 14;
+export const AUDIO_SPATIAL_MAX_DISTANCE = 280;
+export const AUDIO_SPATIAL_ROLLOFF = 1.15;
+export const SOUND_EFFECTS = {
+  rifleShot:   'blaster-shot-229313.mp3',
+  rocketShot:  'burst-128424-shorter.mp3',
+  sniperShot:  'laser-45816.mp3',
+  tankShot:    'impact-cinematic-boom-5-352465.mp3',
+  artilleryShot: 'sound-design-elements-impact-sfx-ps-084-353199.mp3',
+  explosion:   'impact-cinematic-boom-5-352465.mp3',
+  buildComplete: 'submarine-sonar-38243-once.mp3',
+  unitReady:   'submarine-sonar-38243-once.mp3',
+  /** Engineer capture pulse (same file as sniper/laser; separate pool + throttle). */
+  captureTick: 'laser-45816.mp3',
+  /** Soft HUD / touch tick — not production sonar (unitReady). */
+  uiTick:      'blaster-shot-229313.mp3',
+};
+
+// --- Unit Geometries (shape definitions for renderer) ---
+export const UNIT_SHAPES = {
+  rifleman:      { type: 'cylinder', radiusTop: 0.3, radiusBottom: 0.4, height: 1.6 },
+  rocketSoldier: { type: 'cylinder', radiusTop: 0.35, radiusBottom: 0.4, height: 1.6 },
+  sniper:        { type: 'cylinder', radiusTop: 0.2,  radiusBottom: 0.3, height: 1.8 },
+  engineer:      { type: 'cylinder', radiusTop: 0.35, radiusBottom: 0.45, height: 1.4 },
+  scoutBike:     { type: 'box', width: 0.8, height: 0.6, depth: 1.8 },
+  apc:           { type: 'box', width: 1.4, height: 0.9, depth: 2.0 },
+  lightTank:     { type: 'box', width: 1.4, height: 1.0, depth: 1.8 },
+  heavyTank:     { type: 'box', width: 2.34, height: 1.56, depth: 2.86 },
+  artillery:     { type: 'box', width: 1.56, height: 1.04, depth: 3.64 },
+  harvester:     { type: 'box', width: 1.6, height: 1.0, depth: 2.0 },
+  mobileHq:      { type: 'box', width: 1.8, height: 1.15, depth: 2.4 },
+};
+
+export const BUILDING_SHAPES = {
+  hq:              { width: 6, height: 4, depth: 6 },
+  solarPanel:      { width: 2.4, height: 0.35, depth: 2.4 },
+  barracks:        { width: 4, height: 2.5, depth: 4 },
+  warFactory:      { width: 5, height: 3, depth: 5 },
+  refinery:        { width: 4, height: 3, depth: 4 },
+  turret:          { width: 1.6, height: 2.2, depth: 1.6 },
+  artilleryTurret: { width: 2.2, height: 1.8, depth: 2.8 },
+};
+
+// Colors for building types (darker tint + player color accent)
+export const BUILDING_BASE_COLORS = {
+  hq:              0x666666,
+  solarPanel:      0x1a3344,
+  barracks:        0x556644,
+  warFactory:      0x555566,
+  refinery:        0x665544,
+  turret:          0x554433,
+  artilleryTurret: 0x664422,
+};

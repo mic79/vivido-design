@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "probe": {
+    "thrustHalf": 0.4999999999999512,
+    "thrustFull": 0.9999999999999024,
+    "thrustWhileMoving": 0.9999999999999024,
+    "thrustAfterRelease": 0,
+    "coastDist": 1.944105127826333,
+    "yawRight": -1,
+    "yawAfterRelease": 0,
+    "hasSteering": true,
+    "hasThrottle": true
+  },
+  "errors": []
+}

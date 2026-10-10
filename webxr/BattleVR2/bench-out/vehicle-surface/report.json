@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "probe": {
+    "halfDist": 5.517580223164288,
+    "fullDist": 11.035160446328575,
+    "fullSpd": 5.517580223164288,
+    "fell": 2.7932749879769005,
+    "airborneVy": -2.5669216896441176,
+    "terminalVy": -5.741149072687263,
+    "coastDist": 8.995661352299493,
+    "clearance": 0.41999999999999993,
+    "band": 0.42,
+    "sawAir": true,
+    "airLift": 8.064655621384786,
+    "peakImpact": 5.508770952317278,
+    "bouncedUp": true,
+    "landClearance": 0.4360494521165603
+  },
+  "errors": []
+}

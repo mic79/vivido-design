@@ -1,0 +1,42 @@
+{
+  "ok": true,
+  "probe": {
+    "boarded": true,
+    "before": {
+      "x": 193.91673887931475,
+      "y": -3.9769974517822266,
+      "z": 165.91673887931475,
+      "yaw": 0
+    },
+    "afterThrust": {
+      "x": 193.91673887931475,
+      "y": -3.9769974517822266,
+      "z": 159.45556005978725,
+      "yaw": 0
+    },
+    "afterBoost": {
+      "x": 193.91673887931475,
+      "y": -2.3837417348235816,
+      "z": 153.4975536703097,
+      "yaw": 0
+    },
+    "moveDist": 6.461178819527504,
+    "boostLift": 1.593255716958645,
+    "peakLift": 1.593255716958645,
+    "cockpitCtrl": {
+      "yaw": 0,
+      "thrust": 0,
+      "fromGrip": false,
+      "boost": false,
+      "grabJoy": null,
+      "grabThrust": null,
+      "hasSteering": true,
+      "hasThrottle": true
+    },
+    "hasBody": true,
+    "bodyVisible": true,
+    "mixamo": true,
+    "zerog": true
+  },
+  "errors": []
+}

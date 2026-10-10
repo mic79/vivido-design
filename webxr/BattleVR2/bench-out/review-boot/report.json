@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "ready": {
+    "scene": true,
+    "boot": {
+      "version": "0.1.0",
+      "box3d": true,
+      "fighter": true,
+      "cockpit": true
+    },
+    "bootErr": null,
+    "fighter": true,
+    "cockpit": true
+  },
+  "errors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "url": "http://127.0.0.1:9120/?nobootmenu=1"
+}

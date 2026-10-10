@@ -1,0 +1,106 @@
+{
+  "ok": true,
+  "rows": [
+    {
+      "id": "base",
+      "draws": 66,
+      "tris": 721476,
+      "dbg": {
+        "units": 11,
+        "buildings": 2,
+        "bots": 1,
+        "moving": 0,
+        "botOrders": 0,
+        "elapsed": 0.9333333333333346,
+        "boarded": false,
+        "vehicle": {
+          "x": 165.91673887931475,
+          "y": 2.2,
+          "z": 157.91673887931475,
+          "yaw": 0
+        },
+        "draws": 66,
+        "tris": 721476,
+        "mp": false,
+        "host": true
+      }
+    },
+    {
+      "id": "midfield",
+      "draws": 66,
+      "tris": 751338,
+      "dbg": {
+        "units": 11,
+        "buildings": 2,
+        "bots": 1,
+        "moving": 0,
+        "botOrders": 0,
+        "elapsed": 1.266666666666667,
+        "boarded": false,
+        "vehicle": {
+          "x": 165.91673887931475,
+          "y": 2.2,
+          "z": 157.91673887931475,
+          "yaw": 0
+        },
+        "draws": 66,
+        "tris": 751338,
+        "mp": false,
+        "host": true
+      }
+    },
+    {
+      "id": "look-army",
+      "draws": 66,
+      "tris": 761193,
+      "dbg": {
+        "units": 11,
+        "buildings": 2,
+        "bots": 1,
+        "moving": 0,
+        "botOrders": 0,
+        "elapsed": 1.5333333333333328,
+        "boarded": false,
+        "vehicle": {
+          "x": 165.91673887931475,
+          "y": 2.2,
+          "z": 157.91673887931475,
+          "yaw": 0
+        },
+        "draws": 66,
+        "tris": 761193,
+        "mp": false,
+        "host": true
+      }
+    },
+    {
+      "id": "in-cockpit",
+      "draws": 64,
+      "tris": 770979,
+      "dbg": {
+        "units": 11,
+        "buildings": 2,
+        "bots": 1,
+        "moving": 0,
+        "botOrders": 0,
+        "elapsed": 1.6166666666666658,
+        "boarded": true,
+        "vehicle": {
+          "x": 165.91673887931475,
+          "y": 2.2,
+          "z": 157.91673887931475,
+          "yaw": 0
+        },
+        "draws": 64,
+        "tris": 770979,
+        "mp": false,
+        "host": true
+      }
+    }
+  ],
+  "budgets": {
+    "note": "PCVR soft budgets — revisit after LOD/Draco (Phase 2)",
+    "maxDrawsSpawn": 2000,
+    "maxTrisSpawn": 8000000
+  }
+}

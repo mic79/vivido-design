@@ -1,0 +1,67 @@
+{
+  "ok": true,
+  "before": {
+    "boarded": true,
+    "pose": {
+      "x": 193.91673887931475,
+      "y": 2.2,
+      "z": 165.91673887931475,
+      "yaw": 0
+    },
+    "tick": 290
+  },
+  "mid": {
+    "boarded": true,
+    "pose": {
+      "x": 189.3605332319616,
+      "y": 1.056341466426358,
+      "z": 155.85050337536168,
+      "yaw": 1.0757703363848172
+    },
+    "tick": 303,
+    "dbg": {
+      "units": 11,
+      "buildings": 2,
+      "bots": 1,
+      "moving": 0,
+      "botOrders": 0,
+      "elapsed": 0.5833333333333335,
+      "boarded": true,
+      "vehicle": {
+        "x": 189.3605332319616,
+        "y": 1.056341466426358,
+        "z": 155.85050337536168,
+        "yaw": 1.0757703363848172
+      },
+      "draws": 67,
+      "tris": 802612,
+      "mp": false,
+      "host": true
+    }
+  },
+  "after": {
+    "boarded": false,
+    "tick": 306,
+    "dbg": {
+      "units": 11,
+      "buildings": 2,
+      "bots": 1,
+      "moving": 0,
+      "botOrders": 0,
+      "elapsed": 0.7666666666666674,
+      "boarded": false,
+      "vehicle": {
+        "x": 189.15999646827495,
+        "y": 0.994999863248496,
+        "z": 155.75191888917968,
+        "yaw": 1.1342667915952054
+      },
+      "draws": 69,
+      "tris": 847087,
+      "mp": false,
+      "host": true
+    }
+  },
+  "moveDist": 11.049348719359799,
+  "errors": []
+}

@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "probe": {
+    "poseYaw": 0,
+    "seatYaw": 0,
+    "rigYaw": 0,
+    "cockpitYaw": 3.141592653589793,
+    "lookMatchesPose": true,
+    "meshIsBiased": true,
+    "notFacingSeat": true,
+    "alongLook": 1.4903360818933606,
+    "wrapsOk": true,
+    "wraps": [
+      {
+        "name": "steer-wrap",
+        "atOrigin": false
+      },
+      {
+        "name": "thrust-wrap",
+        "atOrigin": false
+      }
+    ]
+  },
+  "errors": []
+}

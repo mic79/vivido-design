@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "snap": {
+    "started": true,
+    "units": 11,
+    "match": {
+      "mode": "1v1",
+      "units": 11,
+      "boarded": false
+    },
+    "elapsed": 45867.300000000745
+  },
+  "after": {
+    "match": {
+      "mode": "1v1",
+      "units": 11,
+      "boarded": false
+    },
+    "draws": 135,
+    "tris": 1070100,
+    "boarded": false
+  },
+  "errors": []
+}

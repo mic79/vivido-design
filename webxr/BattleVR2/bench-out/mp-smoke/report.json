@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "note": "Host match running (PeerJS join may be relay-dependent)",
+  "hostNet": {
+    "note": "no match yet"
+  },
+  "clientNet": {
+    "note": "no match yet"
+  },
+  "hostAfter": {
+    "units": 11,
+    "buildings": 2,
+    "bots": 0,
+    "moving": 0,
+    "botOrders": 0,
+    "elapsed": 0.18333333333333332,
+    "boarded": false,
+    "vehicle": {
+      "x": 165.91673887931475,
+      "y": 2.2,
+      "z": 157.91673887931475,
+      "yaw": 0
+    },
+    "draws": 65,
+    "tris": 760921,
+    "mp": true,
+    "host": true
+  },
+  "errors": []
+}
