@@ -1,0 +1,35 @@
+{
+  "ok": true,
+  "before": {
+    "boarded": false,
+    "cockpit": false
+  },
+  "afterBurst": {
+    "boarded": true,
+    "cockpit": true,
+    "seatDist": 0,
+    "seat": {
+      "x": 193.91673887931475,
+      "y": -2.9370339755056643,
+      "z": 165.71285549964716,
+      "yaw": 0
+    },
+    "rig": {
+      "x": 193.91673887931475,
+      "y": -2.9370339755056643,
+      "z": 165.71285549964716
+    }
+  },
+  "afterExit": {
+    "boarded": false,
+    "cockpit": false
+  },
+  "reboardSeatDist": 0,
+  "boardedFinal": false,
+  "hipsLocalSpan": {
+    "dx": 0,
+    "dy": 0,
+    "dz": 0
+  },
+  "errors": []
+}

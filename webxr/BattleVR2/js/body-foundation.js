@@ -1682,6 +1682,20 @@
         },
 
         /**
+         * BattleVR2 fighter seat: body must hard-lock like the cockpit mesh.
+         * Parent #cameraRig already carries vehicle yaw/pos via syncRigToSeat —
+         * local yaw/hips-back from head-facing or fly velocity = double motion / stutter.
+         */
+        _isBattleVr2BoardedSeat: function () {
+          return !!(
+            window.__BATTLEVR2__ &&
+            window.__BATTLEVR2_BOARDED__ &&
+            !this.data.isMirror &&
+            this._isLocalRigChild()
+          );
+        },
+
+        /**
          * BoltVR/CapVR-style: hips track headset Y every frame.
          * BattleVR2 on-foot uses fixed virtual eye (cockpit-style) + feet anchor instead —
          * so standing/seated IRL share the same body height.
@@ -1732,7 +1746,11 @@
           if (window.__BATTLEVR2__ && window.__BATTLEVR2_BOARDED__ && this._isLocalRigChild()) {
             const back = this._hipsBackLocalTmp || (this._hipsBackLocalTmp = new THREE.Vector3());
             back.set(0, 0, 0.12).applyQuaternion(this._getYawQuat());
-            const headY = this.camera?.object3D?.position?.y || eye;
+            // Flatscreen cockpit pins camera local Y to 0 — must NOT use `|| eye`
+            // (0 is falsy and was treated as “missing”, leaving the body 1.6 m too high
+            // so Mixamo arms could never reach the stick/lever).
+            const camY = this.camera?.object3D?.position?.y;
+            const headY = Number.isFinite(camY) ? camY : eye;
             return new THREE.Vector3(
               manual.x + back.x,
               headY - eye,
@@ -1869,6 +1887,11 @@
         },
 
         _getZeroGWorldVelocity: function () {
+          // Seated: vehicle motion must not thrash zero-g legs / torso lean.
+          if (this._isBattleVr2BoardedSeat()) {
+            this._zeroGVel.set(0, 0, 0);
+            return this._zeroGVel;
+          }
           const zc = this.rig?.components?.['zerog-locomotion'];
           if (zc && zc.getVelocity) {
             this._zeroGVel.copy(zc.getVelocity());
@@ -3620,6 +3643,8 @@
             } else {
               this.updateLocalBody(dt);
               this.updateFingerPoses(dt);
+              // After fingers: hard-snap wrists to stick/lever (IK + curls must not win).
+              this._finalizeCockpitHandBones();
             }
             this._updateBodyDotEffect(dt);
             if (!poseFrozen
@@ -3685,7 +3710,9 @@
           // Head world velocity = thumbstick rig motion + room-scale physical walking.
           const headPos = new THREE.Vector3();
           this.camera.object3D.getWorldPosition(headPos);
-          if (this.previousHeadPosInitialized) {
+          // Boarded fly: rig teleports with the vehicle every frame — treat that as zero
+          // body velocity so zero-g legs / lean do not thrash (cockpit is already snapped).
+          if (this.previousHeadPosInitialized && !this._isBattleVr2BoardedSeat()) {
             this.headVelocity.copy(headPos).sub(this.previousHeadPos).multiplyScalar(invDt);
           } else {
             this.previousHeadPosInitialized = true;
@@ -3833,11 +3860,13 @@
           ['left', 'right'].forEach((hand) => {
             this._applyGrabSurfaceFingerTargets(hand);
           });
+          this._applyCockpitControlFingerTargets();
 
           // Per-finger surface raycasts update target curls before smoothing â€”
           // but only while a surface grab is still settling. Once frozen, the
           // conformed finger pose is held constant until release.
           ['left', 'right'].forEach((hand) => {
+            if (this._isCockpitControlHand(hand)) return;
             const frozen = hand === 'left' ? this._grabFingersFrozenLeft : this._grabFingersFrozenRight;
             const store = hand === 'left' ? this._grabFrozenCurlsLeft : this._grabFrozenCurlsRight;
             if (frozen && store) {
@@ -5110,6 +5139,116 @@
           this[lockFlag] = true;
         },
 
+        _getCockpitHandAttach: function (hand) {
+          const bag = window.__BATTLEVR2_COCKPIT_HAND_ATTACH__;
+          if (!bag || !window.__BATTLEVR2_BOARDED__) return null;
+          return bag[hand] || null;
+        },
+
+        _isCockpitControlHand: function (hand) {
+          return !!this._getCockpitHandAttach(hand);
+        },
+
+        /**
+         * Snap wrist IK targets to cockpit stick/lever grip points while held.
+         * Position follows the deflected control; orientation blends controller → grip.
+         */
+        _applyCockpitControlHandAttach: function (leftPos, leftQuat, rightPos, rightQuat) {
+          if (!window.__BATTLEVR2_BOARDED__) {
+            this._cockpitGrabLeft = false;
+            this._cockpitGrabRight = false;
+            return;
+          }
+          const apply = (hand, pos, quat) => {
+            const attach = this._getCockpitHandAttach(hand);
+            const flag = hand === 'left' ? '_cockpitGrabLeft' : '_cockpitGrabRight';
+            if (!attach || !Number.isFinite(attach.x)) {
+              this[flag] = false;
+              return;
+            }
+            this[flag] = true;
+            pos.set(attach.x, attach.y, attach.z);
+            if (
+              Number.isFinite(attach.qx) &&
+              Number.isFinite(attach.qw) &&
+              quat
+            ) {
+              const gripQ = this._cockpitGripQuatTmp || (this._cockpitGripQuatTmp = new THREE.Quaternion());
+              gripQ.set(attach.qx, attach.qy, attach.qz, attach.qw);
+              // Cockpit poses are authored as Mixamo bone world — copy, don't blend
+              // with the (desktop-at-camera / VR) controller wrist.
+              quat.copy(gripQ);
+            }
+            // Don't let environment surface-grab fight the cockpit pin.
+            if (hand === 'left') {
+              this._grabAnchorActiveLeft = false;
+              this._grabSurfaceContactLeft = false;
+              this._grabWristLockLeft = false;
+              this._grabHandLockLeft = false;
+            } else {
+              this._grabAnchorActiveRight = false;
+              this._grabSurfaceContactRight = false;
+              this._grabWristLockRight = false;
+              this._grabHandLockRight = false;
+            }
+          };
+          apply('left', leftPos, leftQuat);
+          apply('right', rightPos, rightQuat);
+        },
+
+        _applyCockpitControlFingerTargets: function () {
+          for (const hand of ['left', 'right']) {
+            const attach = this._getCockpitHandAttach(hand);
+            if (!attach?.curls) continue;
+            const c = attach.curls;
+            this.targetCurls[hand] = {
+              thumb: c.thumb,
+              index: c.index,
+              middle: c.middle,
+              ring: c.ring,
+              pinky: c.pinky,
+            };
+            // Snap curls immediately in cockpit — no laggy “floating open hand”.
+            this.currentCurls[hand] = {
+              thumb: c.thumb,
+              index: c.index,
+              middle: c.middle,
+              ring: c.ring,
+              pinky: c.pinky,
+            };
+          }
+        },
+
+        /**
+         * Last word on cockpit grips: pin wrist pos+rot to the attach pose after
+         * arm IK and finger curls. (Forearm auto-aim was tried and regressed the
+         * right stick grip — leave IK forearm, only snap the hand bone.)
+         */
+        _finalizeCockpitHandBones: function () {
+          if (!window.__BATTLEVR2_BOARDED__ || this.data.isMirror) return;
+          const THREE = window.THREE;
+          for (const hand of ['left', 'right']) {
+            const attach = this._getCockpitHandAttach(hand);
+            if (!attach?.mixamoWorld || !Number.isFinite(attach.x)) continue;
+            const handBone = this.bones[`${hand}HandBone`];
+            const forearm = this.bones[`${hand}Forearm`];
+            if (!handBone || !forearm) continue;
+
+            forearm.updateMatrixWorld(true);
+            const target = new THREE.Vector3(attach.x, attach.y, attach.z);
+            const worldQ = new THREE.Quaternion(attach.qx, attach.qy, attach.qz, attach.qw);
+
+            const inv = new THREE.Matrix4().copy(forearm.matrixWorld).invert();
+            handBone.position.copy(target.clone().applyMatrix4(inv));
+
+            const fwq = new THREE.Quaternion();
+            forearm.getWorldQuaternion(fwq);
+            handBone.quaternion.copy(fwq.clone().invert().multiply(worldQ));
+            handBone.scale.set(1, 1, 1);
+            handBone.updateMatrixWorld(true);
+          }
+        },
+
         _getGrabSurfaceFingerCurls: function () {
           // Open hand â€” fingertips reach the surface, not a power grip fist.
           return {
@@ -5882,6 +6021,12 @@
           this.rightController.object3D.getWorldPosition(rightHandWorldPos);
           this.rightController.object3D.getWorldQuaternion(rightHandWorldQuat);
 
+          // Fighter cockpit: pin Mixamo wrists to held stick/lever (follows control visual).
+          this._applyCockpitControlHandAttach(
+            leftHandWorldPos, leftHandWorldQuat,
+            rightHandWorldPos, rightHandWorldQuat
+          );
+
           this._applyRagdollDummyArmHold(leftHandWorldPos, rightHandWorldPos);
 
           if (!this.useAnimatedLocomotion) {
@@ -6621,6 +6766,13 @@
             }
           }
 
+          // Cockpit stick/lever: exact wrist pin + stretch allowed (same as env grab freeze).
+          // Without this, arm max-stretch 1.4× undershoots the control and hands float mid-air.
+          if (!heldGrabFreeze && !this.data.isMirror && this._isCockpitControlHand(hand)) {
+            heldGrabFreeze = true;
+            freezeWristWorld.copy(handWorldPos);
+          }
+
           const adjustedHandPos = handWorldPos.clone();
           if (heldGrabFreeze) {
             // Reach is measured to the fixed hold; freezeWristWorld is already the
@@ -6787,6 +6939,7 @@
             // Hand orientation â€” controller tracking, or frozen world pose while grabbing.
             if (handBone) {
               const lockedHandWorld = this._getGrabLockedHandWorld(hand);
+              const cockpitAttach = this._getCockpitHandAttach(hand);
               if (lockedHandWorld) {
                 const fwq = new THREE.Quaternion();
                 forearmBone.getWorldQuaternion(fwq);
@@ -6794,6 +6947,13 @@
                 handBone.quaternion.copy(handLocalQuat);
               } else if (lockedHandLocal) {
                 handBone.quaternion.copy(lockedHandLocal);
+              } else if (cockpitAttach?.mixamoWorld && handWorldQuat) {
+                // Attach quat is already Mixamo bone world — skip VR controller flip/roll.
+                const fwq = new THREE.Quaternion();
+                forearmBone.getWorldQuaternion(fwq);
+                handBone.quaternion.copy(
+                  handWorldQuat.clone().premultiply(fwq.clone().invert())
+                );
               } else {
                 const fwq = new THREE.Quaternion();
                 forearmBone.getWorldQuaternion(fwq);
@@ -7003,7 +7163,7 @@
             let surfaceGrab = hand === 'left' ? this._grabSurfaceContactLeft : this._grabSurfaceContactRight;
             let dbg = hand === 'left' ? legIk._handPalmDebugLeft : legIk._handPalmDebugRight;
 
-            if (grabPressed && collisionHit && !grabWasActive) {
+            if (grabPressed && collisionHit && !grabWasActive && !this._isCockpitControlHand(hand)) {
               // Character limb hits must not start environment grab-pull.
               const hitRagdoll = hitCharacterMesh ||
                 !!(legIk.physics?.isRagdollShape && legIk.physics.isRagdollShape(dbg?.shapeId)) ||

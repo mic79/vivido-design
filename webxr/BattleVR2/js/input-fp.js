@@ -16,10 +16,15 @@
  *   F                 — board / exit fighter
  *
  * IN COCKPIT (Battlezone hover fighter):
- *   Grip flight stick  — yaw
- *   Grip thrust lever  — forward/back (lever forward = go forward)
- *   Stick hand + trigger — fire guns (look aim)
- *   Left stick click   — boost/jump
+ *   RIGHT grip near stick only — yaw (left cannot grab stick)
+ *   LEFT grip near lever only — thrust (right cannot grab lever)
+ *   Thumbstick X WHILE left grips the thrust lever — strafe
+ *   Right trigger while on stick — fire guns
+ *   Virtual stick fwd/back (hand on flight stick) — gun aim up/down (push=down, pull=up)
+ *   Thumbstick click WHILE left grips the thrust lever — boost / hop
+ *     (PC Space = same boost; no lever grab required on keyboard)
+ *   Right thumbstick click (when not on lever) — exit fighter
+ *   A (right) — dump grip calibration JSON to console (use URL #gripcal to disable snaps)
  *   Body/arms stay VISIBLE so you can see hands on the controls
  *
  * IN COCKPIT (flatscreen PC):
@@ -67,6 +72,9 @@ let prevPadRightClick = false;
 let prevPadLeftClick = false;
 /** One-shot: game-over must release stick grab + restore laser even if grip is still held. */
 let clearedCockpitForGameOver = false;
+/** Board toggle debounce — Quest fires thumbstickdown + buttondown + gamepad click together. */
+let lastBoardToggleMs = 0;
+const BOARD_TOGGLE_COOLDOWN_MS = 450;
 
 function clampLookPitch(p) {
   return Math.max(LOOK_PITCH_MIN, Math.min(LOOK_PITCH_MAX, p));
@@ -82,9 +90,15 @@ function consumeMouseLook() {
 
 function applyDesktopCameraPitch() {
   if (!cameraEl?.object3D || isXrPresenting()) return;
+  // Pitch the A-Frame entity; keep nested THREE.Camera local-identity so
+  // scene.camera world forward matches the screen-center HUD / gun aim.
   cameraEl.object3D.rotation.x = lookPitch;
   cameraEl.object3D.rotation.y = 0;
   cameraEl.object3D.rotation.z = 0;
+  try {
+    const nested = cameraEl.getObject3D?.('camera');
+    if (nested?.rotation) nested.rotation.set(0, 0, 0);
+  } catch (_) { /* */ }
 }
 
 function stickAxis(v, deadzone = 0.15) {
@@ -141,7 +155,12 @@ export function initInputFp(scene) {
 
   window.addEventListener('keydown', (e) => {
     keys.add(e.code);
-    if (e.code === 'KeyF') tryToggleBoard();
+    if (e.code === 'KeyF') {
+      // F = board/exit only — block A-Frame/browser fullscreen / enterVR.
+      e.preventDefault();
+      e.stopPropagation();
+      tryToggleBoard();
+    }
     // Prevent page scroll while flying / boosting.
     if (
       (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'ArrowDown') &&
@@ -150,7 +169,7 @@ export function initInputFp(scene) {
     ) {
       e.preventDefault();
     }
-  });
+  }, true);
   window.addEventListener('keyup', (e) => keys.delete(e.code));
 
   window.addEventListener('mousemove', (e) => {
@@ -256,30 +275,68 @@ function wireZerogThrusterButtons() {
       const id = e.detail?.id;
       if (id === 'bbutton' || id === 5 || id === 'bb') Zerog.setThruster('right', false);
     });
+    // Boarded VR: A dumps live hand↔control offsets (use with #gripcal so snaps are off).
+    let lastGripCalMs = 0;
+    const dumpCal = () => {
+      if (!Vehicle.isBoarded()) return;
+      const now = performance.now();
+      if (now - lastGripCalMs < 400) return; // abuttondown + buttondown both fire
+      lastGripCalMs = now;
+      Cockpit.dumpGripCalibration('both');
+    };
+    right.addEventListener('abuttondown', dumpCal);
   }
+}
+
+function isThumbstickClickEvent(e) {
+  const id = e?.detail?.id;
+  // Meta Quest Touch / A-Frame: thumbstick click = button index 3.
+  return id === 3 || id === '3' || id === 'thumbstick' || id === 'thumbstickdown';
+}
+
+/**
+ * VR boost: stick-click only counts while THAT hand is gripping the thrust lever.
+ * On foot: left stick click = look-boost (unchanged).
+ */
+function tryVrBoostFromStickHand(hand) {
+  if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return false;
+  if (!Vehicle.isBoarded()) {
+    if (hand === 'left') {
+      Zerog.requestLookBoost(cameraEl);
+      return true;
+    }
+    return false;
+  }
+  const thrHand = Cockpit.getThrustGrabHand?.() || Cockpit.getCockpitControlDebug?.()?.grabThrust;
+  if (thrHand !== hand) return false;
+  window.__BATTLEVR2_VEHICLE_BOOST__ = true;
+  Vehicle.requestBoost();
+  return true;
 }
 
 function wireStickClicks() {
   const left = document.getElementById('leftHand');
   const right = document.getElementById('rightHand');
   if (left) {
-    left.addEventListener('thumbstickdown', () => {
-      if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
-      if (Vehicle.isBoarded()) {
-        window.__BATTLEVR2_VEHICLE_BOOST__ = true;
-        Vehicle.requestBoost();
-        return;
-      }
-      Zerog.requestLookBoost(cameraEl);
+    // oculus/meta-touch emit thumbstickdown; bare tracked-controls only emits buttondown.
+    left.addEventListener('thumbstickdown', () => tryVrBoostFromStickHand('left'));
+    left.addEventListener('buttondown', (e) => {
+      if (isThumbstickClickEvent(e)) tryVrBoostFromStickHand('left');
     });
   }
   if (right) {
-    right.addEventListener('thumbstickdown', () => {
+    const onRightStick = () => {
       if (!State.gameSession.gameStarted || State.gameSession.menuOpen) return;
+      // Lever hand stick-click = boost; otherwise right stick click = board/exit.
+      if (tryVrBoostFromStickHand('right')) return;
       tryToggleBoard();
-    });
+    };
+    // Prefer thumbstickdown only — also listening to buttondown double-fired board
+    // with the gamepad poll path (enter then instant exit beside the fighter).
+    right.addEventListener('thumbstickdown', onRightStick);
   }
   window.addEventListener('keydown', (e) => {
+    // Flatscreen: Space boosts without a physical lever grab.
     if (e.code === 'Space' && Vehicle.isBoarded()) {
       e.preventDefault();
       window.__BATTLEVR2_VEHICLE_BOOST__ = true;
@@ -309,6 +366,12 @@ function ensureBodyVisible() {
 
 function tryToggleBoard(force = false) {
   if (!State.gameSession.gameStarted && !force) return;
+  const now = performance.now();
+  // Quest: one stick click → thumbstickdown + buttondown + pad.rightClick. Without
+  // debounce that enters then immediately exits beside the hull ("never in it").
+  if (!force && now - lastBoardToggleMs < BOARD_TOGGLE_COOLDOWN_MS) return;
+  lastBoardToggleMs = now;
+
   if (Vehicle.isBoarded()) {
     Cockpit.showCockpit(false);
     Cockpit.hideCockpitHard();
@@ -320,6 +383,10 @@ function tryToggleBoard(force = false) {
     Zerog.setThruster('right', false);
     syncRigToPos(p.x, p.y, p.z, yaw);
     ensureBodyVisible();
+    {
+      const bodyEl = document.getElementById('local-body');
+      bodyEl?.components?.['mixamo-body']?.updateLocalBody?.(1 / 60);
+    }
   } else {
     let p = Box3D.getPlayerPosition();
     if (rigEl?.object3D) {
@@ -333,14 +400,29 @@ function tryToggleBoard(force = false) {
     const dist = Math.hypot(p.x - v.x, p.z - v.z);
     if (!force && dist > 14) {
       console.log('[BattleVR2] too far to board', dist.toFixed(1));
+      // Allow retry immediately when rejected for range (don't burn debounce).
+      lastBoardToggleMs = 0;
       return;
     }
+    // Pull near if far — then seat-snap this same call (never leave them beside).
     if (force || dist > 5) {
       Box3D.spawnPlayerAt(v.x + 2, Math.max(v.y, sampleGroundY(v.x, v.z, v.y) + 1.8), v.z + 2);
     }
     Vehicle.enterVehicle();
     Cockpit.showCockpit(true);
+    Cockpit.syncCockpitToVehicle();
+    {
+      const seat = Cockpit.getSeatWorldPosition();
+      syncRigToSeat(seat.x, seat.y, seat.z, seat.yaw);
+      yaw = seat.yaw;
+      Zerog.setZerogYaw(yaw);
+    }
+    Cockpit.refreshHandAttachPoses();
     ensureBodyVisible(); // MUST see arms/hands to grip stick + throttle
+    {
+      const bodyEl = document.getElementById('local-body');
+      bodyEl?.components?.['mixamo-body']?.updateLocalBody?.(1 / 60);
+    }
   }
   syncBoardWristButton();
 }
@@ -394,14 +476,11 @@ function updateFp(dt) {
       leftY = pad.leftY;
       rightX = pad.rightX;
     }
-    if (pad.rightClick && !prevPadRightClick) tryToggleBoard();
+    if (pad.rightClick && !prevPadRightClick) {
+      if (!tryVrBoostFromStickHand('right')) tryToggleBoard();
+    }
     if (pad.leftClick && !prevPadLeftClick) {
-      if (Vehicle.isBoarded()) {
-        window.__BATTLEVR2_VEHICLE_BOOST__ = true;
-        Vehicle.requestBoost();
-      } else {
-        Zerog.requestLookBoost(cameraEl);
-      }
+      tryVrBoostFromStickHand('left');
     }
     prevPadRightClick = !!pad.rightClick;
     prevPadLeftClick = !!pad.leftClick;
@@ -448,7 +527,8 @@ function updateFp(dt) {
           if (keys.has('KeyD') || keys.has('ArrowRight')) vYaw -= 1;
         }
       }
-      // XR: physical stick/lever only — thumbsticks caused phantom yaw after releasing grab.
+      // XR yaw/thrust stay on physical stick/lever (thumbsticks used to phantom-yaw).
+      // Strafe: lever-hand thumbstick X is applied inside Cockpit.updateCockpitControls.
       window.__BATTLEVR2_DESKTOP_VEHICLE__ = {
         yaw: Math.max(-1, Math.min(1, vYaw)),
         thrust: Math.max(-1, Math.min(1, thrust)),
@@ -456,17 +536,42 @@ function updateFp(dt) {
         yawDelta: !isXrPresenting() ? -look.dx * MOUSE_YAW_SENS : 0,
         boost: false,
       };
+      window.__BATTLEVR2_STICK__ = {
+        leftX,
+        leftY,
+        rightX,
+        rightY: sample.rightY || pad.rightY || 0,
+      };
     }
+    const xr = isXrPresenting();
+    // Publish fire before cockpit attach so stick index/thumb curls update same frame.
+    const fireWantedPre = xr
+      ? !!(sample.leftTrigger || sample.rightTrigger || window.__BATTLEVR2_FIGHTER_FIRE__)
+      : mouseFireHeld ||
+        keys.has('ControlLeft') ||
+        keys.has('ControlRight') ||
+        !!window.__BATTLEVR2_FIGHTER_FIRE__;
+    window.__BATTLEVR2_MOUSE_FIRE__ = !xr && !!fireWantedPre;
+    window.__BATTLEVR2_VR_SAMPLE__ = sample;
+
     Cockpit.updateCockpitControls();
     Vehicle.stepVehicle(dt);
     Cockpit.syncCockpitToVehicle();
     const seat = Cockpit.getSeatWorldPosition();
     syncRigToSeat(seat.x, seat.y, seat.z, seat.yaw);
+    // CapVR rigid-tether pattern: after the vehicle moves, re-weld hand attach +
+    // Mixamo body in THIS frame. Attach published inside updateCockpitControls is
+    // pre-step and one frame stale — that is the whole-character cockpit stutter.
+    Cockpit.refreshHandAttachPoses();
+    {
+      const bodyEl = document.getElementById('local-body');
+      const mb = bodyEl?.components?.['mixamo-body'];
+      mb?.updateLocalBody?.(dt);
+    }
     yaw = seat.yaw;
     Zerog.setZerogYaw(yaw);
     ensureBodyVisible();
     const joyHand = window.__BATTLEVR2_COCKPIT_JOY_HAND__ || null;
-    const xr = isXrPresenting();
     // Guns only while the stick is gripped — free hand keeps RTS laser / select.
     // Desktop: hold LMB (or hold Ctrl) to fire.
     const fireWanted = xr
@@ -474,16 +579,15 @@ function updateFp(dt) {
           ((joyHand === 'left' && !!sample.leftTrigger) ||
             (joyHand === 'right' && !!sample.rightTrigger) ||
             !!window.__BATTLEVR2_FIGHTER_FIRE__))
-      : mouseFireHeld ||
-        keys.has('ControlLeft') ||
-        keys.has('ControlRight') ||
-        !!window.__BATTLEVR2_FIGHTER_FIRE__;
+      : fireWantedPre;
     FighterCombat.stepFighterCombat(dt, {
       fireWanted,
       joyHand: joyHand || (!xr ? 'desktop' : null),
       requireStick: xr,
     });
   } else {
+    window.__BATTLEVR2_MOUSE_FIRE__ = false;
+    window.__BATTLEVR2_VR_SAMPLE__ = null;
     FighterCombat.setFighterCrosshairVisible(false);
     updateHandsFromControllers(sample);
     window.__BATTLEVR2_DESKTOP_VEHICLE__ = null;
@@ -524,6 +628,12 @@ function updateFp(dt) {
     });
     yaw = pose.yaw;
     syncRigToPos(pose.x, pose.y, pose.z, pose.yaw);
+    // Same-frame body weld as cockpit: Mixamo tick may run before FP moves the rig —
+    // without this, on-foot VR shows the character lagging/stuttering behind locomotion.
+    {
+      const bodyEl = document.getElementById('local-body');
+      bodyEl?.components?.['mixamo-body']?.updateLocalBody?.(dt);
+    }
     // Empty fighter keeps momentum (shared phys is the player while on foot).
     Vehicle.stepVehicle(dt);
   }

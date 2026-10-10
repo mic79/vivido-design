@@ -5,6 +5,7 @@
 import * as Box3D from './box3d-world.js';
 import * as Phys from './battle-phys.js';
 import { sampleGroundY } from './rts-bridge.js';
+import * as Audio from './rts/audio.js';
 
 const FIGHTER_URL = 'assets/vehicles/space_fighter.glb';
 const TARGET_LENGTH_M = 10;
@@ -30,6 +31,8 @@ let fitScale = 1;
 let boostCooldown = 0;
 let slamPitch = 0;
 let slamSink = 0;
+/** Brief window after boost impulse so thruster loop can pitch up. */
+let boostAudioUntil = 0;
 
 /** Nudge past the mesh tip so tracers don't spawn inside the barrel. */
 const MUZZLE_NUDGE_M = 0.22;
@@ -272,6 +275,9 @@ export function exitVehicle() {
   syncPoseFromPhys();
   parkedVel = Phys.getPhysVelocity();
   boarded = false;
+  try {
+    Audio.stopFighterThrusterAudio();
+  } catch (_) { /* */ }
   setExteriorVisible(true);
   controls = { yaw: 0, pitch: 0, thrust: 0, strafe: 0, yawDelta: 0, boost: false };
   const p = getVehiclePose();
@@ -307,6 +313,9 @@ export function forceExit() {
     parkedVel = Phys.getPhysVelocity();
   }
   boarded = false;
+  try {
+    Audio.stopFighterThrusterAudio();
+  } catch (_) { /* */ }
   window.__BATTLEVR2_BOARDED__ = false;
   window.__BATTLEVR2_FORCE_VEHICLE_STEP__ = false;
   window.__BATTLEVR2_COCKPIT_JOY_HAND__ = null;
@@ -347,9 +356,9 @@ function stepChassis(dt, { driven }) {
       const y = Phys.getPhysYaw();
       const fwdX = -Math.sin(y);
       const fwdZ = -Math.cos(y);
-      // right = cross(up, forward)
-      const rightX = fwdZ;
-      const rightZ = -fwdX;
+      // Pilot right = cross(up, forward) — same as exit-beside offset.
+      const rightX = -fwdZ;
+      const rightZ = fwdX;
       const f = Phys.SURGE_FORCE_VEHICLE * 0.85;
       Phys.addPhysForce(rightX * strafe * f, 0, rightZ * strafe * f, dt);
     }
@@ -363,6 +372,8 @@ function stepChassis(dt, { driven }) {
         fwdZ * Phys.SPEED_BOOST_FORCE
       );
       boostCooldown = BOOST_COOLDOWN_S;
+      // Long enough that the hop reads as a clear thruster punch, not a blip.
+      boostAudioUntil = performance.now() + 1100;
       controls.boost = false;
     }
   }
@@ -373,9 +384,23 @@ function stepChassis(dt, { driven }) {
   syncVisual();
 }
 
+function syncFighterThrusterAudio(driven) {
+  try {
+    Audio.updateFighterThrusterAudio({
+      active: !!boarded,
+      thrust: driven && boarded ? controls.thrust || 0 : 0,
+      strafe: driven && boarded ? controls.strafe || 0 : 0,
+      boost: boarded && performance.now() < boostAudioUntil,
+    });
+  } catch (_) {
+    /* audio optional */
+  }
+}
+
 export function stepVehicle(dt) {
   if (boarded || window.__BATTLEVR2_FORCE_VEHICLE_STEP__) {
     stepChassis(dt, { driven: true });
+    syncFighterThrusterAudio(true);
     return pose;
   }
 
@@ -387,6 +412,7 @@ export function stepVehicle(dt) {
   Phys.setPhysVelocity(parkedVel.x, parkedVel.y, parkedVel.z);
   stepChassis(dt, { driven: false });
   Phys.restorePhys(snap);
+  syncFighterThrusterAudio(false);
   return pose;
 }
 

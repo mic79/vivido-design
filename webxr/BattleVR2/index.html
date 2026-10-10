@@ -6,7 +6,7 @@
   <title>BattleVR2 — FPS + RTS Hybrid</title>
   <meta name="description" content="First-person VR + RTS hybrid on Hera Planum. Built with A-Frame, Box3D, and PeerJS.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.1.41">
+  <meta name="rts-version" content="0.1.91">
 
 <script>
   (function () {
@@ -46,7 +46,7 @@
     import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
     window.BodyRiggedLoaders = { GLTFLoader, FBXLoader, ready: true };
   </script>
-  <script type="module" src="js/bootstrap.js?v=0.1.41"></script>
+  <script type="module" src="js/bootstrap.js?v=0.1.91"></script>
 
   <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -100,6 +100,7 @@
     vr-mode-ui="enabled: true"
     loading-screen="enabled: false"
     webxr="optionalFeatures: local-floor"
+    keyboard-shortcuts="enterVR: false"
     high-refresh-rate
     rts-version-fps
   >
@@ -608,7 +609,7 @@
   <div id="xr-dom-overlay"></div>
 
   <!-- Game Module — ?v= must match meta rts-version (module graph cache). -->
-  <script type="module" src="js/main.js?v=0.1.41"></script>
+  <script type="module" src="js/main.js?v=0.1.91"></script>
 
   <script>
     document.querySelector('a-scene').addEventListener('loaded', function () {

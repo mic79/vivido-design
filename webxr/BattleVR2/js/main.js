@@ -24,7 +24,7 @@ import * as BotBody from './bot-body-box3d.js';
 import * as Zerog from './zerog-loco.js';
 import { FLOOR_BAND_PLAYER, FLOOR_BAND_VEHICLE } from './battle-phys.js';
 
-const VERSION = '0.1.41';
+const VERSION = '0.1.91';
 
 async function afterMatchStart() {
   Bridge.setTerrainSampler((x, z) => sampleMoonTerrainWorldY(x, z));
@@ -237,6 +237,12 @@ async function boot() {
       if (body) body.setAttribute('visible', 'true');
       return !!window.__BATTLEVR2_BOARDED__;
     };
+    window.__BATTLEVR2_DUMP_GRIPCAL__ = () => Cockpit.dumpGripCalibration('both');
+    if (Cockpit.isGripCalEnabled()) {
+      console.log(
+        '[BattleVR2] #gripcal ON — cockpit hand snaps disabled; press A in VR to dump offsets'
+      );
+    }
     window.__BATTLEVR2_EXIT_VEHICLE__ = () => {
       Cockpit.showCockpit(false);
       Vehicle.exitVehicle();

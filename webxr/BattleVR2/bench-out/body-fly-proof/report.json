@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "boarded": true,
+  "weldedOk": true,
+  "gripOk": true,
+  "maxStickStep": 0.42538790886489625,
+  "maxBoneDistR": 0.13575910499839325,
+  "maxBoneDistL": 0.14072617776701915,
+  "maxHandToAttachR": 0.002055857851928504,
+  "maxHandToAttachL": 0.0015154680169304103,
+  "attachRelRSpan": 0.00017825727759657184,
+  "attachRelLSpan": 0.00004624550916787484,
+  "thrustRelRSpan": 0.09251362997284218,
+  "thrustRelLSpan": 0.030783490789275447,
+  "hipsSpan": 1.1368683772161603e-13,
+  "n": 90,
+  "errors": [],
+  "shot": "d:\\backup 2024-04\\Documents\\Backup_MBP_2021-12\\Backup\\Projects\\Apps\\WebXR\\BattleVR2\\bench-out\\body-fly-proof\\lookdown-fly.png"
+}

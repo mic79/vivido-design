@@ -1,0 +1,90 @@
+{
+  "pass": true,
+  "report": {
+    "left": {
+      "wrist": [
+        193.645,
+        -3.252,
+        165.522
+      ],
+      "finger": [
+        0.984,
+        0.032,
+        -0.177
+      ],
+      "palm": [
+        0,
+        -0.984,
+        -0.181
+      ],
+      "thumb": [
+        193.677,
+        -3.224,
+        165.49
+      ],
+      "curls": {
+        "thumb": 0.78,
+        "index": 0.9,
+        "middle": 0.94,
+        "ring": 0.92,
+        "pinky": 0.9
+      }
+    },
+    "right": {
+      "wrist": [
+        193.948,
+        -3.178,
+        165.517
+      ],
+      "finger": [
+        -0.136,
+        -0.403,
+        -0.905
+      ],
+      "palm": [
+        -0.968,
+        0.246,
+        0.036
+      ],
+      "thumb": [
+        193.929,
+        -3.161,
+        165.471
+      ],
+      "curls": {
+        "thumb": 0.28,
+        "index": 0.12,
+        "middle": 0.8,
+        "ring": 0.78,
+        "pinky": 0.74
+      }
+    },
+    "rightFireCurls": {
+      "thumb": 0.62,
+      "index": 0.92,
+      "middle": 0.82,
+      "ring": 0.8,
+      "pinky": 0.76
+    },
+    "stickC": [
+      193.917,
+      -3.228,
+      165.486
+    ],
+    "leverC": [
+      193.666,
+      -3.28,
+      165.511
+    ],
+    "leftPalmDown": true,
+    "rightPalmLeft": true,
+    "leftNear": true,
+    "rightNear": true,
+    "fireIndexUp": true,
+    "attachKinds": {
+      "L": "lever",
+      "R": "stick"
+    }
+  },
+  "errors": []
+}

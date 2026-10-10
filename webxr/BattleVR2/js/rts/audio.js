@@ -317,3 +317,152 @@ export function playUnitReadySound(x, z) {
 export function playCaptureTickSound(x, z) {
   playSpatial('captureTick', x, z, 0.1);
 }
+
+// ---------------------------------------------------------------------------
+// Fighter thruster loop (cockpit) — continuous BufferSource, pitch ∝ throttle
+// ---------------------------------------------------------------------------
+/** @type {{ gain: GainNode, source: AudioBufferSourceNode|null, started: boolean } | null} */
+let fighterThrusterVoice = null;
+let fighterThrustSmoothed = 0;
+let fighterBoostSmoothed = 0;
+
+function ensureFighterThrusterVoice() {
+  const ctx = ensureAudioContext();
+  if (!ctx) return null;
+  if (fighterThrusterVoice) return fighterThrusterVoice;
+  const gain = ctx.createGain();
+  gain.gain.value = 0;
+  gain.connect(ctx.destination);
+  fighterThrusterVoice = { gain, source: null, started: false };
+  return fighterThrusterVoice;
+}
+
+function startFighterThrusterSource() {
+  const ctx = ensureAudioContext();
+  const voice = ensureFighterThrusterVoice();
+  const buffer = buffers.fighterThrusterLoop;
+  if (!ctx || !voice || !buffer) return false;
+  if (voice.source) return true;
+
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
+  source.playbackRate.value = 0.82;
+  source.connect(voice.gain);
+  voice.source = source;
+  voice.started = true;
+  try {
+    source.start(0);
+  } catch (_) {
+    voice.source = null;
+    voice.started = false;
+    return false;
+  }
+  source.onended = () => {
+    if (voice.source === source) {
+      voice.source = null;
+      voice.started = false;
+    }
+  };
+  return true;
+}
+
+function stopFighterThrusterSource() {
+  const voice = fighterThrusterVoice;
+  if (!voice?.source) return;
+  try {
+    voice.source.onended = null;
+    voice.source.stop(0);
+  } catch (_) { /* */ }
+  try {
+    voice.source.disconnect();
+  } catch (_) { /* */ }
+  voice.source = null;
+  voice.started = false;
+}
+
+/**
+ * Drive fighter thruster loop from cockpit throttle / strafe.
+ * @param {{ active?: boolean, thrust?: number, strafe?: number, boost?: boolean }} opts
+ *   thrust/strafe ∈ [-1,1]; pitch & volume follow max(|thrust|,|strafe|) (+ boost bump).
+ */
+export function updateFighterThrusterAudio(opts = {}) {
+  resumeAudio();
+  const ctx = ensureAudioContext();
+  if (!ctx) return;
+
+  const active = !!opts.active;
+  const thrustMag = Math.abs(opts.thrust || 0);
+  const strafeMag = Math.abs(opts.strafe || 0);
+  // Strafe uses the same thrusters — don't leave the loop idle on A/D-only.
+  const driveMag = Math.min(1, Math.max(thrustMag, strafeMag * 0.92));
+  const boostOn = !!opts.boost;
+
+  // Smooth so lever snaps don't click the loop. Boost snaps up fast, decays slower.
+  const blend = 1 - Math.exp(-10 * (1 / 60));
+  fighterThrustSmoothed += (driveMag - fighterThrustSmoothed) * blend;
+  const boostTarget = boostOn ? 1 : 0;
+  const boostBlend = boostOn
+    ? 1 - Math.exp(-28 * (1 / 60))
+    : 1 - Math.exp(-6 * (1 / 60));
+  fighterBoostSmoothed += (boostTarget - fighterBoostSmoothed) * boostBlend;
+
+  const voice = ensureFighterThrusterVoice();
+  if (!voice) return;
+
+  if (!active) {
+    const t = ctx.currentTime;
+    try {
+      voice.gain.gain.cancelScheduledValues(t);
+      voice.gain.gain.setTargetAtTime(0, t, 0.06);
+    } catch (_) {
+      voice.gain.gain.value = 0;
+    }
+    if (voice.gain.gain.value < 0.01 && !fighterThrustSmoothed) {
+      stopFighterThrusterSource();
+    }
+    fighterThrustSmoothed *= 0.9;
+    fighterBoostSmoothed *= 0.9;
+    return;
+  }
+
+  if (!buffers.fighterThrusterLoop) {
+    // Buffer still loading via init path — nudge load if needed.
+    if (!buffersReady) loadSoundBuffers(ctx).catch(() => {});
+    return;
+  }
+  if (!startFighterThrusterSource()) return;
+
+  const mag = fighterThrustSmoothed;
+  const boost = fighterBoostSmoothed;
+  // Idle rumble → throttle climb; upward boost punches pitch + volume hard.
+  const rate = Math.min(1.95, Math.max(0.7, 0.78 + mag * 0.58 + boost * 0.55));
+  const vol = Math.min(0.95, Math.max(0, 0.11 + mag * 0.4 + boost * 0.48));
+
+  const t = ctx.currentTime;
+  const tau = boost > 0.35 ? 0.028 : 0.05;
+  try {
+    if (voice.source?.playbackRate) {
+      voice.source.playbackRate.cancelScheduledValues(t);
+      voice.source.playbackRate.setTargetAtTime(rate, t, tau);
+    }
+    voice.gain.gain.cancelScheduledValues(t);
+    voice.gain.gain.setTargetAtTime(vol, t, tau);
+  } catch (_) {
+    if (voice.source) voice.source.playbackRate.value = rate;
+    voice.gain.gain.value = vol;
+  }
+}
+
+/** Hard stop (exit / game-over). */
+export function stopFighterThrusterAudio() {
+  fighterThrustSmoothed = 0;
+  fighterBoostSmoothed = 0;
+  const voice = fighterThrusterVoice;
+  if (voice) {
+    try {
+      voice.gain.gain.value = 0;
+    } catch (_) { /* */ }
+  }
+  stopFighterThrusterSource();
+}

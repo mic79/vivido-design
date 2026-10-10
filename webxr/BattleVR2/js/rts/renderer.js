@@ -2495,7 +2495,9 @@ export function refreshPlayableBorderRing() {
 
   const segments = Math.max(96, Math.min(384, Math.round(R * 0.9)));
   const halfW = Math.max(0.55, Math.min(1.35, R * 0.004));
-  const yLift = 0.12;
+  // Slight lift + polygonOffset only — depthTest stays on so the ribbon can't
+  // paint through units / buildings / cockpit (was depthTest:false overlay).
+  const yLift = 0.06;
   const positions = new Float32Array((segments + 1) * 2 * 3);
 
   for (let i = 0; i <= segments; i++) {
@@ -2540,19 +2542,19 @@ export function refreshPlayableBorderRing() {
   const mat = new THREE.MeshBasicMaterial({
     color: 0xff1a1a,
     transparent: true,
-    opacity: 0.92,
+    opacity: 0.85,
     side: THREE.DoubleSide,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false,
     polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
   });
 
   playableBorderMesh = new THREE.Mesh(geo, mat);
   playableBorderMesh.name = 'rts-playable-border';
   playableBorderMesh.frustumCulled = false;
-  playableBorderMesh.renderOrder = 993;
+  playableBorderMesh.renderOrder = 2;
   playableBorderMesh.raycast = () => {};
   // Intro / lobby: hide until a match is running
   playableBorderMesh.visible = !!State.gameSession.gameStarted;

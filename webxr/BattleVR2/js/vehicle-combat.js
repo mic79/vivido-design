@@ -1,7 +1,9 @@
 /**
- * Cockpit fighter weapons — aim locked to vehicle yaw (not HMD).
- * Default: pulse/plasma. Optional grenade (slow tracer): ?weapon=grenade or #grenade.
- * Shots stop on enemies / buildings / ground instead of tunneling through.
+ * Cockpit fighter weapons — yaw from chassis; pitch from look / virtual stick.
+ *   Flatscreen: mouse look pitch (screen crosshair).
+ *   VR: grabbed flight-stick fwd/back (push toward canopy = aim down);
+ *       yaw stays vehicle-locked (headset / thumbstick do not aim guns).
+ * Default: pulse/plasma. Optional grenade: ?weapon=grenade or #grenade.
  */
 import * as State from './rts/state.js';
 import * as Units from './rts/units.js';
@@ -15,8 +17,50 @@ import * as Effects from './rts/effects.js';
 import { sampleGameplayEntityY } from './rts/moon-environment.js';
 import * as TerrainBvh from './terrain-bvh.js';
 
-/** Slight nose-down so skim flight hits ground units. */
-const AIM_PITCH = 0.06;
+/** Fallback if camera missing — slight nose-down for skim shots. */
+const AIM_PITCH_FALLBACK = 0.06;
+const AIM_PITCH_MIN = -1.15;
+const AIM_PITCH_MAX = 1.05;
+
+/** @type {import('three').Vector3 | null} */
+let _aimEye = null;
+/** @type {import('three').Vector3 | null} */
+let _aimFwd = null;
+
+function isXrPresenting() {
+  try {
+    const xr = document.querySelector('a-scene')?.renderer?.xr;
+    if (xr?.isPresenting) return true;
+  } catch (_) { /* */ }
+  return false;
+}
+
+/**
+ * The THREE.Camera that actually draws the frame — same ray as screen-center HUD.
+ * (A-Frame `#camera`.object3D is only a Group; the PerspectiveCamera is a child.)
+ */
+function getRenderCamera() {
+  const camEl = document.getElementById('camera');
+  try {
+    const nested = camEl?.getObject3D?.('camera');
+    if (nested?.isCamera || nested?.isPerspectiveCamera) return nested;
+  } catch (_) { /* */ }
+  try {
+    const sceneCam = document.querySelector('a-scene')?.camera;
+    if (sceneCam?.isCamera || sceneCam?.isPerspectiveCamera) return sceneCam;
+  } catch (_) { /* */ }
+  return camEl?.object3D || null;
+}
+
+/**
+ * VR: virtual flight-stick fwd/back (from cockpit grab) → gun pitch.
+ * Published by cockpit.js as __BATTLEVR2_STICK_AIM_PITCH__ (rad).
+ */
+function getVrVirtualStickAimPitch() {
+  const p = window.__BATTLEVR2_STICK_AIM_PITCH__;
+  if (!Number.isFinite(p)) return AIM_PITCH_FALLBACK * 0.35;
+  return Math.max(AIM_PITCH_MIN, Math.min(AIM_PITCH_MAX, p));
+}
 
 const WEAPONS = {
   plasma: {
@@ -182,11 +226,13 @@ function updateWorldReticle(ray, visible) {
   hardenReticleDepth(el);
   el.object3D.visible = !!visible;
   if (!visible || !ray) return;
-  const x = ray.origin.x + ray.direction.x * RETICLE_DIST;
-  const y = ray.origin.y + ray.direction.y * RETICLE_DIST;
-  const z = ray.origin.z + ray.direction.z * RETICLE_DIST;
+  const o = ray.lookOrigin || ray.origin;
+  const d = ray.lookDirection || ray.direction;
+  const x = o.x + d.x * RETICLE_DIST;
+  const y = o.y + d.y * RETICLE_DIST;
+  const z = o.z + d.z * RETICLE_DIST;
   el.object3D.position.set(x, y, z);
-  el.object3D.lookAt(ray.origin.x, ray.origin.y, ray.origin.z);
+  el.object3D.lookAt(o.x, o.y, o.z);
 }
 
 export function setFighterCrosshairVisible(on) {
@@ -229,24 +275,62 @@ function entityPickRadius(ent) {
   return s ? Math.max(s.width, s.depth) * 0.5 : 3;
 }
 
-/** Aim locked to chassis yaw — turning the fighter aims; HMD does not. */
+/**
+ * Crosshair ray = from the render camera (screen center).
+ * Projectile still spawns at the gun muzzle, aimed at the point under the crosshair
+ * (muzzle-parallel shots miss the sight picture — classic gun/camera offset bug).
+ */
 function vehicleAimRay() {
   const pose = Vehicle.getVehiclePose();
   const yaw = pose.yaw;
-  const fwdX = -Math.sin(yaw);
-  const fwdZ = -Math.cos(yaw);
-  const cosP = Math.cos(AIM_PITCH);
-  const sinP = Math.sin(AIM_PITCH);
-  const dirX = fwdX * cosP;
-  const dirY = -sinP;
-  const dirZ = fwdZ * cosP;
-  const len = Math.hypot(dirX, dirY, dirZ) || 1;
-  // Origin = GLB `gun barrel` tip (tracked under exterior pitch).
-  const origin = Vehicle.getMuzzleWorldPos();
+  const muzzle = Vehicle.getMuzzleWorldPos();
+  const THREE = window.THREE;
+  const cam = getRenderCamera();
+
+  let lookOrigin = { x: muzzle.x, y: muzzle.y, z: muzzle.z };
+  let lookDir = { x: -Math.sin(yaw), y: -AIM_PITCH_FALLBACK, z: -Math.cos(yaw) };
+  let pitch = AIM_PITCH_FALLBACK;
+
+  if (!isXrPresenting() && cam?.getWorldDirection && THREE?.Vector3) {
+    if (!_aimEye) _aimEye = new THREE.Vector3();
+    if (!_aimFwd) _aimFwd = new THREE.Vector3();
+    cam.updateWorldMatrix?.(true, false);
+    cam.getWorldPosition(_aimEye);
+    cam.getWorldDirection(_aimFwd);
+    const len = _aimFwd.length() || 1;
+    lookOrigin = { x: _aimEye.x, y: _aimEye.y, z: _aimEye.z };
+    lookDir = { x: _aimFwd.x / len, y: _aimFwd.y / len, z: _aimFwd.z / len };
+    pitch = Math.asin(Math.max(-1, Math.min(1, lookDir.y)));
+  } else {
+    pitch = getVrVirtualStickAimPitch();
+    const cosP = Math.cos(pitch);
+    const sinP = Math.sin(pitch);
+    const fwdX = -Math.sin(yaw);
+    const fwdZ = -Math.cos(yaw);
+    lookDir = { x: fwdX * cosP, y: sinP, z: fwdZ * cosP };
+    const len = Math.hypot(lookDir.x, lookDir.y, lookDir.z) || 1;
+    lookDir.x /= len;
+    lookDir.y /= len;
+    lookDir.z /= len;
+    // Eye ≈ seat/camera; fall back to muzzle if no cam.
+    if (cam?.getWorldPosition && THREE?.Vector3) {
+      if (!_aimEye) _aimEye = new THREE.Vector3();
+      cam.updateWorldMatrix?.(true, false);
+      cam.getWorldPosition(_aimEye);
+      lookOrigin = { x: _aimEye.x, y: _aimEye.y, z: _aimEye.z };
+    }
+  }
+
   return {
-    origin,
-    direction: { x: dirX / len, y: dirY / len, z: dirZ / len },
+    /** @deprecated use muzzle — kept so older call sites keep working */
+    origin: muzzle,
+    muzzle,
+    lookOrigin,
+    lookDirection: lookDir,
+    /** Muzzle → default far aim point (overwritten after hit tests). */
+    direction: lookDir,
     yaw,
+    pitch,
     pose,
   };
 }
@@ -360,13 +444,18 @@ function spawnFighterBolt(from, to, wpn, onHit) {
 
 function fireOnce(ray, hero) {
   const wpn = weapon;
-  const enemy = pickEnemyAlongRay(ray.origin, ray.direction, wpn.range, hero.team, hero.ownerId);
-  const ground = pickGroundAlongRay(ray.origin, ray.direction, wpn.range);
+  const lookO = ray.lookOrigin || ray.origin;
+  const lookD = ray.lookDirection || ray.direction;
+  const muzzle = ray.muzzle || ray.origin;
+
+  // Hit-test along the crosshair/camera ray (what you see), not the gun bore.
+  const enemy = pickEnemyAlongRay(lookO, lookD, wpn.range, hero.team, hero.ownerId);
+  const ground = pickGroundAlongRay(lookO, lookD, wpn.range);
 
   let end = {
-    x: ray.origin.x + ray.direction.x * wpn.range,
-    y: ray.origin.y + ray.direction.y * wpn.range,
-    z: ray.origin.z + ray.direction.z * wpn.range,
+    x: lookO.x + lookD.x * wpn.range,
+    y: lookO.y + lookD.y * wpn.range,
+    z: lookO.z + lookD.z * wpn.range,
   };
   let onHit = null;
 
@@ -402,17 +491,18 @@ function fireOnce(ray, hero) {
   }
 
   cooldown = wpn.cooldown;
-  spawnFighterBolt(ray.origin, end, wpn, onHit);
+  // Tracer leaves the barrel but converges on the crosshair aim point.
+  spawnFighterBolt(muzzle, end, wpn, onHit);
   try {
-    Audio.playShotSound(wpn.sound, ray.origin.x, ray.origin.z);
+    Audio.playShotSound(wpn.sound, muzzle.x, muzzle.z);
   } catch (_) { /* */ }
   try {
     Effects.spawnMuzzleFlash(
-      ray.origin.x,
-      ray.origin.y,
-      ray.origin.z,
-      end.x - ray.origin.x,
-      end.z - ray.origin.z
+      muzzle.x,
+      muzzle.y,
+      muzzle.z,
+      end.x - muzzle.x,
+      end.z - muzzle.z
     );
   } catch (_) { /* */ }
 }
@@ -431,7 +521,9 @@ export function stepFighterCombat(dt, opts = {}) {
   }
 
   const ray = vehicleAimRay();
-  updateWorldReticle(ray, true);
+  // World reticle is VR-only — on flatscreen it was a second, often-wrong, floating sight.
+  // PC uses the large screen-center HUD, which matches camera forward / shot direction.
+  updateWorldReticle(ray, isXrPresenting());
 
   const fireWanted = !!opts.fireWanted || !!window.__BATTLEVR2_FIGHTER_FIRE__;
   window.__BATTLEVR2_FIGHTER_FIRE__ = false;

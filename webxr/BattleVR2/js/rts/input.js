@@ -717,7 +717,11 @@ export function initInput(sceneEl) {
       vrRight.thumbY = ax.y;
     });
     // A and B buttons are on the right controller
-    rightHand.addEventListener('abuttondown', () => selectAllOfType());
+    rightHand.addEventListener('abuttondown', () => {
+      // Boarded fighter: A is grip-calibration dump (input-fp), not RTS select-all.
+      if (window.__BATTLEVR2_BOARDED__) return;
+      selectAllOfType();
+    });
     rightHand.addEventListener('bbuttondown', () => {
       if (UI.isRtsConfirmOpen && UI.isRtsConfirmOpen()) {
         UI.dismissRtsConfirm();

@@ -1,0 +1,44 @@
+{
+  "pass": false,
+  "report": {
+    "boarded": true,
+    "bodyVisible": true,
+    "attachLeft": true,
+    "attachRight": true,
+    "attachLeftKind": "lever",
+    "attachRightKind": "stick",
+    "joyHand": "right",
+    "steerVisMouseRight": -0.006560557925938216,
+    "steerVisKeyA": 0.10404121764972693,
+    "mouseRightTipsRight": false,
+    "keyATipsLeft": false,
+    "distRightToStick": 0.17277413089798338,
+    "distLeftToLever": 0.14107843711748408,
+    "stickW": {
+      "x": 193.91673884289722,
+      "y": -3.3257342081056107,
+      "z": 165.49151678654644
+    },
+    "leverW": {
+      "x": 193.72063378479433,
+      "y": -3.3379008661961143,
+      "z": 165.5139708127676
+    },
+    "rightHandW": {
+      "x": 193.9224845890118,
+      "y": -3.153057651102912,
+      "z": 165.49234947546444
+    },
+    "leftHandW": {
+      "x": 193.64497755942443,
+      "y": -3.2302058982826267,
+      "z": 165.56477489595395
+    },
+    "hasBones": true,
+    "modelLoaded": true,
+    "bodyAnchorY": -1.62,
+    "bodyAnchorOk": true,
+    "qRestOk": true
+  },
+  "errors": []
+}

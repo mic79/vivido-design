@@ -1107,6 +1107,8 @@ export const SOUND_EFFECTS = {
   captureTick: 'laser-45816.mp3',
   /** Soft HUD / touch tick — not production sonar (unitReady). */
   uiTick:      'blaster-shot-229313.mp3',
+  /** Fighter cockpit thruster loop — pitch/volume follow throttle. */
+  fighterThrusterLoop: 'thrusters_loopwav-14699.mp3',
 };
 
 // --- Unit Geometries (shape definitions for renderer) ---
