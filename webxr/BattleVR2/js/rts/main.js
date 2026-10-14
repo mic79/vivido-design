@@ -34,6 +34,8 @@ import {
   BOT_STRATEGY_ORDER,
   BOT_STRATEGY_1V1,
   BOT_STRATEGY_PRESETS,
+  getSkirmishMapId,
+  skirmishMapLabel,
 } from './config.js';
 import * as Bot from './bot.js';
 import { applyMoonBattlefieldVisuals, rebuildMoonBattlefield, clearStoryBlockingHills, ensureFocusCullPipeline, layoutLargeSkirmishOreSites, snapMatchSpawnToFlat, snapCrystalNearSpawn } from './moon-environment.js';
@@ -114,6 +116,12 @@ if (!globalThis.__BATTLEVR2__) {
   });
 }
 
+/**
+ * Boot must finish (incl. lobby showcase) before callers set `__BATTLEVR2_BOOT__`.
+ * Previously this returned immediately after `setTimeout(500)`, so benches could
+ * `startGame` while boot was still loading — Canyon's fast prepare then lost the
+ * race and the delayed lobby settlement landed on the live match (+draws/FPS lie).
+ */
 export function initializeGame(sceneEl) {
   console.log('🎮 RTSVR6 Initializing...');
   Perf.initPerfFromUrl();
@@ -149,82 +157,99 @@ export function initializeGame(sceneEl) {
   State.initResourceFields();
   Fog.initFog();
 
-  setTimeout(async () => {
-    State.gameSession.sceneContentReady = false;
-    UI.setBootLoadingMessage('Loading sky & lighting…');
-    primeSceneRevealBlack(sceneEl);
-    if (Perf.shouldLoadCubemap()) {
-      await applyHdrSkyEnvironment(sceneEl);
-    } else {
-      console.log('[perf] nocubemap: skipping HDR sky / env map');
-    }
-    UI.setBootLoadingMessage('Building terrain…');
-    await applyMoonBattlefieldVisuals(sceneEl);
-    primeSceneRevealBlack(sceneEl);
+  return new Promise((resolve, reject) => {
+    setTimeout(async () => {
+      try {
+        State.gameSession.sceneContentReady = false;
+        UI.setBootLoadingMessage('Loading sky & lighting…');
+        primeSceneRevealBlack(sceneEl);
+        if (Perf.shouldLoadCubemap()) {
+          await applyHdrSkyEnvironment(sceneEl);
+        } else {
+          console.log('[perf] nocubemap: skipping HDR sky / env map');
+        }
+        UI.setBootLoadingMessage('Building terrain…');
+        await applyMoonBattlefieldVisuals(sceneEl);
+        primeSceneRevealBlack(sceneEl);
 
-    UI.setBootLoadingMessage('Initializing renderer…');
-    await Renderer.initRenderer(sceneEl);
-    Effects.initEffects(sceneEl);
-    Pathfinding.initPathfinding();
+        UI.setBootLoadingMessage('Initializing renderer…');
+        await Renderer.initRenderer(sceneEl);
+        Effects.initEffects(sceneEl);
+        Pathfinding.initPathfinding();
 
-    if (typeof window !== 'undefined') {
-      if (window.RTS_NAV_DEBUG === true) State.gameSession.navDebug = true;
-      else {
-        try {
-          const sp = new URLSearchParams(window.location.search || '');
-          if (sp.get('navDebug') === '1' || sp.get('navDebug') === 'true') State.gameSession.navDebug = true;
-          if (sp.get('pathDebug') === '1' || sp.get('pathDebug') === 'true') window.RTS_PATH_DEBUG = true;
-        } catch (_) {}
+        if (typeof window !== 'undefined') {
+          if (window.RTS_NAV_DEBUG === true) State.gameSession.navDebug = true;
+          else {
+            try {
+              const sp = new URLSearchParams(window.location.search || '');
+              if (sp.get('navDebug') === '1' || sp.get('navDebug') === 'true') State.gameSession.navDebug = true;
+              if (sp.get('pathDebug') === '1' || sp.get('pathDebug') === 'true') window.RTS_PATH_DEBUG = true;
+            } catch (_) {}
+          }
+          if (State.gameSession.navDebug) window.RTS_PATH_DEBUG = true;
+        }
+        NavDebug.initNavDebugOverlay(sceneEl);
+        NavDebug.syncNavDebugOverlayFromState();
+
+        Input.initInput(sceneEl);
+        // Lobby / pre-match only — never after match spawn (race with fast Canyon prepare).
+        if (!State.gameSession.gameStarted && !State.gameSession.matchPreparing) {
+          const rig = Input.getCameraState();
+          const lobbyAheadM = 50;
+          const hx = -Math.sin(rig.rotY) * lobbyAheadM;
+          const hz = -Math.cos(rig.rotY) * lobbyAheadM;
+          const hqPos = clampWorldToPlayableDisk(hx, hz, 14);
+          Buildings.createBuilding('hq', 0, hqPos.x, hqPos.z, {});
+          placeLobbyLunarSettlementShowcase(hqPos);
+          Input.beginLobbyIntroOrbitAroundHq(hqPos.x, hqPos.z);
+        } else {
+          console.warn('[RTSVR6] skip lobby showcase — match already started/preparing');
+        }
+        Pathfinding.rebuildNavMesh();
+        Network.initNetwork();
+
+        UI.setCallbacks(onStartGame, onHostGame, onJoinGame);
+        UI.setEndMatchCallback(endMatchToMenu);
+        Loop.startLoop(sceneEl);
+
+        Renderer.warmRendererPrograms(sceneEl);
+        UI.setBootLoadingMessage('Warming up GPU…');
+        // GPU + scene graph settle (terrain maps, HQ GLB, first instancing tick) before lifting the black hold.
+        await new Promise((r) =>
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => requestAnimationFrame(r))
+          )
+        );
+
+        UI.setBootLoadingMessage('Opening view…');
+        await runSceneRevealFromBlack(sceneEl);
+
+        State.gameSession.sceneContentReady = true;
+        UI.updateMenuVisibility();
+        UI.hideBootLoadingScreen();
+
+        if (typeof window !== 'undefined') {
+          window.__rtsReady = true;
+        }
+        console.log('✅ RTSVR6 Ready');
+        resolve();
+      } catch (err) {
+        console.error('[RTSVR6] boot failed', err);
+        reject(err);
       }
-      if (State.gameSession.navDebug) window.RTS_PATH_DEBUG = true;
-    }
-    NavDebug.initNavDebugOverlay(sceneEl);
-    NavDebug.syncNavDebugOverlayFromState();
-
-    Input.initInput(sceneEl);
-    // Lobby / pre-match: one HQ ~50 m ahead of default camera yaw (VR rig forward = −sin(rotY), −cos(rotY) on XZ).
-    const rig = Input.getCameraState();
-    const lobbyAheadM = 50;
-    const hx = -Math.sin(rig.rotY) * lobbyAheadM;
-    const hz = -Math.cos(rig.rotY) * lobbyAheadM;
-    const hqPos = clampWorldToPlayableDisk(hx, hz, 14);
-    Buildings.createBuilding('hq', 0, hqPos.x, hqPos.z, {});
-    placeLobbyLunarSettlementShowcase(hqPos);
-    Input.beginLobbyIntroOrbitAroundHq(hqPos.x, hqPos.z);
-    Pathfinding.rebuildNavMesh();
-    Network.initNetwork();
-
-    UI.setCallbacks(onStartGame, onHostGame, onJoinGame);
-    Loop.startLoop(sceneEl);
-
-    Renderer.warmRendererPrograms(sceneEl);
-    UI.setBootLoadingMessage('Warming up GPU…');
-    // GPU + scene graph settle (terrain maps, HQ GLB, first instancing tick) before lifting the black hold.
-    await new Promise((r) =>
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => requestAnimationFrame(r))
-      )
-    );
-
-    UI.setBootLoadingMessage('Opening view…');
-    await runSceneRevealFromBlack(sceneEl);
-
-    State.gameSession.sceneContentReady = true;
-    UI.updateMenuVisibility();
-    UI.hideBootLoadingScreen();
-
-    if (typeof window !== 'undefined') {
-      window.__rtsReady = true;
-    }
-    console.log('✅ RTSVR6 Ready');
-  }, 500);
+    }, 500);
+  });
 }
 
 async function prepareMapForMode(mode, sceneEl, prevProfile) {
   const wantStory = mode === 'story';
 
-  // Always rebuild: Story↔skirmish profile changes, and lobby crater → match Hera.
-  UI.showStatus(wantStory ? 'Generating Story battlefield…' : 'Loading skirmish map…');
+  // Always rebuild: Story↔skirmish profile changes, and lobby crater → match Hera/Canyon.
+  const skirmishLabel =
+    getSkirmishMapId() === 'canyon'
+      ? 'Loading Canyon map…'
+      : `Loading ${skirmishMapLabel()} map…`;
+  UI.showStatus(wantStory ? 'Generating Story battlefield…' : skirmishLabel);
   await rebuildMoonBattlefield(sceneEl);
   // Force walkability from the terrain just loaded (Hera slopes ≠ crater ridges).
   Pathfinding.invalidateStaticTerrainMask();
@@ -571,4 +596,45 @@ export function onHostGame() {
 
 export function onJoinGame() {
   Network.joinGame();
+}
+
+/**
+ * Tear down the active match and return to the mode / map picker.
+ * Host-only in multiplayer (clients follow via `game-end`).
+ */
+export function endMatchToMenu() {
+  if (State.gameSession.matchPreparing) {
+    UI.showStatus('Still preparing the battlefield — please wait…');
+    return;
+  }
+  if (State.gameSession.isMultiplayer && !State.gameSession.isHost) {
+    UI.showStatus('Only the host can end the match from this device.');
+    return;
+  }
+  if (!State.gameSession.gameStarted && !State.gameSession.gameOver) {
+    State.gameSession.menuOpen = true;
+    UI.updateMenuVisibility();
+    return;
+  }
+
+  const wasMpHost = State.gameSession.isMultiplayer && State.gameSession.isHost;
+  State.resetState();
+  State.gameSession.menuOpen = true;
+  UI.clearVictoryHud();
+  UI.hideBuildMenu();
+  UI.hideBuildingPanel();
+  UI.hideMobileHqDeployPanel();
+  UI.setMinimapVisible(false);
+  Renderer.resetMatchViewState();
+  Pathfinding.rebuildNavMeshImmediate();
+  UI.updateMenuVisibility();
+  UI.showStatus('Returned to main menu.');
+
+  if (wasMpHost) {
+    try {
+      Network.broadcastData({ type: 'game-end' });
+    } catch (_) {
+      /* */
+    }
+  }
 }

@@ -151,6 +151,39 @@ export function skirmishSceneryMode() {
   return 'B0';
 }
 
+/** @typedef {'hera'|'canyon'} SkirmishMapId */
+/** Menu + `?map=canyon` / `#map=canyon` — DriveVR6 CanyonBare as skirmish ground. */
+let _skirmishMapId = /** @type {SkirmishMapId|null} */ (null);
+
+function skirmishMapIdFromUrl() {
+  const q = searchQuery() + (typeof location !== 'undefined' ? location.hash || '' : '');
+  if (/(?:[?&#]map=canyon\b)|(?:[?&#]canyon=1\b)/i.test(q)) return 'canyon';
+  if (/(?:[?&#]map=hera\b)|(?:[?&#]map=mesa\b)/i.test(q)) return 'hera';
+  return 'hera';
+}
+
+export function getSkirmishMapId() {
+  if (_skirmishMapId) return _skirmishMapId;
+  return skirmishMapIdFromUrl();
+}
+
+/** @param {SkirmishMapId} [id] */
+export function setSkirmishMapId(id) {
+  if (id === 'canyon' || id === 'hera') _skirmishMapId = id;
+  else _skirmishMapId = null;
+  return getSkirmishMapId();
+}
+
+export function cycleSkirmishMapId() {
+  const next = getSkirmishMapId() === 'canyon' ? 'hera' : 'canyon';
+  _skirmishMapId = next;
+  return next;
+}
+
+export function skirmishMapLabel(id = getSkirmishMapId()) {
+  return id === 'canyon' ? 'Canyon' : 'Hera';
+}
+
 /** Sci-fi kit GLB as full terrain (`?kit=1`, or rocks-file A/B / Quest leanrocks). */
 export function wantKitTerrain() {
   const q = searchQuery() + (typeof location !== 'undefined' ? location.hash || '' : '');

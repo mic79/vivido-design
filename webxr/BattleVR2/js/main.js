@@ -24,7 +24,7 @@ import * as BotBody from './bot-body-box3d.js';
 import * as Zerog from './zerog-loco.js';
 import { FLOOR_BAND_PLAYER, FLOOR_BAND_VEHICLE } from './battle-phys.js';
 
-const VERSION = '0.1.91';
+const VERSION = '0.1.96';
 
 async function afterMatchStart() {
   Bridge.setTerrainSampler((x, z) => sampleMoonTerrainWorldY(x, z));

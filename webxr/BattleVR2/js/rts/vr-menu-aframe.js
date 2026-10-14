@@ -28,6 +28,8 @@
       else if (action === 'shadows' && window._toggleDynamicShadows) window._toggleDynamicShadows();
       else if (action === 'msaa' && window._toggleMsaa4x) window._toggleMsaa4x();
       else if (action === 'focusCull' && window._toggleFocusCull) window._toggleFocusCull();
+      else if (action === 'map' && window._cycleSkirmishMap) window._cycleSkirmishMap();
+      else if (action === 'endMatch' && window._endMatchToMenu) window._endMatchToMenu();
       else if (action === 'victoryGraphMetric' && window._cycleVictoryGraphMetric) window._cycleVictoryGraphMetric();
       else if (action === 'board' && typeof window._battleVr2Board === 'function') window._battleVr2Board();
     },

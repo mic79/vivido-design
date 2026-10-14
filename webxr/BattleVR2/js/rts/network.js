@@ -800,6 +800,28 @@ function handleHostData(data) {
       break;
     }
 
+    case 'game-end':
+      State.resetState();
+      State.gameSession.menuOpen = true;
+      import('./ui.js')
+        .then((m) => {
+          if (typeof m.clearVictoryHud === 'function') m.clearVictoryHud();
+          if (typeof m.hideBuildMenu === 'function') m.hideBuildMenu();
+          if (typeof m.hideBuildingPanel === 'function') m.hideBuildingPanel();
+          if (typeof m.hideMobileHqDeployPanel === 'function') m.hideMobileHqDeployPanel();
+          if (typeof m.setMinimapVisible === 'function') m.setMinimapVisible(false);
+          m.updateMenuVisibility();
+          if (typeof m.showStatus === 'function') m.showStatus('Host ended the match — back at menu.');
+        })
+        .catch(() => {});
+      import('./renderer.js')
+        .then((m) => {
+          if (typeof m.resetMatchViewState === 'function') m.resetMatchViewState();
+        })
+        .catch(() => {});
+      Pathfinding.rebuildNavMeshImmediate();
+      break;
+
     case 'game-start':
       lastClientSnapshotSeq = -1;
       lastClientPauseSigFromSnap = '';

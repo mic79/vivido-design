@@ -11,7 +11,11 @@ import {
   clampWorldToCameraNavDisk,
   NET_HOST_PAUSE_AUTO_RESUME_MS,
   MINIMAP_REDRAW_HZ,
+  cycleSkirmishMapId,
+  getSkirmishMapId,
+  skirmishMapLabel,
 } from './config.js';
+import { clearBakedMoonGlbCache } from './baked-moon.js';
 import * as State from './state.js';
 import * as Buildings from './buildings.js';
 import * as Units from './units.js';
@@ -729,7 +733,7 @@ function getHudControlsHelpHtml() {
       <p style="margin:10px 0 0 0;opacity:0.85;font-size:11px;">Zoom in (pinch) for easier taps on single units; zoomed out is best for overview and orders.</p>`;
   }
   return `WASD: Pan · Q/E: Rotate · Scroll: Zoom · Left: Select · Left on open ground: Deselect · Right: Move / attack / follow (engineers repair nearby friendly vehicles; click / right-click a friendly building to repair) · Right-click follow a vehicle to stay with it<br>
-    Selected turret or static artillery: <b>right-click an enemy</b> to assign that target (right-click ground returns it to auto) · HQ click: Build (Solar → Refinery → Barracks → Factory / Turret / Artillery) · Power HUD ⚡ · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, draped on terrain height) · Esc: Menu · Shadows / MSAA 4x: menu / HUD toggles (MSAA reloads the page to recreate the GL context)<br>
+    Selected turret or static artillery: <b>right-click an enemy</b> to assign that target (right-click ground returns it to auto) · HQ click: Build (Solar → Refinery → Barracks → Factory / Turret / Artillery) · Power HUD ⚡ · Other structures: Train / <b>Sell</b> (refund build cost) · Mobile HQ selected: Deploy panel · <b>Sell selected (WF range)…</b> sells only chosen vehicles <b>in range</b> of your <b>War Factory</b> (refund unit cost) · Ctrl+S: Stop · 1–0: Squads · Space: Deselect · Tab: Map · <b>G</b>: terrain grid (off by default) · <b>N</b>: nav map (blue = walkable, draped on terrain height) · Esc: Menu (End Match / change Map) · Shadows / MSAA 4x: menu / HUD toggles (MSAA reloads the page to recreate the GL context)<br>
     <span style="opacity:0.85">VR: Laser + trigger on menu & map · grip+trigger on one hand for follow · X menu · Y map · B deselect · A select all · grips pan · Shadows and MSAA 4x on wrist menu and match HUD</span>`;
 }
 
@@ -1034,6 +1038,8 @@ function createMenu() {
     <button id="btn-start-1v1" style="${btnStyle('#0a0')}" onclick="window._startGame('1v1')">⚔️ 1v1 vs Bot</button>
     <button id="btn-start-2v2" style="${btnStyle('#06a')}" onclick="window._startGame('2v2')">🤝 2v2 Co-op vs Bots</button>
     <button id="btn-start-ffa" style="${btnStyle('#a60')}" onclick="window._startGame('ffa')">👑 FFA (4 Players)</button>
+    <button type="button" id="btn-skirmish-map" style="${btnStyle('#345')};margin-top:8px;" onclick="window._cycleSkirmishMap()">Map: ${skirmishMapLabel()}</button>
+    <button type="button" id="btn-end-match" style="${btnStyle('#622')};margin-top:8px;display:none;" onclick="window._endMatchToMenu()">End Match</button>
     <div id="story-history-panel" class="story-history-panel" aria-live="polite"></div>
     <hr style="border-color: #333; margin: 15px 0;">
     <p style="color:#aaa;font-size:12px;margin:0;">Multiplayer — same lobby # as host (BattleVR-style)</p>
@@ -1065,11 +1071,127 @@ function createMenu() {
   window._replayStory = replayStory;
   window._lobbyDelta = d => Network.adjustLobby(d);
   window._cycleVictoryGraphMetric = cycleVictoryGraphMetric;
+  window._cycleSkirmishMap = cycleSkirmishMap;
+  window._endMatchToMenu = requestEndMatchToMenu;
   Network.refreshLobbyDisplay();
   refreshStoryHistoryPanel();
   syncDynamicShadowToggleUi();
   syncMsaa4xToggleUi();
   syncFocusCullToggleUi();
+  syncSkirmishMapToggleUi();
+  syncEndMatchButtonUi();
+}
+
+export function syncSkirmishMapToggleUi() {
+  const label = `Map: ${skirmishMapLabel()}`;
+  const desk = document.getElementById('btn-skirmish-map');
+  if (desk) desk.textContent = label;
+  const vrLabel = document.getElementById('vr-btn-map-label');
+  if (vrLabel) vrLabel.setAttribute('value', label);
+}
+
+export function syncEndMatchButtonUi() {
+  const inMatch = !!State.gameSession.gameStarted;
+  const desk = document.getElementById('btn-end-match');
+  if (desk) desk.style.display = inMatch ? 'block' : 'none';
+  const vrBtn = document.getElementById('vr-btn-end-match');
+  if (vrBtn) {
+    vrBtn.setAttribute('visible', inMatch ? 'true' : 'false');
+    if (inMatch && State.gameSession.menuOpen) vrBtn.classList.add('clickable');
+    else vrBtn.classList.remove('clickable');
+  }
+}
+
+export function clearVictoryHud() {
+  const victoryEl = document.getElementById('hud-victory');
+  if (victoryEl) {
+    victoryEl.style.display = 'none';
+    victoryEl.innerHTML = '';
+    delete victoryEl.dataset.rtsVictoryPopulated;
+  }
+  const vrRoot = document.getElementById('vr-hud-victory-root');
+  if (vrRoot) vrRoot.setAttribute('visible', 'false');
+  vrVictoryGraphDrawnSig = '';
+  vrVictoryGraphPlayers = null;
+}
+
+let onEndMatchCallback = null;
+
+export function setEndMatchCallback(fn) {
+  onEndMatchCallback = typeof fn === 'function' ? fn : null;
+}
+
+function requestEndMatchToMenu() {
+  if (State.gameSession.matchPreparing) {
+    showStatus('Still preparing the battlefield — please wait…');
+    return;
+  }
+  if (State.gameSession.isMultiplayer && !State.gameSession.isHost) {
+    showStatus('Only the host can end the match from this device.');
+    return;
+  }
+  if (!State.gameSession.gameStarted) {
+    State.gameSession.menuOpen = true;
+    updateMenuVisibility();
+    return;
+  }
+  const run = () => {
+    if (onEndMatchCallback) onEndMatchCallback();
+  };
+  // Already at victory — no need to confirm again.
+  if (State.gameSession.gameOver) {
+    run();
+    return;
+  }
+  showRtsConfirmDialog({
+    title: 'End match?',
+    message: 'Return to the main menu? This match will end and progress will be lost.',
+    confirmLabel: 'End match',
+    cancelLabel: 'Keep playing',
+    onConfirm: run,
+  });
+}
+
+function applySkirmishMapCycleAndMaybeRestart() {
+  const prevMode = State.gameSession.matchMode;
+  const wasInMatch = !!State.gameSession.gameStarted;
+  const id = cycleSkirmishMapId();
+  clearBakedMoonGlbCache();
+  syncSkirmishMapToggleUi();
+  if (!wasInMatch) {
+    showStatus(
+      id === 'canyon'
+        ? 'Map: Canyon — loads on next skirmish start'
+        : 'Map: Hera — loads on next skirmish start'
+    );
+    return;
+  }
+  const restartMode = prevMode && prevMode !== 'story' ? prevMode : '1v1';
+  showStatus(`Map: ${skirmishMapLabel(id)} — starting new ${restartMode}…`);
+  startGame(restartMode);
+}
+
+function cycleSkirmishMap() {
+  if (State.gameSession.matchPreparing) {
+    showStatus('Still preparing the battlefield — please wait…');
+    return;
+  }
+  if (State.gameSession.isMultiplayer && !State.gameSession.isHost) {
+    showStatus('Only the host can change the map.');
+    return;
+  }
+  const nextLabel = getSkirmishMapId() === 'canyon' ? 'Hera' : 'Canyon';
+  if (State.gameSession.gameStarted) {
+    showRtsConfirmDialog({
+      title: 'Change map?',
+      message: `Switch to <b>${nextLabel}</b>? This ends the current match and starts a new one on that map.`,
+      confirmLabel: `Play ${nextLabel}`,
+      cancelLabel: 'Cancel',
+      onConfirm: () => applySkirmishMapCycleAndMaybeRestart(),
+    });
+    return;
+  }
+  applySkirmishMapCycleAndMaybeRestart();
 }
 
 function shadowToggleLabel(on) {
@@ -1883,10 +2005,11 @@ function updateHUD() {
         </table>
         ${buildMatchStatsGraphSection(victoryStatsPlayers)}
         ${storyFooter}
-        <div style="margin-top: 16px;">
-          <button type="button" id="btn-victory-save-trace" style="padding:6px 12px;background:#163;color:#cfc;border:1px solid #3a6;border-radius:4px;cursor:pointer;font-family:Consolas,monospace;">Save match trace</button>
+        <div style="margin-top: 16px; display:flex; flex-wrap:wrap; gap:10px; justify-content:center;">
+          <button type="button" id="btn-victory-main-menu" style="padding:8px 16px;background:#622;color:#fcc;border:1px solid #844;border-radius:4px;cursor:pointer;font-family:Consolas,monospace;">Main Menu</button>
+          <button type="button" id="btn-victory-save-trace" style="padding:8px 16px;background:#163;color:#cfc;border:1px solid #3a6;border-radius:4px;cursor:pointer;font-family:Consolas,monospace;">Save match trace</button>
         </div>
-        <div style="margin-top: 25px; font-size: 14px; color: #888;">Press <span style="color:#eee">Esc</span> to return to command center</div>
+        <div style="margin-top: 18px; font-size: 14px; color: #888;">Or press <span style="color:#eee">Esc</span> for the command menu</div>
       `;
 
       victoryEl.innerHTML = statsHtml;
@@ -1903,6 +2026,14 @@ function updateHUD() {
           e.preventDefault();
           e.stopPropagation();
           replayStory(storySeed);
+        });
+      }
+      const menuBtn = document.getElementById('btn-victory-main-menu');
+      if (menuBtn) {
+        menuBtn.addEventListener('click', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          requestEndMatchToMenu();
         });
       }
       const traceBtn = document.getElementById('btn-victory-save-trace');
@@ -2395,13 +2526,16 @@ export function updateMenuVisibility() {
     }
     const mpClient = State.gameSession.isMultiplayer && !State.gameSession.isHost;
     const busy = !!State.gameSession.matchPreparing;
-    ['btn-start-story', 'btn-start-1v1', 'btn-start-2v2', 'btn-start-ffa'].forEach(id => {
+    ['btn-start-story', 'btn-start-1v1', 'btn-start-2v2', 'btn-start-ffa', 'btn-skirmish-map', 'btn-end-match'].forEach(id => {
       const btn = menuEl.querySelector(`#${id}`);
       if (!btn) return;
-      btn.disabled = !!mpClient || busy;
-      btn.style.opacity = mpClient || busy ? '0.35' : '1';
-      btn.style.pointerEvents = mpClient || busy ? 'none' : 'auto';
+      const endOnlyHost = id === 'btn-end-match' && mpClient;
+      btn.disabled = !!mpClient || busy || endOnlyHost;
+      btn.style.opacity = mpClient || busy || endOnlyHost ? '0.35' : '1';
+      btn.style.pointerEvents = mpClient || busy || endOnlyHost ? 'none' : 'auto';
     });
+    syncSkirmishMapToggleUi();
+    syncEndMatchButtonUi();
     ['btn-host', 'btn-join'].forEach(id => {
       const btn = menuEl.querySelector(`#${id}`);
       if (!btn) return;
@@ -2431,6 +2565,7 @@ export function updateMenuVisibility() {
   }
   /** Same predicate as `#vr-game-menu` visibility — used by `rts-vr-menu-btn` (attribute alone can lag XR). */
   globalThis.__rtsVrShowGameMenu = !!showVrGameMenu;
+  syncEndMatchButtonUi();
   syncVrMatchPreparePanel();
   syncVrGameHudVisibility();
   refreshHandRaycasters();

@@ -6,7 +6,7 @@
  * grid, and the planar bake is still too flat vs Lambert. `?livepbr=1` /
  * `?nobake=1` uses the procedural plate.
  */
-import { MAP_TERRAIN_STYLE, isDesktopPcvrHost } from './config.js';
+import { MAP_TERRAIN_STYLE, isDesktopPcvrHost, getSkirmishMapId } from './config.js';
 import { ensureThreeGltfLoaders, getSharedKtx2Loader } from './three-gltf-umd.js';
 import { installFogVisualOnMaterial } from './fog-visual.js';
 import {
@@ -30,6 +30,11 @@ export const BAKED_SKIRMISH_1V1_GLB = 'assets/terrain/terrain-skirmish-1v1.glb';
 /** Desktop PCVR denser heightfield (~10× tris vs Quest plate). Falls back if missing. */
 export const BAKED_SKIRMISH_1V1_PCVR_GLB = 'assets/terrain/terrain-skirmish-1v1-pcvr.glb';
 export const BAKED_SKIRMISH_MATCH_GLB = BAKED_SKIRMISH_1V1_GLB;
+/**
+ * DriveVR6 CanyonBare (Terrain_ → Moon_0). Project-local copy of
+ * `canyon_bare_hera.glb` — menu Map: Canyon / `?map=canyon`.
+ */
+export const BAKED_SKIRMISH_CANYON_GLB = 'assets/terrain/terrain-canyon.glb';
 /** @deprecated use BAKED_SKIRMISH_MOON_GLB or BAKED_SKIRMISH_1V1_GLB */
 export const BAKED_SKIRMISH_GLB = BAKED_SKIRMISH_1V1_GLB;
 const MIN_BAKE_BYTES = 800000;
@@ -160,6 +165,8 @@ function isQuestStandaloneUa() {
 
 export function preferredSkirmishBakeUrl(mode = 'match') {
   if (mode === 'intro' || !wantCombined1v1()) return BAKED_SKIRMISH_INTRO_GLB;
+  // Canyon is match-only (lobby stays crater). Menu Map / ?map=canyon.
+  if (getSkirmishMapId() === 'canyon') return BAKED_SKIRMISH_CANYON_GLB;
   try {
     const q = `${typeof location !== 'undefined' ? location.search || '' : ''}${
       typeof location !== 'undefined' ? location.hash || '' : ''
@@ -189,8 +196,12 @@ export function clearBakedMoonGlbCache() {
 async function fetchBakeBuffer(preferUrl) {
   const urls = [];
   if (preferUrl) urls.push(preferUrl);
-  // PCVR prefer may 404 — always allow standard Hera, then crater moon.
-  if (!urls.includes(BAKED_SKIRMISH_1V1_GLB)) urls.push(BAKED_SKIRMISH_1V1_GLB);
+  const canyonPrefer = preferUrl === BAKED_SKIRMISH_CANYON_GLB;
+  // Canyon: do not silently fall back to Hera (wrong map). Only crater as last resort.
+  if (!canyonPrefer) {
+    // PCVR prefer may 404 — always allow standard Hera, then crater moon.
+    if (!urls.includes(BAKED_SKIRMISH_1V1_GLB)) urls.push(BAKED_SKIRMISH_1V1_GLB);
+  }
   if (!urls.includes(BAKED_SKIRMISH_MOON_GLB)) urls.push(BAKED_SKIRMISH_MOON_GLB);
   for (const url of urls) {
     let res;
@@ -303,6 +314,11 @@ export async function tryLoadBakedSkirmishMoon(opts = {}) {
   const moonMeshes = [];
   const propMeshes = [];
   const mesaHfEarly = !!(json.extras && json.extras.rtsMesaHeightfield);
+  const canyonEarly =
+    !!(json.extras && json.extras.rtsCanyonMap) ||
+    /terrain-canyon\.glb/i.test(glbBufUrl || '') ||
+    getSkirmishMapId() === 'canyon';
+  if (canyonEarly) keep.userData.rtsCanyonMap = true;
   gltf.scene.updateMatrixWorld(true);
   gltf.scene.traverse((obj) => {
     if (!obj.isMesh && !obj.isSkinnedMesh) return;
@@ -311,8 +327,14 @@ export async function tryLoadBakedSkirmishMoon(opts = {}) {
       moonMeshes.push(obj);
       return;
     }
+    // CanyonBare source names Terrain_* — treat as Moon_0 when loading canyon bake.
+    if (canyonEarly && /^Terrain_/i.test(n)) {
+      obj.name = 'Moon_0';
+      moonMeshes.push(obj);
+      return;
+    }
     // Heightfield / Hera bake: ignore leftover UE kit (CircularPlatform, Pump, etc.).
-    if (mesaHfEarly) {
+    if (mesaHfEarly || canyonEarly) {
       obj.visible = false;
       return;
     }
@@ -524,6 +546,9 @@ export async function tryLoadBakedSkirmishMoon(opts = {}) {
   }
   keep.updateMatrixWorld(true);
   if (mesaHf) keep.userData.rtsMesaHeightfield = json.extras.rtsMesaHeightfield;
+  if (canyonEarly || (json.extras && json.extras.rtsCanyonMap)) {
+    keep.userData.rtsCanyonMap = true;
+  }
 
   console.log('[RTSVR6] baked moon ready', {
     bytes: buf.byteLength,
@@ -535,6 +560,7 @@ export async function tryLoadBakedSkirmishMoon(opts = {}) {
     planarLm: usePlanar,
     rockShadows,
     mesaHeightfield: mesaHf,
+    canyon: !!keep.userData.rtsCanyonMap,
   });
   return keep;
 }

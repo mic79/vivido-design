@@ -1,0 +1,163 @@
+{
+  "version": 3,
+  "uvSpace": "terrain_0_1",
+  "splatI": "splat_i.png",
+  "splatW": "splat_w.png",
+  "colorAtlas": "color_atlas.jpg",
+  "normalAtlas": "normal_atlas.png",
+  "atlasCols": 3,
+  "atlasRows": 3,
+  "atlasCell": 2048,
+  "cellNames": [
+    "desert_generic_soil_01_c + desert_generic_soil_01_nr",
+    "desert_rocky_soil_03_c + spruce_ground_rocky_01_nr",
+    "desert_dry_sand_01_c + desert_dry_sand_01_nr",
+    "rocky_ground_02_c + rocky_ground_02_nr",
+    "rocky_ground_04_c + rocky_ground_04_nr",
+    "rocky_ground_02_c + terrain_rocky_ground_02_nr",
+    "",
+    "",
+    ""
+  ],
+  "layers": [
+    {
+      "name": "Chicken sand",
+      "tile": 150.0,
+      "atlasCell": 0,
+      "dead": false
+    },
+    {
+      "name": "Chicken sand PTF rocks (USE FAR FROM ROUTE)",
+      "tile": 150.0,
+      "atlasCell": 0,
+      "dead": false
+    },
+    {
+      "name": "Chicken sand PTF grass",
+      "tile": 150.0,
+      "atlasCell": 0,
+      "dead": false
+    },
+    {
+      "name": "-EMPTY-",
+      "tile": 150.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "Coarse sand",
+      "tile": 200.0,
+      "atlasCell": 1,
+      "dead": false
+    },
+    {
+      "name": "Coarse sand PTF  rocks",
+      "tile": 200.0,
+      "atlasCell": 1,
+      "dead": false
+    },
+    {
+      "name": "-EMPTY-",
+      "tile": 200.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "-EMPTY-",
+      "tile": 200.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "Hard rock ground",
+      "tile": 100.0,
+      "atlasCell": 2,
+      "dead": false
+    },
+    {
+      "name": "-EMPTY-",
+      "tile": 100.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "-EMPTY-",
+      "tile": 100.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "-EMPTY-",
+      "tile": 100.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "Rocky sand 2",
+      "tile": 175.0,
+      "atlasCell": 3,
+      "dead": false
+    },
+    {
+      "name": "Rocky sand 2 PTF rocks  (USE FAR FROM ROUTE)",
+      "tile": 175.0,
+      "atlasCell": 3,
+      "dead": false
+    },
+    {
+      "name": "Rocky ground PTF rocks",
+      "tile": 150.0,
+      "atlasCell": 4,
+      "dead": false
+    },
+    {
+      "name": "Rocky ground",
+      "tile": 150.0,
+      "atlasCell": 4,
+      "dead": false
+    },
+    {
+      "name": "GRAY PROXY",
+      "tile": 1.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "-EMPTY-",
+      "tile": 150.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "Rocky sand 2",
+      "tile": 175.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "-EMPTY-",
+      "tile": 175.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "-EMPTY-",
+      "tile": 175.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "-EMPTY-",
+      "tile": 175.0,
+      "atlasCell": 0,
+      "dead": true
+    },
+    {
+      "name": "Rocky ground",
+      "tile": 200.0,
+      "atlasCell": 5,
+      "dead": false
+    }
+  ],
+  "note": "WF2 track10 terp splat \u2014 color+normal atlases at game tiles"
+}

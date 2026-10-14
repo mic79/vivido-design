@@ -6,14 +6,14 @@
   <title>BattleVR2 — FPS + RTS Hybrid</title>
   <meta name="description" content="First-person VR + RTS hybrid on Hera Planum. Built with A-Frame, Box3D, and PeerJS.">
   <!-- Bump content when shipping a new build (shown on wrist + desktop HUD for debugging). -->
-  <meta name="rts-version" content="0.1.91">
+  <meta name="rts-version" content="0.1.96">
 
 <script>
   (function () {
     var v = document.querySelector('meta[name="rts-version"]').getAttribute('content');
     var rts = [
       'main.js','renderer.js','fog.js','fog-visual.js','moon-environment.js','config.js','state.js','ui.js',
-      'pathfinding.js','baked-moon.js','skirmish-lanes.js','perf-profiler.js','input.js',
+      'pathfinding.js','baked-moon.js','canyon-herablend.js','skirmish-lanes.js','perf-profiler.js','input.js',
       'network.js','audio.js','bot.js','buildings.js','units.js','effects.js','resources.js',
       'spatial.js','loop.js','story-mode.js','story-kit-terrain.js','story-history.js',
       'sky-hdr-environment.js','scene-reveal.js','epicLightmaps.js','three-gltf-umd.js',
@@ -46,7 +46,7 @@
     import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
     window.BodyRiggedLoaders = { GLTFLoader, FBXLoader, ready: true };
   </script>
-  <script type="module" src="js/bootstrap.js?v=0.1.91"></script>
+  <script type="module" src="js/bootstrap.js?v=0.1.96"></script>
 
   <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -201,9 +201,9 @@
           </a-entity>
 
           <a-entity id="vr-game-menu" position="0 0 0" visible="false">
-            <a-plane class="no-raycast" width="0.72" height="0.82" color="#000810" material="opacity: 0.92; transparent: true" position="0 -0.04 -0.006"></a-plane>
+            <a-plane class="no-raycast" width="0.72" height="1.05" color="#000810" material="opacity: 0.92; transparent: true" position="0 -0.10 -0.006"></a-plane>
             <a-text class="no-raycast" value="BattleVR2" position="0 0.40 0" align="center" width="1.15" color="#00ff66"></a-text>
-            <a-text class="no-raycast" id="menu-status-vr" value="Laser+trigger menu Â· sticks walk after start" position="0 -0.445 0" align="center" width="0.72" color="#888888"></a-text>
+            <a-text class="no-raycast" id="menu-status-vr" value="Laser+trigger menu Â· sticks walk after start" position="0 -0.575 0" align="center" width="0.72" color="#888888"></a-text>
 
             <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: story" vr-button-hover="hoverColor: #2a7a5a" position="0 0.28 0"
                       geometry="primitive: plane; width: 0.52; height: 0.085"
@@ -225,23 +225,46 @@
                       material="color: #553300; transparent: true; opacity: 0.9; side: double">
               <a-text class="no-raycast" value="FFA (4P)" position="0 0 0.01" align="center" width="1.1" color="#ffffff"></a-text>
             </a-entity>
-            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: lobby_minus" vr-button-hover="hoverColor: #444444" position="-0.28 -0.04 0"
+            <a-entity
+              id="vr-btn-map"
+              class="clickable js-vr-menu-btn"
+              rts-vr-menu-btn="action: map"
+              vr-button-hover="hoverColor: #4a5a7a"
+              position="0 -0.03 0"
+              geometry="primitive: plane; width: 0.52; height: 0.07"
+              material="color: #223344; transparent: true; opacity: 0.95; side: double"
+            >
+              <a-text id="vr-btn-map-label" class="no-raycast" value="Map: Hera" position="0 0 0.01" align="center" width="1.05" color="#d8e8ff"></a-text>
+            </a-entity>
+            <a-entity
+              id="vr-btn-end-match"
+              class="js-vr-menu-btn"
+              rts-vr-menu-btn="action: endMatch"
+              vr-button-hover="hoverColor: #7a3a3a"
+              position="0 -0.105 0"
+              visible="false"
+              geometry="primitive: plane; width: 0.52; height: 0.065"
+              material="color: #442222; transparent: true; opacity: 0.95; side: double"
+            >
+              <a-text class="no-raycast" value="End Match" position="0 0 0.01" align="center" width="1.05" color="#ffcccc"></a-text>
+            </a-entity>
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: lobby_minus" vr-button-hover="hoverColor: #444444" position="-0.28 -0.19 0"
                       geometry="primitive: plane; width: 0.14; height: 0.07"
                       material="color: #222222; transparent: true; opacity: 0.95; side: double">
               <a-text class="no-raycast" value="âˆ’" position="0 0 0.01" align="center" width="1.4" color="#ffffff"></a-text>
             </a-entity>
-            <a-text class="no-raycast" id="menu-lobby-vr" position="0 -0.04 0" align="center" width="0.55" color="#cccccc" value="Lobby 1"></a-text>
-            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: lobby_plus" vr-button-hover="hoverColor: #444444" position="0.28 -0.04 0"
+            <a-text class="no-raycast" id="menu-lobby-vr" position="0 -0.19 0" align="center" width="0.55" color="#cccccc" value="Lobby 1"></a-text>
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: lobby_plus" vr-button-hover="hoverColor: #444444" position="0.28 -0.19 0"
                       geometry="primitive: plane; width: 0.14; height: 0.07"
                       material="color: #222222; transparent: true; opacity: 0.95; side: double">
               <a-text class="no-raycast" value="+" position="0 0 0.01" align="center" width="1.4" color="#ffffff"></a-text>
             </a-entity>
-            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: host" vr-button-hover="hoverColor: #2a2a8a" position="-0.24 -0.16 0"
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: host" vr-button-hover="hoverColor: #2a2a8a" position="-0.24 -0.30 0"
                       geometry="primitive: plane; width: 0.44; height: 0.085"
                       material="color: #000055; transparent: true; opacity: 0.9; side: double">
               <a-text class="no-raycast" value="Host" position="0 0 0.01" align="center" width="1.1" color="#ffffff"></a-text>
             </a-entity>
-            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: join" vr-button-hover="hoverColor: #8a2a2a" position="0.24 -0.16 0"
+            <a-entity class="clickable js-vr-menu-btn" rts-vr-menu-btn="action: join" vr-button-hover="hoverColor: #8a2a2a" position="0.24 -0.30 0"
                       geometry="primitive: plane; width: 0.44; height: 0.085"
                       material="color: #550000; transparent: true; opacity: 0.9; side: double">
               <a-text class="no-raycast" value="Join" position="0 0 0.01" align="center" width="1.1" color="#ffffff"></a-text>
@@ -251,7 +274,7 @@
               class="clickable"
               rts-vr-menu-btn="action: shadows"
               vr-button-hover="hoverColor: #3a5a4a"
-              position="-0.27 -0.275 0"
+              position="-0.27 -0.415 0"
               geometry="primitive: plane; width: 0.26; height: 0.07"
               material="color: #143328; transparent: true; opacity: 0.95; side: double"
             >
@@ -262,7 +285,7 @@
               class="clickable"
               rts-vr-menu-btn="action: msaa"
               vr-button-hover="hoverColor: #3a5a4a"
-              position="0.27 -0.275 0"
+              position="0.27 -0.415 0"
               geometry="primitive: plane; width: 0.26; height: 0.07"
               material="color: #2a1818; transparent: true; opacity: 0.95; side: double"
             >
@@ -273,13 +296,13 @@
               class="clickable"
               rts-vr-menu-btn="action: focusCull"
               vr-button-hover="hoverColor: #3a5a4a"
-              position="0 -0.355 0"
+              position="0 -0.495 0"
               geometry="primitive: plane; width: 0.52; height: 0.065"
               material="color: #2a1818; transparent: true; opacity: 0.95; side: double"
             >
               <a-text id="vr-btn-focus-cull-label" class="no-raycast" value="Focus cull: OFF" position="0 0 0.01" align="center" width="1.15" color="#ffccbb"></a-text>
             </a-entity>
-            <a-text class="no-raycast" value="X: close menu" position="0 -0.425 0" align="center" width="0.55" color="#666666"></a-text>
+            <a-text class="no-raycast" value="X: close menu" position="0 -0.555 0" align="center" width="0.55" color="#666666"></a-text>
           </a-entity>
 
           <a-entity id="vr-game-hud" position="0 0 0" visible="false">
@@ -609,7 +632,7 @@
   <div id="xr-dom-overlay"></div>
 
   <!-- Game Module — ?v= must match meta rts-version (module graph cache). -->
-  <script type="module" src="js/main.js?v=0.1.91"></script>
+  <script type="module" src="js/main.js?v=0.1.96"></script>
 
   <script>
     document.querySelector('a-scene').addEventListener('loaded', function () {

@@ -9,6 +9,7 @@
 
 import { MAP_PLAYABLE_RADIUS, MAP_SIZE, MAP_SIZE_STANDARD, MAP_TERRAIN_STYLE, MAP_NAV_PLANE_HALF_M, MAP_NAV_PLANE_CELL, MAP_CAMERA_NAV_AREA_SCALE, MAP_NAV_AREA_SCALE, MAP_SKIRMISH_NAV_AREA_SCALE, MAP_UNIT_NAV_RADIUS, MAP_UNIT_PLAYABLE_RADIUS, MATCH_HQ_SPAWN_MARGIN, MATCH_SPAWN_NEAR_CRYSTAL_OFFSET_M, SKIRMISH_CORNER_RESOURCE_POSITIONS, isStoryMapProfile, skirmishKitKind, forceSkirmishKitKind, leanRocksStoryLeanRequested, forceLeanRocksVisual, skirmishSceneryMode } from './config.js';
 import { bakedMoonAllowed, preferredSkirmishBakeUrl, tryLoadBakedSkirmishMoon, takeEmbeddedSkirmishProps, setBakedMoonRockShadowsEnabled, applyMesaHqTextures, ensureMesaWindDustOnRoot } from './baked-moon.js';
+import { applyCanyonHerablend } from './canyon-herablend.js';
 import { tryLoadStoryKit, tryLoadRocksKit, tryLoadOverviewKit, tryLoadOverviewGroundscape, tryLoadQuestRocksProps, rasterizeKitHeights, setupStoryKitDistanceLod, resetKitLodState, applyLeanRocksHideBuildings, hasStoryKitLodFor } from './story-kit-terrain.js';
 import * as State from './state.js';
 import * as FogVisual from './fog-visual.js';
@@ -1014,6 +1015,7 @@ async function finishBakedMoonLook(THREE, sceneEl, root, opts = {}) {
       : true;
   let cheap = false;
   let mesaHf = !!(root.userData && root.userData.rtsMesaHeightfield);
+  const canyonMap = !!(root.userData && root.userData.rtsCanyonMap);
   root.traverse((obj) => {
     if (!obj.isMesh) return;
     if (obj.material && obj.material.userData && obj.material.userData.cheapMoonLook) cheap = true;
@@ -1022,8 +1024,8 @@ async function finishBakedMoonLook(THREE, sceneEl, root, opts = {}) {
     obj.castShadow = false;
     if (obj.material && obj.material.userData) obj.material.userData.shadowRecv = recv;
   });
-  // Never overwrite slope-vertex-color mesa plates with tiled moon albedo.
-  if (!cheap && !mesaHf) {
+  // Never overwrite slope-vertex-color mesa plates / canyon embeds with tiled moon albedo.
+  if (!cheap && !mesaHf && !canyonMap) {
     const material = await createBattleMoonMaterial(THREE, sceneEl);
     if (material) {
       if (material.userData) material.userData.shadowRecv = recv;
@@ -1033,6 +1035,15 @@ async function finishBakedMoonLook(THREE, sceneEl, root, opts = {}) {
         obj.receiveShadow = recv;
         obj.castShadow = false;
       });
+    }
+  }
+  if (canyonMap) {
+    // FoW first, then herablend (chains onBeforeCompile so FoW stays).
+    try {
+      FogVisual.installFogVisualUnder(root);
+      await applyCanyonHerablend(root, THREE);
+    } catch (err) {
+      console.warn('[RTSVR6] canyon herablend failed', err);
     }
   }
   if (mesaHf) {
@@ -1050,10 +1061,14 @@ async function finishBakedMoonLook(THREE, sceneEl, root, opts = {}) {
       console.warn('[RTSVR6] mesa wind re-assert failed', err);
     }
   }
-  // Always re-rasterize Hera/mesa (and whenever skipHeight is false). Skipping height after
+  // Always re-rasterize Hera/mesa/canyon (and whenever skipHeight is false). Skipping height after
   // lobby crater → match Hera left the crater walkability mask in place.
   const mustHeight =
-    !opts.skipHeight || mesaHf || !centralTerrainHeightGrid || isMesaHeightfieldActive();
+    !opts.skipHeight ||
+    mesaHf ||
+    canyonMap ||
+    !centralTerrainHeightGrid ||
+    isMesaHeightfieldActive();
   if (mustHeight) await adoptBakedMoonHeightField(root);
   else invalidateNavAfterTerrainHeightChange();
   if (root) root.userData.rtsTerrainCollide = true;
@@ -2965,20 +2980,25 @@ async function attachSkirmishSceneryProps(groundEl, sceneEl) {
   // Intro/lobby: clean RTSVR4 moon only. Props attach when a 1v1 match is preparing/running.
   const inMatch =
     !!(State.gameSession && (State.gameSession.matchPreparing || State.gameSession.gameStarted));
-  // Hera / mesa heightfield: never load quest rocks or crater Prop_* (wrong seating).
+  // Hera / mesa / canyon: never load quest rocks or crater Prop_* (wrong seating).
   const mesaHf = !!(
     bakedMoonRoot &&
     bakedMoonRoot.userData &&
     bakedMoonRoot.userData.rtsMesaHeightfield
   );
+  const canyonMap = !!(
+    bakedMoonRoot &&
+    bakedMoonRoot.userData &&
+    bakedMoonRoot.userData.rtsCanyonMap
+  );
   let mode = !inMatch ? 'A0' : skirmishSceneryMode();
-  if (mesaHf && mode !== 'A1') mode = 'A0';
+  if ((mesaHf || canyonMap) && mode !== 'A1') mode = 'A0';
   if (mode === 'A0') {
     if (bakedMoonRoot) setBakedMoonRockShadowsEnabled(bakedMoonRoot, false);
     clearSkirmishLaneRidges(groundEl);
     // Hera / moon-only still needs a fresh slope mask (do not keep lobby crater nav).
     invalidateNavAfterTerrainHeightChange();
-    console.log('[RTSVR6] scenery A0: moon only', { inMatch, mesaHf });
+    console.log('[RTSVR6] scenery A0: moon only', { inMatch, mesaHf, canyonMap });
     return false;
   }
 
