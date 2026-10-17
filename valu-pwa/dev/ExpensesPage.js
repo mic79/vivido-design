@@ -362,11 +362,26 @@ export default {
       showAddModal.value = true;
     }
 
-    async function addExpense() {
+    // Blocks double-taps: while one save is running, further taps are ignored.
+    const submitting = ref(false);
+    function guardedSubmit(fn) {
+      return async (...args) => {
+        if (submitting.value) return;
+        submitting.value = true;
+        try { return await fn(...args); } finally { submitting.value = false; }
+      };
+    }
+
+    // Optional per-group rule (Groups > configuration): a category must be chosen.
+    const categoryRequired = computed(() =>
+      categoriesEnabled.value && categories.value.length > 0 && props.settings?.expenseCategoryRequired === 'true');
+
+    async function addExpenseImpl() {
       const e = newExpense.value;
       if (!e.title.trim() || e.amount === '' || e.amount === undefined) return;
       const amt = parseAmount(e.amount);
       if (isNaN(amt)) return;
+      if (categoryRequired.value && !e.category) { showAlert('Please choose a category.'); return; }
       const date = e.date || localDateISO();
       const dup = expenses.value.find(x => x.title === e.title.trim() && x.date === date && x.amount === amt);
       if (dup) {
@@ -399,6 +414,8 @@ export default {
       }
     }
 
+    const addExpense = guardedSubmit(addExpenseImpl);
+
     function startEdit(expense) {
       editOriginal.value = {
         amount: expense.amount,
@@ -411,12 +428,13 @@ export default {
       showEditModal.value = true;
     }
 
-    async function saveEdit() {
+    async function saveEditImpl() {
       const e = editingExpense.value;
       const orig = editOriginal.value;
       if (!e || !orig) return;
       const amt = parseAmount(e.amount);
       if (isNaN(amt)) return;
+      if (categoryRequired.value && !e.category) { showAlert('Please choose a category.'); return; }
       try {
         const shouldAdjust = editAdjustBalance.value && e.accountId;
         const date = e.date || localDateISO();
@@ -462,6 +480,8 @@ export default {
       }
     }
 
+    const saveEdit = guardedSubmit(saveEditImpl);
+
     function duplicateExpense() {
       const e = editingExpense.value;
       if (!e) return;
@@ -479,7 +499,7 @@ export default {
       showAddModal.value = true;
     }
 
-    async function deleteExpense(id) {
+    async function deleteExpenseImpl(id) {
       if (!(await showConfirm('Delete this expense?'))) return;
       try {
         const orig = editOriginal.value;
@@ -497,6 +517,8 @@ export default {
         showAlert('Failed to delete. Please try again.');
       }
     }
+
+    const deleteExpense = guardedSubmit(deleteExpenseImpl);
 
     function isFutureDate(dateStr) {
       if (!dateStr) return false;
@@ -699,6 +721,7 @@ export default {
       openDropdown, toggleDropdown, setDropdownOpen,
       sortedAccounts,
       formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
+      submitting, categoryRequired,
       addExpense, startEdit, saveEdit, deleteExpense, duplicateExpense,
       isFutureDate, formatDate, sanitizeAmount, openNewExpenseModal, addNameInput,
       showCategoryManager, managedCategories, newManagedCat, editingCatName, editCatNameValue, catIconPickerFor,
@@ -861,13 +884,13 @@ export default {
               <valu-date-field v-model="newExpense.date" />
             </div>
             <div class="sheet-list-item">
-              <label>Category</label>
+              <label>Category<span v-if="categoryRequired"> *</span></label>
               <valu-dropdown :open="openDropdown === 'newCat'" @update:open="(v) => setDropdownOpen('newCat', v)">
                 <template #label>
                   <span v-if="getCategoryIcon(newExpense.category)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(newExpense.category) }}</span>
-                  {{ newExpense.category || 'No category' }}
+                  {{ newExpense.category || (categoryRequired ? 'Choose a category' : 'No category') }}
                 </template>
-                <div class="valu-dropdown-option" :class="{ selected: !newExpense.category }"
+                <div v-if="!categoryRequired" class="valu-dropdown-option" :class="{ selected: !newExpense.category }"
                      @click="newExpense.category = ''; openDropdown = null">No category</div>
                 <div v-for="c in categories" :key="c.name"
                      class="valu-dropdown-option" :class="{ selected: newExpense.category === c.name }"
@@ -916,7 +939,7 @@ export default {
             </label>
           </div>
           <div class="modal-footer">
-            <button class="btn-sheet-cta" @click="addExpense" :disabled="!newExpense.title.trim() || newExpense.amount === '' || newExpense.amount === undefined">Add expense</button>
+            <button class="btn-sheet-cta" @click="addExpense" :disabled="submitting || (categoryRequired && !newExpense.category) || !newExpense.title.trim() || newExpense.amount === '' || newExpense.amount === undefined">{{ submitting ? 'Saving…' : 'Add expense' }}</button>
           </div>
         </div>
       </div>
@@ -988,13 +1011,13 @@ export default {
               <valu-date-field v-model="editingExpense.date" />
             </div>
             <div class="sheet-list-item">
-              <label>Category</label>
+              <label>Category<span v-if="categoryRequired"> *</span></label>
               <valu-dropdown :open="openDropdown === 'editCat'" @update:open="(v) => setDropdownOpen('editCat', v)">
                 <template #label>
                   <span v-if="getCategoryIcon(editingExpense.category)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(editingExpense.category) }}</span>
-                  {{ editingExpense.category || 'No category' }}
+                  {{ editingExpense.category || (categoryRequired ? 'Choose a category' : 'No category') }}
                 </template>
-                <div class="valu-dropdown-option" :class="{ selected: !editingExpense.category }"
+                <div v-if="!categoryRequired" class="valu-dropdown-option" :class="{ selected: !editingExpense.category }"
                      @click="editingExpense.category = ''; openDropdown = null">No category</div>
                 <div v-for="c in categories" :key="c.name"
                      class="valu-dropdown-option" :class="{ selected: editingExpense.category === c.name }"
@@ -1043,9 +1066,9 @@ export default {
             </label>
           </div>
           <div class="modal-footer">
-            <button class="btn-sheet-cta" @click="saveEdit">Save changes</button>
+            <button class="btn-sheet-cta" @click="saveEdit" :disabled="submitting || (categoryRequired && !editingExpense.category)">{{ submitting ? 'Saving…' : 'Save changes' }}</button>
             <div class="modal-footer-row">
-              <button class="btn btn-text btn-danger" @click="deleteExpense(editingExpense.id)">Delete</button>
+              <button class="btn btn-text btn-danger" :disabled="submitting" @click="deleteExpense(editingExpense.id)">Delete</button>
               <button class="btn btn-text" @click="duplicateExpense"><span class="material-icons" style="font-size:18px;vertical-align:middle;">content_copy</span> Duplicate</button>
               <button class="btn btn-text" @click="showEditModal = false">Cancel</button>
             </div>

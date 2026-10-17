@@ -9,6 +9,7 @@ Hardened auth worker: `cloudflare-worker-dev/` (`node --test` there as well). De
 - Inline scripts moved to `boot.js` / `app.js`; version lives only in `version.js`.
 - Assistant/FAQ text is HTML-escaped (`htmlSafe.js`); formula-looking text is neutralized before writing to Sheets; row IDs are verified before updating cached rows; polling pauses when the tab is hidden; crypto-random IDs; no debug `console.log`.
 - "Open shared group" no longer adds a duplicate when you pick a sheet that is already listed (it updates the existing entry), and a newly added group gets its "Last modified" right away.
+- v198-dev: Balance Overview shows plain numbers (no currency symbols); Add/Save/Delete buttons on Expenses, Income and Accounts show "Saving..." and ignore repeated taps; per-group option "Require a category" (Groups > group configuration, settings keys expenseCategoryRequired / incomeCategoryRequired); recurring/FX "last checked" stamps are now also updated in the app's own settings (they were only saved to the Sheet, so stale values re-suggested old months at the next app start).
 - Sign-out clears cached chats/groups; Settings -> Privacy has "Sign out & forget this device" (revokes access at Google).
 - Service worker: own `valu-dev-*` cache, offline boot, no forced reload on update, bounded cache.
 - `_headers` (CSP is report-only), `.assetsignore`, manifest id/scope.
