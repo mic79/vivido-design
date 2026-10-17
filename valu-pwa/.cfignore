@@ -1,4 +1,10 @@
-node_modules/
+﻿node_modules/
 cloudflare-worker/
+cloudflare-worker-dev/
 package.json
 package-lock.json
+scripts/
+docs/
+.wrangler/
+dev/tests/
+dev/DEV-NOTES.md

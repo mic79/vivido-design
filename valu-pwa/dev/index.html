@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#729c9c" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Valu — a personal finance tracker that's private, simple, and free. Track income, expenses, and account balances using your own Google Sheet." />
+  <meta property="og:title" content="Valu — Personal Finance Tracker" />
+  <meta property="og:description" content="Private, simple, free. Track your finances using your own Google Sheet — no database, no server, your data stays yours." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="icons/android-chrome-512x512.png" />
+  <title>Valu</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/favicon.png" type="image/png" sizes="128x128" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" sizes="180x180" />
+  <link rel="stylesheet" href="vendor/fonts.css" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="version.js"></script>
+  <script src="boot.js"></script>
+
+  <!-- All libraries are self-hosted in vendor/ (no CDN): Vue 3.5.44, GSAP 3.15.0 + plugins -->
+  <script src="vendor/vue.global.prod.js"></script>
+  <!-- Google API loader + Picker (Google-hosted by design; the Picker cannot be self-hosted) -->
+  <script src="https://apis.google.com/js/api.js"></script>
+  <script src="https://apis.google.com/js/picker.js"></script>
+  <!-- GSAP + DrawSVG (same stack as https://valu-app.com/ landing intro) -->
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/DrawSVGPlugin.min.js"></script>
+  <script src="vendor/Draggable.min.js"></script>
+  <script src="vendor/InertiaPlugin.min.js"></script>
+  <script src="vendor/shake-lite.js"></script>
+</head>
+<body>
+  <div id="app">
+
+    <!-- Signed-in app or Demo (no Google account required for Demo) -->
+    <template v-if="inAppShell">
+
+      <!-- Top Bar (home/groups only — sub-pages render their own nav row) -->
+      <div class="topbar" v-if="currentPage === 'home' || currentPage === 'groups'">
+        <button class="topbar-btn" @click="sideNavOpen = true">
+          <span class="material-icons">menu</span>
+        </button>
+        <div class="valu-orb-sm" style="cursor:pointer;" @click="navigateTo('assistant')">
+          <div class="spheres">
+            <div class="spheres-group">
+              <div class="sphere s1"></div>
+              <div class="sphere s2"></div>
+              <div class="sphere s3"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Side Nav Overlay -->
+      <div class="overlay" :class="{ open: sideNavOpen }" @click="sideNavOpen = false"></div>
+
+      <!-- Side Nav -->
+      <div class="sidenav" :class="{ open: sideNavOpen }">
+        <div class="sidenav-header">
+          <div v-if="isAuthenticated" class="sidenav-auth-row">
+            <span class="sidenav-email truncate">{{ userProfile?.email || '' }}</span>
+            <span class="sidenav-auth-dot">·</span>
+            <button type="button" class="sidenav-logout-link" @click="signOut">Sign out</button>
+          </div>
+          <div v-else class="sidenav-auth-row">
+            <span class="sidenav-email truncate">Demo preview</span>
+            <span class="sidenav-auth-dot">·</span>
+            <button type="button" class="sidenav-logout-link" @click="leaveDemoToSignIn">Sign in</button>
+          </div>
+        </div>
+
+        <div class="sidenav-body">
+          <button type="button" class="sidenav-menu-item" @click="navigateTo('groups'); sideNavOpen = false;">
+            <span class="material-icons sidenav-menu-icon">people</span>
+            <span>Groups</span>
+            <span class="sidenav-menu-after">{{ groupsForSwitcher.length }} group{{ groupsForSwitcher.length !== 1 ? 's' : '' }}</span>
+          </button>
+          <button v-if="!isAuthenticated" type="button" class="sidenav-menu-item" @click="leaveDemoToSignIn">
+            <span class="material-icons sidenav-menu-icon">login</span>
+            <span>Sign in with Google</span>
+            <span class="sidenav-menu-after">Your groups</span>
+          </button>
+          <button class="sidenav-menu-item" @click="navigateTo('activity'); sideNavOpen = false;">
+            <span class="material-icons sidenav-menu-icon">notifications</span>
+            <span>Activity</span>
+          </button>
+          <button class="sidenav-menu-item" @click="navigateTo('faq'); sideNavOpen = false;">
+            <span class="material-icons sidenav-menu-icon">help</span>
+            <span>FAQ</span>
+          </button>
+          <button class="sidenav-menu-item" @click="navigateTo('about'); sideNavOpen = false;">
+            <span class="material-icons sidenav-menu-icon">info</span>
+            <span>About</span>
+          </button>
+        </div>
+
+        <div class="sidenav-footer">
+          <button class="sidenav-version" @click="navigateTo('activity', { scrollTo: 'whats-new' }); sideNavOpen = false;">{{ appVersion }} — What's new</button>
+          <button v-if="swUpdateReady" class="btn btn-text btn-sm" style="color:var(--color-primary);font-size:11px;" @click="applySwUpdate">Update available — tap to reload</button>
+        </div>
+      </div>
+
+      <!-- Group Name Header (home page only) -->
+      <div v-if="activeGroup && currentPage === 'home'" class="home-group-header">
+        <button class="home-group-name" @click="showGroupSwitcher = true">
+          {{ activeGroupName }} <span class="material-icons home-group-sort">swap_vert</span>
+        </button>
+      </div>
+
+      <!-- Group Switcher Sheet -->
+      <div class="modal-overlay" :class="{ open: showGroupSwitcher }" @click.self="showGroupSwitcher = false">
+        <div class="modal">
+          <div class="sheet-handle"></div>
+          <div class="group-switcher-title">Groups</div>
+          <div class="group-switcher-list">
+            <button v-for="group in groupsForSwitcher" :key="group.id"
+                    class="group-switcher-card"
+                    :class="{ active: activeGroup && activeGroup.id === group.id }"
+                    @click="switchGroup(group); showGroupSwitcher = false;">
+              <div class="group-switcher-row">
+                <span class="group-switcher-name">{{ group.name.replace('Valu: ', '') }}</span>
+                <span class="group-switcher-users" v-if="activeGroup && activeGroup.id === group.id"><span class="material-icons" style="font-size:14px;vertical-align:middle;">check</span></span>
+              </div>
+              <div class="group-switcher-sub" v-if="activeGroup && activeGroup.id === group.id && groupSettings">
+                <span v-for="list in (groupSettings.listsEnabled || '').split(',').filter(Boolean)" :key="list" class="comma-separated">{{ list.charAt(0).toUpperCase() + list.slice(1) }}</span>
+              </div>
+            </button>
+          </div>
+          <div class="group-switcher-footer">
+            <button v-if="isAuthenticated" type="button" class="group-switcher-link" @click="navigateTo('groups'); showGroupSwitcher = false;">Edit groups</button>
+            <button v-else type="button" class="group-switcher-link" @click="leaveDemoToSignIn(); showGroupSwitcher = false;">Sign in for your groups</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Content -->
+      <div class="main-content" :class="{ 'is-demo-group': demoHomeCallout !== 'none' }">
+        <!-- No group: block sub-pages only — Home shows welcome / onboarding -->
+        <div v-if="!activeGroup && currentPage !== 'groups' && currentPage !== 'home' && currentPage !== 'settings'" class="empty-state" style="padding-top:80px;">
+          <span class="material-icons">folder_off</span>
+          <h3>No group selected</h3>
+          <p>Create or select a group to get started.</p>
+          <button class="btn btn-primary" @click="navigateTo('groups')">Manage Groups</button>
+        </div>
+
+        <!-- Group loading (full-page, only before first data load) -->
+        <div v-else-if="groupLoading && !dataLoaded" class="loading" style="padding-top:80px;">
+          <div class="spinner"></div>
+          Loading group...
+        </div>
+
+        <!-- Reconnect banner (full-page, only before first data load) -->
+        <div v-else-if="needsReconnect && !dataLoaded" class="empty-state" style="padding-top:80px;">
+          <span class="material-icons" style="font-size:48px;color:var(--color-primary);">sync</span>
+          <h3>Session expired</h3>
+          <p>Tap below to reconnect to Google Drive.</p>
+          <button class="btn btn-primary" @click="reconnect">
+            <span class="material-icons">refresh</span> Reconnect
+          </button>
+        </div>
+
+        <!-- Pages (with optional demo notice above) -->
+        <template v-else>
+          <div v-if="demoHomeCallout !== 'none' && currentPage === 'home' && !demoNoticeDismissed" class="demo-notice" style="margin:16px 16px 0;">
+            <div class="demo-notice-body">
+              <span class="material-icons demo-notice-icon">info</span>
+              <div class="demo-notice-content">
+                <strong>Demo data</strong>
+                <p>This group is pre-filled with sample data so you can explore the app. Any changes you make here are temporary and will not be saved.</p>
+                <p v-if="demoHomeCallout === 'signin'">
+                  <strong>Ready to start for real?</strong> Sign in with Google to create your own group — your data will be stored privately in your Drive.
+                </p>
+                <div class="demo-notice-actions">
+                  <button v-if="demoHomeCallout === 'signin'" class="btn-text-link" @click="leaveDemoToSignIn()">Sign in</button>
+                  <button class="btn-text-link btn-text-muted" @click="demoNoticeDismissed = true">Dismiss</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <component
+            :is="currentPageComponent"
+          :sheetId="activeSheetId"
+          :settings="groupSettings"
+          :accounts="accountsList"
+          :groups="groupsForSwitcher"
+          :activeGroup="activeGroup"
+          :userProfile="userProfile"
+          :groupName="activeGroupName"
+          :showUpdateReminder="false"
+          :accountsEntryIntent="accountsEntryIntent"
+          :isDemoGroup="!!(activeGroup && activeGroup.id === demoSheetId)"
+          :demoCallout="demoHomeCallout"
+          @navigate="(page, opts) => navigateTo(page, opts)"
+          @switch-group="switchGroup"
+          @create-group="onGroupCreated"
+          @open-shared="onSharedOpened"
+          @refresh-groups="refreshGroupsList"
+          @accounts-updated="onAccountsUpdated"
+          @accounts-intent-consumed="accountsEntryIntent = null"
+          @settings-updated="onSettingsUpdated"
+          @refresh="refreshCurrentPage"
+          @go-home="navigateTo('home')"
+        ></component>
+        </template>
+
+        <!-- Non-destructive reconnect banner (after data was loaded — keeps component alive) -->
+        <div v-if="needsReconnect && dataLoaded" class="reconnect-bar">
+          <span>Session expired</span>
+          <button class="btn btn-primary btn-sm" @click="reconnect">
+            <span class="material-icons" style="font-size:16px;vertical-align:middle;margin-right:4px;">refresh</span>Reconnect
+          </button>
+        </div>
+      </div>
+
+      <!-- Bottom Tabs (home page only, sub-pages overlay everything) -->
+      <div class="bottombar" v-if="activeGroup && currentPage === 'home'">
+        <button
+          v-if="isListEnabled('accounts')"
+          class="tab-btn"
+          @click="navigateTo('accounts')"
+        >
+          <span class="material-icons">account_balance</span>
+          <span>Accounts</span>
+        </button>
+
+        <button
+          v-if="isListEnabled('expenses')"
+          class="tab-btn"
+          @click="navigateTo('expenses')"
+        >
+          <span class="material-icons">shopping_cart</span>
+          <span>Expenses</span>
+        </button>
+
+        <button
+          v-if="isListEnabled('income')"
+          class="tab-btn"
+          @click="navigateTo('income')"
+        >
+          <span class="material-icons">payments</span>
+          <span>Income</span>
+        </button>
+
+        <button
+          v-if="isListEnabled('fi')"
+          class="tab-btn"
+          @click="navigateTo('fi')"
+        >
+          <span class="material-icons">trending_up</span>
+          <span>FI Calc</span>
+        </button>
+
+        <button
+          v-if="isListEnabled('forecast')"
+          class="tab-btn"
+          @click="navigateTo('forecast')"
+        >
+          <span class="material-icons">show_chart</span>
+          <span>Forecast</span>
+        </button>
+
+        <button
+          class="tab-btn"
+          @click="navigateTo('settings')"
+        >
+          <span class="material-icons">tune</span>
+          <span>Settings</span>
+        </button>
+      </div>
+
+    </template>
+
+    <!-- Landing + sign-in bottom sheet -->
+    <template v-else>
+      <div class="valu-landing">
+        <div class="valu-landing-hero-wrap">
+          <div class="valu-landing-hero">
+            <div class="valu-landing-spheres-stack">
+              <!-- Markup + behavior ported from https://valu-app.com/ -->
+              <div class="valu-site-intro">
+                <div class="spheres">
+                  <div class="spheres-group">
+                    <div class="sphere s1"></div>
+                    <div class="sphere s2"></div>
+                    <div class="sphere s3"></div>
+                  </div>
+                </div>
+                <!-- Cropped viewBox; stroke 65 + no vector-effect (DrawSVG must measure path length). -->
+                <svg id="valu" class="valu-landing-wordmark-svg" xmlns="http://www.w3.org/2000/svg" viewBox="180 265 920 430" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Valu">
+                  <title>Valu</title>
+                  <g id="logo" fill="none" stroke="currentColor" stroke-width="65" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10">
+                    <polyline class="st0 ch1" shape-rendering="geometricPrecision" points="191.2,480 291.2,680 391.2,480"/>
+                    <path class="st0 ch2" shape-rendering="geometricPrecision" d="M889.8,480v100c0,55.2,44.8,100,100,100c55.2,0,100-44.8,100-100V480"/>
+                    <path class="st0 ch3" shape-rendering="geometricPrecision" d="M776.8,280v343.5c0,31.2-25.3,56.5-56.5,56.5s-56.5-25.3-56.5-56.5V580c0-55.2-44.8-100-100-100s-100,44.8-100,100s44.8,100,100,100"/>
+                  </g>
+                  <g id="gfx" fill="none" stroke="currentColor" stroke-width="65" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" aria-hidden="true">
+                    <circle class="st0 c1" cx="640" cy="512" r="56.5"/>
+                    <circle class="st0 c2" cx="640" cy="512" r="56.5"/>
+                    <circle class="st0 c3" cx="640" cy="512" r="56.5"/>
+                  </g>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="valu-landing-body">
+        <div class="valu-landing-tagline" :class="{ 'valu-landing-tagline--visible': landingShowCtas }">Private finance tracking, secured by your own Google Drive</div>
+        <div class="valu-landing-cta" :class="{ 'valu-landing-cta--visible': landingShowCtas }">
+          <p class="valu-landing-welcome">Welcome!</p>
+          <button type="button" class="valu-landing-card" @click="startQuickLookDemo">
+            <span class="material-icons valu-landing-card-icon">visibility</span>
+            <div>
+              <div class="valu-landing-card-title">Quick look</div>
+              <div class="valu-landing-card-desc">Without signing in, explore the app with sample data.</div>
+            </div>
+          </button>
+          <button type="button" class="valu-landing-card" @click="showSignInFromLanding = true">
+            <span class="material-icons valu-landing-card-icon">fast_forward</span>
+            <div>
+              <div class="valu-landing-card-title">Jump start</div>
+              <div class="valu-landing-card-desc">Sign in to start organizing your own data.</div>
+            </div>
+          </button>
+        </div>
+        </div>
+      </div>
+
+      <div
+        class="modal-overlay valu-signin-sheet-overlay"
+        :class="{ open: showSignInFromLanding }"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Sign in with Google"
+        @click.self="showSignInFromLanding = false"
+      >
+        <div class="modal valu-signin-sheet" @click.stop>
+          <div class="sheet-handle" aria-hidden="true"></div>
+          <div class="modal-body valu-signin-sheet-body">
+            <button type="button" class="btn-google valu-signin-sheet-google" @click="connect" :disabled="authLoading">
+              <svg viewBox="0 0 24 24" width="20" height="20" style="margin-right:10px;" aria-hidden="true">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              </svg>
+              {{ authLoading ? 'Connecting...' : 'Connect with Google' }}
+            </button>
+            <p class="auth-footer valu-signin-sheet-footer">
+              Your finances stay between you and Google. The app syncs to spreadsheets in your account &mdash; nothing is sent elsewhere.
+            </p>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- Global dialog (replaces native alert/confirm) -->
+    <div class="modal-overlay valu-dialog-overlay" :class="{ open: dialogVisible }" @click.self="dialogCancel">
+      <div class="valu-dialog" @click.stop>
+        <p class="valu-dialog-message">{{ dialogMessage }}</p>
+        <div class="valu-dialog-actions">
+          <button v-if="dialogIsConfirm" class="btn btn-text" @click="dialogCancel">Cancel</button>
+          <button class="btn btn-primary btn-sm" @click="dialogOk">{{ dialogIsConfirm ? 'Confirm' : 'OK' }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

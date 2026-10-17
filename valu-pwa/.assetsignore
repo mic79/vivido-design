@@ -1,0 +1,16 @@
+﻿# Cloudflare Workers static assets: files listed here are NOT uploaded/served.
+# (Copy this file into the folder you deploy from, i.e. your Git folder, if it differs from this one.)
+.wrangler
+node_modules
+cloudflare-worker
+cloudflare-worker-dev
+scripts
+docs
+package.json
+package-lock.json
+.cfignore
+.assetsignore
+.gitignore
+# dev/ is published at /dev/ (tests and notes are kept out of the upload).
+dev/tests
+dev/DEV-NOTES.md

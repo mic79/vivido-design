@@ -1,0 +1,1155 @@
+import SheetsApi, { TABS, formatAccountDisplayName, localDateISO, CATEGORY_ICONS, CURRENCIES } from './sheetsApi.js';
+import { useFxConvert } from './useFxConvert.js';
+
+const { ref, computed, watch, inject, nextTick, onMounted, onUnmounted } = Vue;
+
+const LS_LAST_ACCOUNT_INCOME = 'valu_last_account_income';
+
+export default {
+  props: ['sheetId', 'settings', 'accounts'],
+  emits: ['refresh', 'go-home', 'settings-updated', 'navigate'],
+
+  setup(props, { emit }) {
+    const injectedSheetId = inject('activeSheetId', ref(null));
+    const showAlert = inject('showAlert', m => window.alert(m));
+    const showConfirm = inject('showConfirm', m => Promise.resolve(window.confirm(m)));
+    function getSheetId() { return props.sheetId || injectedSheetId.value; }
+    const incomeList = ref([]);
+    const loading = ref(true);
+    const showAddModal = ref(false);
+    const showEditModal = ref(false);
+    const editingIncome = ref(null);
+    const filterMonth = ref(getCurrentMonthKey());
+    const filterCategory = ref('');
+    const filterSearch = ref('');
+    const showUpcoming = ref(localStorage.getItem('valu_show_upcoming') !== 'false');
+    function toggleUpcoming() {
+      showUpcoming.value = !showUpcoming.value;
+      localStorage.setItem('valu_show_upcoming', showUpcoming.value ? 'true' : 'false');
+    }
+    const showMonthSheet = ref(false);
+    const openDropdown = ref(null);
+
+    function getCurrentMonthKey() {
+      const d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    }
+
+    function formatMonthLabel(key) {
+      if (!key) return 'All time';
+      if (key.length === 4) return 'All ' + key;
+      const [y, m] = key.split('-').map(Number);
+      return new Date(y, m - 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    }
+
+    const newIncome = ref({
+      title: '', amount: '', accountId: '', category: '', date: '', notes: '', repeats: '',
+    });
+    const adjustBalance = ref(false);
+    const editAdjustBalance = ref(false);
+    const editOriginal = ref(null);
+
+    const baseCurrency = computed(() => props.settings?.baseCurrency || 'CAD');
+    const manualRates = computed(() => {
+      const str = props.settings?.currencyRates || '';
+      return str.split(',').filter(Boolean).map(r => { const [currency, rate] = r.split(':'); return { currency, rate }; });
+    });
+
+    const categoriesEnabled = computed(() => props.settings?.incomeCategoriesEnabled !== 'false');
+
+    const categories = computed(() => {
+      if (!categoriesEnabled.value) return [];
+      const str = props.settings?.incomeCategories || '';
+      return str.split(',').filter(Boolean).map(c => {
+        const idx = c.indexOf(':');
+        if (idx < 0) return { name: c, icon: '' };
+        return { name: c.slice(0, idx), icon: c.slice(idx + 1) };
+      });
+    });
+
+    const allCategoryIcons = computed(() => {
+      const str = props.settings?.incomeCategories || '';
+      const map = {};
+      str.split(',').filter(Boolean).forEach(c => {
+        const idx = c.indexOf(':');
+        if (idx > 0) map[c.slice(0, idx)] = c.slice(idx + 1);
+      });
+      return map;
+    });
+
+    function getCategoryIcon(categoryName) {
+      return allCategoryIcons.value[categoryName] || '';
+    }
+
+    function getAccountCurrency(accountId) {
+      const acc = (props.accounts || []).find(a => a.id === accountId);
+      return acc ? (acc.currency || baseCurrency.value) : baseCurrency.value;
+    }
+
+    function getAccountName(accountId) {
+      const acc = (props.accounts || []).find(a => a.id === accountId);
+      return acc ? formatAccountDisplayName(acc) : '';
+    }
+
+    const addFx = useFxConvert({
+      foreignCurrency: computed(() => getAccountCurrency(newIncome.value.accountId)),
+      baseCurrency,
+      dateStr: computed(() => newIncome.value.date || localDateISO()),
+      setAmount: v => { newIncome.value.amount = v; },
+      manualRates,
+    });
+
+    const editFx = useFxConvert({
+      foreignCurrency: computed(() => editingIncome.value ? getAccountCurrency(editingIncome.value.accountId) : baseCurrency.value),
+      baseCurrency,
+      dateStr: computed(() => editingIncome.value?.date || localDateISO()),
+      setAmount: v => { if (editingIncome.value) editingIncome.value.amount = v; },
+      manualRates,
+    });
+
+    function getNumberLocale() {
+      const pref = localStorage.getItem('valu_number_format') || 'auto';
+      return pref === 'auto' ? undefined : pref;
+    }
+
+    function amountToInput(num) {
+      const pref = localStorage.getItem('valu_number_format') || 'auto';
+      const str = Number(num).toString();
+      if (pref === 'de-DE') return str.replace('.', ',');
+      return str;
+    }
+
+    function sanitizeAmount(obj, key) {
+      const raw = obj[key];
+      if (typeof raw !== 'string') return;
+      let s = raw.replace(/[^0-9.,-]/g, '');
+      s = s.replace(/^(-?)(.*)/, (_, sign, rest) => sign + rest.replace(/-/g, ''));
+      s = s.replace(/([.,])([.,])/g, '$1');
+      s = s.replace(/([.,])([.,])/g, '$1');
+      obj[key] = s;
+    }
+
+    function parseAmount(val) {
+      if (typeof val === 'number') return val;
+      if (!val || typeof val !== 'string') return NaN;
+      const s = val.trim();
+      const lastDot = s.lastIndexOf('.');
+      const lastComma = s.lastIndexOf(',');
+      if (lastComma > lastDot) {
+        return parseFloat(s.replace(/\./g, '').replace(',', '.'));
+      }
+      return parseFloat(s.replace(/,/g, ''));
+    }
+
+    function formatCurrency(amount, currency) {
+      try {
+        const cur = currency || baseCurrency.value;
+        const numLocale = getNumberLocale();
+        const sym = new Intl.NumberFormat(undefined, {
+          style: 'currency', currency: cur, currencyDisplay: 'narrowSymbol',
+        }).formatToParts(0).find(p => p.type === 'currency')?.value || cur;
+        const num = new Intl.NumberFormat(numLocale, {
+          minimumFractionDigits: 2, maximumFractionDigits: 2,
+        }).format(amount);
+        return sym + num;
+      } catch {
+        return amount.toFixed(2) + ' ' + (currency || '');
+      }
+    }
+
+    const filterAwareIncome = computed(() => {
+      let list = incomeList.value;
+      if (!showUpcoming.value) {
+        list = list.filter(e => !isFutureDate(e.date));
+      }
+      if (filterCategory.value) {
+        list = list.filter(e => e.category === filterCategory.value);
+      }
+      if (filterSearch.value) {
+        const q = filterSearch.value.toLowerCase();
+        list = list.filter(e =>
+          (e.title && e.title.toLowerCase().includes(q)) ||
+          (e.notes && e.notes.toLowerCase().includes(q)) ||
+          (e.category && e.category.toLowerCase().includes(q))
+        );
+      }
+      return list;
+    });
+
+    const availableMonths = computed(() => {
+      const months = new Set();
+      for (const e of filterAwareIncome.value) {
+        if (e.date) {
+          const parts = e.date.split('-');
+          months.add(`${parts[0]}-${parts[1]}`);
+        }
+      }
+      return [...months].sort().reverse();
+    });
+
+    const periodOptions = computed(() => {
+      const months = availableMonths.value;
+      const byYear = {};
+      for (const m of months) {
+        const y = m.split('-')[0];
+        if (!byYear[y]) byYear[y] = [];
+        byYear[y].push(m);
+      }
+      const years = Object.keys(byYear).sort().reverse();
+      const options = [];
+      for (const y of years) {
+        const yMonths = byYear[y];
+        const yearTotal = yMonths.reduce((sum, m) => sum + (monthTotals.value[m] || 0), 0);
+        options.push({ key: y, label: 'All ' + y, total: yearTotal, isYear: true });
+        for (const m of yMonths) {
+          options.push({ key: m, label: formatMonthLabel(m), total: monthTotals.value[m] || 0, isYear: false });
+        }
+      }
+      return options;
+    });
+
+    function onPeriodKeydown(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const keys = ['', ...periodOptions.value.map(o => o.key)];
+      const idx = keys.indexOf(filterMonth.value);
+      if (e.key === 'ArrowDown' && idx < keys.length - 1) {
+        filterMonth.value = keys[idx + 1];
+      } else if (e.key === 'ArrowUp' && idx > 0) {
+        filterMonth.value = keys[idx - 1];
+      }
+    }
+    onMounted(() => window.addEventListener('keydown', onPeriodKeydown));
+    onUnmounted(() => window.removeEventListener('keydown', onPeriodKeydown));
+
+    const filteredIncome = computed(() => {
+      let list = [...incomeList.value].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+      if (filterMonth.value) {
+        const isYear = filterMonth.value.length === 4;
+        list = list.filter(e => {
+          if (!e.date) return false;
+          const parts = e.date.split('-');
+          return isYear ? parts[0] === filterMonth.value : `${parts[0]}-${parts[1]}` === filterMonth.value;
+        });
+      }
+
+      if (filterCategory.value) {
+        list = list.filter(e => e.category === filterCategory.value);
+      }
+
+      if (filterSearch.value) {
+        const q = filterSearch.value.toLowerCase();
+        list = list.filter(e =>
+          (e.title && e.title.toLowerCase().includes(q)) ||
+          (e.notes && e.notes.toLowerCase().includes(q)) ||
+          (e.category && e.category.toLowerCase().includes(q)) ||
+          (getAccountName(e.accountId).toLowerCase().includes(q))
+        );
+      }
+
+      if (!showUpcoming.value) {
+        list = list.filter(e => !isFutureDate(e.date));
+      }
+
+      return list;
+    });
+
+    const hasFutureEntries = computed(() =>
+      incomeList.value.some(e => isFutureDate(e.date))
+    );
+
+    const monthlyTotal = computed(() => {
+      return filteredIncome.value.reduce((sum, e) => sum + e.amount, 0);
+    });
+
+    const monthTotals = computed(() => {
+      const map = {};
+      for (const e of filterAwareIncome.value) {
+        if (!e.date) continue;
+        const parts = e.date.split('-');
+        const key = `${parts[0]}-${parts[1]}`;
+        map[key] = (map[key] || 0) + e.amount;
+      }
+      return map;
+    });
+
+    const usedCategories = computed(() => {
+      const activeSet = new Set();
+      const isYear = filterMonth.value && filterMonth.value.length === 4;
+      let src = filterMonth.value
+        ? incomeList.value.filter(e => {
+            if (!e.date) return false;
+            const parts = e.date.split('-');
+            return isYear ? parts[0] === filterMonth.value : `${parts[0]}-${parts[1]}` === filterMonth.value;
+          })
+        : incomeList.value;
+      if (!showUpcoming.value) {
+        src = src.filter(e => !isFutureDate(e.date));
+      }
+      for (const e of src) {
+        if (e.category) activeSet.add(e.category);
+      }
+      const allCats = (props.settings?.incomeCategories || '').split(',').filter(Boolean).map(c => {
+        const idx = c.indexOf(':');
+        return idx < 0 ? c : c.slice(0, idx);
+      });
+      const everUsed = new Set();
+      for (const e of incomeList.value) {
+        if (e.category) everUsed.add(e.category);
+      }
+      const ordered = allCats.filter(name => everUsed.has(name));
+      for (const name of everUsed) {
+        if (!ordered.includes(name)) ordered.push(name);
+      }
+      return ordered.map(name => ({ name, active: activeSet.has(name) }));
+    });
+
+    async function fetchData() {
+      loading.value = true;
+      try {
+        const rows = await SheetsApi.getTabData(getSheetId(), TABS.INCOME);
+        incomeList.value = rows.map(r => ({
+          id: r[0], title: r[1], amount: parseFloat(r[2]) || 0,
+          accountId: r[3], category: r[4], date: r[5],
+          notes: r[6], createdAt: r[7], balanceAdjusted: r[8] || '',
+          repeats: r[9] || '',
+        }));
+      } catch (err) {
+        console.error('Failed to load income:', err);
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    function activeAccountsList() {
+      return (props.accounts || [])
+        .filter((a) => a.discontinued !== 'true')
+        .slice()
+        .sort((a, b) => (parseInt(a.order) || 0) - (parseInt(b.order) || 0));
+    }
+
+    const sortedAccounts = computed(() => activeAccountsList());
+
+    function defaultAccountIdForNewIncome() {
+      const list = activeAccountsList();
+      if (list.length === 1) return list[0].id;
+      try {
+        const last = localStorage.getItem(LS_LAST_ACCOUNT_INCOME);
+        if (last && list.some((a) => a.id === last)) return last;
+      } catch (_) { /* private mode */ }
+      return '';
+    }
+
+    function resetNewIncomeForm() {
+      newIncome.value = {
+        title: '',
+        amount: '',
+        accountId: defaultAccountIdForNewIncome(),
+        category: '',
+        date: localDateISO(),
+        notes: '',
+        repeats: '',
+      };
+    }
+
+    function openNewIncomeModal() {
+      resetNewIncomeForm();
+      adjustBalance.value = false;
+      showAddModal.value = true;
+    }
+
+    async function addIncome() {
+      const e = newIncome.value;
+      if (!e.title.trim() || e.amount === '' || e.amount === undefined) return;
+      const amt = parseAmount(e.amount);
+      if (isNaN(amt)) return;
+      const date = e.date || localDateISO();
+      const dup = incomeList.value.find(x => x.title === e.title.trim() && x.date === date && x.amount === amt);
+      if (dup) {
+        const dupInfo = `"${dup.title}" on ${dup.date} (${formatCurrency(dup.amount, baseCurrency.value)})`;
+        if (!(await showConfirm(`A similar income entry already exists:\n${dupInfo}\n\nAdd anyway?`))) return;
+      }
+      try {
+        const id = SheetsApi.generateId();
+        const now = new Date().toISOString();
+        const shouldAdjust = adjustBalance.value && e.accountId;
+        const notes = addFx.appendFxTag(e.notes);
+        await SheetsApi.appendRow(getSheetId(), TABS.INCOME, [
+          id, e.title.trim(), amt.toString(), e.accountId,
+          e.category, date, notes, now, shouldAdjust ? 'yes' : '', e.repeats || '',
+        ]);
+        if (shouldAdjust) {
+          const [y, m] = date.split('-').map(Number);
+          const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+          await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, y, m, cur + amt, date);
+        }
+        if (e.accountId) {
+          try { localStorage.setItem(LS_LAST_ACCOUNT_INCOME, e.accountId); } catch (_) {}
+        }
+        showAddModal.value = false;
+        resetNewIncomeForm();
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to add income:', err);
+        showAlert('Failed to save. Please try again.');
+      }
+    }
+
+    function startEdit(income) {
+      editOriginal.value = {
+        amount: income.amount,
+        accountId: income.accountId || '',
+        balanceAdjusted: income.balanceAdjusted || '',
+        date: income.date || '',
+      };
+      editingIncome.value = { ...income, amount: amountToInput(income.amount) };
+      editAdjustBalance.value = income.balanceAdjusted === 'yes';
+      showEditModal.value = true;
+    }
+
+    async function saveEdit() {
+      const e = editingIncome.value;
+      const orig = editOriginal.value;
+      if (!e || !orig) return;
+      const amt = parseAmount(e.amount);
+      if (isNaN(amt)) return;
+      try {
+        const shouldAdjust = editAdjustBalance.value && e.accountId;
+        const date = e.date || localDateISO();
+        const notes = editFx.appendFxTag(e.notes);
+        await SheetsApi.updateRow(getSheetId(), TABS.INCOME, e.id, [
+          e.id, e.title, amt.toString(), e.accountId,
+          e.category, date, notes, e.createdAt, shouldAdjust ? 'yes' : '', e.repeats || '',
+        ]);
+        if (shouldAdjust) {
+          const [newY, newM] = date.split('-').map(Number);
+          const newAmt = amt;
+          const accountChanged = e.accountId !== orig.accountId;
+          const origDate = orig.date || date;
+          const [origY, origM] = origDate.split('-').map(Number);
+          if (accountChanged && orig.balanceAdjusted === 'yes' && orig.accountId) {
+            const oldBal = await SheetsApi.getCurrentBalance(getSheetId(), orig.accountId);
+            await SheetsApi.upsertBalanceRow(getSheetId(), orig.accountId, origY, origM, oldBal - orig.amount, origDate);
+            const newBal = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+            await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, newY, newM, newBal + newAmt, date);
+          } else if (orig.balanceAdjusted === 'yes') {
+            const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+            await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, origY, origM, cur - orig.amount, origDate);
+            const cur2 = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+            await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, newY, newM, cur2 + newAmt, date);
+          } else {
+            const cur = await SheetsApi.getCurrentBalance(getSheetId(), e.accountId);
+            await SheetsApi.upsertBalanceRow(getSheetId(), e.accountId, newY, newM, cur + newAmt, date);
+          }
+        } else if (!shouldAdjust && orig.balanceAdjusted === 'yes' && orig.accountId) {
+          const origDate = orig.date || date;
+          const [origY, origM] = origDate.split('-').map(Number);
+          const cur = await SheetsApi.getCurrentBalance(getSheetId(), orig.accountId);
+          await SheetsApi.upsertBalanceRow(getSheetId(), orig.accountId, origY, origM, cur - orig.amount, origDate);
+        }
+        showEditModal.value = false;
+        editingIncome.value = null;
+        editOriginal.value = null;
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to save income:', err);
+        showAlert('Failed to save. Please try again.');
+      }
+    }
+
+    function duplicateIncome() {
+      const e = editingIncome.value;
+      if (!e) return;
+      newIncome.value = {
+        title: e.title,
+        amount: amountToInput(parseAmount(e.amount)),
+        accountId: e.accountId || '',
+        category: e.category || '',
+        date: localDateISO(),
+        notes: e.notes || '',
+        repeats: e.repeats || '',
+      };
+      showEditModal.value = false;
+      editingIncome.value = null;
+      showAddModal.value = true;
+    }
+
+    async function deleteIncome(id) {
+      if (!(await showConfirm('Delete this income entry?'))) return;
+      try {
+        const orig = editOriginal.value;
+        if (orig && orig.balanceAdjusted === 'yes' && orig.accountId && orig.date) {
+          const [y, m] = orig.date.split('-').map(Number);
+          const cur = await SheetsApi.getCurrentBalance(getSheetId(), orig.accountId);
+          await SheetsApi.upsertBalanceRow(getSheetId(), orig.accountId, y, m, cur - orig.amount, orig.date);
+        }
+        await SheetsApi.deleteRows(getSheetId(), TABS.INCOME, [id]);
+        showEditModal.value = false;
+        editingIncome.value = null;
+        await fetchData();
+      } catch (err) {
+        console.error('Failed to delete income:', err);
+        showAlert('Failed to delete. Please try again.');
+      }
+    }
+
+    function isFutureDate(dateStr) {
+      if (!dateStr) return false;
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const [y, m, d] = dateStr.split('-').map(Number);
+      return new Date(y, m - 1, d) > today;
+    }
+
+    function formatDate(dateStr) {
+      if (!dateStr) return '';
+      const [y, m, d] = dateStr.split('-').map(Number);
+      const opts = { month: 'short', day: 'numeric' };
+      const singleMonth = filterMonth.value && filterMonth.value.length > 4;
+      if (!singleMonth && y !== new Date().getFullYear()) opts.year = 'numeric';
+      return new Date(y, m - 1, d).toLocaleDateString(undefined, opts);
+    }
+
+    watch(() => getSheetId(), (id) => { if (id) fetchData(); }, { immediate: true });
+
+    const addNameInput = ref(null);
+    watch(showAddModal, (v) => {
+      if (v) {
+        addFx.reset();
+        nextTick(() => { addNameInput.value?.focus(); });
+      } else if (openDropdown.value === 'newCat' || openDropdown.value === 'newAcct') {
+        openDropdown.value = null;
+      }
+    });
+    watch(showEditModal, (v) => {
+      if (v) {
+        editFx.reset();
+      } else if (openDropdown.value === 'editCat' || openDropdown.value === 'editAcct') {
+        openDropdown.value = null;
+      }
+    });
+
+    function toggleDropdown(name) {
+      openDropdown.value = openDropdown.value === name ? null : name;
+    }
+
+    function setDropdownOpen(id, isOpen) {
+      if (isOpen) openDropdown.value = id;
+      else if (openDropdown.value === id) openDropdown.value = null;
+    }
+
+    // ── Category Manager ──────────────────────────────────────────────────
+    const showCategoryManager = ref(false);
+    const managedCategories = ref([]);
+    const newManagedCat = ref('');
+    const editingCatName = ref(null);
+    const editCatNameValue = ref('');
+    const catIconPickerFor = ref(null);
+
+    function serializeCats(arr) {
+      return arr.map(c => c.icon ? c.name + ':' + c.icon : c.name).join(',');
+    }
+
+    function openCategoryManager() {
+      openDropdown.value = null;
+      const str = props.settings?.incomeCategories || '';
+      managedCategories.value = str.split(',').filter(Boolean).map(c => {
+        const idx = c.indexOf(':');
+        if (idx < 0) return { name: c, icon: '' };
+        return { name: c.slice(0, idx), icon: c.slice(idx + 1) };
+      });
+      showCategoryManager.value = true;
+    }
+
+    async function saveManagedCategories() {
+      try {
+        const serialized = serializeCats(managedCategories.value);
+        await SheetsApi.updateSetting(getSheetId(), 'incomeCategories', serialized);
+        emit('settings-updated', { incomeCategories: serialized });
+      } catch (err) {
+        console.error('Failed to save categories:', err);
+        showAlert('Failed to save categories. Please try again.');
+      }
+    }
+
+    function addManagedCat() {
+      const name = newManagedCat.value.trim();
+      if (!name || managedCategories.value.some(c => c.name === name)) return;
+      managedCategories.value.push({ name, icon: '' });
+      newManagedCat.value = '';
+      saveManagedCategories();
+    }
+    async function removeManagedCat(i) {
+      const name = managedCategories.value[i]?.name || 'this category';
+      if (!(await showConfirm('Delete "' + name + '"? This will not remove the category from existing entries.'))) return;
+      managedCategories.value.splice(i, 1);
+      saveManagedCategories();
+    }
+    function startRenameManagedCat(i) {
+      editingCatName.value = i;
+      editCatNameValue.value = managedCategories.value[i].name;
+    }
+    function saveRenameManagedCat() {
+      if (editingCatName.value === null) return;
+      const val = editCatNameValue.value.trim();
+      if (val) managedCategories.value[editingCatName.value].name = val;
+      editingCatName.value = null;
+      saveManagedCategories();
+    }
+    function cancelRenameManagedCat() { editingCatName.value = null; }
+    function moveManagedCatUp(i) {
+      if (i <= 0) return;
+      const arr = managedCategories.value;
+      [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
+      saveManagedCategories();
+    }
+    function moveManagedCatDown(i) {
+      const arr = managedCategories.value;
+      if (i >= arr.length - 1) return;
+      [arr[i], arr[i + 1]] = [arr[i + 1], arr[i]];
+      saveManagedCategories();
+    }
+    function openCatIconPicker(i) { catIconPickerFor.value = i; }
+    function pickCatIcon(iconName) {
+      if (catIconPickerFor.value === null) return;
+      managedCategories.value[catIconPickerFor.value].icon = iconName;
+      catIconPickerFor.value = null;
+      saveManagedCategories();
+    }
+    function clearCatIcon() {
+      if (catIconPickerFor.value === null) return;
+      managedCategories.value[catIconPickerFor.value].icon = '';
+      catIconPickerFor.value = null;
+      saveManagedCategories();
+    }
+
+    // ── Account Manager ──────────────────────────────────────────────────
+    const showAccountManager = ref(false);
+    const newManagedAccount = ref({ name: '', currency: '', type: 'Checking/Debit' });
+    const ACCOUNT_TYPES = ['Checking/Debit', 'Saving', 'Credit', 'Investment'];
+    const acctCurrencyOpen = ref(false);
+    const acctCurrencySearch = ref('');
+    const acctFilteredCurrencies = computed(() => {
+      const q = acctCurrencySearch.value.toLowerCase();
+      if (!q) return CURRENCIES;
+      return CURRENCIES.filter(c => c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q));
+    });
+    function acctCurrencyName(code) {
+      const found = CURRENCIES.find(c => c.code === code);
+      return found ? found.name : code;
+    }
+    function selectAcctCurrency(code) {
+      newManagedAccount.value.currency = code;
+      acctCurrencyOpen.value = false;
+      acctCurrencySearch.value = '';
+    }
+
+    function openAccountManager() {
+      openDropdown.value = null;
+      newManagedAccount.value = { name: '', currency: baseCurrency.value, type: 'Checking/Debit' };
+      showAccountManager.value = true;
+    }
+
+    async function addManagedAccount() {
+      const acc = newManagedAccount.value;
+      if (!acc.name.trim()) return;
+      const id = SheetsApi.generateId();
+      const currency = acc.currency || baseCurrency.value;
+      const order = (props.accounts || []).length.toString();
+      await SheetsApi.appendRow(getSheetId(), TABS.ACCOUNTS, [
+        id, acc.name.trim(), currency, acc.type, 'false', order,
+      ]);
+      newManagedAccount.value = { name: '', currency: baseCurrency.value, type: 'Checking/Debit' };
+      emit('refresh');
+    }
+
+    async function toggleManagedAccountDiscontinued(acc) {
+      const newVal = acc.discontinued === 'true' ? 'false' : 'true';
+      await SheetsApi.updateRow(getSheetId(), TABS.ACCOUNTS, acc.id, [
+        acc.id, acc.name, acc.currency, acc.type, newVal, acc.order,
+      ]);
+      emit('refresh');
+    }
+
+    async function disableTool() {
+      try {
+        const current = (props.settings?.listsEnabled || '').split(',').filter(Boolean);
+        const updated = current.filter(t => t !== 'income').join(',');
+        await SheetsApi.updateSetting(getSheetId(), 'listsEnabled', updated);
+        emit('settings-updated', { listsEnabled: updated });
+        emit('go-home');
+      } catch (err) {
+        console.error('Failed to disable tool:', err);
+        showAlert('Failed to save. Please try again.');
+      }
+    }
+
+    return {
+      incomeList, loading, filteredIncome, monthlyTotal, monthTotals,
+      showAddModal, showEditModal, editingIncome,
+      newIncome, categories, baseCurrency,
+      adjustBalance, editAdjustBalance,
+      filterMonth, filterCategory, filterSearch, showUpcoming, toggleUpcoming, hasFutureEntries, availableMonths, periodOptions, usedCategories,
+      showMonthSheet, formatMonthLabel,
+      openDropdown, toggleDropdown, setDropdownOpen,
+      sortedAccounts,
+      formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
+      addIncome, startEdit, saveEdit, deleteIncome, duplicateIncome,
+      isFutureDate, formatDate, sanitizeAmount, openNewIncomeModal, addNameInput,
+      showCategoryManager, managedCategories, newManagedCat, editingCatName, editCatNameValue, catIconPickerFor,
+      openCategoryManager, addManagedCat, removeManagedCat,
+      startRenameManagedCat, saveRenameManagedCat, cancelRenameManagedCat,
+      moveManagedCatUp, moveManagedCatDown, openCatIconPicker, pickCatIcon, clearCatIcon,
+      CATEGORY_ICONS,
+      showAccountManager, newManagedAccount, ACCOUNT_TYPES,
+      acctCurrencyOpen, acctCurrencySearch, acctFilteredCurrencies, acctCurrencyName, selectAcctCurrency,
+      openAccountManager, addManagedAccount, toggleManagedAccountDiscontinued,
+      disableTool,
+      addFx, editFx,
+    };
+  },
+
+  template: `
+    <div class="subpage">
+      <div class="subpage-scroll">
+      <!-- Nav row with centered title -->
+      <div class="subpage-nav">
+        <button class="subpage-back subpage-back--colored" @click="$emit('go-home')">
+          <span class="material-icons">arrow_back</span>
+        </button>
+        <h1 class="subpage-nav-title">Income</h1>
+        <div class="valu-orb-sm subpage-orb-inline" @click="$emit('navigate', 'assistant')">
+          <div class="spheres">
+            <div class="spheres-group">
+              <div class="sphere s1"></div>
+              <div class="sphere s2"></div>
+              <div class="sphere s3"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="loading" class="loading" style="padding-top:40px;"><div class="spinner"></div>Loading income...</div>
+
+      <template v-else>
+        <!-- Month + total header -->
+        <div class="subpage-header">
+          <button class="subpage-month-btn" @click="showMonthSheet = true">
+            <span>{{ formatMonthLabel(filterMonth) }}</span>
+            <span class="material-icons subpage-month-arrow">unfold_more</span>
+          </button>
+          <h2 class="subpage-balance">{{ formatCurrency(monthlyTotal, baseCurrency) }}</h2>
+        </div>
+
+        <!-- Category filter -->
+        <div class="subpage-filter-bar" v-if="filteredIncome.length > 0 || filterSearch || filterCategory || hasFutureEntries">
+          <div class="subpage-filter-search" :class="{ expanded: filterSearch }">
+            <span class="material-icons subpage-filter-search-icon">search</span>
+            <input class="subpage-filter-search-input" v-model="filterSearch" placeholder="Search..." />
+            <button v-if="filterSearch" class="subpage-filter-search-clear" @click="filterSearch = ''">
+              <span class="material-icons">close</span>
+            </button>
+          </div>
+          <div v-if="usedCategories.length > 0" style="position:relative;">
+            <button class="subpage-filter-btn" :class="{ active: filterCategory }" @click="toggleDropdown('filterCat')">
+              <span class="material-icons" style="font-size:16px;">filter_list</span>
+              <span>{{ filterCategory || 'Filter' }}</span>
+            </button>
+            <div class="subpage-filter-dropdown" v-if="openDropdown === 'filterCat'" @click.stop>
+              <div class="subpage-filter-option" :class="{ selected: !filterCategory }"
+                   @click="filterCategory = ''; openDropdown = null">All categories</div>
+              <div v-for="cat in usedCategories" :key="cat.name"
+                   class="subpage-filter-option" :class="{ selected: filterCategory === cat.name }"
+                   :style="!cat.active ? { opacity: 0.5 } : {}"
+                   @click="filterCategory = cat.name; openDropdown = null">
+                <span v-if="getCategoryIcon(cat.name)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(cat.name) }}</span>
+                {{ cat.name }}
+              </div>
+            </div>
+          </div>
+          <button v-if="hasFutureEntries" class="subpage-filter-btn" :class="{ active: showUpcoming }" @click="toggleUpcoming">
+            <span class="material-icons" style="font-size:16px;">event</span>
+            <span>Upcoming</span>
+          </button>
+        </div>
+
+        <!-- Income List -->
+        <div class="valu-list" v-if="filteredIncome.length > 0">
+          <div v-for="inc in filteredIncome" :key="inc.id" class="valu-list-item" :style="isFutureDate(inc.date) ? { opacity: 0.5 } : {}" @click="startEdit(inc)">
+            <div class="valu-list-row">
+              <span v-if="getCategoryIcon(inc.category)" class="material-icons valu-list-cat-icon">{{ getCategoryIcon(inc.category) }}</span>
+              <div class="valu-list-body">
+                <div class="valu-list-top">
+                  <div class="valu-list-name">{{ inc.title }}</div>
+                  <div class="valu-list-after">{{ formatCurrency(inc.amount, baseCurrency) }}</div>
+                </div>
+                <div class="valu-list-sub">
+                  {{ formatDate(inc.date) }}
+                  <span v-if="getAccountName(inc.accountId)"> · {{ getAccountName(inc.accountId) }}</span>
+                  <span v-if="inc.repeats" class="repeats-badge"><span class="material-icons" style="font-size:12px;vertical-align:middle;">repeat</span> {{ inc.repeats === 'monthly' ? 'Monthly' : 'Yearly' }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="filteredIncome.length === 0 && incomeList.length > 0" class="empty-state">
+          <span class="material-icons">filter_list</span>
+          <h3>No income for this period</h3>
+          <p>Try adjusting your search, category filter, or period.</p>
+          <button v-if="filterMonth || filterCategory || filterSearch" class="btn-link" style="margin-top:8px;" @click="filterMonth = ''; filterCategory = ''; filterSearch = ''">Clear all filters</button>
+        </div>
+
+        <div v-if="incomeList.length === 0" class="empty-state" style="padding-top:40px;text-align:center;">
+          <span class="material-icons">payments</span>
+          <h3>No income recorded yet</h3>
+          <p>Track your earnings by adding income entries.</p>
+          <div class="empty-state-disable">
+            <p>Not ready to use this tool?</p>
+            <button class="btn-disable-tool" @click="disableTool">Disable Income for now</button>
+            <p class="empty-state-hint">You can re-enable it anytime from your Group configuration.</p>
+          </div>
+        </div>
+
+        <div class="subpage-bottom-fixed">
+          <button class="btn-add-outline" @click="openNewIncomeModal">ADD INCOME</button>
+        </div>
+      </template>
+      </div>
+
+      <!-- Add Income Sheet -->
+      <div class="modal-overlay" :class="{ open: showAddModal }" @click.self="showAddModal = false">
+        <div class="modal">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>New Income</h2>
+            <button class="btn-icon" @click="showAddModal = false"><span class="material-icons">close</span></button>
+          </div>
+          <div class="sheet-hero">
+            <input ref="addNameInput" class="sheet-hero-name" v-model="newIncome.title" placeholder="Income source" />
+            <input class="sheet-hero-amount" v-model="newIncome.amount" @input="sanitizeAmount(newIncome, 'amount')" type="text" inputmode="decimal" placeholder="0" :readonly="addFx.fxActive.value" :class="{ 'fx-readonly': addFx.fxActive.value }" />
+            <div class="sheet-hero-label">Amount <span v-if="addFx.fxActive.value" class="fx-base-tag">in {{ baseCurrency }}</span></div>
+          </div>
+          <div v-if="addFx.needsFx.value" class="fx-convert-section">
+            <button class="fx-toggle-btn" @click="addFx.toggle()">
+              <span class="material-icons fx-toggle-icon">currency_exchange</span>
+              {{ addFx.fxActive.value ? 'Cancel conversion' : 'Convert from ' + addFx.fxCurrency.value }}
+            </button>
+            <div v-if="addFx.fxActive.value" class="fx-convert-body">
+              <div class="fx-input-row">
+                <input class="fx-foreign-input" type="text" inputmode="decimal" v-model="addFx.fxForeignAmount.value" @input="addFx.updateConverted()" :placeholder="'Amount in ' + addFx.fxCurrency.value" />
+                <span class="fx-currency-label">{{ addFx.fxCurrency.value }}</span>
+              </div>
+              <div v-if="addFx.fxLoading.value" class="fx-rate-info">Fetching rate...</div>
+              <div v-else-if="addFx.fxError.value" class="fx-rate-info fx-rate-error">{{ addFx.fxError.value }} — enter amount in {{ baseCurrency }} directly.</div>
+              <div v-else-if="addFx.fxRate.value" class="fx-rate-info">1 {{ addFx.fxCurrency.value }} = {{ addFx.fxRate.value.toFixed(4) }} {{ baseCurrency }} <span class="fx-rate-date">({{ addFx.fxRateDate.value }})</span></div>
+              <div v-if="addFx.fxIsFuture.value && addFx.fxRate.value && !addFx.fxLoading.value" class="fx-rate-info fx-future-hint">
+                <span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">schedule</span>
+                Using today's rate — will be updated automatically when the date arrives.
+              </div>
+            </div>
+          </div>
+          <div class="modal-body" @click="openDropdown = null">
+            <div class="sheet-section-title">Details</div>
+            <div class="sheet-list-item">
+              <label>Date</label>
+              <valu-date-field v-model="newIncome.date" />
+            </div>
+            <div class="sheet-list-item">
+              <label>Category</label>
+              <valu-dropdown :open="openDropdown === 'newCat'" @update:open="(v) => setDropdownOpen('newCat', v)">
+                <template #label>
+                  <span v-if="getCategoryIcon(newIncome.category)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(newIncome.category) }}</span>
+                  {{ newIncome.category || 'No category' }}
+                </template>
+                <div class="valu-dropdown-option" :class="{ selected: !newIncome.category }"
+                     @click="newIncome.category = ''; openDropdown = null">No category</div>
+                <div v-for="c in categories" :key="c.name"
+                     class="valu-dropdown-option" :class="{ selected: newIncome.category === c.name }"
+                     @click="newIncome.category = c.name; openDropdown = null">
+                  <span v-if="c.icon" class="material-icons dropdown-cat-icon">{{ c.icon }}</span>
+                  {{ c.name }}
+                </div>
+                <div class="valu-dropdown-option valu-dropdown-manage" @click="openCategoryManager()">
+                  <span class="material-icons dropdown-cat-icon">settings</span> Manage categories
+                </div>
+              </valu-dropdown>
+            </div>
+            <div class="sheet-list-item">
+              <label>Account</label>
+              <valu-dropdown :open="openDropdown === 'newAcct'" @update:open="(v) => setDropdownOpen('newAcct', v)">
+                <template #label>{{ newIncome.accountId ? getAccountName(newIncome.accountId) : 'No account' }}</template>
+                <div class="valu-dropdown-option" :class="{ selected: !newIncome.accountId }"
+                     @click="newIncome.accountId = ''; openDropdown = null">No account</div>
+                <div v-for="a in sortedAccounts" :key="a.id"
+                     class="valu-dropdown-option" :class="{ selected: newIncome.accountId === a.id }"
+                     @click="newIncome.accountId = a.id; openDropdown = null">{{ formatAccountDisplayName(a) }}</div>
+                <div class="valu-dropdown-option valu-dropdown-manage" @click="openAccountManager()">
+                  <span class="material-icons dropdown-cat-icon">settings</span> Manage accounts
+                </div>
+              </valu-dropdown>
+            </div>
+            <div class="form-group" style="margin-top:16px;">
+              <label class="form-label">Notes</label>
+              <textarea class="form-input" v-model="newIncome.notes" rows="2" placeholder="Optional notes"></textarea>
+            </div>
+            <div class="sheet-list-item">
+              <label>Repeats</label>
+              <valu-dropdown :open="openDropdown === 'newRepeats'" @update:open="(v) => setDropdownOpen('newRepeats', v)">
+                <template #label>{{ newIncome.repeats === 'monthly' ? 'Monthly' : newIncome.repeats === 'yearly' ? 'Yearly' : 'None' }}</template>
+                <div class="valu-dropdown-option" :class="{ selected: !newIncome.repeats }"
+                     @click="newIncome.repeats = ''; openDropdown = null">None</div>
+                <div class="valu-dropdown-option" :class="{ selected: newIncome.repeats === 'monthly' }"
+                     @click="newIncome.repeats = 'monthly'; openDropdown = null">Monthly</div>
+                <div class="valu-dropdown-option" :class="{ selected: newIncome.repeats === 'yearly' }"
+                     @click="newIncome.repeats = 'yearly'; openDropdown = null">Yearly</div>
+              </valu-dropdown>
+            </div>
+            <label v-if="newIncome.accountId && sortedAccounts.length > 0" class="balance-adjust-check" @click.stop>
+              <input type="checkbox" v-model="adjustBalance" />
+              <span>Also update {{ getAccountName(newIncome.accountId) }} balance</span>
+            </label>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-sheet-cta" @click="addIncome" :disabled="!newIncome.title.trim() || newIncome.amount === '' || newIncome.amount === undefined">Add income</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Month Selection Sheet -->
+      <div class="modal-overlay" :class="{ open: showMonthSheet }" @click.self="showMonthSheet = false">
+        <div class="modal">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Select Period</h2>
+            <button class="btn-icon" @click="showMonthSheet = false"><span class="material-icons">close</span></button>
+          </div>
+          <div v-if="filterCategory || filterSearch" class="month-picker-filters">
+            <span v-if="filterSearch" class="month-picker-filter-tag"><span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">search</span>{{ filterSearch }}</span>
+            <span v-if="filterCategory" class="month-picker-filter-tag"><span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">filter_list</span>{{ filterCategory }}</span>
+          </div>
+          <div class="modal-body" style="padding:0;">
+            <div class="month-picker-option" :class="{ selected: !filterMonth }"
+                 @click="filterMonth = ''; showMonthSheet = false">
+              <span class="month-picker-label">All time</span>
+              <span class="month-picker-total">{{ formatCurrency(Object.values(monthTotals).reduce((a,b) => a+b, 0), baseCurrency) }}</span>
+            </div>
+            <div v-for="opt in periodOptions" :key="opt.key"
+                 class="month-picker-option" :class="{ selected: filterMonth === opt.key, 'month-picker-year': opt.isYear }"
+                 @click="filterMonth = opt.key; showMonthSheet = false">
+              <span class="month-picker-label">{{ opt.label }}</span>
+              <span class="month-picker-total">{{ formatCurrency(opt.total, baseCurrency) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Edit Income Sheet -->
+      <div class="modal-overlay" :class="{ open: showEditModal }" @click.self="showEditModal = false">
+        <div class="modal" v-if="editingIncome">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Edit Income</h2>
+            <button class="btn-icon" @click="showEditModal = false"><span class="material-icons">close</span></button>
+          </div>
+          <div class="sheet-hero">
+            <input class="sheet-hero-name" v-model="editingIncome.title" placeholder="Income source" />
+            <input class="sheet-hero-amount" v-model="editingIncome.amount" @input="sanitizeAmount(editingIncome, 'amount')" type="text" inputmode="decimal" placeholder="0" :readonly="editFx.fxActive.value" :class="{ 'fx-readonly': editFx.fxActive.value }" />
+            <div class="sheet-hero-label">Amount <span v-if="editFx.fxActive.value" class="fx-base-tag">in {{ baseCurrency }}</span></div>
+          </div>
+          <div v-if="editFx.needsFx.value" class="fx-convert-section">
+            <button class="fx-toggle-btn" @click="editFx.toggle()">
+              <span class="material-icons fx-toggle-icon">currency_exchange</span>
+              {{ editFx.fxActive.value ? 'Cancel conversion' : 'Convert from ' + editFx.fxCurrency.value }}
+            </button>
+            <div v-if="editFx.fxActive.value" class="fx-convert-body">
+              <div class="fx-input-row">
+                <input class="fx-foreign-input" type="text" inputmode="decimal" v-model="editFx.fxForeignAmount.value" @input="editFx.updateConverted()" :placeholder="'Amount in ' + editFx.fxCurrency.value" />
+                <span class="fx-currency-label">{{ editFx.fxCurrency.value }}</span>
+              </div>
+              <div v-if="editFx.fxLoading.value" class="fx-rate-info">Fetching rate...</div>
+              <div v-else-if="editFx.fxError.value" class="fx-rate-info fx-rate-error">{{ editFx.fxError.value }} — enter amount in {{ baseCurrency }} directly.</div>
+              <div v-else-if="editFx.fxRate.value" class="fx-rate-info">1 {{ editFx.fxCurrency.value }} = {{ editFx.fxRate.value.toFixed(4) }} {{ baseCurrency }} <span class="fx-rate-date">({{ editFx.fxRateDate.value }})</span></div>
+              <div v-if="editFx.fxIsFuture.value && editFx.fxRate.value && !editFx.fxLoading.value" class="fx-rate-info fx-future-hint">
+                <span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">schedule</span>
+                Using today's rate — will be updated automatically when the date arrives.
+              </div>
+            </div>
+          </div>
+          <div class="modal-body" @click="openDropdown = null">
+            <div class="sheet-section-title">Details</div>
+            <div class="sheet-list-item">
+              <label>Date</label>
+              <valu-date-field v-model="editingIncome.date" />
+            </div>
+            <div class="sheet-list-item">
+              <label>Category</label>
+              <valu-dropdown :open="openDropdown === 'editCat'" @update:open="(v) => setDropdownOpen('editCat', v)">
+                <template #label>
+                  <span v-if="getCategoryIcon(editingIncome.category)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(editingIncome.category) }}</span>
+                  {{ editingIncome.category || 'No category' }}
+                </template>
+                <div class="valu-dropdown-option" :class="{ selected: !editingIncome.category }"
+                     @click="editingIncome.category = ''; openDropdown = null">No category</div>
+                <div v-for="c in categories" :key="c.name"
+                     class="valu-dropdown-option" :class="{ selected: editingIncome.category === c.name }"
+                     @click="editingIncome.category = c.name; openDropdown = null">
+                  <span v-if="c.icon" class="material-icons dropdown-cat-icon">{{ c.icon }}</span>
+                  {{ c.name }}
+                </div>
+                <div class="valu-dropdown-option valu-dropdown-manage" @click="openCategoryManager()">
+                  <span class="material-icons dropdown-cat-icon">settings</span> Manage categories
+                </div>
+              </valu-dropdown>
+            </div>
+            <div class="sheet-list-item">
+              <label>Account</label>
+              <valu-dropdown :open="openDropdown === 'editAcct'" @update:open="(v) => setDropdownOpen('editAcct', v)">
+                <template #label>{{ editingIncome.accountId ? getAccountName(editingIncome.accountId) : 'No account' }}</template>
+                <div class="valu-dropdown-option" :class="{ selected: !editingIncome.accountId }"
+                     @click="editingIncome.accountId = ''; openDropdown = null">No account</div>
+                <div v-for="a in sortedAccounts" :key="a.id"
+                     class="valu-dropdown-option" :class="{ selected: editingIncome.accountId === a.id }"
+                     @click="editingIncome.accountId = a.id; openDropdown = null">{{ formatAccountDisplayName(a) }}</div>
+                <div class="valu-dropdown-option valu-dropdown-manage" @click="openAccountManager()">
+                  <span class="material-icons dropdown-cat-icon">settings</span> Manage accounts
+                </div>
+              </valu-dropdown>
+            </div>
+            <div class="form-group" style="margin-top:16px;">
+              <label class="form-label">Notes</label>
+              <textarea class="form-input" v-model="editingIncome.notes" rows="2" placeholder="Optional notes"></textarea>
+            </div>
+            <div class="sheet-list-item">
+              <label>Repeats</label>
+              <valu-dropdown :open="openDropdown === 'editRepeats'" @update:open="(v) => setDropdownOpen('editRepeats', v)">
+                <template #label>{{ editingIncome.repeats === 'monthly' ? 'Monthly' : editingIncome.repeats === 'yearly' ? 'Yearly' : 'None' }}</template>
+                <div class="valu-dropdown-option" :class="{ selected: !editingIncome.repeats }"
+                     @click="editingIncome.repeats = ''; openDropdown = null">None</div>
+                <div class="valu-dropdown-option" :class="{ selected: editingIncome.repeats === 'monthly' }"
+                     @click="editingIncome.repeats = 'monthly'; openDropdown = null">Monthly</div>
+                <div class="valu-dropdown-option" :class="{ selected: editingIncome.repeats === 'yearly' }"
+                     @click="editingIncome.repeats = 'yearly'; openDropdown = null">Yearly</div>
+              </valu-dropdown>
+            </div>
+            <label v-if="editingIncome.accountId && sortedAccounts.length > 0" class="balance-adjust-check" @click.stop>
+              <input type="checkbox" v-model="editAdjustBalance" />
+              <span>Also update {{ getAccountName(editingIncome.accountId) }} balance</span>
+            </label>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-sheet-cta" @click="saveEdit">Save changes</button>
+            <div class="modal-footer-row">
+              <button class="btn btn-text btn-danger" @click="deleteIncome(editingIncome.id)">Delete</button>
+              <button class="btn btn-text" @click="duplicateIncome"><span class="material-icons" style="font-size:18px;vertical-align:middle;">content_copy</span> Duplicate</button>
+              <button class="btn btn-text" @click="showEditModal = false">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Category Manager Sheet -->
+      <div class="modal-overlay" :class="{ open: showCategoryManager }" @click.self="showCategoryManager = false">
+        <div class="modal" v-if="showCategoryManager">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Income Categories</h2>
+            <button class="btn-icon" @click="showCategoryManager = false"><span class="material-icons">close</span></button>
+          </div>
+          <div class="modal-body" style="padding:12px;">
+            <div class="cat-list" v-if="managedCategories.length">
+              <div class="cat-item" v-for="(cat, i) in managedCategories" :key="i">
+                <button class="cat-icon-btn" @click="openCatIconPicker(i)">
+                  <span class="material-icons">{{ cat.icon || 'label' }}</span>
+                </button>
+                <template v-if="editingCatName === i">
+                  <input class="form-input cat-rename-input" v-model="editCatNameValue" @keyup.enter="saveRenameManagedCat" @keyup.escape="cancelRenameManagedCat" @blur="saveRenameManagedCat" />
+                </template>
+                <span v-else class="cat-name" @click="startRenameManagedCat(i)">{{ cat.name }}</span>
+                <div class="cat-order-btns">
+                  <button class="cat-order-btn" @click="moveManagedCatUp(i)" :disabled="i === 0"><span class="material-icons">arrow_upward</span></button>
+                  <button class="cat-order-btn" @click="moveManagedCatDown(i)" :disabled="i === managedCategories.length - 1"><span class="material-icons">arrow_downward</span></button>
+                </div>
+                <button class="cat-remove-btn" @click="removeManagedCat(i)">&times;</button>
+              </div>
+            </div>
+            <p v-else style="font-size:13px;color:var(--color-text-hint);margin-bottom:12px;">No categories yet.</p>
+            <div class="flex gap-8" style="margin-top:12px;">
+              <input class="form-input flex-1" v-model="newManagedCat" placeholder="New category" @keyup.enter="addManagedCat" />
+              <button class="btn btn-outline" @click="addManagedCat" :disabled="!newManagedCat.trim()">Add</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Category Icon Picker -->
+      <div class="modal-overlay modal-overlay-top" :class="{ open: catIconPickerFor !== null }" @click.self="catIconPickerFor = null">
+        <div class="modal" v-if="catIconPickerFor !== null" style="max-height:60vh;">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Choose Icon</h2>
+            <button class="btn-icon" @click="catIconPickerFor = null"><span class="material-icons">close</span></button>
+          </div>
+          <div class="modal-body" style="padding:12px;">
+            <div class="icon-picker-grid">
+              <button v-for="ic in CATEGORY_ICONS" :key="ic" class="icon-picker-item" @click="pickCatIcon(ic)" :title="ic">
+                <span class="material-icons">{{ ic }}</span>
+              </button>
+            </div>
+            <button class="btn btn-text" style="width:100%;margin-top:8px;" @click="clearCatIcon">Remove icon</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Account Manager Sheet -->
+      <div class="modal-overlay" :class="{ open: showAccountManager }" @click.self="showAccountManager = false">
+        <div class="modal" v-if="showAccountManager">
+          <div class="sheet-handle"></div>
+          <div class="modal-header">
+            <h2>Accounts</h2>
+            <button class="btn-icon" @click="showAccountManager = false"><span class="material-icons">close</span></button>
+          </div>
+          <div class="modal-body" style="padding:12px;">
+            <div v-if="(accounts || []).length" class="cat-list">
+              <div class="cat-item" v-for="acc in sortedAccounts" :key="acc.id">
+                <span class="material-icons" style="font-size:20px;color:var(--color-primary);margin-right:8px;">account_balance</span>
+                <span class="cat-name" style="cursor:default;">{{ formatAccountDisplayName(acc) }}</span>
+              </div>
+              <div v-for="acc in (accounts || []).filter(a => a.discontinued === 'true')" :key="acc.id" class="cat-item" style="opacity:0.5;">
+                <span class="material-icons" style="font-size:20px;color:var(--color-text-hint);margin-right:8px;">account_balance</span>
+                <span class="cat-name" style="cursor:default;text-decoration:line-through;">{{ formatAccountDisplayName(acc) }}</span>
+              </div>
+            </div>
+            <p v-else style="font-size:13px;color:var(--color-text-hint);margin-bottom:12px;">No accounts yet.</p>
+            <div style="margin-top:16px;border-top:1px solid var(--color-border);padding-top:12px;">
+              <div class="sheet-section-title">Add account</div>
+              <input class="form-input" v-model="newManagedAccount.name" placeholder="Account name" style="margin-bottom:8px;" />
+              <div class="sheet-list-item" style="margin-bottom:8px;">
+                <label>Type</label>
+                <valu-dropdown :open="openDropdown === 'acctType'" @update:open="(v) => setDropdownOpen('acctType', v)">
+                  <template #label>{{ newManagedAccount.type }}</template>
+                  <div v-for="t in ACCOUNT_TYPES" :key="t"
+                       class="valu-dropdown-option" :class="{ selected: newManagedAccount.type === t }"
+                       @click="newManagedAccount.type = t; openDropdown = null">{{ t }}</div>
+                </valu-dropdown>
+              </div>
+              <div class="sheet-list-item" style="margin-bottom:12px;">
+                <label>Currency</label>
+                <valu-currency-picker v-model:open="acctCurrencyOpen" v-model:search="acctCurrencySearch">
+                  <template #label>{{ newManagedAccount.currency ? acctCurrencyName(newManagedAccount.currency) : 'Select currency' }}</template>
+                  <div v-for="c in acctFilteredCurrencies" :key="c.code"
+                       class="currency-picker-option" :class="{ selected: c.code === newManagedAccount.currency }"
+                       @click="selectAcctCurrency(c.code)">{{ c.name }}</div>
+                  <div v-if="acctFilteredCurrencies.length === 0" class="currency-picker-empty">No match</div>
+                </valu-currency-picker>
+              </div>
+              <button class="btn btn-primary" style="width:100%;" @click="addManagedAccount" :disabled="!newManagedAccount.name.trim()">Add account</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+};
