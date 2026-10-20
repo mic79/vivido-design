@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Single source of truth for the app version.
  * Loaded as a classic script by index.html (window.VALU_VERSION) and by the service worker
  * (importScripts). Bump this ONE value on every deploy: it renames the cache and updates the
@@ -8,5 +8,5 @@
  * When promoting dev to stable, change this to the plain number (e.g. 'v197').
  */
 (function (root) {
-  root.VALU_VERSION = 'v198-dev';
+  root.VALU_VERSION = 'v199-dev';
 })(typeof self !== 'undefined' ? self : this);

@@ -159,7 +159,20 @@ export default {
       }
     }
 
-    const filterAwareExpenses = computed(() => {
+    // "Sold" entries (e.g. "Sold winter jacket", -40) are logged as negative expenses so they reduce
+    // their category total. This optional view hides them to show only what was bought.
+    const SOLD_RE = /\bsold\b/i;
+    function isSoldEntry(e) { return !!e.title && SOLD_RE.test(e.title); }
+    const excludeSold = ref(false);
+
+    function inSelectedPeriod(e) {
+      if (!filterMonth.value) return true;
+      if (!e.date) return false;
+      const parts = e.date.split('-');
+      return filterMonth.value.length === 4 ? parts[0] === filterMonth.value : `${parts[0]}-${parts[1]}` === filterMonth.value;
+    }
+
+    const filterAwareBase = computed(() => {
       let list = expenses.value;
       if (!showUpcoming.value) {
         list = list.filter(e => !isFutureDate(e.date));
@@ -177,6 +190,16 @@ export default {
       }
       return list;
     });
+
+    // The button only exists while a category/search filter is active AND it contains "Sold" entries.
+    const soldFilterAvailable = computed(() =>
+      !!(filterCategory.value || filterSearch.value) &&
+      filterAwareBase.value.some(e => isSoldEntry(e) && inSelectedPeriod(e)));
+    const soldExcluded = computed(() => excludeSold.value && soldFilterAvailable.value);
+    watch([filterCategory, filterSearch], () => { excludeSold.value = false; });
+
+    const filterAwareExpenses = computed(() =>
+      soldExcluded.value ? filterAwareBase.value.filter(e => !isSoldEntry(e)) : filterAwareBase.value);
 
     const availableMonths = computed(() => {
       const months = new Set();
@@ -253,6 +276,10 @@ export default {
 
       if (!showUpcoming.value) {
         list = list.filter(e => !isFutureDate(e.date));
+      }
+
+      if (soldExcluded.value) {
+        list = list.filter(e => !isSoldEntry(e));
       }
 
       return list;
@@ -722,6 +749,7 @@ export default {
       sortedAccounts,
       formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
       submitting, categoryRequired,
+      excludeSold, soldFilterAvailable, soldExcluded,
       addExpense, startEdit, saveEdit, deleteExpense, duplicateExpense,
       isFutureDate, formatDate, sanitizeAmount, openNewExpenseModal, addNameInput,
       showCategoryManager, managedCategories, newManagedCat, editingCatName, editCatNameValue, catIconPickerFor,
@@ -795,6 +823,11 @@ export default {
               </div>
             </div>
           </div>
+          <button v-if="soldFilterAvailable" class="subpage-filter-btn" :class="{ active: excludeSold }" @click="excludeSold = !excludeSold"
+                  title="Hide entries with &quot;Sold&quot; in the title to see only what was bought">
+            <span class="material-icons" style="font-size:16px;">sell</span>
+            <span>{{ excludeSold ? 'Sold hidden' : 'Hide sold' }}</span>
+          </button>
           <button v-if="hasFutureEntries" class="subpage-filter-btn" :class="{ active: showUpcoming }" @click="toggleUpcoming">
             <span class="material-icons" style="font-size:16px;">event</span>
             <span>Upcoming</span>
