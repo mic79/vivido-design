@@ -205,6 +205,22 @@ async function refreshViaWorker(encryptedRefreshToken) {
   return data;
 }
 
+/**
+ * Safety net: the profile shown in the app is restored from storage, but the access token comes from
+ * Google. If the two ever belong to different accounts (e.g. storage shared with another copy of the
+ * app), trust the token: switch to its real profile and drop the cached data of the other account.
+ */
+async function verifyStoredIdentity(stored, onAuthChange) {
+  try {
+    const fresh = await fetchUserInfo(accessToken);
+    if (_signedOut || !fresh.email || !stored.email || fresh.email === stored.email) return;
+    userProfile = fresh;
+    persistSession(fresh);
+    clearCachedUserData();
+    onAuthChange(true, fresh);
+  } catch (_) { /* offline or transient: keep the stored profile */ }
+}
+
 // ── Proactive refresh ─────────────────────────────────────────────────────────
 
 function scheduleRefresh(expiresIn) {
@@ -296,6 +312,7 @@ const GoogleAuth = {
         const remaining = Math.max(0, Math.floor((expiry - Date.now()) / 1000));
         scheduleRefresh(remaining);
         onAuthChange(true, userProfile);
+        verifyStoredIdentity(storedProfile, onAuthChange);
         return;
       }
 
@@ -306,6 +323,7 @@ const GoogleAuth = {
         accessToken = result.access_token;
         cacheToken(result.access_token, result.expires_in);
         scheduleRefresh(result.expires_in);
+        verifyStoredIdentity(storedProfile, onAuthChange);
       } catch (err) {
         console.warn('Background token refresh failed:', err.message);
         accessToken = null;
