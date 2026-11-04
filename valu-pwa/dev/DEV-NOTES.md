@@ -1,4 +1,6 @@
-﻿# Valu dev - notes
+# Valu dev - notes
+
+**Status (Nov 2026):** dev v201 was promoted to stable (now v202). Stable runs with PKCE on, the hardened `valu-auth` worker, and an enforced Content-Security-Policy set in the root `_headers` (the old dev/_headers was removed: Cloudflare only reads that file at the root). /dev keeps working as a test copy; the notes below describe how it differs from the stable app as of v196 and how the promotion was done.
 
 Run locally: `http://localhost:8080/dev/` (same `python -m http.server 8080` as the stable app).
 Tests (nothing to install, Node 20+): from `dev/` run `node --test`.
