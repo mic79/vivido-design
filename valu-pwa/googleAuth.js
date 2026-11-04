@@ -24,16 +24,15 @@ const CLIENT_ID   = '399400088485-h2nrjmo500qj4s7qrvfaog2tsqet3huo.apps.googleus
 const API_KEY     = 'AIzaSyBdC9q6tLx1vLOFyUF-8Jeuy4gpuTYiaPs';
 const SCOPES      = 'https://www.googleapis.com/auth/drive.file openid email profile';
 
-// The production auth worker. It does not forward `code_verifier`, so PKCE stays off until the
-// hardened worker code has been deployed to it (then set USE_PKCE = true).
+// The production auth worker (runs the hardened code from cloudflare-worker-dev/src/index.js).
 const WORKER_URL  = 'https://valu-auth.valu.workers.dev';
 
 /**
- * PKCE (RFC 7636) for the sign-in code flow. Only works with a worker that forwards
- * `code_verifier` to Google (cloudflare-worker-dev/ does; the original stable worker does NOT, so
- * PKCE must be `false` whenever WORKER_URL points at the original worker).
+ * PKCE (RFC 7636) for the sign-in code flow. Requires a worker that forwards `code_verifier` to
+ * Google, which the deployed hardened worker does. Do not point WORKER_URL at an older worker
+ * while this is true.
  */
-const USE_PKCE = false;
+const USE_PKCE = true;
 
 /**
  * Where the encrypted refresh token is kept. The dev worker seals tokens in a newer format that

@@ -62,11 +62,15 @@ test('version.js is the only place the version is defined', () => {
   assert.ok(!/v\d{3}\s*—\s*What/.test(read('index.html')), 'index.html must not hardcode the version label');
 });
 
-test('PKCE is only enabled together with the dev worker, never with the original stable worker', () => {
+test('PKCE stays on, and only with a worker URL that is known to forward code_verifier', () => {
+  // Both deployed workers (valu-auth and valu-auth-dev) run the hardened code since Nov 2026.
   const src = read('googleAuth.js');
   const worker = /const WORKER_URL\s*=\s*'([^']+)'/.exec(src)[1];
   const pkce = /const USE_PKCE\s*=\s*(true|false)/.exec(src)[1] === 'true';
-  if (pkce) assert.notEqual(worker, 'https://valu-auth.valu.workers.dev', 'stable worker ignores code_verifier');
+  assert.equal(pkce, true, 'USE_PKCE must stay enabled');
+  assert.ok(
+    ['https://valu-auth.valu.workers.dev', 'https://valu-auth-dev.valu.workers.dev'].includes(worker),
+    'unknown worker URL: check that it forwards code_verifier before enabling PKCE with it');
 });
 
 test('dev builds keep their refresh token in a separate localStorage key', () => {
