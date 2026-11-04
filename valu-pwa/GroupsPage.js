@@ -35,6 +35,8 @@ export default {
     const configCurrencyRates = ref([]);
     const configExpenseCatsEnabled = ref(true);
     const configIncomeCatsEnabled = ref(true);
+    const configExpenseCatRequired = ref(false);
+    const configIncomeCatRequired = ref(false);
     const newExpenseCat = ref('');
     const newIncomeCat = ref('');
     const newRateCurrency = ref('');
@@ -185,6 +187,8 @@ export default {
       configCurrencyRates.value = [];
       configExpenseCatsEnabled.value = true;
       configIncomeCatsEnabled.value = true;
+      configExpenseCatRequired.value = false;
+      configIncomeCatRequired.value = false;
       newExpenseCat.value = '';
       newIncomeCat.value = '';
       newRateCurrency.value = '';
@@ -299,6 +303,8 @@ export default {
         configIncomeCategories.value = parseCategories(settings.incomeCategories);
         configExpenseCatsEnabled.value = settings.expenseCategoriesEnabled !== 'false';
         configIncomeCatsEnabled.value = settings.incomeCategoriesEnabled !== 'false';
+        configExpenseCatRequired.value = settings.expenseCategoryRequired === 'true';
+        configIncomeCatRequired.value = settings.incomeCategoryRequired === 'true';
 
         const ratesStr = settings.currencyRates || '';
         configCurrencyRates.value = ratesStr.split(',').filter(Boolean).map(r => {
@@ -487,6 +493,20 @@ export default {
       }
     }
 
+    function toggleCategoryRequired(type) {
+      if (type === 'expense') {
+        configExpenseCatRequired.value = !configExpenseCatRequired.value;
+        saveConfigField('expenseCategoryRequired', configExpenseCatRequired.value ? 'true' : 'false');
+      } else {
+        configIncomeCatRequired.value = !configIncomeCatRequired.value;
+        saveConfigField('incomeCategoryRequired', configIncomeCatRequired.value ? 'true' : 'false');
+      }
+    }
+
+    function isCategoryRequired(type) {
+      return type === 'expense' ? configExpenseCatRequired.value : configIncomeCatRequired.value;
+    }
+
     function areCategoriesEnabled(type) {
       if (type === 'expense') return configExpenseCatsEnabled.value;
       return configIncomeCatsEnabled.value;
@@ -533,7 +553,7 @@ export default {
       openIconPicker, pickIcon, clearCategoryIcon,
       startRenameCat, saveRenameCat, cancelRenameCat,
       moveCategoryUp, moveCategoryDown,
-      toggleCategoriesEnabled, areCategoriesEnabled,
+      toggleCategoriesEnabled, areCategoriesEnabled, toggleCategoryRequired, isCategoryRequired,
       addConfigCurrencyRate, removeConfigCurrencyRate,
     };
   },
@@ -731,6 +751,18 @@ export default {
                   <input class="form-input flex-1" v-model="newExpenseCat" placeholder="New category" @keyup.enter="addConfigCategory('expense')" />
                   <button class="btn btn-outline" @click="addConfigCategory('expense')" :disabled="!newExpenseCat.trim()">Add</button>
                 </div>
+                <div v-if="configExpenseCategories.length && areCategoriesEnabled('expense')"
+                     style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding-top:12px;border-top:1px solid var(--color-border, rgba(0,0,0,.08));">
+                  <div style="min-width:0;">
+                    <div style="font-size:14px;font-weight:500;">Require a category</div>
+                    <div style="font-size:12px;color:var(--color-text-hint);">An expense can't be saved without one</div>
+                  </div>
+                  <label class="toggle toggle-sm">
+                    <input type="checkbox" :checked="isCategoryRequired('expense')" @change="toggleCategoryRequired('expense')" />
+                    <div class="toggle-track"></div>
+                    <div class="toggle-thumb"></div>
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -767,6 +799,18 @@ export default {
                 <div class="flex gap-8">
                   <input class="form-input flex-1" v-model="newIncomeCat" placeholder="New category" @keyup.enter="addConfigCategory('income')" />
                   <button class="btn btn-outline" @click="addConfigCategory('income')" :disabled="!newIncomeCat.trim()">Add</button>
+                </div>
+                <div v-if="configIncomeCategories.length && areCategoriesEnabled('income')"
+                     style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding-top:12px;border-top:1px solid var(--color-border, rgba(0,0,0,.08));">
+                  <div style="min-width:0;">
+                    <div style="font-size:14px;font-weight:500;">Require a category</div>
+                    <div style="font-size:12px;color:var(--color-text-hint);">An income entry can't be saved without one</div>
+                  </div>
+                  <label class="toggle toggle-sm">
+                    <input type="checkbox" :checked="isCategoryRequired('income')" @change="toggleCategoryRequired('income')" />
+                    <div class="toggle-track"></div>
+                    <div class="toggle-thumb"></div>
+                  </label>
                 </div>
               </div>
             </div>

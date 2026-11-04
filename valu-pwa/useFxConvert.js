@@ -1,4 +1,5 @@
 import { getRate } from './fxService.js';
+import { CURRENCIES } from './sheetsApi.js';
 
 const { ref, computed, watch, unref } = Vue;
 
@@ -46,13 +47,37 @@ export function useFxConvert({ foreignCurrency, baseCurrency, dateStr, setAmount
   const loading = ref(false);
   const error = ref('');
 
+  // Per-item currency. By default the account's currency is used; the user can pick another one for just
+  // this entry (e.g. a multi-currency account such as Wise). Nothing extra is stored: the existing
+  // `(EUR 12.00)` note tag already carries the currency, and later rate updates read it from there.
+  const customCurrency = ref('');
+  const pickerShown = ref(false);
+  const currencyOpen = ref(false);
+  const currencySearch = ref('');
+  const effectiveCurrency = computed(() => customCurrency.value || unref(foreignCurrency));
+
+  const canConvert = computed(() => !!unref(baseCurrency));
+
+  const filteredCurrencies = computed(() => {
+    const q = currencySearch.value.trim().toLowerCase();
+    if (!q) return CURRENCIES;
+    return CURRENCIES.filter(c => c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q));
+  });
+
+  const currencyLabel = computed(() => {
+    const code = effectiveCurrency.value;
+    if (!code || code === unref(baseCurrency)) return 'Select currency';
+    const found = CURRENCIES.find(c => c.code === code);
+    return found ? found.name : code;
+  });
+
   const needsFx = computed(() => {
-    const fc = unref(foreignCurrency);
+    const fc = effectiveCurrency.value;
     const bc = unref(baseCurrency);
     return fc && bc && fc !== bc;
   });
 
-  const fxCurrency = computed(() => unref(foreignCurrency));
+  const fxCurrency = computed(() => effectiveCurrency.value);
 
   const fxIsFuture = computed(() => {
     const date = unref(dateStr);
@@ -64,6 +89,10 @@ export function useFxConvert({ foreignCurrency, baseCurrency, dateStr, setAmount
 
   function reset() {
     active.value = false;
+    customCurrency.value = '';
+    pickerShown.value = false;
+    currencyOpen.value = false;
+    currencySearch.value = '';
     foreignAmount.value = '';
     rate.value = null;
     rateDate.value = '';
@@ -72,7 +101,7 @@ export function useFxConvert({ foreignCurrency, baseCurrency, dateStr, setAmount
   }
 
   async function fetchRate() {
-    const from = unref(foreignCurrency);
+    const from = effectiveCurrency.value;
     const to = unref(baseCurrency);
     const date = unref(dateStr);
     if (!from || !to || from === to) return;
@@ -133,7 +162,7 @@ export function useFxConvert({ foreignCurrency, baseCurrency, dateStr, setAmount
     if (!active.value || !foreignAmount.value) return '';
     const raw = parseLocaleAmount(foreignAmount.value);
     if (isNaN(raw)) return '';
-    return `(${unref(foreignCurrency)} ${raw.toFixed(2)})`;
+    return `(${effectiveCurrency.value} ${raw.toFixed(2)})`;
   }
 
   const FX_TAG_RE = /\s*\([A-Z]{3}\s+[\d.,]+\)\s*$/;
@@ -147,15 +176,49 @@ export function useFxConvert({ foreignCurrency, baseCurrency, dateStr, setAmount
 
   watch(() => unref(dateStr), () => { if (active.value) fetchRate(); });
 
-  watch(() => unref(foreignCurrency), () => {
+  watch(effectiveCurrency, () => {
     if (active.value) {
       if (!needsFx.value) reset();
       else fetchRate();
     }
   });
 
+  function showPicker() { pickerShown.value = true; }
+
+  // User picked a currency for this entry. A currency other than the base starts a conversion right away;
+  // picking the base currency (or the account's own currency again) goes back to normal entry.
+  function chooseCurrency(code) {
+    currencyOpen.value = false;
+    currencySearch.value = '';
+    customCurrency.value = code === unref(foreignCurrency) ? '' : code;
+    pickerShown.value = true;
+    if (!needsFx.value) {
+      active.value = false;
+      foreignAmount.value = '';
+      rate.value = null;
+      rateDate.value = '';
+      error.value = '';
+      return;
+    }
+    if (!active.value) {
+      active.value = true;
+      foreignAmount.value = '';
+      setAmount('');
+    }
+    fetchRate();
+  }
+
   return {
     fxActive: active,
+    canConvert,
+    pickerShown,
+    currencyOpen,
+    currencySearch,
+    filteredCurrencies,
+    currencyLabel,
+    customCurrency,
+    showPicker,
+    chooseCurrency,
     fxForeignAmount: foreignAmount,
     fxRate: rate,
     fxRateDate: rateDate,

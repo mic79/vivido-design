@@ -281,7 +281,17 @@ export default {
       }
     }
 
-    async function addAccount() {
+    // Blocks double-taps: while one save is running, further taps are ignored.
+    const submitting = ref(false);
+    function guardedSubmit(fn) {
+      return async (...args) => {
+        if (submitting.value) return;
+        submitting.value = true;
+        try { return await fn(...args); } finally { submitting.value = false; }
+      };
+    }
+
+    async function addAccountImpl() {
       const acc = newAccount.value;
       if (!acc.name.trim()) return;
       try {
@@ -303,6 +313,8 @@ export default {
         showAlert('Failed to save. Please try again.');
       }
     }
+
+    const addAccount = guardedSubmit(addAccountImpl);
 
     async function loadEditHoldingsLines(accountId) {
       loadingHoldingsEdit.value = true;
@@ -424,7 +436,7 @@ export default {
       editingAccount.value = null;
     }
 
-    async function deleteAccount(id) {
+    async function deleteAccountImpl(id) {
       if (!(await showConfirm('Delete this account? Balance history entries will be kept.'))) return;
       try {
         await SheetsApi.deleteRows(getSheetId(), TABS.ACCOUNTS, [id]);
@@ -436,6 +448,8 @@ export default {
         showAlert('Failed to delete. Please try again.');
       }
     }
+
+    const deleteAccount = guardedSubmit(deleteAccountImpl);
 
     function showHistory(account) {
       historyAccount.value = account;
@@ -527,7 +541,7 @@ export default {
       showBalanceModal.value = true;
     }
 
-    async function saveBalance() {
+    async function saveBalanceImpl() {
       const entry = balanceEntry.value;
       if (!entry.accountId || entry.amount === '') return;
       const amt = parseAmount(entry.amount);
@@ -548,6 +562,8 @@ export default {
       }
     }
 
+    const saveBalance = guardedSubmit(saveBalanceImpl);
+
     // ── Bulk update mode ─────────────────────────────────────────────────────
 
     function enterUpdateMode() {
@@ -561,7 +577,7 @@ export default {
       updateBalances.value = balances;
     }
 
-    async function saveBalanceUpdates() {
+    async function saveBalanceUpdatesImpl() {
       try {
         const { year, month } = parseDateParts(updateDate.value);
         const dateStr = updateDate.value;
@@ -584,6 +600,8 @@ export default {
         showAlert('Failed to save. Please try again.');
       }
     }
+
+    const saveBalanceUpdates = guardedSubmit(saveBalanceUpdatesImpl);
 
     // ── Shared upsert helper ─────────────────────────────────────────────────
 
@@ -773,6 +791,7 @@ export default {
       formatAccountDisplayName,
       formatCurrency, sanitizeAmount, getCurrentBalance, getLastUpdateDate, formatUpdateDate,
       getAccountDiff,
+      submitting,
       addAccount, startEdit, saveEdit, persistEditToSheet, deleteAccount,
       showHistory, openBalanceUpdate, saveBalance, editHistoryEntry,
       enterUpdateMode, saveBalanceUpdates, monthName,
@@ -929,7 +948,7 @@ export default {
             </div>
           </div>
           <div class="modal-footer">
-            <button class="btn-sheet-cta" @click="addAccount" :disabled="!newAccount.name.trim()">Add new account</button>
+            <button class="btn-sheet-cta" @click="addAccount" :disabled="submitting || !newAccount.name.trim()">{{ submitting ? 'Saving…' : 'Add new account' }}</button>
           </div>
         </div>
       </div>
@@ -1032,7 +1051,7 @@ export default {
               </label>
             </div>
             <div style="padding:16px;">
-              <button class="btn btn-text btn-danger" @click="deleteAccount(editingAccount.id)">Delete account</button>
+              <button class="btn btn-text btn-danger" :disabled="submitting" @click="deleteAccount(editingAccount.id)">Delete account</button>
             </div>
           </div>
         </div>
@@ -1075,7 +1094,7 @@ export default {
             </div>
           </div>
           <div class="modal-footer">
-            <button class="btn-sheet-cta" @click="saveBalance" :disabled="balanceEntry.amount === ''">Store new balance</button>
+            <button class="btn-sheet-cta" @click="saveBalance" :disabled="submitting || balanceEntry.amount === ''">{{ submitting ? 'Saving…' : 'Store new balance' }}</button>
           </div>
         </div>
       </div>

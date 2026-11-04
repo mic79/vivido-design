@@ -1,5 +1,6 @@
 import SheetsApi, { TABS, isDemoSheet, isInvestmentAccountType } from './sheetsApi.js';
 import { getFaqById, FAQ_ENTRIES } from './faqData.js';
+import { renderChatText } from './htmlSafe.js';
 
 const { ref, computed, watch, inject, onMounted, onBeforeUnmount, nextTick } = Vue;
 
@@ -1795,6 +1796,7 @@ export default {
       emit,
       chatList, activeChatId, showHistory, activeChat,
       createNewChat, openChat, deleteChat, chatPreview, formatChatDate,
+      renderChatText,
     };
   },
 
@@ -1857,7 +1859,7 @@ export default {
               </div>
               <div class="assistant-bubble" :class="'assistant-bubble--' + msg.from">
                 <div class="assistant-label">{{ msg.from === 'valu' ? 'Valu' : 'You' }}</div>
-                <div class="assistant-text" v-html="msg.text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\\n/g, '<br>')"></div>
+                <div class="assistant-text" v-html="renderChatText(msg.text)"></div>
 
                 <div v-if="msg.table" class="assistant-table">
                   <div v-for="(line, li) in msg.table" :key="li" class="assistant-table-row">{{ line }}</div>

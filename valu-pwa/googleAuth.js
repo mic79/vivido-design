@@ -23,10 +23,39 @@
 const CLIENT_ID   = '399400088485-h2nrjmo500qj4s7qrvfaog2tsqet3huo.apps.googleusercontent.com';
 const API_KEY     = 'AIzaSyBdC9q6tLx1vLOFyUF-8Jeuy4gpuTYiaPs';
 const SCOPES      = 'https://www.googleapis.com/auth/drive.file openid email profile';
+
+// The production auth worker. It does not forward `code_verifier`, so PKCE stays off until the
+// hardened worker code has been deployed to it (then set USE_PKCE = true).
 const WORKER_URL  = 'https://valu-auth.valu.workers.dev';
+
+/**
+ * PKCE (RFC 7636) for the sign-in code flow. Only works with a worker that forwards
+ * `code_verifier` to Google (cloudflare-worker-dev/ does; the original stable worker does NOT, so
+ * PKCE must be `false` whenever WORKER_URL points at the original worker).
+ */
+const USE_PKCE = false;
+
+/**
+ * Where the encrypted refresh token is kept. The dev worker seals tokens in a newer format that
+ * the stable worker cannot open, and localhost:8080 and localhost:8080/dev share localStorage, so
+ * dev uses its own key to avoid ever overwriting (and thereby breaking) stable's token.
+ * Once the version number loses its "-dev" suffix (promotion) this automatically becomes the
+ * normal key again, so existing users stay signed in.
+ */
+const IS_DEV_BUILD = String((typeof window !== 'undefined' && window.VALU_VERSION) || '').endsWith('-dev');
+const REFRESH_KEY = IS_DEV_BUILD ? 'valu_dev_encrypted_refresh' : 'valu_encrypted_refresh';
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+
+/** localStorage keys that hold cached copies of the user's data (safe to drop: re-fetched from the Sheet). */
+const CACHED_DATA_KEY_PREFIXES = [
+  'valu_chats_',
+];
+const CACHED_DATA_KEYS = [
+  'valu_groups_cache', 'valu_settings_cache', 'valu_last_group', 'valu_last_group_name',
+  'valu_oauth_state', 'valu_oauth_verifier',
+];
 
 let accessToken    = null;
 let userProfile    = null;
@@ -79,10 +108,35 @@ function clearAllTokens(revokeRefresh = false) {
   localStorage.removeItem('valu_access_token');
   localStorage.removeItem('valu_token_expiry');
   if (revokeRefresh) {
-    localStorage.removeItem('valu_encrypted_refresh');
+    localStorage.removeItem(REFRESH_KEY);
   }
   sessionStorage.removeItem('valu_access_token');
   sessionStorage.removeItem('valu_token_expiry');
+}
+
+/** Remove cached copies of the user's data (chats, groups, settings) from this browser. */
+function clearCachedUserData() {
+  for (const k of CACHED_DATA_KEYS) localStorage.removeItem(k);
+  for (const k of Object.keys(localStorage)) {
+    if (CACHED_DATA_KEY_PREFIXES.some(p => k.startsWith(p))) localStorage.removeItem(k);
+  }
+}
+
+// ── PKCE helpers ──────────────────────────────────────────────────────────────
+
+function base64Url(bytes) {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function randomVerifier() {
+  return base64Url(crypto.getRandomValues(new Uint8Array(48)));
+}
+
+async function challengeFor(verifier) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return base64Url(new Uint8Array(digest));
 }
 
 function getRedirectUri() {
@@ -110,11 +164,14 @@ async function fetchUserInfo(token) {
 
 async function exchangeCodeForTokens(code) {
   const redirectUri = getRedirectUri();
-  console.log('Token exchange — redirect_uri:', redirectUri);
+  const payload = { code, redirect_uri: redirectUri };
+  const verifier = localStorage.getItem('valu_oauth_verifier');
+  localStorage.removeItem('valu_oauth_verifier');
+  if (USE_PKCE && verifier) payload.code_verifier = verifier;
   const res = await fetch(`${WORKER_URL}/auth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, redirect_uri: redirectUri }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     let msg = `Token exchange failed (${res.status})`;
@@ -146,6 +203,22 @@ async function refreshViaWorker(encryptedRefreshToken) {
   return data;
 }
 
+/**
+ * Safety net: the profile shown in the app is restored from storage, but the access token comes from
+ * Google. If the two ever belong to different accounts (e.g. storage shared with another copy of the
+ * app), trust the token: switch to its real profile and drop the cached data of the other account.
+ */
+async function verifyStoredIdentity(stored, onAuthChange) {
+  try {
+    const fresh = await fetchUserInfo(accessToken);
+    if (_signedOut || !fresh.email || !stored.email || fresh.email === stored.email) return;
+    userProfile = fresh;
+    persistSession(fresh);
+    clearCachedUserData();
+    onAuthChange(true, fresh);
+  } catch (_) { /* offline or transient: keep the stored profile */ }
+}
+
 // ── Proactive refresh ─────────────────────────────────────────────────────────
 
 function scheduleRefresh(expiresIn) {
@@ -155,7 +228,7 @@ function scheduleRefresh(expiresIn) {
 }
 
 async function silentRefresh() {
-  const encryptedRefresh = localStorage.getItem('valu_encrypted_refresh');
+  const encryptedRefresh = localStorage.getItem(REFRESH_KEY);
   if (!encryptedRefresh) return;
 
   try {
@@ -207,7 +280,7 @@ const GoogleAuth = {
         accessToken = result.access_token;
         cacheToken(result.access_token, result.expires_in);
         if (result.encrypted_refresh_token) {
-          localStorage.setItem('valu_encrypted_refresh', result.encrypted_refresh_token);
+          localStorage.setItem(REFRESH_KEY, result.encrypted_refresh_token);
         }
 
         const profile = await fetchUserInfo(accessToken);
@@ -225,7 +298,7 @@ const GoogleAuth = {
 
     // Normal page load — restore session
     const storedProfile = getStoredProfile();
-    const encryptedRefresh = localStorage.getItem('valu_encrypted_refresh');
+    const encryptedRefresh = localStorage.getItem(REFRESH_KEY);
 
     if (storedProfile && encryptedRefresh) {
       userProfile = storedProfile;
@@ -237,6 +310,7 @@ const GoogleAuth = {
         const remaining = Math.max(0, Math.floor((expiry - Date.now()) / 1000));
         scheduleRefresh(remaining);
         onAuthChange(true, userProfile);
+        verifyStoredIdentity(storedProfile, onAuthChange);
         return;
       }
 
@@ -247,6 +321,7 @@ const GoogleAuth = {
         accessToken = result.access_token;
         cacheToken(result.access_token, result.expires_in);
         scheduleRefresh(result.expires_in);
+        verifyStoredIdentity(storedProfile, onAuthChange);
       } catch (err) {
         console.warn('Background token refresh failed:', err.message);
         accessToken = null;
@@ -261,14 +336,14 @@ const GoogleAuth = {
    * Start the sign-in flow. Redirects the browser to Google's consent screen.
    * Must be called from a user gesture (button click).
    */
-  connect() {
+  async connect() {
     _signedOut = false;
     const state = crypto.randomUUID
       ? crypto.randomUUID()
       : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
     localStorage.setItem('valu_oauth_state', state);
 
-    const hasRefreshToken = !!localStorage.getItem('valu_encrypted_refresh');
+    const hasRefreshToken = !!localStorage.getItem(REFRESH_KEY);
     const params = new URLSearchParams({
       client_id: CLIENT_ID,
       redirect_uri: getRedirectUri(),
@@ -278,6 +353,13 @@ const GoogleAuth = {
       prompt: hasRefreshToken ? 'select_account' : 'consent',
       state,
     });
+
+    if (USE_PKCE) {
+      const verifier = randomVerifier();
+      localStorage.setItem('valu_oauth_verifier', verifier);
+      params.set('code_challenge', await challengeFor(verifier));
+      params.set('code_challenge_method', 'S256');
+    }
 
     window.location.href = `${GOOGLE_AUTH_URL}?${params}`;
   },
@@ -301,7 +383,7 @@ const GoogleAuth = {
       return cached;
     }
 
-    const encryptedRefresh = localStorage.getItem('valu_encrypted_refresh');
+    const encryptedRefresh = localStorage.getItem(REFRESH_KEY);
     if (!encryptedRefresh) {
       throw new Error('Not signed in');
     }
@@ -349,7 +431,31 @@ const GoogleAuth = {
     _refreshTimer = null;
     persistSession(null);
     clearAllTokens();
+    clearCachedUserData();
     if (_onAuthChange) _onAuthChange(false, null);
+  },
+
+  /**
+   * Full "forget this device": revokes Valu's access at Google (which also invalidates the refresh
+   * token), then erases everything Valu stored in this browser. The user will have to go through
+   * Google's consent screen again next time. Intended for shared or borrowed devices.
+   */
+  async signOutAndForget() {
+    const tokenToRevoke = accessToken || getCachedToken();
+    if (tokenToRevoke) {
+      try {
+        await fetch(GOOGLE_REVOKE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ token: tokenToRevoke }),
+        });
+      } catch { /* offline: local data is still erased below */ }
+    }
+    this.signOut();
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('valu_')) localStorage.removeItem(k);
+    }
+    sessionStorage.clear();
   },
 
   /**

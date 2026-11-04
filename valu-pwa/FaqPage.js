@@ -1,4 +1,5 @@
 import { FAQ_CATEGORIES, FAQ_ENTRIES, getFaqsByCategory } from './faqData.js';
+import { renderChatText } from './htmlSafe.js';
 
 const { ref, computed } = Vue;
 
@@ -24,9 +25,7 @@ export default {
     }
 
     function formatAnswer(text) {
-      return text
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\n/g, '<br>');
+      return renderChatText(text);
     }
 
     return {

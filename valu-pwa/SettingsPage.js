@@ -1,3 +1,5 @@
+import GoogleAuth from './googleAuth.js';
+
 const { ref, computed, onMounted, inject } = Vue;
 
 const DEFAULT_WIDGETS = [
@@ -122,7 +124,19 @@ export default {
       return w.requires.every(r => enabledLists.value.includes(r));
     }
 
+    // ── Privacy: forget this device ─────────────────────────────────────
+    const showConfirm = inject('showConfirm', null);
+    const isSignedIn = computed(() => !!GoogleAuth.isSignedIn);
+    async function forgetThisDevice() {
+      const msg = 'Sign out, revoke Valu\u2019s access to your Google account, and erase everything Valu saved on this device? Your spreadsheets in Google Drive are not touched. You will need to approve access again the next time you sign in.';
+      const ok = showConfirm ? await showConfirm(msg) : window.confirm(msg);
+      if (!ok) return;
+      await GoogleAuth.signOutAndForget();
+      window.location.replace(window.location.pathname);
+    }
+
     return {
+      isSignedIn, forgetThisDevice,
       THEME_OPTIONS, NUMBER_FORMAT_OPTIONS, theme, numberFormat, defaultGroupId, balanceReminders,
       openDropdown, toggleDropdown,
       saveTheme, saveNumberFormat, saveDefaultGroup, saveBalanceReminders,
@@ -257,6 +271,19 @@ export default {
             </div>
             <p style="font-size:12px;color:var(--color-text-hint);padding:8px 16px 12px;">
               Choose which widgets appear on the Home page and in what order.
+            </p>
+          </div>
+        </div>
+
+        <!-- Privacy (signed-in only) -->
+        <div class="card mb-16" v-if="isSignedIn">
+          <div class="card-header"><h3>Privacy</h3></div>
+          <div class="card-body">
+            <button type="button" class="btn btn-outline" @click="forgetThisDevice">
+              <span class="material-icons" style="font-size:18px;vertical-align:middle;margin-right:4px;">delete_forever</span>Sign out &amp; forget this device
+            </button>
+            <p style="font-size:13px;color:var(--color-text-secondary);margin-top:8px;">
+              Best for shared or borrowed devices. Revokes Valu&rsquo;s access to your Google account and erases everything Valu saved in this browser. Your spreadsheets are not touched.
             </p>
           </div>
         </div>

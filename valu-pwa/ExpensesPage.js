@@ -159,7 +159,20 @@ export default {
       }
     }
 
-    const filterAwareExpenses = computed(() => {
+    // "Sold" entries (e.g. "Sold winter jacket", -40) are logged as negative expenses so they reduce
+    // their category total. This optional view hides them to show only what was bought.
+    const SOLD_RE = /\bsold\b/i;
+    function isSoldEntry(e) { return !!e.title && SOLD_RE.test(e.title); }
+    const excludeSold = ref(false);
+
+    function inSelectedPeriod(e) {
+      if (!filterMonth.value) return true;
+      if (!e.date) return false;
+      const parts = e.date.split('-');
+      return filterMonth.value.length === 4 ? parts[0] === filterMonth.value : `${parts[0]}-${parts[1]}` === filterMonth.value;
+    }
+
+    const filterAwareBase = computed(() => {
       let list = expenses.value;
       if (!showUpcoming.value) {
         list = list.filter(e => !isFutureDate(e.date));
@@ -177,6 +190,16 @@ export default {
       }
       return list;
     });
+
+    // The button only exists while a category/search filter is active AND it contains "Sold" entries.
+    const soldFilterAvailable = computed(() =>
+      !!(filterCategory.value || filterSearch.value) &&
+      filterAwareBase.value.some(e => isSoldEntry(e) && inSelectedPeriod(e)));
+    const soldExcluded = computed(() => excludeSold.value && soldFilterAvailable.value);
+    watch([filterCategory, filterSearch], () => { excludeSold.value = false; });
+
+    const filterAwareExpenses = computed(() =>
+      soldExcluded.value ? filterAwareBase.value.filter(e => !isSoldEntry(e)) : filterAwareBase.value);
 
     const availableMonths = computed(() => {
       const months = new Set();
@@ -253,6 +276,10 @@ export default {
 
       if (!showUpcoming.value) {
         list = list.filter(e => !isFutureDate(e.date));
+      }
+
+      if (soldExcluded.value) {
+        list = list.filter(e => !isSoldEntry(e));
       }
 
       return list;
@@ -362,11 +389,26 @@ export default {
       showAddModal.value = true;
     }
 
-    async function addExpense() {
+    // Blocks double-taps: while one save is running, further taps are ignored.
+    const submitting = ref(false);
+    function guardedSubmit(fn) {
+      return async (...args) => {
+        if (submitting.value) return;
+        submitting.value = true;
+        try { return await fn(...args); } finally { submitting.value = false; }
+      };
+    }
+
+    // Optional per-group rule (Groups > configuration): a category must be chosen.
+    const categoryRequired = computed(() =>
+      categoriesEnabled.value && categories.value.length > 0 && props.settings?.expenseCategoryRequired === 'true');
+
+    async function addExpenseImpl() {
       const e = newExpense.value;
       if (!e.title.trim() || e.amount === '' || e.amount === undefined) return;
       const amt = parseAmount(e.amount);
       if (isNaN(amt)) return;
+      if (categoryRequired.value && !e.category) { showAlert('Please choose a category.'); return; }
       const date = e.date || localDateISO();
       const dup = expenses.value.find(x => x.title === e.title.trim() && x.date === date && x.amount === amt);
       if (dup) {
@@ -399,6 +441,8 @@ export default {
       }
     }
 
+    const addExpense = guardedSubmit(addExpenseImpl);
+
     function startEdit(expense) {
       editOriginal.value = {
         amount: expense.amount,
@@ -411,12 +455,13 @@ export default {
       showEditModal.value = true;
     }
 
-    async function saveEdit() {
+    async function saveEditImpl() {
       const e = editingExpense.value;
       const orig = editOriginal.value;
       if (!e || !orig) return;
       const amt = parseAmount(e.amount);
       if (isNaN(amt)) return;
+      if (categoryRequired.value && !e.category) { showAlert('Please choose a category.'); return; }
       try {
         const shouldAdjust = editAdjustBalance.value && e.accountId;
         const date = e.date || localDateISO();
@@ -462,6 +507,8 @@ export default {
       }
     }
 
+    const saveEdit = guardedSubmit(saveEditImpl);
+
     function duplicateExpense() {
       const e = editingExpense.value;
       if (!e) return;
@@ -479,7 +526,7 @@ export default {
       showAddModal.value = true;
     }
 
-    async function deleteExpense(id) {
+    async function deleteExpenseImpl(id) {
       if (!(await showConfirm('Delete this expense?'))) return;
       try {
         const orig = editOriginal.value;
@@ -497,6 +544,8 @@ export default {
         showAlert('Failed to delete. Please try again.');
       }
     }
+
+    const deleteExpense = guardedSubmit(deleteExpenseImpl);
 
     function isFutureDate(dateStr) {
       if (!dateStr) return false;
@@ -699,6 +748,8 @@ export default {
       openDropdown, toggleDropdown, setDropdownOpen,
       sortedAccounts,
       formatCurrency, getAccountName, getAccountCurrency, getCategoryIcon, formatAccountDisplayName,
+      submitting, categoryRequired,
+      excludeSold, soldFilterAvailable, soldExcluded,
       addExpense, startEdit, saveEdit, deleteExpense, duplicateExpense,
       isFutureDate, formatDate, sanitizeAmount, openNewExpenseModal, addNameInput,
       showCategoryManager, managedCategories, newManagedCat, editingCatName, editCatNameValue, catIconPickerFor,
@@ -772,6 +823,11 @@ export default {
               </div>
             </div>
           </div>
+          <button v-if="soldFilterAvailable" class="subpage-filter-btn" :class="{ active: excludeSold }" @click="excludeSold = !excludeSold"
+                  title="Hide entries with &quot;Sold&quot; in the title to see only what was bought">
+            <span class="material-icons" style="font-size:16px;">sell</span>
+            <span>{{ excludeSold ? 'Sold hidden' : 'Hide sold' }}</span>
+          </button>
           <button v-if="hasFutureEntries" class="subpage-filter-btn" :class="{ active: showUpcoming }" @click="toggleUpcoming">
             <span class="material-icons" style="font-size:16px;">event</span>
             <span>Upcoming</span>
@@ -835,11 +891,24 @@ export default {
             <input class="sheet-hero-amount" v-model="newExpense.amount" @input="sanitizeAmount(newExpense, 'amount')" type="text" inputmode="decimal" placeholder="0" :readonly="addFx.fxActive.value" :class="{ 'fx-readonly': addFx.fxActive.value }" />
             <div class="sheet-hero-label">Amount <span v-if="addFx.fxActive.value" class="fx-base-tag">in {{ baseCurrency }}</span></div>
           </div>
-          <div v-if="addFx.needsFx.value" class="fx-convert-section">
-            <button class="fx-toggle-btn" @click="addFx.toggle()">
+          <div v-if="addFx.canConvert.value" class="fx-convert-section">
+            <button v-if="addFx.needsFx.value" class="fx-toggle-btn" @click="addFx.toggle()">
               <span class="material-icons fx-toggle-icon">currency_exchange</span>
               {{ addFx.fxActive.value ? 'Cancel conversion' : 'Convert from ' + addFx.fxCurrency.value }}
             </button>
+            <button v-else-if="!addFx.pickerShown.value" class="fx-toggle-btn" @click="addFx.showPicker()">
+              <span class="material-icons fx-toggle-icon">currency_exchange</span>
+              Paid in another currency?
+            </button>
+            <div v-if="addFx.needsFx.value || addFx.pickerShown.value" class="fx-currency-row">
+              <valu-currency-picker v-model:open="addFx.currencyOpen.value" v-model:search="addFx.currencySearch.value">
+                <template #label>{{ addFx.currencyLabel.value }}</template>
+                <div v-for="c in addFx.filteredCurrencies.value" :key="c.code"
+                     class="currency-picker-option" :class="{ selected: c.code === addFx.fxCurrency.value }"
+                     @click="addFx.chooseCurrency(c.code)">{{ c.name }}</div>
+                <div v-if="addFx.filteredCurrencies.value.length === 0" class="currency-picker-empty">No match</div>
+              </valu-currency-picker>
+            </div>
             <div v-if="addFx.fxActive.value" class="fx-convert-body">
               <div class="fx-input-row">
                 <input class="fx-foreign-input" type="text" inputmode="decimal" v-model="addFx.fxForeignAmount.value" @input="addFx.updateConverted()" :placeholder="'Amount in ' + addFx.fxCurrency.value" />
@@ -861,13 +930,13 @@ export default {
               <valu-date-field v-model="newExpense.date" />
             </div>
             <div class="sheet-list-item">
-              <label>Category</label>
+              <label>Category<span v-if="categoryRequired"> *</span></label>
               <valu-dropdown :open="openDropdown === 'newCat'" @update:open="(v) => setDropdownOpen('newCat', v)">
                 <template #label>
                   <span v-if="getCategoryIcon(newExpense.category)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(newExpense.category) }}</span>
-                  {{ newExpense.category || 'No category' }}
+                  {{ newExpense.category || (categoryRequired ? 'Choose a category' : 'No category') }}
                 </template>
-                <div class="valu-dropdown-option" :class="{ selected: !newExpense.category }"
+                <div v-if="!categoryRequired" class="valu-dropdown-option" :class="{ selected: !newExpense.category }"
                      @click="newExpense.category = ''; openDropdown = null">No category</div>
                 <div v-for="c in categories" :key="c.name"
                      class="valu-dropdown-option" :class="{ selected: newExpense.category === c.name }"
@@ -916,7 +985,7 @@ export default {
             </label>
           </div>
           <div class="modal-footer">
-            <button class="btn-sheet-cta" @click="addExpense" :disabled="!newExpense.title.trim() || newExpense.amount === '' || newExpense.amount === undefined">Add expense</button>
+            <button class="btn-sheet-cta" @click="addExpense" :disabled="submitting || (categoryRequired && !newExpense.category) || !newExpense.title.trim() || newExpense.amount === '' || newExpense.amount === undefined">{{ submitting ? 'Saving…' : 'Add expense' }}</button>
           </div>
         </div>
       </div>
@@ -962,11 +1031,24 @@ export default {
             <input class="sheet-hero-amount" v-model="editingExpense.amount" @input="sanitizeAmount(editingExpense, 'amount')" type="text" inputmode="decimal" placeholder="0" :readonly="editFx.fxActive.value" :class="{ 'fx-readonly': editFx.fxActive.value }" />
             <div class="sheet-hero-label">Amount <span v-if="editFx.fxActive.value" class="fx-base-tag">in {{ baseCurrency }}</span></div>
           </div>
-          <div v-if="editFx.needsFx.value" class="fx-convert-section">
-            <button class="fx-toggle-btn" @click="editFx.toggle()">
+          <div v-if="editFx.canConvert.value" class="fx-convert-section">
+            <button v-if="editFx.needsFx.value" class="fx-toggle-btn" @click="editFx.toggle()">
               <span class="material-icons fx-toggle-icon">currency_exchange</span>
               {{ editFx.fxActive.value ? 'Cancel conversion' : 'Convert from ' + editFx.fxCurrency.value }}
             </button>
+            <button v-else-if="!editFx.pickerShown.value" class="fx-toggle-btn" @click="editFx.showPicker()">
+              <span class="material-icons fx-toggle-icon">currency_exchange</span>
+              Paid in another currency?
+            </button>
+            <div v-if="editFx.needsFx.value || editFx.pickerShown.value" class="fx-currency-row">
+              <valu-currency-picker v-model:open="editFx.currencyOpen.value" v-model:search="editFx.currencySearch.value">
+                <template #label>{{ editFx.currencyLabel.value }}</template>
+                <div v-for="c in editFx.filteredCurrencies.value" :key="c.code"
+                     class="currency-picker-option" :class="{ selected: c.code === editFx.fxCurrency.value }"
+                     @click="editFx.chooseCurrency(c.code)">{{ c.name }}</div>
+                <div v-if="editFx.filteredCurrencies.value.length === 0" class="currency-picker-empty">No match</div>
+              </valu-currency-picker>
+            </div>
             <div v-if="editFx.fxActive.value" class="fx-convert-body">
               <div class="fx-input-row">
                 <input class="fx-foreign-input" type="text" inputmode="decimal" v-model="editFx.fxForeignAmount.value" @input="editFx.updateConverted()" :placeholder="'Amount in ' + editFx.fxCurrency.value" />
@@ -988,13 +1070,13 @@ export default {
               <valu-date-field v-model="editingExpense.date" />
             </div>
             <div class="sheet-list-item">
-              <label>Category</label>
+              <label>Category<span v-if="categoryRequired"> *</span></label>
               <valu-dropdown :open="openDropdown === 'editCat'" @update:open="(v) => setDropdownOpen('editCat', v)">
                 <template #label>
                   <span v-if="getCategoryIcon(editingExpense.category)" class="material-icons dropdown-cat-icon">{{ getCategoryIcon(editingExpense.category) }}</span>
-                  {{ editingExpense.category || 'No category' }}
+                  {{ editingExpense.category || (categoryRequired ? 'Choose a category' : 'No category') }}
                 </template>
-                <div class="valu-dropdown-option" :class="{ selected: !editingExpense.category }"
+                <div v-if="!categoryRequired" class="valu-dropdown-option" :class="{ selected: !editingExpense.category }"
                      @click="editingExpense.category = ''; openDropdown = null">No category</div>
                 <div v-for="c in categories" :key="c.name"
                      class="valu-dropdown-option" :class="{ selected: editingExpense.category === c.name }"
@@ -1043,9 +1125,9 @@ export default {
             </label>
           </div>
           <div class="modal-footer">
-            <button class="btn-sheet-cta" @click="saveEdit">Save changes</button>
+            <button class="btn-sheet-cta" @click="saveEdit" :disabled="submitting || (categoryRequired && !editingExpense.category)">{{ submitting ? 'Saving…' : 'Save changes' }}</button>
             <div class="modal-footer-row">
-              <button class="btn btn-text btn-danger" @click="deleteExpense(editingExpense.id)">Delete</button>
+              <button class="btn btn-text btn-danger" :disabled="submitting" @click="deleteExpense(editingExpense.id)">Delete</button>
               <button class="btn btn-text" @click="duplicateExpense"><span class="material-icons" style="font-size:18px;vertical-align:middle;">content_copy</span> Duplicate</button>
               <button class="btn btn-text" @click="showEditModal = false">Cancel</button>
             </div>

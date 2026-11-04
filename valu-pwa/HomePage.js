@@ -34,7 +34,7 @@ function loadWidgetLayout() {
 
 export default {
   props: ['sheetId', 'settings', 'groupName', 'accounts', 'isDemoGroup', 'demoCallout'],
-  emits: ['navigate', 'refresh'],
+  emits: ['navigate', 'refresh', 'settings-updated'],
 
   setup(props, { emit }) {
     const injectedSheetId = inject('activeSheetId', ref(null));
@@ -101,6 +101,17 @@ export default {
         return sym + num;
       } catch {
         return amount.toFixed(2);
+      }
+    }
+
+    /** Number only (no currency symbol), same locale formatting as formatCurrency. Used by the Balance Overview table. */
+    function formatPlainAmount(amount) {
+      try {
+        return new Intl.NumberFormat(getNumberLocale(), {
+          minimumFractionDigits: 2, maximumFractionDigits: 2,
+        }).format(amount);
+      } catch {
+        return Number(amount).toFixed(2);
       }
     }
 
@@ -955,6 +966,17 @@ export default {
       return Math.round(vals.reduce((s, v) => s + v, 0) * 100) / 100;
     });
 
+    /**
+     * Save a "last checked" stamp to the Sheet AND tell the app, so the in-memory/cached settings are
+     * updated too. Without this, the stale value was used at the next app start and old months
+     * (already handled, skipped or dismissed) were suggested again.
+     */
+    async function markChecked(key) {
+      const stamp = new Date().toISOString();
+      await SheetsApi.updateSetting(getSheetId(), key, stamp);
+      emit('settings-updated', { [key]: stamp });
+    }
+
     // ── Recurring transactions review ───────────────────────────────────────
     const showRecurringReview = ref(false);
     const recurringApplying = ref(false);
@@ -1030,7 +1052,7 @@ export default {
             item.category, item.newDate, notes, now, '', item.repeats || '',
           ]);
         }
-        await SheetsApi.updateSetting(getSheetId(), 'repeatsLastChecked', new Date().toISOString());
+        await markChecked('repeatsLastChecked');
         showRecurringReview.value = false;
         pendingRecurring.value = [];
         emit('refresh');
@@ -1043,7 +1065,7 @@ export default {
 
     async function dismissRecurring() {
       try {
-        await SheetsApi.updateSetting(getSheetId(), 'repeatsLastChecked', new Date().toISOString());
+        await markChecked('repeatsLastChecked');
         showRecurringReview.value = false;
         pendingRecurring.value = [];
       } catch (err) {
@@ -1112,7 +1134,7 @@ export default {
             item.balanceAdjusted || '', item.repeats || '',
           ]);
         }
-        await SheetsApi.updateSetting(getSheetId(), 'fxLastRechecked', new Date().toISOString());
+        await markChecked('fxLastRechecked');
         showFxReview.value = false;
         pendingFxUpdates.value = [];
         emit('refresh');
@@ -1125,7 +1147,7 @@ export default {
 
     async function dismissFxUpdates() {
       try {
-        await SheetsApi.updateSetting(getSheetId(), 'fxLastRechecked', new Date().toISOString());
+        await markChecked('fxLastRechecked');
         showFxReview.value = false;
         pendingFxUpdates.value = [];
       } catch (err) {
@@ -1133,13 +1155,28 @@ export default {
       }
     }
 
+    // Settings can arrive after the first data load (cached settings are shown first, fresh ones follow).
+    // Recompute the suggestions when the "last checked" stamps change so stale ones never linger.
+    watch(() => props.settings?.repeatsLastChecked, () => {
+      if (loading.value || showRecurringReview.value) return;
+      pendingRecurring.value = getPendingRecurring(
+        expenses.value, incomeList.value, props.settings?.repeatsLastChecked || ''
+      );
+    });
+    watch(() => props.settings?.fxLastRechecked, () => {
+      if (loading.value || showFxReview.value) return;
+      pendingFxUpdates.value = detectPendingFxUpdates(
+        expenses.value, incomeList.value, props.settings?.fxLastRechecked || ''
+      );
+    });
+
     return {
       loading, enabledLists, baseCurrency, expenses, incomeList,
       monthlyExpenses, monthlyIncome, netWorth, netWorthHistory,
       recentTransactions, needsBalanceUpdate, needsInvestmentBalanceUpdate,
       prevMonthInfo, chartMax, selectedBar, selectedPoint, displayedBalance,
       chartWidth, chartHeight, chartPath, chartAreaPath,
-      formatCurrency, formatDate, monthLabel, monthName, accountLabel, getCategoryIcon, getAccountCurrency,
+      formatCurrency, formatPlainAmount, formatDate, monthLabel, monthName, accountLabel, getCategoryIcon, getAccountCurrency,
       toggleBar, emit,
       showDemoWelcomeSheet, dismissDemoWelcome, showDemoNotice, demoCalloutDismissed, dismissDemoCallout, lastUpdateLabel,
       smartInsightsMode, smartInsightsData, siChartWidth, siChartHeight, siChartPath,
@@ -1461,7 +1498,7 @@ export default {
                       @click="showNameTooltip($event, row.name)">{{ row.name }}</td>
                   <td v-for="(val, i) in row.months" :key="i"
                       :class="{ 'balance-table-empty': val === null }">
-                    {{ val !== null ? formatCurrency(val, row.currency) : '--' }}
+                    {{ val !== null ? formatPlainAmount(val) : '--' }}
                   </td>
                 </tr>
               </tbody>
@@ -1470,7 +1507,7 @@ export default {
                   <td class="balance-table-sticky balance-table-name">Total</td>
                   <td v-for="(val, i) in yearlyBalanceTable.totals" :key="i"
                       :class="{ 'balance-table-empty': val === null }">
-                    {{ val !== null ? formatCurrency(val, baseCurrency) : '--' }}
+                    {{ val !== null ? formatPlainAmount(val) : '--' }}
                   </td>
                 </tr>
               </tfoot>

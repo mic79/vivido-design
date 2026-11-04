@@ -1,6 +1,10 @@
 {
+  "id": "/index.html",
   "name": "Valu",
   "short_name": "Valu",
+  "lang": "en",
+  "categories": ["finance", "productivity"],
+  "scope": "./",
   "description": "Personal finance tracker — private, simple, free",
   "start_url": "index.html",
   "display": "standalone",
