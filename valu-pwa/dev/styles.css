@@ -2131,6 +2131,17 @@ html[data-theme="light"] .valu-site-intro .s3 { background: #4f4f4f; }
 .fx-toggle-btn:hover {
   background: rgba(0,0,0,0.04);
 }
+.fx-currency-row {
+  margin-top: 6px;
+  border-bottom: 1px solid var(--color-border, #ddd);
+}
+.fx-currency-row .currency-picker-trigger {
+  padding-bottom: 8px;
+  font-size: 15px;
+}
+.fx-convert-section > .fx-toggle-btn + .fx-currency-row {
+  margin-top: 10px;
+}
 .fx-toggle-icon {
   font-size: 18px;
 }

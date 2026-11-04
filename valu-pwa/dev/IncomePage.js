@@ -855,11 +855,24 @@ export default {
             <input class="sheet-hero-amount" v-model="newIncome.amount" @input="sanitizeAmount(newIncome, 'amount')" type="text" inputmode="decimal" placeholder="0" :readonly="addFx.fxActive.value" :class="{ 'fx-readonly': addFx.fxActive.value }" />
             <div class="sheet-hero-label">Amount <span v-if="addFx.fxActive.value" class="fx-base-tag">in {{ baseCurrency }}</span></div>
           </div>
-          <div v-if="addFx.needsFx.value" class="fx-convert-section">
-            <button class="fx-toggle-btn" @click="addFx.toggle()">
+          <div v-if="addFx.canConvert.value" class="fx-convert-section">
+            <button v-if="addFx.needsFx.value" class="fx-toggle-btn" @click="addFx.toggle()">
               <span class="material-icons fx-toggle-icon">currency_exchange</span>
               {{ addFx.fxActive.value ? 'Cancel conversion' : 'Convert from ' + addFx.fxCurrency.value }}
             </button>
+            <button v-else-if="!addFx.pickerShown.value" class="fx-toggle-btn" @click="addFx.showPicker()">
+              <span class="material-icons fx-toggle-icon">currency_exchange</span>
+              Paid in another currency?
+            </button>
+            <div v-if="addFx.needsFx.value || addFx.pickerShown.value" class="fx-currency-row">
+              <valu-currency-picker v-model:open="addFx.currencyOpen.value" v-model:search="addFx.currencySearch.value">
+                <template #label>{{ addFx.currencyLabel.value }}</template>
+                <div v-for="c in addFx.filteredCurrencies.value" :key="c.code"
+                     class="currency-picker-option" :class="{ selected: c.code === addFx.fxCurrency.value }"
+                     @click="addFx.chooseCurrency(c.code)">{{ c.name }}</div>
+                <div v-if="addFx.filteredCurrencies.value.length === 0" class="currency-picker-empty">No match</div>
+              </valu-currency-picker>
+            </div>
             <div v-if="addFx.fxActive.value" class="fx-convert-body">
               <div class="fx-input-row">
                 <input class="fx-foreign-input" type="text" inputmode="decimal" v-model="addFx.fxForeignAmount.value" @input="addFx.updateConverted()" :placeholder="'Amount in ' + addFx.fxCurrency.value" />
@@ -982,11 +995,24 @@ export default {
             <input class="sheet-hero-amount" v-model="editingIncome.amount" @input="sanitizeAmount(editingIncome, 'amount')" type="text" inputmode="decimal" placeholder="0" :readonly="editFx.fxActive.value" :class="{ 'fx-readonly': editFx.fxActive.value }" />
             <div class="sheet-hero-label">Amount <span v-if="editFx.fxActive.value" class="fx-base-tag">in {{ baseCurrency }}</span></div>
           </div>
-          <div v-if="editFx.needsFx.value" class="fx-convert-section">
-            <button class="fx-toggle-btn" @click="editFx.toggle()">
+          <div v-if="editFx.canConvert.value" class="fx-convert-section">
+            <button v-if="editFx.needsFx.value" class="fx-toggle-btn" @click="editFx.toggle()">
               <span class="material-icons fx-toggle-icon">currency_exchange</span>
               {{ editFx.fxActive.value ? 'Cancel conversion' : 'Convert from ' + editFx.fxCurrency.value }}
             </button>
+            <button v-else-if="!editFx.pickerShown.value" class="fx-toggle-btn" @click="editFx.showPicker()">
+              <span class="material-icons fx-toggle-icon">currency_exchange</span>
+              Paid in another currency?
+            </button>
+            <div v-if="editFx.needsFx.value || editFx.pickerShown.value" class="fx-currency-row">
+              <valu-currency-picker v-model:open="editFx.currencyOpen.value" v-model:search="editFx.currencySearch.value">
+                <template #label>{{ editFx.currencyLabel.value }}</template>
+                <div v-for="c in editFx.filteredCurrencies.value" :key="c.code"
+                     class="currency-picker-option" :class="{ selected: c.code === editFx.fxCurrency.value }"
+                     @click="editFx.chooseCurrency(c.code)">{{ c.name }}</div>
+                <div v-if="editFx.filteredCurrencies.value.length === 0" class="currency-picker-empty">No match</div>
+              </valu-currency-picker>
+            </div>
             <div v-if="editFx.fxActive.value" class="fx-convert-body">
               <div class="fx-input-row">
                 <input class="fx-foreign-input" type="text" inputmode="decimal" v-model="editFx.fxForeignAmount.value" @input="editFx.updateConverted()" :placeholder="'Amount in ' + editFx.fxCurrency.value" />
