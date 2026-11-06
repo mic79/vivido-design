@@ -79,6 +79,14 @@ export function useFxConvert({ foreignCurrency, baseCurrency, dateStr, setAmount
 
   const fxCurrency = computed(() => effectiveCurrency.value);
 
+  // Rate as shown to the user: 4 decimals normally, but enough digits for tiny rates (IDR, VND...).
+  const rateLabel = computed(() => {
+    const r = rate.value;
+    if (!r) return '';
+    if (r >= 0.01) return r.toFixed(4);
+    return r.toFixed(Math.min(12, 2 - Math.floor(Math.log10(r))));
+  });
+
   const fxIsFuture = computed(() => {
     const date = unref(dateStr);
     if (!date) return false;
@@ -221,6 +229,7 @@ export function useFxConvert({ foreignCurrency, baseCurrency, dateStr, setAmount
     chooseCurrency,
     fxForeignAmount: foreignAmount,
     fxRate: rate,
+    fxRateLabel: rateLabel,
     fxRateDate: rateDate,
     fxLoading: loading,
     fxError: error,

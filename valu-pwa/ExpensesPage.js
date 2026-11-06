@@ -916,7 +916,7 @@ export default {
               </div>
               <div v-if="addFx.fxLoading.value" class="fx-rate-info">Fetching rate...</div>
               <div v-else-if="addFx.fxError.value" class="fx-rate-info fx-rate-error">{{ addFx.fxError.value }} — enter amount in {{ baseCurrency }} directly.</div>
-              <div v-else-if="addFx.fxRate.value" class="fx-rate-info">1 {{ addFx.fxCurrency.value }} = {{ addFx.fxRate.value.toFixed(4) }} {{ baseCurrency }} <span class="fx-rate-date">({{ addFx.fxRateDate.value }})</span></div>
+              <div v-else-if="addFx.fxRate.value" class="fx-rate-info">1 {{ addFx.fxCurrency.value }} = {{ addFx.fxRateLabel.value }} {{ baseCurrency }} <span class="fx-rate-date">({{ addFx.fxRateDate.value }})</span></div>
               <div v-if="addFx.fxIsFuture.value && addFx.fxRate.value && !addFx.fxLoading.value" class="fx-rate-info fx-future-hint">
                 <span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">schedule</span>
                 Using today's rate — will be updated automatically when the date arrives.
@@ -1056,7 +1056,7 @@ export default {
               </div>
               <div v-if="editFx.fxLoading.value" class="fx-rate-info">Fetching rate...</div>
               <div v-else-if="editFx.fxError.value" class="fx-rate-info fx-rate-error">{{ editFx.fxError.value }} — enter amount in {{ baseCurrency }} directly.</div>
-              <div v-else-if="editFx.fxRate.value" class="fx-rate-info">1 {{ editFx.fxCurrency.value }} = {{ editFx.fxRate.value.toFixed(4) }} {{ baseCurrency }} <span class="fx-rate-date">({{ editFx.fxRateDate.value }})</span></div>
+              <div v-else-if="editFx.fxRate.value" class="fx-rate-info">1 {{ editFx.fxCurrency.value }} = {{ editFx.fxRateLabel.value }} {{ baseCurrency }} <span class="fx-rate-date">({{ editFx.fxRateDate.value }})</span></div>
               <div v-if="editFx.fxIsFuture.value && editFx.fxRate.value && !editFx.fxLoading.value" class="fx-rate-info fx-future-hint">
                 <span class="material-icons" style="font-size:13px;vertical-align:middle;margin-right:2px;">schedule</span>
                 Using today's rate — will be updated automatically when the date arrives.

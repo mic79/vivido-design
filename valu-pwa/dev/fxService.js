@@ -56,6 +56,18 @@ function providerParam(from, to) {
  * @returns {Promise<{rate: number, date: string}|{error: string}>}
  */
 export async function getRate(from, to, date) {
+  const direct = await getRateDirect(from, to, date);
+  if (direct.error || !(direct.rate < TINY_RATE)) return direct;
+  // The API returns only a few significant digits, so a tiny rate (e.g. 1 IDR = 0.000077 CAD) loses
+  // precision and amounts drift by up to ~1%. The reverse pair (1 CAD = 12987 IDR) is far more exact.
+  const inverse = await getRateDirect(to, from, date);
+  if (!inverse.error && inverse.rate > 0) return { rate: 1 / inverse.rate, date: inverse.date };
+  return direct;
+}
+
+const TINY_RATE = 0.01;
+
+async function getRateDirect(from, to, date) {
   if (!from || !to || from === to) return { rate: 1, date };
 
   // Clamp future dates to today — use the latest available rate;

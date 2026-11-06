@@ -8,5 +8,5 @@
  * When promoting dev to stable, change this to the plain number (e.g. 'v197').
  */
 (function (root) {
-  root.VALU_VERSION = 'v201-dev';
+  root.VALU_VERSION = 'v203-dev';
 })(typeof self !== 'undefined' ? self : this);
