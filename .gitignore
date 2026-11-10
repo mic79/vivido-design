@@ -1,6 +1,13 @@
 # Local-only / not for Pages (kept on disk)
-webxr/**/*BAK*/
-webxr/**/*BAK*
+webxr/**/BoltVRBAK/
+webxr/**/BoltVRBAK2/
+webxr/**/RTSVR6BAK/
+webxr/**/VRrunnerBAK/
+webxr/**/body-riggedGD-BAK/
+webxr/**/indexBAK*.html
+webxr/driveBAK.html
+webxr/pinballVRBAK.html
+webxr/spaceshooterBAK.html
 webxr/**/.chrome*/
 webxr/**/export/
 webxr/**/bench-*/

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>UE top-down diffuse bake</title>
+  <style>
+    html, body { margin: 0; background: #111; color: #9f9; font: 13px/1.4 monospace; }
+    #log { padding: 8px; white-space: pre-wrap; }
+    canvas { display: block; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/build/three.module.js",
+      "three/addons/": "/vendor/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <pre id="log">starting…</pre>
+  <script type="module">
+    const logEl = document.getElementById('log');
+    const log = (...a) => {
+      const line = a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+      console.log('[topdown]', line);
+      logEl.textContent += '\n' + line;
+    };
+
+    const params = new URLSearchParams(location.search);
+    const SRC = params.get('src') || '../assets/terrain/scifi-rts-kit-lod2.glb';
+    const RES = Math.max(256, Math.min(8192, Number(params.get('res') || 2048)));
+    // Nature / original landscape + rocks. No human-built SM_* (buildings, fences, pads…).
+    const KEEP = /SM_Rock|SM_Dirt|SM_Cliff|SM_Mineral|SM_Sand|SM_Ground|SM_Landscape|Landscape|Terrain|Rocks|Cliff|DirtPile|Mineral|MI_Rock|MI_Cliff|MI_Dirt/i;
+    const DROP = /SM_Build|Building|Fence|Wall|Gate|Hangar|Barrack|Factory|Crate|Container|Pipe|Pump|Tower|Antenna|Solar|Walkway|Stair|Door|Window|Platform|Pad_|Light|Lamp|Decal|Spline|Volume|Trigger|Camera|PlayerStart|Blocking/i;
+
+    try {
+      const THREE = await import('three');
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      const { DRACOLoader } = await import('three/addons/loaders/DRACOLoader.js');
+      const { KTX2Loader } = await import('three/addons/loaders/KTX2Loader.js');
+
+      const renderer = new THREE.WebGLRenderer({
+        antialias: false,
+        alpha: false,
+        preserveDrawingBuffer: true,
+        powerPreference: 'high-performance',
+      });
+      renderer.setSize(RES, RES, false);
+      renderer.setPixelRatio(1);
+      renderer.setClearColor(0x2a241c, 1);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      document.body.appendChild(renderer.domElement);
+
+      const loader = new GLTFLoader();
+      const draco = new DRACOLoader();
+      draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+      loader.setDRACOLoader(draco);
+      try {
+        const ktx2 = new KTX2Loader()
+          .setTranscoderPath('/vendor/three/examples/jsm/libs/basis/')
+          .detectSupport(renderer);
+        loader.setKTX2Loader(ktx2);
+      } catch (e) {
+        log('KTX2 optional', String(e));
+      }
+
+      log('fetch', SRC, 'res', RES);
+      const res = await fetch(SRC);
+      if (!res.ok) throw new Error(`fetch ${SRC} ${res.status}`);
+      const buf = await res.arrayBuffer();
+      log('bytes', buf.byteLength);
+      const gltf = await loader.parseAsync(buf, '');
+      const scene = gltf.scene;
+      scene.updateMatrixWorld(true);
+
+      const keepRoot = new THREE.Group();
+      keepRoot.name = 'ue-nature';
+      const kept = [];
+      const dropped = [];
+      const nameOf = (obj) => {
+        let n = obj;
+        let actor = obj.name || '';
+        while (n && n !== scene) {
+          if (n.name && /SM_|Landscape|Terrain/i.test(n.name)) {
+            actor = n.name;
+            break;
+          }
+          n = n.parent;
+        }
+        return `${actor} ${obj.name || ''}`.trim();
+      };
+
+      scene.traverse((obj) => {
+        if (!obj.isMesh && !obj.isSkinnedMesh) return;
+        const label = nameOf(obj);
+        if (DROP.test(label) && !KEEP.test(label)) {
+          dropped.push(label);
+          return;
+        }
+        if (!KEEP.test(label)) {
+          dropped.push(label);
+          return;
+        }
+        obj.updateWorldMatrix(true, false);
+        const geo = obj.geometry;
+        const mesh = new THREE.Mesh(geo, obj.material);
+        mesh.name = obj.name;
+        mesh.matrix.copy(obj.matrixWorld);
+        mesh.matrixAutoUpdate = false;
+        keepRoot.add(mesh);
+        kept.push(label);
+      });
+
+      if (!kept.length) throw new Error('no nature meshes kept');
+      keepRoot.updateMatrixWorld(true);
+
+      // Drop far singleton outliers so the ortho frustum frames the main cluster.
+      const centers = [];
+      keepRoot.children.forEach((m) => {
+        const b = new THREE.Box3().setFromObject(m);
+        const c = b.getCenter(new THREE.Vector3());
+        centers.push(c);
+      });
+      const med = (arr) => {
+        const s = [...arr].sort((a, b) => a - b);
+        return s[Math.floor(s.length / 2)] || 0;
+      };
+      const mx = med(centers.map((c) => c.x));
+      const mz = med(centers.map((c) => c.z));
+      const rads = centers.map((c) => Math.hypot(c.x - mx, c.z - mz)).sort((a, b) => a - b);
+      const cut = rads[Math.floor(rads.length * 0.92)] || 400;
+      const box = new THREE.Box3();
+      let framed = 0;
+      keepRoot.children.forEach((m) => {
+        const b = new THREE.Box3().setFromObject(m);
+        const c = b.getCenter(new THREE.Vector3());
+        if (Math.hypot(c.x - mx, c.z - mz) > cut * 1.15) return;
+        const span = Math.max(b.max.x - b.min.x, b.max.z - b.min.z);
+        if (span > 1500) return;
+        box.union(b);
+        framed += 1;
+      });
+      if (!Number.isFinite(box.min.x)) box.setFromObject(keepRoot);
+      log('framedMeshes', framed, 'outlierCutM', +cut.toFixed(1));
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const half = Math.max(size.x, size.z) * 0.5 * 1.01;
+      log('kept', kept.length, 'dropped', dropped.length);
+      log('bbox', {
+        min: [+box.min.x.toFixed(1), +box.min.y.toFixed(1), +box.min.z.toFixed(1)],
+        max: [+box.max.x.toFixed(1), +box.max.y.toFixed(1), +box.max.z.toFixed(1)],
+        spanXZ: [+size.x.toFixed(1), +size.z.toFixed(1)],
+      });
+      log('keptSample', kept.slice(0, 24));
+      log('droppedSample', dropped.slice(0, 16));
+
+      // Unlit albedo — this is a diffuse/color map, not a lit beauty pass.
+      const unlitCache = new Map();
+      keepRoot.traverse((obj) => {
+        if (!obj.isMesh) return;
+        const src = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+        const key = src ? src.uuid : 'none';
+        if (unlitCache.has(key)) {
+          obj.material = unlitCache.get(key);
+          return;
+        }
+        const mat = new THREE.MeshBasicMaterial({
+          color: src && src.color ? src.color.clone() : new THREE.Color(0x888888),
+          map: src && src.map ? src.map : null,
+          fog: false,
+          toneMapped: false,
+        });
+        if (mat.map) {
+          mat.map.colorSpace = THREE.SRGBColorSpace;
+          mat.map.needsUpdate = true;
+        }
+        unlitCache.set(key, mat);
+        obj.material = mat;
+      });
+
+      const cam = new THREE.OrthographicCamera(-half, half, half, -half, 1, Math.max(200, size.y + 400));
+      // +X right, +Z up in the image (north-up if UE +X east / +Y up / +Z north after Y-up convert).
+      cam.up.set(0, 0, 1);
+      cam.position.set(center.x, box.max.y + 80, center.z);
+      cam.lookAt(center.x, center.y, center.z);
+      cam.updateProjectionMatrix();
+
+      renderer.render(keepRoot, cam);
+      const dataUrl = renderer.domElement.toDataURL('image/png');
+      window.__topdownResult = {
+        dataUrl,
+        kept: kept.length,
+        dropped: dropped.length,
+        spanXZ: [size.x, size.z],
+        center: [center.x, center.y, center.z],
+        half,
+        res: RES,
+        src: SRC,
+      };
+      log('done png chars', dataUrl.length);
+    } catch (err) {
+      console.error(err);
+      window.__topdownError = String(err && err.stack ? err.stack : err);
+      log('ERROR', window.__topdownError);
+    }
+  </script>
+</body>
+</html>
