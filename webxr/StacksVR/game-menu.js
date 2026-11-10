@@ -22,7 +22,9 @@
       this._xWasDown = false;
       this._menuToggleAt = 0;
       this._poseKey = '';
-      this._menuHomeParent = null;
+      this._menuPos = new THREE.Vector3();
+      this._menuFwd = new THREE.Vector3();
+      this._camPos = new THREE.Vector3();
       var self = this;
 
       this.el.sceneEl.addEventListener('loaded', function () { self.cacheRefs(); });
@@ -171,22 +173,31 @@
       }, 0);
     },
 
+    // Keep menu under a-scene (camera parenting hides / misplaces it in WebXR).
+    // Park it in world space ~1.2m in front of the headset, facing the player.
     _placeMenuInView: function () {
       var root = document.getElementById('vr-menu-root');
       var cam = document.getElementById('camera');
-      if (!root || !cam) return;
-      if (!this._menuHomeParent) this._menuHomeParent = root.parentElement;
-      if (root.parentElement !== cam) cam.appendChild(root);
-      root.setAttribute('position', '0 -0.12 -1.05');
-      root.setAttribute('rotation', '0 0 0');
-    },
+      if (!root || !cam || !root.object3D) return;
 
-    _restoreMenuHome: function () {
-      var root = document.getElementById('vr-menu-root');
-      if (!root || !this._menuHomeParent) return;
-      if (root.parentElement !== this._menuHomeParent) this._menuHomeParent.appendChild(root);
-      root.setAttribute('position', '0 1.35 -0.9');
-      root.setAttribute('rotation', '0 0 0');
+      cam.object3D.getWorldPosition(this._camPos);
+      cam.object3D.getWorldDirection(this._menuFwd); // where the headset looks
+      this._menuFwd.y = 0;
+      if (this._menuFwd.lengthSq() < 1e-6) this._menuFwd.set(0, 0, -1);
+      this._menuFwd.normalize();
+
+      this._menuPos.copy(this._camPos).addScaledVector(this._menuFwd, 1.2);
+      this._menuPos.y = this._camPos.y - 0.12;
+
+      root.object3D.position.copy(this._menuPos);
+      // Plane faces +Z; yaw so +Z points back at the camera
+      var yaw = Math.atan2(
+        this._camPos.x - this._menuPos.x,
+        this._camPos.z - this._menuPos.z
+      );
+      root.object3D.rotation.set(0, yaw, 0);
+      root.object3D.visible = true;
+      root.setAttribute('visible', true);
     },
 
     toggleMenu: function () {
@@ -194,11 +205,12 @@
       var root = document.getElementById('vr-menu-root');
       if (this.menuVisible) {
         this._placeMenuInView();
-        if (root) root.setAttribute('visible', true);
         this.setRaycasters(true);
       } else {
-        if (root) root.setAttribute('visible', false);
-        this._restoreMenuHome();
+        if (root) {
+          root.setAttribute('visible', false);
+          if (root.object3D) root.object3D.visible = false;
+        }
         this.setRaycasters(false);
       }
     },
@@ -206,8 +218,10 @@
     closeMenu: function () {
       this.menuVisible = false;
       var root = document.getElementById('vr-menu-root');
-      if (root) root.setAttribute('visible', false);
-      this._restoreMenuHome();
+      if (root) {
+        root.setAttribute('visible', false);
+        if (root.object3D) root.object3D.visible = false;
+      }
       this.setRaycasters(false);
     },
 

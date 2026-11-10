@@ -26,7 +26,7 @@
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=19"></script>
   <script src="match-replay.js?v=19"></script>
-  <script src="game-menu.js?v=19"></script>
+  <script src="game-menu.js?v=20"></script>
   <script src="mixamo-body.js?v=19"></script>
   <script src="locomotion.js?v=19"></script>
   <script src="stacks-game.js?v=19"></script>
@@ -131,7 +131,7 @@
       mixamo-body="mode: bot; color: #4A90E2; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
 
     <a-entity id="vr-menu-root" position="0 1.35 -0.9" visible="false">
-      <a-plane width="1.5" height="1.55" material="color: #111820; opacity: 0.92; transparent: true"></a-plane>
+      <a-plane width="1.5" height="1.55" material="color: #111820; opacity: 0.92; transparent: true; side: double"></a-plane>
       <a-entity position="0 0.62 0.01" text="value: STACKSVR; align: center; width: 2; color: #fff"></a-entity>
       <a-entity class="menu-btn" data-action="start-bot" position="0 0.42 0.02"
         geometry="primitive: plane; width: 1.2; height: 0.13"
