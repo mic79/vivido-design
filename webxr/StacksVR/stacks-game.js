@@ -3,7 +3,8 @@
   'use strict';
 
   var CELL = (global.StacksShapes && global.StacksShapes.CELL) || 0.12;
-  var GRAB_REACH = 0.45;
+  var GRAB_REACH = 0.32;       // pad piece pickup
+  var POCKET_REACH = 0.16;     // intentional purple-bin only (was sharing 0.45 with pad → false deposits)
   var REGRAB_REACH = 0.28;
   var CUP_GRAB_REACH = 0.28;
   var CUP_MARGIN = CELL * 0.85;
@@ -123,7 +124,7 @@
 
       // Hold / storage pocket (Tetris-style swap)
       this._pocket = new THREE.Group();
-      this._pocket.position.set(-0.35, 1.05, 0.85);
+      this._pocket.position.set(-0.55, 1.05, 0.85);
       this._sceneRoot.add(this._pocket);
       var pocketBase = new THREE.Mesh(
         new THREE.BoxGeometry(0.32, 0.04, 0.32),
@@ -195,19 +196,19 @@
 
       function tryGrabFrom(handEl) {
         if (!self._canControl() || !handEl) return;
-        // Owning hand holding — pocket deposit/swap, else release-to-place
+        // Owning hand holding — deposit only if deep in the purple bin; place is on trigger-up
         if (self.held && self.held.handEl === handEl) {
-          if (self._handDistToPocket(handEl) <= GRAB_REACH) self._interactPocket(handEl);
+          if (self._handDistToPocket(handEl) <= POCKET_REACH) self._interactPocket(handEl);
           return;
         }
 
-        // Free hand while other holds: steal / pocket / rotate cup
+        // Free hand while other holds: steal / take-from-pocket / rotate cup
         if (self.held && self.held.handEl !== handEl) {
           if (self._handNearHeld(handEl)) {
             self._transferHold(handEl);
             return;
           }
-          if (self._handDistToPocket(handEl) <= GRAB_REACH) {
+          if (self._pocketType && self._handDistToPocket(handEl) <= POCKET_REACH) {
             self._interactPocket(handEl);
             return;
           }
@@ -218,15 +219,22 @@
           return;
         }
 
-        // Empty both: pocket / pad / cup (closest wins)
+        // Empty hands: pad grab preferred; pocket only if clearly in-bin (and useful)
         var cup = self._localCup();
         var padD = self._handDistToPad(handEl);
         var cupD = self._handDistToCup(handEl, cup);
         var pocketD = self._handDistToPocket(handEl);
         var nearPad = padD <= GRAB_REACH;
         var nearCup = cupD <= CUP_GRAB_REACH;
-        var nearPocket = pocketD <= GRAB_REACH;
-        if (nearPocket && pocketD <= padD && pocketD <= cupD) {
+        var nearPocket = pocketD <= POCKET_REACH;
+
+        // Pad first when in reach — pocket must not steal near-miss pad grabs
+        if (nearPad && (!nearPocket || padD <= pocketD + 0.04)) {
+          self._grab(handEl);
+          return;
+        }
+        // Empty pocket + empty hand is a no-op — never early-return on that
+        if (nearPocket && self._pocketType && (!nearPad || pocketD + 0.04 < padD)) {
           self._interactPocket(handEl);
           return;
         }
