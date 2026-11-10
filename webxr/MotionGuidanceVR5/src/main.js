@@ -4,7 +4,8 @@ import { Course, cruiseProfile, idealRoll } from './path.js';
 import { SignalCapture } from './capture.js';
 import { buildRoom as buildClassicRoom } from './architecture.js';
 import { buildFutureRoom } from './architectureFuture.js';
-import { loadEnvStyle, saveEnvStyle, STYLE_FUTURE, STYLES } from './envStyle.js';
+import { buildMughalRoom } from './architectureMughal.js';
+import { loadEnvStyle, saveEnvStyle, STYLE_FUTURE, STYLE_MUGHAL, STYLES } from './envStyle.js';
 import { DesktopViz } from './viz.js';
 import { TESTS, CHAPTERS, testById, chapterOf } from './tests.js';
 import {
@@ -22,9 +23,8 @@ const guideAudio = new GuideAudio();
 const sfx = new Sfx();
 const params = new URLSearchParams(location.search);
 const LITE = params.has('lite');
-let envStyle = params.get('style') === 'classic' || params.get('style') === 'future'
-  ? params.get('style')
-  : loadEnvStyle();
+const styleParam = params.get('style');
+let envStyle = STYLES.some((s) => s.id === styleParam) ? styleParam : loadEnvStyle();
 
 /* Chrome + Meta Link: hide XR layers so three uses classic XRWebGLLayer. */
 try {
@@ -531,7 +531,9 @@ function buildRoomFor(id) {
   profile = cruiseProfile(course.length, test.trialSec);
   if (set) set.dispose();
   if (room) room.dispose();
-  const build = envStyle === STYLE_FUTURE ? buildFutureRoom : buildClassicRoom;
+  const build = envStyle === STYLE_FUTURE ? buildFutureRoom
+    : envStyle === STYLE_MUGHAL ? buildMughalRoom
+      : buildClassicRoom;
   room = build(renderer, test, course, { next: nextTest() ?? TESTS[0], lite: LITE, style: envStyle });
   labRoot.add(room.group);
   room.reflector?.exclude(worldPanel, ...pointers.flatMap((p) => [p.ray, p.tip]), fadeShell);

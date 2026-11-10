@@ -13,8 +13,9 @@ node serve.mjs 9500
 
 Chrome + Meta Link for immersive VR. Desktop “Play on screen” uses the same capture pipeline (drag to look).
 
-**Hall style** (home top bar, or `?style=classic` / `?style=future`):  
+**Hall style** (home top bar, or `?style=classic` / `?style=mughal` / `?style=future`):  
 - **Classic** — colonnades, arches, coffered vaults / dome (default).  
+- **Mughal** — the same rooms as an Agra-style court: red sandstone walls, white marble dado and floor, cusped (multifoil) arches, hexagonal jali screens throwing patterned sun, bracket-capital octagonal piers, a star-inlaid shallow vault, and an onion dome over the rotundas.  
 - **Future** — seamless Subside-like soft rooms: filleted shell, panel grooves, ceiling ring lights, no columns. Preference is saved in `localStorage`.
 
 ## Calibration modules (design references)
@@ -28,7 +29,7 @@ Each run: fade in → **voice briefing** + one upright glass card (front-left, y
 
 ### Rooms — four chapters, increasing difficulty
 
-Halls are built procedurally per course (`src/architecture.js`): a **nave** (coffered barrel vault, free-standing fluted colonnades with arcades, arched windows with sun shafts) or a **rotunda** (column ring, coffered dome with oculus). The exit is an open portal into a lit vestibule tinted with the next room's colour. Elevated courses run on a floating deck with glass balustrade.
+Halls are built procedurally per course. **Classic** (`src/architecture.js`) is a nave (coffered barrel vault, fluted colonnades, arched windows) or a rotunda (column ring, coffered dome with oculus). **Mughal** (`src/architectureMughal.js`) keeps that plan and swaps in cusped arches, a sandstone chhajja, hex jali windows, octagonal bracket piers, a shallow star-inlaid vault, and an onion dome. The exit is an open portal into a lit vestibule tinted with the next room's colour. Elevated courses run on a floating deck with glass balustrade.
 
 | Id | Room | Hall | Course | Protocol |
 |---|---|---|---|---|

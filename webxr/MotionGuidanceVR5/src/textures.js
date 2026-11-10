@@ -199,6 +199,156 @@ export function cofferSet() {
   return set;
 }
 
+/** Soft wandering vein, drawn as a jittered polyline. */
+function vein(ctx, r, N, rgb, alpha, width) {
+  let x = r() * N, y = r() * N;
+  let ang = r() * Math.PI * 2;
+  ctx.strokeStyle = `rgba(${rgb},${alpha})`;
+  ctx.lineWidth = width;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  for (let i = 0; i < 28; i++) {
+    ang += (r() - 0.5) * 0.9;
+    x += Math.cos(ang) * (18 + r() * 26);
+    y += Math.sin(ang) * (18 + r() * 26);
+    ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+/** Agra red sandstone: dressed 1.25 × 0.5 m courses with fine joints and bedding bands. Tile = 5 m. */
+export function sandstoneSet() {
+  if (cache.has('sandstone')) return cache.get('sandstone');
+  const N = 1024, rows = 12, bh = N / rows, bw = N / 5;
+  const r = rng(53);
+  const [ac, a] = canvas(N), [hc, h] = canvas(N);
+  h.fillStyle = '#fff'; h.fillRect(0, 0, N, N);
+  for (let row = 0; row < rows; row++) {
+    const off = row % 2 ? bw / 2 : 0;
+    for (let k = -1; k < 5; k++) {
+      const x = off + k * bw, y = row * bh;
+      const t = 0.96 + r() * 0.07;
+      const warm = r() * 10;
+      a.fillStyle = `rgb(${(214 + warm) * t | 0},${(116 + warm * 0.6) * t | 0},${(88 + warm * 0.4) * t | 0})`;
+      a.fillRect(x, y, bw, bh);
+    }
+  }
+  // soft cloudy mottling (quarry variation): breaks the block grid so it never reads as planks
+  for (let k = 0; k < 70; k++) {
+    const gx = r() * N, gy = r() * N, rad = 60 + r() * 200;
+    const gr = a.createRadialGradient(gx, gy, 0, gx, gy, rad);
+    const v = r() < 0.5 ? '255,190,150' : '80,28,18';
+    gr.addColorStop(0, `rgba(${v},0.10)`);
+    gr.addColorStop(1, `rgba(${v},0)`);
+    a.fillStyle = gr;
+    a.fillRect(gx - rad, gy - rad, rad * 2, rad * 2);
+  }
+  // isotropic grain
+  for (let i = 0; i < 52000; i++) {
+    const v = r() < 0.5 ? 255 : 40;
+    a.fillStyle = `rgba(${v},${v * 0.7 | 0},${v * 0.55 | 0},${0.05 + r() * 0.07})`;
+    const gs = 1 + (r() < 0.25 ? 1 : 0);
+    a.fillRect(r() * N, r() * N, gs, gs);
+  }
+  // joints (albedo + height)
+  for (let row = 0; row < rows; row++) {
+    const off = row % 2 ? bw / 2 : 0;
+    // fine dressed joints: present, not brick-wall mortar
+    a.fillStyle = 'rgba(70,32,22,0.22)';
+    a.fillRect(0, row * bh - 0.5, N, 1);
+    h.fillStyle = 'rgb(95,95,95)';
+    h.fillRect(0, row * bh - 1, N, 2);
+    for (let k = -1; k < 5; k++) {
+      const x = off + k * bw;
+      a.fillRect(x - 0.5, row * bh, 1, bh);
+      h.fillRect(x - 1, row * bh, 2, bh);
+    }
+  }
+  // pitting in the height field
+  for (let i = 0; i < 9000; i++) {
+    const v = 150 + r() * 80 | 0;
+    h.fillStyle = `rgb(${v},${v},${v})`;
+    h.fillRect(r() * N, r() * N, 2, 2);
+  }
+  const set = { map: tex(ac), normalMap: normalFromHeight(hc, 1.4) };
+  cache.set('sandstone', setRepeat(set, 5));
+  return set;
+}
+
+/** Makrana-style white marble: warm ivory, grey-brown veining, cloudy variation. Tile = 4 m. */
+export function marbleSet() {
+  if (cache.has('marble')) return cache.get('marble');
+  const N = 1024;
+  const r = rng(71);
+  const [ac, a] = canvas(N);
+  a.fillStyle = 'rgb(240,234,222)'; a.fillRect(0, 0, N, N);
+  for (let k = 0; k < 40; k++) {
+    const gx = r() * N, gy = r() * N, rad = 80 + r() * 220;
+    const gr = a.createRadialGradient(gx, gy, 0, gx, gy, rad);
+    const v = r() < 0.5 ? '255,252,244' : '206,196,180';
+    gr.addColorStop(0, `rgba(${v},0.16)`);
+    gr.addColorStop(1, `rgba(${v},0)`);
+    a.fillStyle = gr;
+    a.fillRect(gx - rad, gy - rad, rad * 2, rad * 2);
+  }
+  for (let i = 0; i < 9; i++) vein(a, r, N, '120,108,96', 0.16, 1 + r() * 2.2);
+  for (let i = 0; i < 14; i++) vein(a, r, N, '168,156,140', 0.12, 0.8 + r());
+  for (let i = 0; i < 18000; i++) {
+    const v = 180 + r() * 75 | 0;
+    a.fillStyle = `rgba(${v},${v - 4},${v - 12},0.14)`;
+    a.fillRect(r() * N, r() * N, 1, 1);
+  }
+  const set = { map: tex(ac) };
+  cache.set('marble', setRepeat(set, 4));
+  return set;
+}
+
+/** Polished marble floor: 2 m tiles in two ivory tones, thin dark seams. Tile = 4 m. */
+export function marbleFloorSet() {
+  if (cache.has('marbleFloor')) return cache.get('marbleFloor');
+  const N = 1024, half = N / 2;
+  const r = rng(97);
+  const [ac, a] = canvas(N), [hc, h] = canvas(N);
+  h.fillStyle = '#fff'; h.fillRect(0, 0, N, N);
+  const tones = [[243, 237, 225], [226, 219, 205], [226, 219, 205], [243, 237, 225]];
+  [[0, 0], [half, 0], [0, half], [half, half]].forEach(([x, y], i) => {
+    const [R, G, B] = tones[i];
+    a.fillStyle = `rgb(${R},${G},${B})`;
+    a.fillRect(x, y, half, half);
+    for (let k = 0; k < 14; k++) {
+      const gx = x + r() * half, gy = y + r() * half, rad = 50 + r() * 150;
+      const gr = a.createRadialGradient(gx, gy, 0, gx, gy, rad);
+      const v = r() < 0.5 ? '255,252,244' : '196,184,166';
+      gr.addColorStop(0, `rgba(${v},0.14)`);
+      gr.addColorStop(1, `rgba(${v},0)`);
+      a.fillStyle = gr;
+      a.fillRect(gx - rad, gy - rad, rad * 2, rad * 2);
+    }
+    a.save();
+    a.beginPath(); a.rect(x, y, half, half); a.clip();
+    for (let k = 0; k < 4; k++) vein(a, r, N, '128,116,100', 0.14, 1 + r() * 1.8);
+    a.restore();
+  });
+  for (let i = 0; i < 16000; i++) {
+    const v = 170 + r() * 85 | 0;
+    a.fillStyle = `rgba(${v},${v - 4},${v - 10},0.12)`;
+    a.fillRect(r() * N, r() * N, 1, 1);
+  }
+  const seam = (ctx, w, style) => {
+    ctx.fillStyle = style;
+    for (const p of [0, half]) { ctx.fillRect(p - w / 2, 0, w, N); ctx.fillRect(0, p - w / 2, N, w); }
+    ctx.fillRect(N - w / 2, 0, w, N);
+    ctx.fillRect(0, N - w / 2, N, w);
+  };
+  seam(a, 3, 'rgba(92,80,66,0.6)');
+  seam(h, 6, 'rgb(150,150,150)');
+  seam(h, 3, 'rgb(40,40,40)');
+  const set = { map: tex(ac), normalMap: normalFromHeight(hc, 1.6) };
+  cache.set('marbleFloor', setRepeat(set, 4));
+  return set;
+}
+
 export function disposeTextures() {
   for (const set of cache.values()) for (const t of Object.values(set)) t?.dispose?.();
   cache.clear();
