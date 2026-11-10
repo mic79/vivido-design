@@ -1,0 +1,6 @@
+# Local-only / not for Pages (kept on disk)
+webxr/**/*BAK*/
+webxr/**/*BAK*
+webxr/**/.chrome*/
+webxr/**/export/
+webxr/**/bench-*/

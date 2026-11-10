@@ -1,0 +1,125 @@
+# Deploy a size-capped site. GitHub Pages hard-limits artifacts at 1GB;
+# publishing all of webxr (~8GB tracked) always fails.
+name: Deploy Pages (slim)
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble slim site
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEST=_site
+          rm -rf "$DEST"
+          mkdir -p "$DEST"
+
+          # Root marketing site + small non-webxr apps
+          for f in index.html style.css script.js favicon.ico CNAME .nojekyll .htaccess; do
+            [[ -f "$f" ]] && cp -a "$f" "$DEST/"
+          done
+          for d in .well-known demo agenda AuthTest GsheetTest insights Nutri valu-pwa 4pong itium; do
+            [[ -d "$d" ]] && rsync -a --exclude node_modules --exclude .git "$d" "$DEST/"
+          done
+
+          # webxr: include only projects that fit the budget. Giants stay in git for
+          # local/dev but are NOT published (use dedicated Pages repos if needed).
+          # Excluded families: RTSVR*, DriveVR*, BattleVR2, VRscifiHallway, ChaseVR,
+          # GTAVR, shared webxr/assets, and any *BAK* trees.
+          mkdir -p "$DEST/webxr"
+          [[ -f webxr/index.html ]] && cp -a webxr/index.html "$DEST/webxr/" || true
+
+          ALLOW=(
+            languageVR
+            MotionGuidanceVR5
+            StacksVR
+            DodgeVR
+            DodgeVR1
+            DodgeVR1-1
+            DodgeVR2
+            DodgeVR2v2
+            DodgeVR3
+            capVR
+            BoltVR
+            BattleVR
+            VRdrift
+            VRdrift2
+            VRrunner
+            VRragdoll
+            VRragdoll2
+            whiteRoomVR
+            brutalistVR6
+            brutalistVR7
+            brutalistVR8
+            pinballVR2
+            VRKnockout
+            VRLeague
+            HeliVR
+            HeliVR2
+            LiteRT
+            DotminationVR
+            body-rigged
+            body-rigged2
+            body-rigged3
+            body-rigged4
+            body-rigged5
+            body-rigged4echo
+            body-rigged5echo
+            body-riggedGD
+            audio
+          )
+
+          for name in "${ALLOW[@]}"; do
+            src="webxr/$name"
+            if [[ -d "$src" ]]; then
+              echo "include $src"
+              rsync -a \
+                --exclude '.chrome*' \
+                --exclude 'export/' \
+                --exclude 'bench-*/' \
+                --exclude 'node_modules/' \
+                --exclude '.git/' \
+                "$src" "$DEST/webxr/"
+            fi
+          done
+
+          # Budget gate — fail the job before uploading a doomed artifact
+          BYTES=$(du -sb "$DEST" | awk '{print $1}')
+          MB=$((BYTES / 1024 / 1024))
+          echo "Slim site size: ${MB} MB"
+          if (( BYTES > 950*1024*1024 )); then
+            echo "::error::Slim site is ${MB}MB (>950MB). Trim ALLOW list."
+            du -sh "$DEST"/* "$DEST"/webxr/* 2>/dev/null | sort -hr | head -40
+            exit 1
+          fi
+          du -sh "$DEST"/* "$DEST"/webxr/* 2>/dev/null | sort -hr | head -40 || true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
