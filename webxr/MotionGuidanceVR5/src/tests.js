@@ -11,7 +11,7 @@
 import { Route } from './path.js';
 
 export const CHAPTERS = [
-  { id: 1, name: 'Stillness & Glide' },
+  { id: 1, name: 'Settle & Glide' },
   { id: 2, name: 'Turning' },
   { id: 3, name: 'Elevation' },
   { id: 4, name: 'Attention' },
@@ -32,16 +32,19 @@ function descent(len, from, to, grade, ease) {
 }
 
 export const TESTS = [
-  /* ---------------- Chapter 1 · Stillness & Glide ---------------- */
+  /* ---------------- Chapter 1 · Settle & Glide ---------------- */
   {
+    // Keep id C01_still so the voice filename and progress keys stay stable.
     id: 'C01_still', chamber: '01', chapter: 1,
-    name: 'Still Stance',
-    brief: 'Stand in the light and hold still while the ring fills.',
-    steps: ['Stand in the ring', 'Look ahead', 'Hold still'],
-    focus: 'Quiet postural sway', objective: 'Remain still until the floor ring completes.',
-    youDo: 'Stand still inside the ring, look straight ahead.', weDo: 'Nothing moves. We record head drift.',
-    protocol: 'standing', course: { kind: 'still' }, introSec: 3, trialSec: 12, trialKind: 'still',
-    theme: 'still', accent: 0x58d6c6,
+    name: 'Free Look',
+    brief: 'Take a moment in the hall. Look around freely — left, right, up, down — and notice how you feel.',
+    steps: ['Stand in the ring', 'Look around the hall', 'Notice comfort'],
+    focus: 'Baseline comfort and free head motion before any locomotion',
+    objective: 'Acclimate to the space; check for discomfort from display latency alone.',
+    youDo: 'Stand comfortably and look around at your own pace. No need to hold still.',
+    weDo: 'Nothing moves. We record head motion while you explore the static hall.',
+    protocol: 'standing', course: { kind: 'still' }, introSec: 2, trialSec: 20, trialKind: 'still',
+    theme: 'freelook', accent: 0x58d6c6,
     room: { ...ROT, Rc: 8.5, sunEl: 66, feedback: 'steady', exposure: 1.0 },
     sound: { size: 6.5, drone: 55, bright: 520, level: 0.9 },
   },
@@ -226,8 +229,11 @@ export const TESTS = [
   },
 ];
 
+/** Rooms shown in the session flow (`skip: true` keeps a test out of play). */
+export const PLAYABLE = TESTS.filter((t) => !t.skip);
+
 export function testById(id) {
-  return TESTS.find((t) => t.id === id) || TESTS[0];
+  return TESTS.find((t) => t.id === id) || PLAYABLE[0] || TESTS[0];
 }
 
 export function chapterOf(t) {

@@ -339,14 +339,27 @@ export function makeWorldPanel() {
   return mesh;
 }
 
-/** Canvas pixel → button id (for pointer rays hitting the card at uv). */
-export function panelButtonAt(panel, uv) {
-  if (!uv) return null;
+/** Canvas pixel → button record (for pointer rays hitting the card at uv). */
+export function panelControlAt(panel, uv) {
+  if (!uv || !panel?.userData?.buttons) return null;
   const x = uv.x * CW, y = (1 - uv.y) * CH;
   for (const b of panel.userData.buttons) {
-    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b.id;
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b;
   }
   return null;
+}
+
+/** Canvas pixel → button id (for pointer rays hitting the card at uv). */
+export function panelButtonAt(panel, uv) {
+  return panelControlAt(panel, uv)?.id ?? null;
+}
+
+/** 0..1 along a horizontal slider from a hit uv (clamped). */
+export function panelSliderT(panel, uv, id) {
+  const b = panel?.userData?.buttons?.find((x) => x.id === id);
+  if (!b || !uv || b.kind !== 'slider') return null;
+  const x = uv.x * CW;
+  return Math.min(1, Math.max(0, (x - b.x) / Math.max(1, b.w)));
 }
 
 /**
@@ -379,7 +392,8 @@ const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V'];
 
 /**
  * @param {object} o { test, course, hall, stage: 'wait'|'done', stepIndex, time,
- *   briefingDone, feedback, next, menu, hover, tests, chapters, completed:Set, index }
+ *   briefingDone, feedback, next, menu: false|'rooms'|'style'|'settings', hover,
+ *   tests, chapters, completed:Set, index, styles, envStyle, musicOn, voiceOn, speedScale }
  */
 export function paintWorldPanel(panel, o) {
   const { test, stage, time = 0, menu, hover } = o;
@@ -414,7 +428,9 @@ export function paintWorldPanel(panel, o) {
   ctx.textAlign = 'left';
   drawProgress(ctx, X, 112, CW - 2 * X, o, time);
 
-  if (menu) paintMenu(ctx, o, buttons, hover, time);
+  if (menu === 'rooms') paintMenuRooms(ctx, o, buttons, hover, time);
+  else if (menu === 'style') paintMenuStyle(ctx, o, buttons, hover, time);
+  else if (menu === 'settings') paintMenuSettings(ctx, o, buttons, hover, time);
   else paintRoom(ctx, o, buttons, hover, accent, stage === 'done');
 
   tex.needsUpdate = true;
@@ -514,21 +530,43 @@ function paintRoom(ctx, o, buttons, hover, accent, done) {
     ctx.fillText(s, X + 42, y);
   });
 
+  // Speed chip — always visible on the main card; opens Settings.
+  {
+    const pct = Math.round(Math.min(3, Math.max(0.5, o.speedScale ?? 1)) * 100);
+    const label = `Speed ${pct}%`;
+    ctx.font = `600 20px ${FONT}`;
+    const sw = Math.max(128, ctx.measureText(label).width + 36);
+    const sx = CW - 60 - sw, sy = 148;
+    const hot = hover === 'speed';
+    round(ctx, sx, sy, sw, 40, 20);
+    ctx.fillStyle = hot ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.06)';
+    ctx.fill();
+    ctx.strokeStyle = hot ? '#ffffff' : accent;
+    ctx.lineWidth = hot ? 2.5 : 1.8;
+    ctx.stroke();
+    ctx.fillStyle = '#eef6f7';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, sx + sw / 2, sy + 27);
+    ctx.textAlign = 'left';
+    buttons.push({ id: 'speed', x: sx, y: sy, w: sw, h: 40 });
+  }
+
   const by = CH - 104;
   let x = X;
   if (!done) {
-    x += button(ctx, buttons, hover, 'begin', x, by, briefingDone ? 'Begin  ▸' : 'Skip intro  ▸', accent, true, time) + 14;
-    button(ctx, buttons, hover, 'menu', x, by, 'All rooms', accent, false, time);
+    x += button(ctx, buttons, hover, 'begin', x, by, briefingDone ? 'Begin  ▸' : 'Skip intro  ▸', accent, true, time) + 12;
   } else {
-    x += button(ctx, buttons, hover, 'next', x, by, next ? `Next: ${next.name}  ▸` : 'Back to Room 1  ▸', accent, true, time) + 14;
-    x += button(ctx, buttons, hover, 'repeat', x, by, 'Repeat', accent, false, time) + 14;
-    button(ctx, buttons, hover, 'menu', x, by, 'All rooms', accent, false, time);
+    x += button(ctx, buttons, hover, 'next', x, by, next ? `Next: ${next.name}  ▸` : 'Back to Room 1  ▸', accent, true, time) + 12;
+    x += button(ctx, buttons, hover, 'repeat', x, by, 'Repeat', accent, false, time) + 12;
   }
+  x += button(ctx, buttons, hover, 'menu', x, by, 'Rooms', accent, false, time) + 10;
+  x += button(ctx, buttons, hover, 'style', x, by, 'Style', accent, false, time) + 10;
+  button(ctx, buttons, hover, 'settings', x, by, 'Settings', accent, false, time);
   ctx.fillStyle = 'rgba(200,215,218,0.55)';
   ctx.font = `19px ${FONT}`;
   ctx.fillText(
     done
-      ? (stopped ? 'Trigger · next   Grip · repeat   All rooms' : 'Trigger · next   Grip · repeat')
+      ? (stopped ? 'Trigger · next   Grip · repeat' : 'Trigger · next   Grip · repeat')
       : 'Trigger to begin · grip fully stops motion',
     X, CH - 22,
   );
@@ -538,14 +576,50 @@ function paintRoom(ctx, o, buttons, hover, accent, done) {
   else drawIllustration(ctx, bx, byI, bw, bh, { test, course, hall: o.hall, time, accent });
 }
 
-function paintMenu(ctx, o, buttons, hover, time) {
+function paintMenuTabs(ctx, buttons, hover, page, accent, time) {
+  const tabs = [
+    { id: 'menu', page: 'rooms', label: 'Rooms' },
+    { id: 'style', page: 'style', label: 'Style' },
+    { id: 'settings', page: 'settings', label: 'Settings' },
+  ];
+  let x = 60;
+  for (const t of tabs) {
+    const on = page === t.page;
+    const hot = hover === t.id;
+    ctx.font = `600 22px ${FONT}`;
+    const w = Math.max(110, ctx.measureText(t.label).width + 44);
+    round(ctx, x, 148, w, 44, 22);
+    if (on) {
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = 0.92;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#0f1518';
+    } else {
+      ctx.fillStyle = hot ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.05)';
+      ctx.fill();
+      ctx.strokeStyle = hot ? 'rgba(255,255,255,0.75)' : 'rgba(220,235,238,0.28)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = '#e1ecee';
+    }
+    ctx.textAlign = 'center';
+    ctx.fillText(t.label, x + w / 2, yTabText(148));
+    ctx.textAlign = 'left';
+    buttons.push({ id: t.id, x, y: 148, w, h: 44 });
+    x += w + 10;
+  }
+}
+
+function yTabText(y) { return y + 30; }
+
+function paintMenuRooms(ctx, o, buttons, hover, time) {
   const X = 60;
-  ctx.fillStyle = '#f6fbfc';
-  ctx.font = `600 44px ${FONT}`;
-  ctx.fillText('All rooms', X, 196);
+  const accent = hex(o.test.accent);
+  paintMenuTabs(ctx, buttons, hover, 'rooms', accent, time);
   ctx.fillStyle = '#9fb2b6';
-  ctx.font = `22px ${FONT}`;
-  ctx.fillText('Point at a room to go there. Completed rooms are ticked.', X + 230, 192);
+  ctx.font = `20px ${FONT}`;
+  ctx.fillText('Point at a room to go there. Completed rooms are ticked.', X, 220);
   const cols = o.chapters.length, gap = 14, M = 44;
   const cw = (CW - 2 * M - (cols - 1) * gap) / cols;
   o.chapters.forEach((c, ci) => {
@@ -557,53 +631,170 @@ function paintMenu(ctx, o, buttons, hover, time) {
       ctx.font = `600 ${fs}px ${FONT}`;
       if (ctx.measureText(head).width + head.length * 1.2 <= cw) break;
     }
-    spaced(ctx, head, cx, 246, 1.2);
+    spaced(ctx, head, cx, 258, 1.2);
     const rooms = o.tests.filter((t) => t.chapter === c.id);
     rooms.forEach((t, ri) => {
-      const y = 262 + ri * 64;
+      const y = 274 + ri * 58;
       const id = `room:${t.id}`;
       const hot = hover === id;
       const cur = t.id === o.test.id;
       const done = o.completed.has(t.id);
-      round(ctx, cx, y, cw, 56, 14);
+      round(ctx, cx, y, cw, 52, 14);
       ctx.fillStyle = hot ? 'rgba(255,255,255,0.18)' : cur ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.04)';
       ctx.fill();
       ctx.strokeStyle = hot ? '#ffffff' : cur ? hex(t.accent) : 'rgba(220,235,238,0.16)';
       ctx.lineWidth = hot || cur ? 2.5 : 1.5;
       ctx.stroke();
       ctx.fillStyle = hex(t.accent);
-      round(ctx, cx + 12, y + 14, 5, 28, 2.5);
+      round(ctx, cx + 12, y + 12, 5, 28, 2.5);
       ctx.fill();
       ctx.fillStyle = '#93a7ab';
-      ctx.font = `600 17px ${FONT}`;
-      ctx.fillText(t.chamber, cx + 28, y + 35);
+      ctx.font = `600 16px ${FONT}`;
+      ctx.fillText(t.chamber, cx + 28, y + 32);
       ctx.fillStyle = '#eef6f7';
-      ctx.font = `19px ${FONT}`;
+      ctx.font = `18px ${FONT}`;
       const room = cw - 58 - (done ? 40 : 12);
-      if (ctx.measureText(t.name).width <= room) ctx.fillText(t.name, cx + 58, y + 35);
+      if (ctx.measureText(t.name).width <= room) ctx.fillText(t.name, cx + 58, y + 33);
       else {
-        ctx.font = `17px ${FONT}`;
+        ctx.font = `16px ${FONT}`;
         const words = t.name.split(' ');
         let a = words.shift();
         while (words.length && ctx.measureText(`${a} ${words[0]}`).width <= room) a += ' ' + words.shift();
         let b = words.join(' ');
         while (b && ctx.measureText(b).width > room && b.length > 4) b = b.slice(0, -2) + '…';
-        ctx.fillText(a, cx + 58, y + 25);
-        ctx.fillText(b, cx + 58, y + 46);
+        ctx.fillText(a, cx + 58, y + 24);
+        ctx.fillText(b, cx + 58, y + 43);
       }
       if (done) {
         ctx.strokeStyle = hex(t.accent);
         ctx.lineWidth = 3.5;
         ctx.beginPath();
-        ctx.moveTo(cx + cw - 34, y + 28);
-        ctx.lineTo(cx + cw - 27, y + 35);
-        ctx.lineTo(cx + cw - 15, y + 21);
+        ctx.moveTo(cx + cw - 34, y + 26);
+        ctx.lineTo(cx + cw - 27, y + 33);
+        ctx.lineTo(cx + cw - 15, y + 19);
         ctx.stroke();
       }
-      buttons.push({ id, x: cx, y, w: cw, h: 56 });
+      buttons.push({ id, x: cx, y, w: cw, h: 52 });
     });
   });
-  button(ctx, buttons, hover, 'back', X, CH - 104, '◂  Back', hex(o.test.accent), false, time);
+  button(ctx, buttons, hover, 'back', X, CH - 104, '◂  Back', accent, false, time);
+}
+
+function paintMenuStyle(ctx, o, buttons, hover, time) {
+  const X = 60;
+  const accent = hex(o.test.accent);
+  paintMenuTabs(ctx, buttons, hover, 'style', accent, time);
+  ctx.fillStyle = '#9fb2b6';
+  ctx.font = `20px ${FONT}`;
+  ctx.fillText('Hall appearance for every room. Switching rebuilds the current hall.', X, 220);
+  const styles = o.styles || [];
+  const gap = 16;
+  const cardW = (CW - 2 * X - (styles.length - 1) * gap) / Math.max(1, styles.length);
+  styles.forEach((s, i) => {
+    const x = X + i * (cardW + gap);
+    const y = 250;
+    const h = 280;
+    const id = `style:${s.id}`;
+    const hot = hover === id;
+    const on = s.id === o.envStyle;
+    round(ctx, x, y, cardW, h, 22);
+    ctx.fillStyle = hot ? 'rgba(255,255,255,0.16)' : on ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.04)';
+    ctx.fill();
+    ctx.strokeStyle = hot ? '#ffffff' : on ? accent : 'rgba(220,235,238,0.18)';
+    ctx.lineWidth = hot || on ? 3 : 1.5;
+    ctx.stroke();
+    ctx.fillStyle = on ? accent : '#93a7ab';
+    ctx.font = `600 18px ${FONT}`;
+    spaced(ctx, on ? 'CURRENT' : 'SELECT', x + 28, y + 48, 2.2);
+    ctx.fillStyle = '#f6fbfc';
+    ctx.font = `600 40px ${FONT}`;
+    ctx.fillText(s.label, x + 28, y + 110);
+    ctx.fillStyle = '#b7c8cb';
+    ctx.font = `22px ${FONT}`;
+    wrap(ctx, s.hint || '', x + 28, y + 150, cardW - 56, 30);
+    buttons.push({ id, x, y, w: cardW, h });
+  });
+  button(ctx, buttons, hover, 'back', X, CH - 104, '◂  Back', accent, false, time);
+}
+
+function paintMenuSettings(ctx, o, buttons, hover, time) {
+  const X = 60;
+  const accent = hex(o.test.accent);
+  paintMenuTabs(ctx, buttons, hover, 'settings', accent, time);
+  ctx.fillStyle = '#9fb2b6';
+  ctx.font = `20px ${FONT}`;
+  ctx.fillText('Audio and playback. Changes apply immediately.', X, 220);
+
+  toggleRow(ctx, buttons, hover, 'toggle:music', X, 260, 'Music', 'Soft background while you move', !!o.musicOn, accent);
+  toggleRow(ctx, buttons, hover, 'toggle:voice', X, 360, 'Voice guide', 'Spoken cues at the start of each room', !!o.voiceOn, accent);
+
+  const sMin = 0.5, sMax = 3;
+  const speed = Math.min(sMax, Math.max(sMin, o.speedScale ?? 1));
+  const pct = Math.round(speed * 100);
+  ctx.fillStyle = '#f6fbfc';
+  ctx.font = `600 28px ${FONT}`;
+  ctx.fillText('Playback speed', X, 490);
+  ctx.fillStyle = '#9fb2b6';
+  ctx.font = `20px ${FONT}`;
+  ctx.fillText(`${pct}% · 100% is the designed pace`, X + 260, 488);
+
+  const sx = X, sy = 520, sw = CW - 2 * X, sh = 56;
+  const t = (speed - sMin) / (sMax - sMin);
+  round(ctx, sx, sy + 18, sw, 20, 10);
+  ctx.fillStyle = 'rgba(255,255,255,0.10)';
+  ctx.fill();
+  round(ctx, sx, sy + 18, Math.max(20, sw * t), 20, 10);
+  ctx.fillStyle = accent;
+  ctx.globalAlpha = 0.9;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  const kx = sx + sw * t;
+  ctx.beginPath();
+  ctx.arc(kx, sy + 28, 18, 0, Math.PI * 2);
+  ctx.fillStyle = hover === 'slider:speed' ? '#ffffff' : '#eef6f7';
+  ctx.fill();
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.fillStyle = '#93a7ab';
+  ctx.font = `600 18px ${FONT}`;
+  ctx.fillText('50%', sx, sy + 72);
+  const x100 = sx + sw * ((1 - sMin) / (sMax - sMin));
+  ctx.textAlign = 'center';
+  ctx.fillText('100%', x100, sy + 72);
+  ctx.textAlign = 'right';
+  ctx.fillText('300%', sx + sw, sy + 72);
+  ctx.textAlign = 'left';
+  buttons.push({ id: 'slider:speed', kind: 'slider', x: sx, y: sy, w: sw, h: sh, min: sMin, max: sMax });
+
+  button(ctx, buttons, hover, 'back', X, CH - 104, '◂  Back', accent, false, time);
+}
+
+function toggleRow(ctx, buttons, hover, id, x, y, title, hint, on, accent) {
+  const w = CW - 2 * x, h = 78;
+  const hot = hover === id;
+  round(ctx, x, y, w, h, 18);
+  ctx.fillStyle = hot ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.04)';
+  ctx.fill();
+  ctx.strokeStyle = hot ? 'rgba(255,255,255,0.7)' : 'rgba(220,235,238,0.16)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#f6fbfc';
+  ctx.font = `600 28px ${FONT}`;
+  ctx.fillText(title, x + 28, y + 36);
+  ctx.fillStyle = '#9fb2b6';
+  ctx.font = `20px ${FONT}`;
+  ctx.fillText(hint, x + 28, y + 62);
+  // switch
+  const tw = 64, th = 34, tx = x + w - 28 - tw, ty = y + (h - th) / 2;
+  round(ctx, tx, ty, tw, th, th / 2);
+  ctx.fillStyle = on ? accent : 'rgba(255,255,255,0.18)';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(on ? tx + tw - 17 : tx + 17, ty + th / 2, 12, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  buttons.push({ id, x, y, w, h });
 }
 
 /* ------------------------------------------------------ illustrations */
@@ -641,7 +832,7 @@ function drawDoneBadge(ctx, x, y, w, h, time, accent, doneAt) {
 }
 
 function drawIllustration(ctx, x, y, w, h, { test, course, hall, time, accent }) {
-  if (test.theme === 'still') {
+  if (test.theme === 'still' || test.theme === 'freelook') {
     drawStillFigure(ctx, x, y, w, h, time, accent);
     return;
   }

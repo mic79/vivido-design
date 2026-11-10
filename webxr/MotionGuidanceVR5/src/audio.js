@@ -6,6 +6,8 @@
 
 const BGM_URL = 'assets/audio/calm-bgm.mp3';
 const VOICE_BASE = 'assets/audio/voice/';
+// Bust browser/CDN cache when clips are replaced (same filename, new content).
+const VOICE_VER = '20261110b';
 
 const BGM_VOL = 0.14;
 const BGM_DUCK = 0.045;
@@ -95,7 +97,7 @@ export class GuideAudio {
     if (!this.voiceOn || !id) {
       return Promise.resolve({ skipped: true });
     }
-    const url = `${VOICE_BASE}${id}.mp3`;
+    const url = `${VOICE_BASE}${id}.mp3?v=${VOICE_VER}`;
     return new Promise((resolve) => {
       const a = new Audio(url);
       a.volume = VOICE_VOL;

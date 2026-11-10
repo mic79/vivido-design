@@ -25,7 +25,7 @@ Presentation borrows from:
 1. **Portal / The Lab** — numbered chamber, title, timed trial, obvious completion.
 2. **Lone Echo calibration** — single-purpose modules, holographic panel, step checklist, one mechanic per module, minimal, architectural dressing built into the room itself. Each MGVR5 module notes its Lone Echo parallel in `echoRef` (in `src/tests.js`).
 
-Each run: fade in → **voice briefing** + one upright glass card (front-left, yaw/pitch only, chapter + "room n of 14" progress, animated plan or side profile of the route) over calm music → **Begin** (trigger / Space / click on the button) → card fades away → ride → completion card with friendly feedback (**stay in VR**): **Next**, **Repeat**, **All rooms**. The All-rooms grid jumps to any room; completed rooms are ticked. Progress is kept in `localStorage` (`mg5.progress.v2`) and the start screen continues where you left off. Laser pointers on both controllers (or the mouse) press card buttons. Default XR controller models are shown; no head-locked HUD.
+Each run: fade in → **voice briefing** + one upright glass card (front-left, yaw/pitch only, chapter + "room n of 14" progress, animated plan or side profile of the route) over calm music → **Begin** (trigger / Space / click on the button) → card fades away → ride → completion card with friendly feedback (**stay in VR**): **Next**, **Repeat**, **All rooms**. The All-rooms grid jumps to any room; completed rooms are ticked. Progress is kept in `localStorage` (`mg5.progress.v2`) and the start screen continues where you left off. Laser pointers on both controllers (or the mouse) press card buttons. Default XR controller models are shown; no head-locked HUD. Room 1 (`C01_still`) is a free-look baseline (card + matching VO); rooms 2–14 keep their original clips.
 
 ### Rooms — four chapters, increasing difficulty
 
@@ -33,7 +33,7 @@ Halls are built procedurally per course. **Classic** (`src/architecture.js`) is 
 
 | Id | Room | Hall | Course | Protocol |
 |---|---|---|---|---|
-| `C01_still` | Still Stance | rotunda | 12 s still | standing |
+| `C01_still` | Free Look | rotunda | 20 s free look | standing |
 | `C02_glide` | First Glide | nave | 18 m straight, 1.0 m/s | standing |
 | `C03_brisk` | Brisk Glide | nave | 36 m straight, 2.4 m/s | standing |
 | `C04_curveL` | Wide Curve Left | nave | 45° left, R 22 m | seated |

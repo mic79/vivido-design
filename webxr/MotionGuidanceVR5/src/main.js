@@ -5,16 +5,16 @@ import { SignalCapture } from './capture.js';
 import { buildRoom as buildClassicRoom } from './architecture.js';
 import { buildFutureRoom } from './architectureFuture.js';
 import { buildMughalRoom } from './architectureMughal.js';
-import { loadEnvStyle, saveEnvStyle, STYLE_FUTURE, STYLE_MUGHAL, STYLES } from './envStyle.js';
+import { loadEnvStyle, saveEnvStyle, STYLE_FUTURE, STYLE_MUGHAL, STYLES, STYLES_UI } from './envStyle.js';
 import { DesktopViz } from './viz.js';
-import { TESTS, CHAPTERS, testById, chapterOf } from './tests.js';
+import { TESTS, PLAYABLE, CHAPTERS, testById, chapterOf } from './tests.js';
 import {
   saveSession, listSessions, getSession, deleteSession, clearAllSessions,
   exportSession, exportAllSessions,
 } from './store.js';
 import {
   buildChamberSet, makeWorldPanel, paintWorldPanel, placeWorldPanel,
-  setPanelOpacityTarget, tickPanelOpacity, panelButtonAt,
+  setPanelOpacityTarget, tickPanelOpacity, panelButtonAt, panelControlAt, panelSliderT,
 } from './chamberEnv.js';
 import { GuideAudio } from './audio.js';
 import { Sfx } from './sfx.js';
@@ -25,6 +25,32 @@ const params = new URLSearchParams(location.search);
 const LITE = params.has('lite');
 const styleParam = params.get('style');
 let envStyle = STYLES.some((s) => s.id === styleParam) ? styleParam : loadEnvStyle();
+const SPEED_KEY = 'mg5.speedScale.v3';
+const SPEED_MIN = 0.5;
+const SPEED_MAX = 3;
+function loadSpeedScale() {
+  try {
+    // Missing key → getItem is null → `+null === 0` (finite!) — that wrongly became 50%.
+    const raw = localStorage.getItem(SPEED_KEY);
+    if (raw == null || raw === '') return 1;
+    const v = Number(raw);
+    if (Number.isFinite(v) && v > 0) return Math.min(SPEED_MAX, Math.max(SPEED_MIN, v));
+  } catch { /* */ }
+  return 1;
+}
+function saveSpeedScale(v) {
+  const n = Math.min(SPEED_MAX, Math.max(SPEED_MIN, Number.isFinite(+v) && +v > 0 ? +v : 1));
+  try { localStorage.setItem(SPEED_KEY, String(n)); } catch { /* */ }
+  return n;
+}
+let speedScale = loadSpeedScale();
+function speedLabel(v = speedScale) {
+  return `${Math.round(v * 100)}%`;
+}
+function refreshSpeedChip() {
+  const el = document.getElementById('speedChip');
+  if (el) el.textContent = `Speed ${speedLabel()}`;
+}
 
 /* Chrome + Meta Link: hide XR layers so three uses classic XRWebGLLayer. */
 try {
@@ -93,7 +119,7 @@ let room = null;
 let set = null;
 let course = new Course({ kind: 'still' });
 let profile = cruiseProfile(0, 1);
-let test = testById('C01_still');
+let test = PLAYABLE[0];
 
 const st = {
   // -1 home | 0 briefing | 1 settle countdown | 2 trial | 3 complete (stay put)
@@ -111,8 +137,12 @@ const st = {
   confirmPulse: false,
   retryPulse: false,
   action: null,
-  menu: false,
+  menu: false, // false | 'rooms' | 'style' | 'settings'
   hover: null,
+  hoverPrev: null,
+  sliderDrag: null, // 'slider:speed' while dragging
+  panelUv: null,
+  openSettingsOnEnter: false,
   inVr: false,
   briefingDone: false,
   briefingToken: 0,
@@ -144,12 +174,14 @@ function saveProgress() {
 }
 /** Where to continue: the first unfinished room after the last one played. */
 function continueId() {
-  const li = Math.max(0, TESTS.findIndex((t) => t.id === progress.last));
-  for (let k = 0; k < TESTS.length; k++) {
-    const t = TESTS[(li + k) % TESTS.length];
+  const list = PLAYABLE;
+  let li = list.findIndex((t) => t.id === progress.last);
+  if (li < 0) li = 0;
+  for (let k = 0; k < list.length; k++) {
+    const t = list[(li + k) % list.length];
     if (!progress.completed.has(t.id)) return t.id;
   }
-  return TESTS[0].id;
+  return list[0].id;
 }
 
 window.__mg5 = {
@@ -171,7 +203,7 @@ const participant = () => document.getElementById('pid').value.trim();
 const hex = (c) => `#${c.toString(16).padStart(6, '0')}`;
 const ROMAN = ['', 'I', 'II', 'III', 'IV'];
 
-for (const t of TESTS) {
+for (const t of PLAYABLE) {
   const opt = document.createElement('option');
   opt.value = t.id;
   opt.textContent = `${t.chamber} — ${t.name} (~${Math.round(t.introSec + t.trialSec)}s)`;
@@ -181,7 +213,8 @@ for (const t of TESTS) {
 function renderRail() {
   rail.innerHTML = '';
   for (const c of CHAPTERS) {
-    const rooms = TESTS.filter((t) => t.chapter === c.id);
+    const rooms = PLAYABLE.filter((t) => t.chapter === c.id);
+    if (!rooms.length) continue;
     const done = rooms.filter((t) => progress.completed.has(t.id)).length;
     const el = document.createElement('div');
     el.className = 'chap';
@@ -206,8 +239,8 @@ function renderHero() {
   document.getElementById('heroOver').textContent = `Chapter ${ROMAN[t.chapter]} · ${chapterOf(t).name}`;
   document.getElementById('heroTitle').textContent = t.name;
   document.getElementById('heroBrief').textContent = t.brief;
-  const idx = TESTS.indexOf(t);
-  const chips = [`Room ${idx + 1} of ${TESTS.length}`, t.protocol === 'seated' ? 'Seated' : 'Standing', `About ${Math.round(t.introSec + t.trialSec)} s`];
+  const idx = PLAYABLE.indexOf(t);
+  const chips = [`Room ${Math.max(1, idx + 1)} of ${PLAYABLE.length}`, t.protocol === 'seated' ? 'Seated' : 'Standing', `About ${Math.round(t.introSec + t.trialSec)} s`];
   if (progress.completed.has(t.id)) chips.push('Completed ✓');
   document.getElementById('heroChips').innerHTML = chips.map((c) => `<span class="chip">${c}</span>`).join('');
 }
@@ -229,7 +262,7 @@ testSel.onchange = () => selectRoom(testSel.value);
 function renderStylePicker() {
   const el = document.getElementById('stylePicker');
   if (!el) return;
-  el.innerHTML = STYLES.map((s) => (
+  el.innerHTML = STYLES_UI.map((s) => (
     `<button type="button" class="style-opt${s.id === envStyle ? ' on' : ''}" data-style="${s.id}" title="${s.hint}">${s.label}</button>`
   )).join('');
   el.querySelectorAll('[data-style]').forEach((btn) => {
@@ -267,17 +300,37 @@ for (let i = 0; i < 2; i++) {
   tip.visible = false;
   c.add(ray);
   scene.add(tip);
-  const p = { controller: c, ray, tip, connected: false, hover: null };
+  const p = { controller: c, ray, tip, connected: false, hover: null, gamepad: null, uv: null };
   pointers.push(p);
-  c.addEventListener('connected', () => { p.connected = true; });
-  c.addEventListener('disconnected', () => { p.connected = false; });
+  c.addEventListener('connected', (e) => { p.connected = true; p.gamepad = e.data?.gamepad ?? null; });
+  c.addEventListener('disconnected', () => { p.connected = false; p.gamepad = null; });
   c.addEventListener('selectstart', () => {
-    if (p.hover) { st.action = p.hover; return; }
-    if (!st.menu && (st.phase === 0 || st.phase === 3)) st.confirmPulse = true;
+    if (p.hover?.startsWith?.('slider:')) {
+      st.sliderDrag = p.hover;
+      applyPanelSlider(p.hover, p.uv);
+      hapticHand(p, 0.22, 35);
+      return;
+    }
+    if (p.hover) {
+      st.action = p.hover;
+      hapticHand(p, 0.35, 45);
+      return;
+    }
+    if (!st.menu && (st.phase === 0 || st.phase === 3)) {
+      st.confirmPulse = true;
+      hapticHand(p, 0.3, 40);
+    }
+  });
+  c.addEventListener('selectend', () => {
+    if (st.sliderDrag) {
+      st.sliderDrag = null;
+      hapticHand(p, 0.12, 20);
+    }
   });
   c.addEventListener('squeezestart', () => {
-    if (st.phase === 3 && !st.menu) { st.retryPulse = true; return; }
+    if (st.phase === 3 && !st.menu) { st.retryPulse = true; hapticHand(p, 0.28, 40); return; }
     st.calmHeld = true;
+    hapticHand(p, 0.18, 30);
     if (st.phase === 2) capture.mark('calm_start');
   });
   c.addEventListener('squeezeend', () => {
@@ -290,6 +343,15 @@ for (let i = 0; i < 2; i++) {
   scene.add(grip);
 }
 
+/** Pulse one hand when we know its gamepad; otherwise both. */
+function hapticHand(p, intensity, ms) {
+  try {
+    const act = p?.gamepad?.hapticActuators?.[0];
+    if (act?.pulse) { act.pulse(intensity, ms); return; }
+  } catch { /* */ }
+  haptic(intensity, ms);
+}
+
 /** Gentle controller pulse on both hands (no-op on desktop). */
 function haptic(intensity, ms) {
   const session = renderer.xr.getSession?.();
@@ -300,16 +362,27 @@ function haptic(intensity, ms) {
   }
 }
 
+function applyPanelSlider(id, uv) {
+  if (id !== 'slider:speed') return;
+  const t = panelSliderT(worldPanel, uv, id);
+  if (t == null) return;
+  speedScale = saveSpeedScale(SPEED_MIN + t * (SPEED_MAX - SPEED_MIN));
+  refreshSpeedChip();
+  st.lastPaint = 0;
+}
+
 const _rayM = new THREE.Matrix4();
 /** Laser pointers onto the card; returns hovered button id. */
 function updatePointers() {
   const cardOn = worldPanel.visible && worldPanel.material.opacity > 0.5 && st.phase >= 0;
   let hover = null;
+  st.panelUv = null;
   for (const p of pointers) {
     const show = cardOn && p.connected && renderer.xr.isPresenting;
     p.ray.visible = show;
     p.tip.visible = false;
     p.hover = null;
+    p.uv = null;
     if (!show) continue;
     _rayM.identity().extractRotation(p.controller.matrixWorld);
     raycaster.ray.origin.setFromMatrixPosition(p.controller.matrixWorld);
@@ -319,10 +392,22 @@ function updatePointers() {
     if (hit) {
       p.tip.visible = true;
       p.tip.position.copy(hit.point);
+      p.uv = hit.uv;
       p.hover = panelButtonAt(worldPanel, hit.uv);
-      hover = hover || p.hover;
+      if (p.hover && !hover) {
+        hover = p.hover;
+        st.panelUv = hit.uv;
+      }
+      if (st.sliderDrag && p.hover === st.sliderDrag) applyPanelSlider(st.sliderDrag, hit.uv);
+      else if (st.sliderDrag && !p.hover) applyPanelSlider(st.sliderDrag, hit.uv);
     }
   }
+  // Hover edge → light tick on the pointing hand
+  if (hover && hover !== st.hoverPrev) {
+    const hand = pointers.find((p) => p.hover === hover);
+    hapticHand(hand, 0.14, 22);
+  }
+  st.hoverPrev = hover;
   return hover;
 }
 
@@ -400,6 +485,8 @@ addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyR' && st.phase === 3) { st.retryPulse = true; e.preventDefault(); }
   if (e.code === 'KeyM' && (st.phase === 0 || st.phase === 3)) { st.action = st.menu ? 'back' : 'menu'; }
+  if (e.code === 'Comma' && (st.phase === 0 || st.phase === 3)) { st.action = 'style'; }
+  if (e.code === 'Period' && (st.phase === 0 || st.phase === 3)) { st.action = 'settings'; }
   if (e.code === 'Escape' && st.phase >= 0) {
     e.preventDefault();
     leaveToHome();
@@ -422,17 +509,36 @@ function mouseHover(e) {
 canvas.addEventListener('pointerdown', (e) => {
   st.drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
   canvas.setPointerCapture(e.pointerId);
+  if (!renderer.xr.isPresenting) {
+    _ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+    raycaster.setFromCamera(_ndc, camera);
+    const hit = raycaster.intersectObject(worldPanel, false)[0];
+    const ctrl = hit ? panelControlAt(worldPanel, hit.uv) : null;
+    if (ctrl?.kind === 'slider') {
+      st.sliderDrag = ctrl.id;
+      applyPanelSlider(ctrl.id, hit.uv);
+      st.drag.slider = true;
+    }
+  }
 });
 canvas.addEventListener('pointerup', (e) => {
   const d = st.drag;
+  const wasSlider = !!d?.slider || !!st.sliderDrag;
   st.drag = null;
-  if (!d || Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > 6) return;
+  st.sliderDrag = null;
+  if (wasSlider || !d || Math.hypot(e.clientX - d.x0, e.clientY - d.y0) > 6) return;
   const id = mouseHover(e);
   if (id) st.action = id;
   else if (!st.menu && (st.phase === 0 || st.phase === 3)) st.confirmPulse = true;
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!renderer.xr.isPresenting) {
+    if (st.sliderDrag) {
+      _ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+      raycaster.setFromCamera(_ndc, camera);
+      const hit = raycaster.intersectObject(worldPanel, false)[0];
+      if (hit) applyPanelSlider(st.sliderDrag, hit.uv);
+    }
     const h = mouseHover(e);
     st.mouseHover = h;
     canvas.style.cursor = h ? 'pointer' : 'default';
@@ -518,8 +624,9 @@ function tickFade(dt) {
 /* ---------------------------------------------------------- chambers */
 
 function nextTest(t = test) {
-  const i = TESTS.indexOf(t);
-  return i < TESTS.length - 1 ? TESTS[i + 1] : null;
+  const i = PLAYABLE.indexOf(t);
+  if (i < 0) return PLAYABLE[0] || null;
+  return i < PLAYABLE.length - 1 ? PLAYABLE[i + 1] : null;
 }
 
 /** Build the hall for `id` (architecture, lighting, sound, fixtures). Call while black. */
@@ -534,7 +641,7 @@ function buildRoomFor(id) {
   const build = envStyle === STYLE_FUTURE ? buildFutureRoom
     : envStyle === STYLE_MUGHAL ? buildMughalRoom
       : buildClassicRoom;
-  room = build(renderer, test, course, { next: nextTest() ?? TESTS[0], lite: LITE, style: envStyle });
+  room = build(renderer, test, course, { next: nextTest() ?? PLAYABLE[0], lite: LITE, style: envStyle });
   labRoot.add(room.group);
   room.reflector?.exclude(worldPanel, ...pointers.flatMap((p) => [p.ray, p.tip]), fadeShell);
   scene.environment = room.envMap;
@@ -581,12 +688,17 @@ function setupChamber(id) {
     stepIndex: 0, lookStage: 0, gazeErrSum: 0, gazeErrN: 0, quality: 0.5,
     calmTime: 0, trialTime: 0, feedback: null, doneAt: 0,
     sway: { n: 0, x: 0, z: 0, xx: 0, zz: 0 }, lean: { sum: 0, n: 0 }, looking: { yaw: 0, pitch: 0 },
+    lookExplore: 0, _prevLook: null,
   });
   camera.rotation.set(0, 0, 0);
   camera.updateMatrixWorld(true);
   placeWorldPanel(worldPanel, headWorldPose());
   setPanelOpacityTarget(worldPanel, 1);
   st.lastPaint = 0;
+  if (st.openSettingsOnEnter) {
+    st.openSettingsOnEnter = false;
+    st.menu = 'settings';
+  }
 
   home.classList.add('hide');
   drawer.classList.remove('open');
@@ -598,7 +710,7 @@ function setupChamber(id) {
 
 function playBriefing() {
   const token = ++st.briefingToken;
-  st.briefingDone = !guideAudio.voiceOn;
+  st.briefingDone = !guideAudio.voiceOn || !!test.skipVoice;
   if (st.briefingDone) return;
   guideAudio.play(test.id).then(() => {
     if (token !== st.briefingToken || st.phase !== 0) return;
@@ -623,6 +735,12 @@ function feedbackFor() {
   const sum = capture.summarize();
   const r = sum.ride;
   switch (test.theme) {
+    case 'freelook': {
+      const look = st.lookExplore || 0;
+      if (look > 8) return { headline: 'Well explored', detail: 'You looked around the hall. If that felt fine, you are ready to move.' };
+      if (look > 3) return { headline: 'Settled in', detail: 'A short look around is enough. Continue if you feel comfortable.' };
+      return { headline: 'Baseline done', detail: 'If anything felt off just looking around, take a break before the glides.' };
+    }
     case 'still': {
       const a = st.sway;
       const sway = a.n > 1 ? Math.sqrt(Math.max(0, a.xx / a.n - (a.x / a.n) ** 2 + a.zz / a.n - (a.z / a.n) ** 2)) * 100 : 0; // cm
@@ -753,13 +871,50 @@ function onXrSessionEnd() {
   leaveToHome();
 }
 
+function syncAudioToggles() {
+  const m = document.getElementById('musicOn');
+  const v = document.getElementById('voiceOn');
+  if (m) m.checked = guideAudio.musicOn;
+  if (v) v.checked = guideAudio.voiceOn;
+}
+
+function applyEnvStyle(nextId) {
+  const next = saveEnvStyle(nextId);
+  if (next === envStyle) return false;
+  envStyle = next;
+  renderStylePicker();
+  return true;
+}
+
 /** Card buttons (pointer, mouse) and their trigger/keyboard fallbacks. */
 function runAction(id, tAbs) {
   if (!id || st.pending) return;
+  if (id.startsWith('slider:')) return; // drag-only
   sfx.chime('step');
-  haptic(0.2, 30);
-  if (id === 'menu') { st.menu = true; st.lastPaint = 0; return; }
+  haptic(0.28, 40);
+  if (id === 'menu') { st.menu = 'rooms'; st.lastPaint = 0; return; }
+  if (id === 'style') { st.menu = 'style'; st.lastPaint = 0; return; }
+  if (id === 'settings' || id === 'speed') { st.menu = 'settings'; st.lastPaint = 0; return; }
   if (id === 'back') { st.menu = false; st.lastPaint = 0; return; }
+  if (id === 'toggle:music') {
+    guideAudio.setMusic(!guideAudio.musicOn);
+    syncAudioToggles();
+    st.lastPaint = 0;
+    return;
+  }
+  if (id === 'toggle:voice') {
+    guideAudio.setVoice(!guideAudio.voiceOn);
+    syncAudioToggles();
+    st.lastPaint = 0;
+    return;
+  }
+  if (id.startsWith('style:')) {
+    const sid = id.slice(6);
+    if (!applyEnvStyle(sid)) { st.lastPaint = 0; return; }
+    if (st.phase === -1 && st.ready) transition(() => buildRoomFor(testSel.value));
+    else if (st.phase === 0 || st.phase === 3) transition(() => setupChamber(test.id));
+    return;
+  }
   if (id.startsWith('room:')) {
     const rid = id.slice(5);
     if (st.phase === 2 || st.phase === 1) return;
@@ -768,7 +923,7 @@ function runAction(id, tAbs) {
     return;
   }
   if (id === 'begin') { st.confirmPulse = true; return; }
-  if (id === 'next') { transition(() => setupChamber((nextTest() ?? TESTS[0]).id)); return; }
+  if (id === 'next') { transition(() => setupChamber((nextTest() ?? PLAYABLE[0]).id)); return; }
   if (id === 'repeat') { transition(() => setupChamber(test.id)); }
   void tAbs;
 }
@@ -856,7 +1011,15 @@ function updateSteps(dt, prog) {
 /** Live 0..1 "doing it right" signal that drives the room's feedback lights. */
 function updateQuality(dt, head, ideal) {
   let q = st.quality;
-  if (test.theme === 'still') {
+  if (test.theme === 'freelook') {
+    const prev = st._prevLook;
+    const dyaw = prev ? Math.abs(head.yaw - prev.yaw) : 0;
+    const dpitch = prev ? Math.abs(head.pitch - prev.pitch) : 0;
+    st._prevLook = { yaw: head.yaw, pitch: head.pitch };
+    const rate = (dyaw + dpitch) / Math.max(dt, 1e-3);
+    st.lookExplore = (st.lookExplore || 0) + Math.min(1.5, rate) * dt;
+    q = 0.4 + 0.6 * Math.min(1, rate / 0.9);
+  } else if (test.theme === 'still') {
     const a = st.sway;
     a.n++; a.x += head.x; a.z += head.z; a.xx += head.x * head.x; a.zz += head.z * head.z;
     const v = st._prevHead ? Math.hypot(head.x - st._prevHead.x, head.z - st._prevHead.z) / Math.max(dt, 1e-3) : 0;
@@ -956,11 +1119,11 @@ renderer.setAnimationLoop(() => {
     headWorldPose();
     if (test.trialKind === 'ride') {
       // Grip / Space = full stop (comfort). Hold ~1.6 s while stopped → leave the room.
-      const rate = 1 - st.calm;
+      const rate = (1 - st.calm) * speedScale;
       st.tau += dt * rate;
       const p = profile.at(st.tau);
       st.s = p.s;
-      speed = p.v * rate;
+      speed = p.v * (1 - st.calm) * speedScale;
       sample = course.sample(st.s);
       applyInversePath(sample);
       prog = course.length > 0 ? st.s / course.length : 1;
@@ -976,8 +1139,8 @@ renderer.setAnimationLoop(() => {
       }
     } else {
       sample = course.sample(0);
-      prog = Math.min(1, trialT / test.trialSec);
-      done = trialT >= test.trialSec;
+      prog = Math.min(1, (trialT * speedScale) / test.trialSec);
+      done = trialT * speedScale >= test.trialSec;
       // Still rooms: long grip/Space also exits if feeling unwell.
       if (st.calmHeld) {
         st.stopHold += dt;
@@ -1011,7 +1174,7 @@ renderer.setAnimationLoop(() => {
   } else if (st.phase === 3) {
     stage = 'done';
     prog = 1;
-    if (confirm) transition(() => setupChamber((nextTest() ?? TESTS[0]).id));
+    if (confirm) transition(() => setupChamber((nextTest() ?? PLAYABLE[0]).id));
     else if (retry) transition(() => setupChamber(test.id));
   }
 
@@ -1036,10 +1199,15 @@ renderer.setAnimationLoop(() => {
       next: nextTest(),
       menu: st.menu,
       hover: st.hover,
-      tests: TESTS,
+      tests: PLAYABLE,
       chapters: CHAPTERS,
       completed: progress.completed,
-      index: TESTS.indexOf(test),
+      index: Math.max(0, PLAYABLE.indexOf(test)),
+      styles: STYLES_UI,
+      envStyle,
+      musicOn: guideAudio.musicOn,
+      voiceOn: guideAudio.voiceOn,
+      speedScale,
     });
   }
 
@@ -1066,6 +1234,17 @@ renderer.setAnimationLoop(() => {
   renderHero();
   renderRail();
   renderStylePicker();
+  refreshSpeedChip();
+  document.getElementById('speedChip')?.addEventListener('click', () => {
+    if (st.phase === 0 || st.phase === 3) {
+      st.menu = 'settings';
+      st.lastPaint = 0;
+      setPanelOpacityTarget(worldPanel, 1);
+      return;
+    }
+    st.openSettingsOnEnter = true;
+    statusEl.textContent = `Speed ${speedLabel()} — settings open on the hall card when you start.`;
+  });
   window.__mg5.envStyle = () => envStyle;
   try {
     buildRoomFor(testSel.value);
