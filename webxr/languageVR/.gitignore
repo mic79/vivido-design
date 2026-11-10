@@ -1,0 +1,26 @@
+# Local-only extras — runtime ships NL + dining room only
+# (kept on disk; not published to GitHub Pages)
+
+# Unused photogrammetry / alt rooms
+assets/hintze_hall-1k.glb
+assets/fontana_di_trevi_photogrammetry_scan.glb
+assets/fontana_di_trevi_environment_photogrammetry_scan.glb
+assets/peirene_fountain_corinth_-_greece.glb
+assets/library_of_celsus_-_crowdsourced_photogrammetry.glb
+assets/crystal_palace_cinema_from_realityvirtual.co.glb
+assets/bagan_-_khayiminga_temple_interior.glb
+assets/small_modern_kitchen.glb
+assets/modern_apartment_interior.glb
+assets/mansion_garden_scene.glb
+
+# Vosk: keep nl.tar.gz tracked; extracted packs + other langs stay local
+assets/vosk-models/nl/
+assets/vosk-models/de/
+assets/vosk-models/fr/
+assets/vosk-models/es/
+assets/vosk-models/de.tar.gz
+assets/vosk-models/fr.tar.gz
+assets/vosk-models/es.tar.gz
+
+# Local HTML backups
+indexBAK*.html

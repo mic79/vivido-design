@@ -12,6 +12,11 @@ sample-xr-*.json
 decay-*.json
 entervr-*.json
 
+# Terrain / texture duplicates (keep on disk; not for Pages)
+assets/terrain/*Copy*
+assets/terrain/*.bak
+assets/textures/**/*.exr
+
 # Terrain A/B (product keeps quest / lod2 / overview / rocks / groundscape)
 assets/terrain/scifi-overview-lods.glb
 assets/terrain/scifi-overview-lods-quest.glb
