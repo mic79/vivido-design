@@ -651,6 +651,8 @@ function buildRoomFor(id) {
   hemi.intensity = room.hemi;
   set = buildChamberSet(labRoot, test, course);
   set.opacity = 0;
+  // Pad sits on the mirror floor — keep it out of the reflection pass (avoids a floating twin).
+  if (set.pad) room.reflector?.exclude(set.pad);
   applyInversePath(course.sample(0));
   sfx.setRoom(test.sound);
   if (!renderer.xr.isPresenting) {
@@ -960,12 +962,14 @@ function updateGazeTarget(fx, dt) {
   d.dotA += (wantDot - d.dotA) * Math.min(1, dt * 10);
   d.onTarget = errDeg < T.accuracyDeg;
   const before = d.fill;
+  // Match playback speed: at 300% you pass targets ~3× sooner, so fill/drain 3× faster.
+  const pace = Math.max(0.5, speedScale);
   if (d.onTarget) {
-    d.fill = Math.min(1, d.fill + dt / T.dwellSec);
+    d.fill = Math.min(1, d.fill + (dt * pace) / T.dwellSec);
     st.gazeErrSum += errDeg * dt;
     st.gazeErrN += dt;
   } else {
-    d.fill = Math.max(0, d.fill - dt * 0.35);
+    d.fill = Math.max(0, d.fill - dt * 0.35 * pace);
   }
   if (Math.floor(d.fill * 4) > Math.floor(before * 4) && d.fill < 1) haptic(0.12, 25);
   sfx.setGaze(d.fill, d.onTarget);

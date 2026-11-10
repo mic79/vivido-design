@@ -147,6 +147,27 @@ function makeFloorRing(radius, width, color) {
   return mesh;
 }
 
+/** Dark underfoot pad (path-runner tone) — hides the wrong ceiling bounce under the player. */
+function makeStancePad(radius = 0.82) {
+  const mesh = new THREE.Mesh(
+    new THREE.CircleGeometry(radius, 72),
+    new THREE.MeshStandardMaterial({
+      color: 0x2a3036,
+      roughness: 0.94,
+      metalness: 0.04,
+      envMapIntensity: 0.08,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }),
+  );
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.renderOrder = 2;
+  mesh.receiveShadow = true;
+  mesh.name = 'stancePad';
+  return mesh;
+}
+
 /* ------------------------------------------------------- gaze target */
 
 /** Floating holo-target: dark glass disc, bronze bezel, fill ring, gaze dot. */
@@ -213,6 +234,11 @@ export function buildChamberSet(labParent, test, course) {
   const h = { group, opacity: 0, opacityTarget: 1, targets: [] };
 
   if (course.kind === 'still') {
+    // Opaque pad under the stance ring — same family as the dark walkway runner, so looking
+    // down doesn't show a wrong vault reflection in the glossy marble.
+    h.pad = makeStancePad(0.82);
+    h.pad.position.set(0, course.startY + 0.05, 0);
+    group.add(h.pad);
     h.ring = makeFloorRing(0.5, 0.045, accent);
     h.ring.position.set(0, course.startY + LIFT, 0);
     group.add(h.ring);
