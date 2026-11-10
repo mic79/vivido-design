@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+  <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <title>StacksVR</title>
-  <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.6.0/dist/aframe-extras.min.js"></script>
-  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.6.0/dist/aframe-extras.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/FBXLoader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.0/umd/index.js"></script>
   <script>
@@ -26,7 +26,7 @@
   <script src="modes.js?v=17"></script>
   <script src="lobby.js?v=17"></script>
   <script src="match-replay.js?v=17"></script>
-  <script src="game-menu.js?v=17"></script>
+  <script src="game-menu.js?v=18"></script>
   <script src="mixamo-body.js?v=17"></script>
   <script src="locomotion.js?v=17"></script>
   <script src="stacks-game.js?v=17"></script>
@@ -48,31 +48,31 @@
     body.mobile-spectator #mobile-lobby-screen {
       display: flex; position: fixed; inset: 0; z-index: 40; flex-direction: column;
       align-items: center; justify-content: center; background: #0b0e14; color: #fff;
-    }
-  </style>
-</head>
-<body>
+      }
+    </style>
+  </head>
+  <body>
   <div id="boot">
     <h1 style="margin:0;letter-spacing:0.08em">STACKSVR</h1>
     <div class="keys">
       <b>Green pad</b> grab · <b>purple pocket</b> hold/swap (H)<br/>
       Empty hand on <b>cup rim</b> = rotate + raise/lower<br/>
       Ghost in-cup · release place · other hand can steal<br/>
-      Menu: X / M · Multi lobby for PvP
-    </div>
+      Menu: left X (or M) · Multi lobby for PvP
+      </div>
     <button id="boot-btn" type="button">START</button>
-  </div>
+    </div>
 
-  <div id="mobile-lobby-screen">
+      <div id="mobile-lobby-screen">
     <h1>STACKSVR Spectate</h1>
     <div>
       <button id="mobile-lobby-minus" type="button">-</button>
       <span id="mobile-lobby-num">1</span>
       <button id="mobile-lobby-plus" type="button">+</button>
-    </div>
+        </div>
     <button id="mobile-watch-btn" type="button">Watch</button>
     <div id="mobile-status-msg"></div>
-  </div>
+    </div>
 
   <a-scene
     stacks-game="mode: pvp"
@@ -110,10 +110,12 @@
         <a-entity id="camera" camera look-controls="pointerLockEnabled: true" wasd-controls position="0 1.6 0"></a-entity>
         <a-entity id="leftHand"
           hand-controls="hand: left; handModelStyle: lowPoly; color: #ffcccc"
+          oculus-touch-controls="hand: left"
           laser-controls="hand: left"
           raycaster="objects: .menu-btn,.clickable; far: 4"></a-entity>
         <a-entity id="rightHand"
           hand-controls="hand: right; handModelStyle: lowPoly; color: #ffcccc"
+          oculus-touch-controls="hand: right"
           laser-controls="hand: right"
           raycaster="objects: .menu-btn,.clickable; far: 4"></a-entity>
       </a-entity>
@@ -255,9 +257,9 @@
         if (e.key === 'm' || e.key === 'M') {
           var menu = document.querySelector('[vr-menu]');
           if (menu && menu.components['vr-menu']) menu.components['vr-menu'].toggleMenu();
-        }
-      });
-    })();
-  </script>
-</body>
-</html>
+          }
+        });
+      })();
+    </script>
+  </body>
+</html> 

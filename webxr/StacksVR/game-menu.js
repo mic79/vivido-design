@@ -17,24 +17,55 @@
       this.statsPage = 0;
       this.STATS_PER_PAGE = 4;
       this._refsReady = false;
+      this._xWasDown = false;
+      this._menuToggleAt = 0;
       var self = this;
 
       this.el.sceneEl.addEventListener('loaded', function () { self.cacheRefs(); });
       if (this.el.sceneEl.hasLoaded) this.cacheRefs();
 
-      this.el.sceneEl.addEventListener('xbuttondown', function () { self.toggleMenu(); });
+      function onMenuButton() { self.requestToggleMenu(); }
+      this.el.sceneEl.addEventListener('xbuttondown', onMenuButton);
       this.el.sceneEl.addEventListener('lobby-state-updated', function () { self.refreshLobbyUI(); });
 
       setTimeout(function attachX() {
         var leftHand = document.getElementById('leftHand');
-        if (leftHand) leftHand.addEventListener('xbuttondown', function () { self.toggleMenu(); });
-        else setTimeout(attachX, 400);
+        if (leftHand) {
+          leftHand.addEventListener('xbuttondown', onMenuButton);
+          // Quest / WebXR sometimes skips A-Frame button events when hand+laser share an entity
+          leftHand.addEventListener('controllerconnected', function () {
+            self._leftHandEl = leftHand;
+          });
+          self._leftHandEl = leftHand;
+        } else setTimeout(attachX, 400);
       }, 100);
 
       this.el.sceneEl.addEventListener('enter-vr', function () {
         var overlay = document.getElementById('pre-vr-overlay');
         if (overlay) overlay.style.display = 'none';
       });
+    },
+
+    // Edge-detect left X (XR button index 4) so menu works even if xbuttondown never fires
+    tick: function () {
+      var hand = this._leftHandEl || document.getElementById('leftHand');
+      if (!hand) return;
+      var tracked = hand.components['tracked-controls'] ||
+        hand.components['tracked-controls-webxr'] ||
+        hand.components['oculus-touch-controls'] ||
+        hand.components['meta-touch-controls'];
+      var gp = tracked && tracked.controller && tracked.controller.gamepad;
+      if (!gp || !gp.buttons || !gp.buttons[4]) return;
+      var down = !!gp.buttons[4].pressed;
+      if (down && !this._xWasDown) this.requestToggleMenu();
+      this._xWasDown = down;
+    },
+
+    requestToggleMenu: function () {
+      var now = performance.now();
+      if (now - this._menuToggleAt < 250) return;
+      this._menuToggleAt = now;
+      this.toggleMenu();
     },
 
     cacheRefs: function () {
