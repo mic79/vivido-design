@@ -2,6 +2,8 @@
 (function () {
   'use strict';
 
+  var PLAY_POSITION = { x: 0, y: 0, z: 1.35, ry: 0 };
+
   var SPECTATOR_POSITIONS = [
     { x: -3.5, y: 0, z: 2.5, ry: -40 },
     { x: 3.5, y: 0, z: 2.5, ry: 40 },
@@ -19,6 +21,8 @@
       this._refsReady = false;
       this._xWasDown = false;
       this._menuToggleAt = 0;
+      this._poseKey = '';
+      this._menuHomeParent = null;
       var self = this;
 
       this.el.sceneEl.addEventListener('loaded', function () { self.cacheRefs(); });
@@ -30,35 +34,81 @@
 
       setTimeout(function attachX() {
         var leftHand = document.getElementById('leftHand');
+        var rightHand = document.getElementById('rightHand');
         if (leftHand) {
           leftHand.addEventListener('xbuttondown', onMenuButton);
-          // Quest / WebXR sometimes skips A-Frame button events when hand+laser share an entity
-          leftHand.addEventListener('controllerconnected', function () {
-            self._leftHandEl = leftHand;
-          });
           self._leftHandEl = leftHand;
-        } else setTimeout(attachX, 400);
+        }
+        // laser-controls re-enables lines on controllerconnected — stamp them back off
+        function guardLasers(hand) {
+          if (!hand) return;
+          hand.addEventListener('controllerconnected', function () {
+            if (!self.menuVisible) self.setRaycasters(false);
+          });
+        }
+        guardLasers(leftHand);
+        guardLasers(rightHand);
+        if (!leftHand || !rightHand) setTimeout(attachX, 400);
       }, 100);
 
       this.el.sceneEl.addEventListener('enter-vr', function () {
         var overlay = document.getElementById('pre-vr-overlay');
         if (overlay) overlay.style.display = 'none';
+        var cam = document.getElementById('camera');
+        if (cam) {
+          cam.setAttribute('look-controls', 'enabled', false);
+          cam.removeAttribute('wasd-controls');
+        }
+        self.setRaycasters(false);
+      });
+
+      this.el.sceneEl.addEventListener('exit-vr', function () {
+        var cam = document.getElementById('camera');
+        if (cam) {
+          cam.setAttribute('look-controls', 'enabled', true);
+          cam.setAttribute('wasd-controls', '');
+        }
       });
     },
 
     // Edge-detect left X (XR button index 4) so menu works even if xbuttondown never fires
     tick: function () {
       var hand = this._leftHandEl || document.getElementById('leftHand');
-      if (!hand) return;
-      var tracked = hand.components['tracked-controls'] ||
-        hand.components['tracked-controls-webxr'] ||
-        hand.components['oculus-touch-controls'] ||
-        hand.components['meta-touch-controls'];
-      var gp = tracked && tracked.controller && tracked.controller.gamepad;
-      if (!gp || !gp.buttons || !gp.buttons[4]) return;
-      var down = !!gp.buttons[4].pressed;
-      if (down && !this._xWasDown) this.requestToggleMenu();
-      this._xWasDown = down;
+      if (hand) {
+        var tracked = hand.components['tracked-controls'] ||
+          hand.components['tracked-controls-webxr'] ||
+          hand.components['oculus-touch-controls'] ||
+          hand.components['meta-touch-controls'];
+        var gp = tracked && tracked.controller && tracked.controller.gamepad;
+        if (gp && gp.buttons && gp.buttons[4]) {
+          var down = !!gp.buttons[4].pressed;
+          if (down && !this._xWasDown) this.requestToggleMenu();
+          this._xWasDown = down;
+        }
+      }
+      // laser-controls periodically revives lines — keep them dead while menu closed
+      if (!this.menuVisible) {
+        this._laserGuard = (this._laserGuard || 0) + 1;
+        if (this._laserGuard % 20 === 0) this._forceHideLaserLines();
+      }
+    },
+
+    _forceHideLaserLines: function () {
+      ['leftHand', 'rightHand'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el || !el.object3D) return;
+        var rc = el.components && el.components.raycaster;
+        if (rc) {
+          if (rc.data) {
+            rc.data.showLine = false;
+            rc.data.enabled = false;
+          }
+          if (rc.line) rc.line.visible = false;
+        }
+        el.object3D.traverse(function (obj) {
+          if (obj.isLine || obj.type === 'Line') obj.visible = false;
+        });
+      });
     },
 
     requestToggleMenu: function () {
@@ -72,8 +122,11 @@
       this.menu = document.getElementById('vr-menu-root');
       this.lobbySection = document.getElementById('menu-lobby-section');
       this.queueButtons = document.getElementById('menu-queue-buttons');
+      this.leftHand = document.getElementById('leftHand');
+      this.rightHand = document.getElementById('rightHand');
       this._refsReady = true;
       this._bindClicks();
+      this.setRaycasters(false);
       this.refreshLobbyUI();
     },
 
@@ -89,19 +142,73 @@
       });
     },
 
+    setRaycasters: function (enabled) {
+      this._setHandRaycaster(this.leftHand || document.getElementById('leftHand'), enabled);
+      this._setHandRaycaster(this.rightHand || document.getElementById('rightHand'), enabled);
+    },
+
+    _setHandRaycaster: function (hand, enabled) {
+      if (!hand) return;
+      hand.setAttribute('raycaster', {
+        objects: enabled ? '.menu-btn' : '',
+        showLine: enabled,
+        lineColor: '#9fe6b8',
+        lineOpacity: enabled ? 0.85 : 0,
+        far: 4,
+        enabled: !!enabled
+      });
+      // laser-controls keeps a Line child — force hide when menu closed
+      setTimeout(function () {
+        var rc = hand.components && hand.components.raycaster;
+        if (rc && rc.data) {
+          rc.data.showLine = !!enabled;
+          rc.data.enabled = !!enabled;
+        }
+        if (rc && rc.line) rc.line.visible = !!enabled;
+        hand.object3D.traverse(function (obj) {
+          if (obj.isLine || (obj.type === 'Line')) obj.visible = !!enabled;
+        });
+      }, 0);
+    },
+
+    _placeMenuInView: function () {
+      var root = document.getElementById('vr-menu-root');
+      var cam = document.getElementById('camera');
+      if (!root || !cam) return;
+      if (!this._menuHomeParent) this._menuHomeParent = root.parentElement;
+      if (root.parentElement !== cam) cam.appendChild(root);
+      root.setAttribute('position', '0 -0.12 -1.05');
+      root.setAttribute('rotation', '0 0 0');
+    },
+
+    _restoreMenuHome: function () {
+      var root = document.getElementById('vr-menu-root');
+      if (!root || !this._menuHomeParent) return;
+      if (root.parentElement !== this._menuHomeParent) this._menuHomeParent.appendChild(root);
+      root.setAttribute('position', '0 1.35 -0.9');
+      root.setAttribute('rotation', '0 0 0');
+    },
+
     toggleMenu: function () {
       this.menuVisible = !this.menuVisible;
       var root = document.getElementById('vr-menu-root');
-      if (root) root.setAttribute('visible', this.menuVisible);
-      var lh = document.getElementById('leftHand');
-      var rh = document.getElementById('rightHand');
       if (this.menuVisible) {
-        if (lh) lh.setAttribute('raycaster', 'objects', '.menu-btn');
-        if (rh) rh.setAttribute('raycaster', 'objects', '.menu-btn');
+        this._placeMenuInView();
+        if (root) root.setAttribute('visible', true);
+        this.setRaycasters(true);
       } else {
-        if (lh) lh.setAttribute('raycaster', 'objects', '.clickable');
-        if (rh) rh.setAttribute('raycaster', 'objects', '.clickable');
+        if (root) root.setAttribute('visible', false);
+        this._restoreMenuHome();
+        this.setRaycasters(false);
       }
+    },
+
+    closeMenu: function () {
+      this.menuVisible = false;
+      var root = document.getElementById('vr-menu-root');
+      if (root) root.setAttribute('visible', false);
+      this._restoreMenuHome();
+      this.setRaycasters(false);
     },
 
     handleAction: function (action) {
@@ -118,9 +225,7 @@
           break;
         case 'start-bot':
           if (comp) comp.startOfflineBotMatch();
-          this.menuVisible = false;
-          var root = document.getElementById('vr-menu-root');
-          if (root) root.setAttribute('visible', false);
+          this.closeMenu();
           break;
         case 'end-match':
           if (comp) comp.endMatch();
@@ -188,28 +293,56 @@
         }
       }
 
-      // Spectator seating
-      this._applySpectatorPose();
+      this._applySeatPose();
     },
 
-    _applySpectatorPose: function () {
-      if (!window.isMultiplayer || !window.lobbyState) return;
-      var myId = window.myPlayerId || (window.StacksLobby && window.StacksLobby.myPlayerId);
-      var mp = window.lobbyState.matchPlayers || {};
-      var isPlayer = mp.blue === myId || mp.red === myId;
+    _resetRigLocal: function () {
       var rig = document.getElementById('rig');
       if (!rig) return;
-      if (isPlayer) {
-        if (mp.blue === myId) rig.setAttribute('position', '0 0 1.8');
-        else rig.setAttribute('position', '0 0 1.8');
-        return;
+      rig.setAttribute('position', '0 0 0');
+      rig.setAttribute('rotation', '0 0 0');
+    },
+
+    _movePlayerTo: function (pos) {
+      var player = document.getElementById('player');
+      if (!player) return;
+      player.setAttribute('position', pos.x + ' ' + (pos.y || 0) + ' ' + pos.z);
+      // Yaw on player (locomotion root) — never offset #rig or snap-turn orbits off-body
+      player.object3D.rotation.y = THREE.MathUtils.degToRad(pos.ry || 0);
+      this._resetRigLocal();
+    },
+
+    _applySeatPose: function () {
+      if (!window.isMultiplayer || !window.lobbyState) return;
+      var myId = window.myPlayerId || (window.StacksLobby && window.StacksLobby.myPlayerId);
+      if (!myId) return;
+
+      var ls = window.lobbyState;
+      var mp = ls.matchPlayers || {};
+      var isMatchPlayer = mp.blue === myId || (mp.red === myId && mp.red !== '__BOT__');
+      var inQueue = (ls.queue || []).indexOf(myId) >= 0;
+      var slots = ls.spectatorSlots || [];
+      var specIdx = slots.indexOf(myId);
+
+      // Only park in spectator corners while a match is on and you're not playing.
+      // Joining/hosting a lobby must NOT yank the player off the table.
+      var useSpectator = !isMatchPlayer && !inQueue &&
+        ls.matchState === 'PLAYING' && specIdx >= 0;
+
+      var key = useSpectator
+        ? ('spec:' + (specIdx % SPECTATOR_POSITIONS.length))
+        : 'play';
+      if (key === this._poseKey) return;
+      this._poseKey = key;
+
+      if (useSpectator) {
+        var p = SPECTATOR_POSITIONS[specIdx % SPECTATOR_POSITIONS.length];
+        this._movePlayerTo(p);
+        window.isSpectator = true;
+      } else {
+        this._movePlayerTo(PLAY_POSITION);
+        window.isSpectator = false;
       }
-      var slots = window.lobbyState.spectatorSlots || [];
-      var idx = slots.indexOf(myId);
-      if (idx < 0) idx = 0;
-      var p = SPECTATOR_POSITIONS[idx % SPECTATOR_POSITIONS.length];
-      rig.setAttribute('position', p.x + ' 0 ' + p.z);
-      rig.setAttribute('rotation', '0 ' + p.ry + ' 0');
     },
 
     _showStats: function () {
@@ -235,7 +368,6 @@
 
     _playLatestReplay: function () {
       if (!window.matchReplayStorage) return;
-      var self = this;
       window.matchReplayStorage.list().then(function (keys) {
         if (!keys || !keys.length) return;
         var latest = keys.sort(function (a, b) { return b - a; })[0];

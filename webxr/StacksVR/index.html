@@ -18,18 +18,18 @@
     };
   </script>
 
-  <script src="shapes.js?v=17"></script>
-  <script src="cup.js?v=17"></script>
-  <script src="clear.js?v=17"></script>
-  <script src="attack.js?v=17"></script>
-  <script src="cup-bot.js?v=17"></script>
-  <script src="modes.js?v=17"></script>
-  <script src="lobby.js?v=17"></script>
-  <script src="match-replay.js?v=17"></script>
-  <script src="game-menu.js?v=18"></script>
-  <script src="mixamo-body.js?v=17"></script>
-  <script src="locomotion.js?v=17"></script>
-  <script src="stacks-game.js?v=17"></script>
+  <script src="shapes.js?v=19"></script>
+  <script src="cup.js?v=19"></script>
+  <script src="clear.js?v=19"></script>
+  <script src="attack.js?v=19"></script>
+  <script src="cup-bot.js?v=19"></script>
+  <script src="modes.js?v=19"></script>
+  <script src="lobby.js?v=19"></script>
+  <script src="match-replay.js?v=19"></script>
+  <script src="game-menu.js?v=19"></script>
+  <script src="mixamo-body.js?v=19"></script>
+  <script src="locomotion.js?v=19"></script>
+  <script src="stacks-game.js?v=19"></script>
 
   <style>
     html, body { margin: 0; height: 100%; background: #0b0e14; font-family: system-ui, sans-serif; }
@@ -58,7 +58,7 @@
       <b>Green pad</b> grab · <b>purple pocket</b> hold/swap (H)<br/>
       Empty hand on <b>cup rim</b> = rotate + raise/lower<br/>
       Ghost in-cup · release place · other hand can steal<br/>
-      Menu: left X (or M) · Multi lobby for PvP
+      Menu: left X (or M) · lasers only while menu open · Multi lobby for PvP
       </div>
     <button id="boot-btn" type="button">START</button>
     </div>
@@ -112,12 +112,12 @@
           hand-controls="hand: left; handModelStyle: lowPoly; color: #ffcccc"
           oculus-touch-controls="hand: left"
           laser-controls="hand: left"
-          raycaster="objects: .menu-btn,.clickable; far: 4"></a-entity>
+          raycaster="far: 4; showLine: false; enabled: false; lineOpacity: 0"></a-entity>
         <a-entity id="rightHand"
           hand-controls="hand: right; handModelStyle: lowPoly; color: #ffcccc"
           oculus-touch-controls="hand: right"
           laser-controls="hand: right"
-          raycaster="objects: .menu-btn,.clickable; far: 4"></a-entity>
+          raycaster="far: 4; showLine: false; enabled: false; lineOpacity: 0"></a-entity>
       </a-entity>
     </a-entity>
 

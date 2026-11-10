@@ -1,4 +1,4 @@
-// locomotion.js — thumbstick move + snap-turn for StacksVR
+// locomotion.js — thumbstick move + comfort snap-turn for StacksVR
 (function () {
   'use strict';
 
@@ -19,6 +19,8 @@
       this._right = new THREE.Vector3();
       this._quat = new THREE.Quaternion();
       this._euler = new THREE.Euler(0, 0, 0, 'YXZ');
+      this._camBefore = new THREE.Vector3();
+      this._camAfter = new THREE.Vector3();
 
       var self = this;
       this._onStick = function (evt) {
@@ -34,16 +36,30 @@
           self._rx = x;
         }
       };
+      // Listen on scene + hands — laser/hand-controls can swallow scene bubbling
       this.el.sceneEl.addEventListener('thumbstickmoved', this._onStick);
+      var selfBind = this;
+      setTimeout(function bindHands() {
+        var lh = document.getElementById('leftHand');
+        var rh = document.getElementById('rightHand');
+        if (lh) lh.addEventListener('thumbstickmoved', selfBind._onStick);
+        if (rh) rh.addEventListener('thumbstickmoved', selfBind._onStick);
+        if (!lh || !rh) setTimeout(bindHands, 400);
+      }, 100);
     },
 
     remove: function () {
       if (this.el.sceneEl) {
         this.el.sceneEl.removeEventListener('thumbstickmoved', this._onStick);
       }
+      var lh = document.getElementById('leftHand');
+      var rh = document.getElementById('rightHand');
+      if (lh) lh.removeEventListener('thumbstickmoved', this._onStick);
+      if (rh) rh.removeEventListener('thumbstickmoved', this._onStick);
     },
 
     tick: function (t, dt) {
+      if (window.isSpectator) return;
       var ms = Math.min(dt || 16, 50) / 1000;
       var cam = document.getElementById('camera');
       if (!cam) return;
@@ -65,9 +81,24 @@
         this._snapReady = true;
       } else if (this._snapReady) {
         var sign = this._rx > 0 ? -1 : 1;
-        this.el.object3D.rotation.y += THREE.MathUtils.degToRad(this.data.snapDegrees) * sign;
+        this._comfortSnap(THREE.MathUtils.degToRad(this.data.snapDegrees) * sign);
         this._snapReady = false;
       }
+    },
+
+    // Rotate around the headset, not the player-entity origin (avoids orbit when cam ≠ origin)
+    _comfortSnap: function (deltaRad) {
+      var cam = document.getElementById('camera');
+      if (!cam) {
+        this.el.object3D.rotation.y += deltaRad;
+        return;
+      }
+      cam.object3D.getWorldPosition(this._camBefore);
+      this.el.object3D.rotation.y += deltaRad;
+      this.el.object3D.updateMatrixWorld(true);
+      cam.object3D.getWorldPosition(this._camAfter);
+      this.el.object3D.position.x += this._camBefore.x - this._camAfter.x;
+      this.el.object3D.position.z += this._camBefore.z - this._camAfter.z;
     },
 
     _moveDeadened: function (v) {
