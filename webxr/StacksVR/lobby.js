@@ -284,25 +284,42 @@
     ];
   }
 
+  // Returns true if the PeerJS id is free (no host). False if taken (host online).
+  // Uses ID-claim (unavailable-id) — NOT a DataConnection probe (those false-timeout
+  // on Quest/mobile NAT and were reporting "No lobby found" while VR was hosting).
   function checkPeerAvailability(id) {
     return new Promise(function (resolve) {
-      var probe = new Peer(id + '-probe-' + Math.random().toString(36).slice(2, 6), {
-        host: '0.peerjs.com', port: 443, secure: true
-      });
+      var tempPeer = null;
       var done = false;
       function finish(available) {
         if (done) return;
         done = true;
-        try { probe.destroy(); } catch (e) {}
+        try { if (tempPeer) tempPeer.destroy(); } catch (e) {}
         resolve(available);
       }
-      probe.on('open', function () {
-        var test = probe.connect(id);
-        var timer = setTimeout(function () { finish(true); }, 2000);
-        test.on('open', function () { clearTimeout(timer); finish(false); });
-        test.on('error', function () { clearTimeout(timer); finish(true); });
+      try {
+        tempPeer = new Peer(id, { host: '0.peerjs.com', port: 443, secure: true });
+      } catch (e) {
+        finish(true);
+        return;
+      }
+      var timeout = setTimeout(function () {
+        // Ambiguous — treat as free so VR can still host; mobile will try connect anyway
+        finish(true);
+      }, 4000);
+      tempPeer.on('open', function () {
+        clearTimeout(timeout);
+        // Successfully registered as this id ⇒ nobody was hosting
+        finish(true);
       });
-      probe.on('error', function () { finish(true); });
+      tempPeer.on('error', function (err) {
+        clearTimeout(timeout);
+        if (err && err.type === 'unavailable-id') {
+          finish(false); // id taken ⇒ host exists
+        } else {
+          finish(true);
+        }
+      });
     });
   }
 
@@ -399,11 +416,43 @@
   }
 
   async function connectAsMobileSpectator(lobbyNum) {
+    if (Lobby.isMultiplayer || Lobby.connectionState === 'connecting') {
+      return { ok: false, error: 'Already connecting.' };
+    }
+    Lobby.connectionState = 'connecting';
     var hostId = 'stacksvr-host-' + lobbyNum;
-    var hostTaken = !(await checkPeerAvailability(hostId));
-    if (!hostTaken) return { ok: false, error: 'No lobby found. Host must create it in VR first.' };
-    await setupPeer(lobbyNum, true);
-    return { ok: true };
+    var hostAvailable = await checkPeerAvailability(hostId);
+    var hostTaken = !hostAvailable;
+    if (!hostTaken) {
+      Lobby.connectionState = 'idle';
+      return { ok: false, error: 'No lobby found. In VR: Multi Lobby → Connect Lobby ' + lobbyNum + ' first.' };
+    }
+    try {
+      await setupPeer(lobbyNum, true);
+      // Wait briefly for the data connection to open
+      var ok = await new Promise(function (resolve) {
+        var n = 0;
+        var iv = setInterval(function () {
+          n++;
+          if (Lobby.conn && Lobby.conn.open) {
+            clearInterval(iv);
+            resolve(true);
+          } else if (n > 50) {
+            clearInterval(iv);
+            resolve(false);
+          }
+        }, 100);
+      });
+      if (!ok) {
+        Lobby.connectionState = 'idle';
+        Lobby.isMultiplayer = false;
+        return { ok: false, error: 'Lobby id exists but connection failed. Same Wi‑Fi / retry.' };
+      }
+      return { ok: true };
+    } catch (e) {
+      Lobby.connectionState = 'idle';
+      return { ok: false, error: (e && e.message) || 'Connect failed' };
+    }
   }
 
   function sendQueueAction(action) {

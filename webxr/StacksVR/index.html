@@ -24,7 +24,7 @@
   <script src="attack.js?v=19"></script>
   <script src="cup-bot.js?v=19"></script>
   <script src="modes.js?v=19"></script>
-  <script src="lobby.js?v=19"></script>
+  <script src="lobby.js?v=26"></script>
   <script src="match-replay.js?v=19"></script>
   <script src="game-menu.js?v=21"></script>
   <script src="mixamo-body.js?v=19"></script>
@@ -220,10 +220,18 @@
       if (watch) {
         watch.onclick = async function () {
           var status = document.getElementById('mobile-status-msg');
+          if (status) status.textContent = 'Looking for lobby ' + lobbyNum + '…';
           watch.disabled = true;
-          var res = await window.connectAsMobileSpectator(lobbyNum);
-          if (!res || !res.ok) {
-            if (status) status.textContent = (res && res.error) || 'Failed';
+          try {
+            var res = await window.connectAsMobileSpectator(lobbyNum);
+            if (!res || !res.ok) {
+              if (status) status.textContent = (res && res.error) || 'Failed';
+              watch.disabled = false;
+            } else if (status) {
+              status.textContent = 'Connected — watching lobby ' + lobbyNum;
+            }
+          } catch (e) {
+            if (status) status.textContent = (e && e.message) || 'Failed';
             watch.disabled = false;
           }
         };
