@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>StacksVR</title>
+  <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.6.0/dist/aframe-extras.min.js"></script>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/FBXLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.0/umd/index.js"></script>
+  <script>
+    const _origWarn = console.warn;
+    console.warn = function () {
+      const msg = arguments[0];
+      if (typeof msg === 'string' && msg.includes('decodeText() has been deprecated')) return;
+      return _origWarn.apply(console, arguments);
+    };
+  </script>
+
+  <script src="shapes.js?v=17"></script>
+  <script src="cup.js?v=17"></script>
+  <script src="clear.js?v=17"></script>
+  <script src="attack.js?v=17"></script>
+  <script src="cup-bot.js?v=17"></script>
+  <script src="modes.js?v=17"></script>
+  <script src="lobby.js?v=17"></script>
+  <script src="match-replay.js?v=17"></script>
+  <script src="game-menu.js?v=17"></script>
+  <script src="mixamo-body.js?v=17"></script>
+  <script src="locomotion.js?v=17"></script>
+  <script src="stacks-game.js?v=17"></script>
+
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0e14; font-family: system-ui, sans-serif; }
+    #boot {
+      position: fixed; inset: 0; z-index: 50;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: #0b0e14; color: #e8eef8; text-align: center; gap: 12px;
+    }
+    #boot.gone { display: none !important; }
+    #boot button {
+      padding: 14px 32px; border: 0; border-radius: 10px;
+      background: #1f9d45; color: #fff; font-size: 1.15rem; font-weight: 700; cursor: pointer;
+    }
+    #boot .keys { opacity: 0.75; font-size: 0.95rem; line-height: 1.45; max-width: 460px; }
+    #mobile-lobby-screen { display: none; }
+    body.mobile-spectator #mobile-lobby-screen {
+      display: flex; position: fixed; inset: 0; z-index: 40; flex-direction: column;
+      align-items: center; justify-content: center; background: #0b0e14; color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div id="boot">
+    <h1 style="margin:0;letter-spacing:0.08em">STACKSVR</h1>
+    <div class="keys">
+      <b>Green pad</b> grab · <b>purple pocket</b> hold/swap (H)<br/>
+      Empty hand on <b>cup rim</b> = rotate + raise/lower<br/>
+      Ghost in-cup · release place · other hand can steal<br/>
+      Menu: X / M · Multi lobby for PvP
+    </div>
+    <button id="boot-btn" type="button">START</button>
+  </div>
+
+  <div id="mobile-lobby-screen">
+    <h1>STACKSVR Spectate</h1>
+    <div>
+      <button id="mobile-lobby-minus" type="button">-</button>
+      <span id="mobile-lobby-num">1</span>
+      <button id="mobile-lobby-plus" type="button">+</button>
+    </div>
+    <button id="mobile-watch-btn" type="button">Watch</button>
+    <div id="mobile-status-msg"></div>
+  </div>
+
+  <a-scene
+    stacks-game="mode: pvp"
+    vr-menu
+    match-replay-ticker
+    background="color: #0b0e14"
+    renderer="colorManagement: true; antialias: true"
+    webxr="optionalFeatures: local-floor, bounded-floor, hand-tracking"
+  >
+    <a-entity light="type: ambient; color: #9aacbf; intensity: 0.7"></a-entity>
+    <a-entity light="type: directional; intensity: 0.9" position="1.5 3 2"></a-entity>
+    <a-entity light="type: point; color: #4A90E2; intensity: 0.4; distance: 6" position="-0.5 2 1"></a-entity>
+    <a-entity light="type: point; color: #E25A4A; intensity: 0.35; distance: 6" position="0.8 2 1"></a-entity>
+
+    <a-plane position="0 0 0" rotation="-90 0 0" width="12" height="12"
+      material="color: #151a22; roughness: 0.92"></a-plane>
+
+    <a-entity id="score-display" position="0 2.15 -0.6"
+      text="value: BLUE 0  |  RED 0; align: center; width: 3.5; color: #e8eef8"></a-entity>
+    <a-entity id="control-hint" position="0 1.95 -0.6"
+      text="value: Pad = grab · purple pocket = hold; align: center; width: 3.2; color: #9fe6b8"></a-entity>
+    <a-entity id="cup-height-blue" position="-0.4 1.95 -0.15"
+      text="value: H 0; align: center; width: 1.1; color: #4A90E2"></a-entity>
+    <a-entity id="cup-height-red" position="0.55 1.95 -0.15"
+      text="value: H 0; align: center; width: 1.1; color: #E25A4A"></a-entity>
+    <a-entity id="damage-blue" position="-0.4 1.82 -0.15"
+      text="value: DMG 0; align: center; width: 1.1; color: #aaa"></a-entity>
+    <a-entity id="damage-red" position="0.55 1.82 -0.15"
+      text="value: DMG 0; align: center; width: 1.1; color: #aaa"></a-entity>
+    <a-entity id="version-display" position="0 0.12 0.9"
+      text="value: StacksVR 1.0; align: center; width: 2; color: #556"></a-entity>
+
+    <a-entity id="player" position="0 0 1.35" stick-locomotion>
+      <a-entity id="rig">
+        <a-entity id="camera" camera look-controls="pointerLockEnabled: true" wasd-controls position="0 1.6 0"></a-entity>
+        <a-entity id="leftHand"
+          hand-controls="hand: left; handModelStyle: lowPoly; color: #ffcccc"
+          laser-controls="hand: left"
+          raycaster="objects: .menu-btn,.clickable; far: 4"></a-entity>
+        <a-entity id="rightHand"
+          hand-controls="hand: right; handModelStyle: lowPoly; color: #ffcccc"
+          laser-controls="hand: right"
+          raycaster="objects: .menu-btn,.clickable; far: 4"></a-entity>
+      </a-entity>
+    </a-entity>
+
+    <a-entity id="player-body"
+      mixamo-body="mode: player; color: #4A90E2; modelPath: assets/YBot.fbx"></a-entity>
+
+    <a-entity id="cup-bot" position="0 1.5 -2.4"></a-entity>
+    <a-entity id="bot-body" position="0 0 -2.4"
+      mixamo-body="mode: bot; color: #E25A4A; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
+    <a-entity id="spec-blue-body" visible="false"
+      mixamo-body="mode: bot; color: #4A90E2; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
+
+    <a-entity id="vr-menu-root" position="0 1.35 -0.9" visible="false">
+      <a-plane width="1.5" height="1.55" material="color: #111820; opacity: 0.92; transparent: true"></a-plane>
+      <a-entity position="0 0.62 0.01" text="value: STACKSVR; align: center; width: 2; color: #fff"></a-entity>
+      <a-entity class="menu-btn" data-action="start-bot" position="0 0.42 0.02"
+        geometry="primitive: plane; width: 1.2; height: 0.13"
+        material="color: #1f6b3a"
+        text="value: Play vs Bot; align: center; width: 2; color: #fff"></a-entity>
+      <a-entity class="menu-btn" data-action="end-match" position="0 0.26 0.02"
+        geometry="primitive: plane; width: 1.2; height: 0.11"
+        material="color: #5a2a2a"
+        text="value: End Match; align: center; width: 2; color: #fff"></a-entity>
+      <a-entity class="menu-btn" data-action="mode-multi" position="0 0.1 0.02"
+        geometry="primitive: plane; width: 1.2; height: 0.11"
+        material="color: #2a4a6a"
+        text="value: Multi Lobby; align: center; width: 2; color: #fff"></a-entity>
+
+      <a-entity id="menu-lobby-section" visible="false" position="0 -0.08 0">
+        <a-entity id="menu-lobby-num" position="0 0.14 0.02"
+          text="value: Lobby 1; align: center; width: 2; color: #9cf"></a-entity>
+        <a-entity class="menu-btn" data-action="lobby-minus" position="-0.35 0 0.02"
+          geometry="primitive: plane; width: 0.28; height: 0.1"
+          material="color: #333"
+          text="value: -; align: center; width: 1.5; color: #fff"></a-entity>
+        <a-entity class="menu-btn" data-action="lobby-plus" position="0.35 0 0.02"
+          geometry="primitive: plane; width: 0.28; height: 0.1"
+          material="color: #333"
+          text="value: +; align: center; width: 1.5; color: #fff"></a-entity>
+        <a-entity class="menu-btn" data-action="join-lobby" position="0 -0.14 0.02"
+          geometry="primitive: plane; width: 1.2; height: 0.11"
+          material="color: #2a5080"
+          text="value: Connect Lobby; align: center; width: 2; color: #fff"></a-entity>
+      </a-entity>
+
+      <a-entity id="menu-queue-buttons" visible="false" position="0 -0.48 0">
+        <a-entity class="menu-btn" data-action="join-queue" position="0 0.12 0.02"
+          geometry="primitive: plane; width: 1.2; height: 0.1"
+          material="color: #1f6b3a"
+          text="value: Join Queue; align: center; width: 2; color: #fff"></a-entity>
+        <a-entity class="menu-btn" data-action="leave-queue" position="0 0 0.02"
+          geometry="primitive: plane; width: 1.2; height: 0.1"
+          material="color: #5a2a2a"
+          text="value: Leave Queue; align: center; width: 2; color: #fff"></a-entity>
+        <a-entity class="menu-btn" data-action="start-match" position="0 -0.12 0.02"
+          geometry="primitive: plane; width: 1.2; height: 0.1"
+          material="color: #8a6a20"
+          text="value: Start Match; align: center; width: 2; color: #fff"></a-entity>
+      </a-entity>
+
+      <a-entity id="menu-lobby-status" position="0 -0.72 0.02"
+        text="value: ; align: center; width: 2.2; color: #889"></a-entity>
+      <a-entity id="menu-stats-text" visible="false"></a-entity>
+    </a-entity>
+  </a-scene>
+
+  <script>
+    (function () {
+      function start() {
+        var boot = document.getElementById('boot');
+        if (boot) boot.classList.add('gone');
+      }
+      document.getElementById('boot-btn').addEventListener('click', start);
+      document.querySelector('a-scene').addEventListener('enter-vr', start);
+
+      var ua = navigator.userAgent || '';
+      var params = new URLSearchParams(location.search);
+      // Quest / Oculus / Pico / VR headsets must NOT be forced into phone spectate mode
+      var isHeadset = /Quest|Oculus|Pico|Vive|Windows MR|XR|Headset/i.test(ua);
+      var isPhoneTablet = /iPhone|iPad|iPod|Android/i.test(ua) && !isHeadset;
+      // Android Quest still contains "Android" — isHeadset catches Quest/OculusBrowser
+      if (/OculusBrowser|Quest/i.test(ua)) isHeadset = true;
+      if (params.get('spectate') === '1' || (isPhoneTablet && !isHeadset && params.get('vr') !== '1')) {
+        document.body.classList.add('mobile-spectator');
+        window.isMobileSpectator = true;
+        start();
+      }
+
+      var lobbyNum = 1;
+      function setLobby(n) {
+        lobbyNum = n;
+        var el = document.getElementById('mobile-lobby-num');
+        if (el) el.textContent = String(n);
+      }
+      var minus = document.getElementById('mobile-lobby-minus');
+      var plus = document.getElementById('mobile-lobby-plus');
+      if (minus) minus.onclick = function () { setLobby(Math.max(1, lobbyNum - 1)); };
+      if (plus) plus.onclick = function () { setLobby(Math.min(10, lobbyNum + 1)); };
+      var watch = document.getElementById('mobile-watch-btn');
+      if (watch) {
+        watch.onclick = async function () {
+          var status = document.getElementById('mobile-status-msg');
+          watch.disabled = true;
+          var res = await window.connectAsMobileSpectator(lobbyNum);
+          if (!res || !res.ok) {
+            if (status) status.textContent = (res && res.error) || 'Failed';
+            watch.disabled = false;
+          }
+        };
+      }
+
+      if (window.StacksLobby) {
+        window.StacksLobby.onPlayerPose = function (fromId, data) {
+          var mp = window.lobbyState && window.lobbyState.matchPlayers;
+          var myId = window.myPlayerId || (window.StacksLobby && window.StacksLobby.myPlayerId);
+          if (fromId === myId) return;
+          var body = null;
+          if (mp && fromId === mp.red) body = document.getElementById('bot-body');
+          else if (mp && fromId === mp.blue) body = document.getElementById('spec-blue-body');
+          if (!body) return;
+          body.object3D.visible = true;
+          var mb = body.components && body.components['mixamo-body'];
+          if (mb) mb.remoteHandData = {
+            head: data.head,
+            leftHand: data.leftHand,
+            rightHand: data.rightHand
+          };
+        };
+      }
+
+      window.addEventListener('keydown', function (e) {
+        if (e.key === 'b' || e.key === 'B') {
+          var el = document.querySelector('[stacks-game]');
+          var g = el && el.components && el.components['stacks-game'];
+          if (g && !g.matchActive) g.startOfflineBotMatch();
+        }
+        if (e.key === 'm' || e.key === 'M') {
+          var menu = document.querySelector('[vr-menu]');
+          if (menu && menu.components['vr-menu']) menu.components['vr-menu'].toggleMenu();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
