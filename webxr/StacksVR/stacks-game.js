@@ -44,6 +44,7 @@
       this._pocketMesh = null;
       this._pocketType = null; // stashed shape type or null
       this._pocketUsed = false; // tetris-style: one swap until next place
+      this._pocketLockUntil = 0; // ignore pocket actions briefly after take/deposit
       this._cupGrab = null; // { handEl, cup, startHandAngle, startYaw }
       this._lastTransformSend = 0;
       this._lastPoseSend = 0;
@@ -197,9 +198,11 @@
 
       function tryGrabFrom(handEl) {
         if (!self._canControl() || !handEl) return;
-        // Owning hand holding — stash if hand or held block is over the purple bin
+        var pocketReady = performance.now() >= (self._pocketLockUntil || 0);
+
+        // Owning hand holding — trigger over bin stashes (not on trigger-up)
         if (self.held && self.held.handEl === handEl) {
-          if (self._nearPocket(handEl)) self._interactPocket(handEl);
+          if (pocketReady && self._nearPocket(handEl)) self._interactPocket(handEl);
           return;
         }
 
@@ -209,7 +212,7 @@
             self._transferHold(handEl);
             return;
           }
-          if (self._pocketType && self._nearPocket(handEl)) {
+          if (pocketReady && self._pocketType && self._nearPocket(handEl)) {
             self._interactPocket(handEl);
             return;
           }
@@ -220,7 +223,7 @@
           return;
         }
 
-        // Empty hands: pad grab preferred; pocket only if clearly in-bin (and useful)
+        // Empty hands
         var cup = self._localCup();
         var padD = self._handDistToPad(handEl);
         var cupD = self._handDistToCup(handEl, cup);
@@ -229,22 +232,17 @@
         var nearCup = cupD <= CUP_GRAB_REACH;
         var nearPocket = pocketD <= POCKET_REACH;
 
-        // Pad first when in reach — pocket must not steal near-miss pad grabs
-        if (nearPad && (!nearPocket || padD <= pocketD + 0.04)) {
-          self._grab(handEl);
-          return;
-        }
-        // Empty pocket + empty hand is a no-op — never early-return on that
-        if (nearPocket && self._pocketType && (!nearPad || pocketD + 0.04 < padD)) {
+        // Take from pocket FIRST when over the bin (pad is ~0.75m away — no conflict)
+        if (pocketReady && nearPocket && self._pocketType) {
           self._interactPocket(handEl);
-          return;
-        }
-        if (nearCup && (!nearPad || cupD < padD - 0.02)) {
-          self._startCupGrab(handEl, cup);
           return;
         }
         if (nearPad) {
           self._grab(handEl);
+          return;
+        }
+        if (nearCup) {
+          self._startCupGrab(handEl, cup);
           return;
         }
         // Desktop / far: still allow pad grab without proximity when not presenting
@@ -260,17 +258,13 @@
         if (!self.held) return;
         // Never place from the non-owning hand
         if (ownerId() !== handEl.id) return;
-        // Steal / fresh acquire: consume this trigger-up without placing
+        // Steal / fresh acquire: consume this trigger-up without placing/stashing
         if (self.held.suppressPlace) {
           self.held.suppressPlace = false;
           self._pulseHaptic(handEl, 0.25, 30);
           return;
         }
-        // Release over purple bin = stash (when not a valid cup place)
-        if (self._nearPocket(handEl) && !self.ghostValid) {
-          self._interactPocket(handEl);
-          return;
-        }
+        // Stash is trigger-down only — trigger-up over bin was putting takes straight back
         if (self.ghostValid && self.ghostCells) {
           self._place(self.ghostCells);
         }
@@ -479,6 +473,7 @@
      *  Swap (pocket already full) is one-shot until the next place. */
     _interactPocket: function (handEl) {
       if (!this._canControl()) return;
+      if (performance.now() < (this._pocketLockUntil || 0)) return;
       if (this.held) {
         var incoming = this.held.type;
         var outgoing = this._pocketType;
@@ -496,6 +491,7 @@
           this._pocketUsed = true;
           this._spawnHeldType(handEl, outgoing);
         }
+        this._pocketLockUntil = performance.now() + 350;
         this._pulseHaptic(handEl, 0.5, 50);
         this._broadcastHold();
         this._updateHUD();
@@ -506,7 +502,8 @@
         this._pocketType = null;
         this._refreshPocketMesh();
         this._spawnHeldType(handEl, take);
-        // Do not lock pocketUsed on take — player must be able to put it back
+        // Lock briefly so trigger-up / bounce cannot immediately re-deposit
+        this._pocketLockUntil = performance.now() + 350;
         this._pulseHaptic(handEl, 0.5, 50);
         this._broadcastHold();
         this._updateHUD();
