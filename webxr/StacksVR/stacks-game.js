@@ -4,7 +4,8 @@
 
   var CELL = (global.StacksShapes && global.StacksShapes.CELL) || 0.12;
   var GRAB_REACH = 0.32;       // pad piece pickup
-  var POCKET_REACH = 0.16;     // intentional purple-bin only (was sharing 0.45 with pad → false deposits)
+  // Pocket is at x=-0.55, pad at x=0.2 (~0.75m apart) — 0.28 won't steal pad grabs
+  var POCKET_REACH = 0.28;
   var REGRAB_REACH = 0.28;
   var CUP_GRAB_REACH = 0.28;
   var CUP_MARGIN = CELL * 0.85;
@@ -196,9 +197,9 @@
 
       function tryGrabFrom(handEl) {
         if (!self._canControl() || !handEl) return;
-        // Owning hand holding — deposit only if deep in the purple bin; place is on trigger-up
+        // Owning hand holding — stash if hand or held block is over the purple bin
         if (self.held && self.held.handEl === handEl) {
-          if (self._handDistToPocket(handEl) <= POCKET_REACH) self._interactPocket(handEl);
+          if (self._nearPocket(handEl)) self._interactPocket(handEl);
           return;
         }
 
@@ -208,7 +209,7 @@
             self._transferHold(handEl);
             return;
           }
-          if (self._pocketType && self._handDistToPocket(handEl) <= POCKET_REACH) {
+          if (self._pocketType && self._nearPocket(handEl)) {
             self._interactPocket(handEl);
             return;
           }
@@ -223,7 +224,7 @@
         var cup = self._localCup();
         var padD = self._handDistToPad(handEl);
         var cupD = self._handDistToCup(handEl, cup);
-        var pocketD = self._handDistToPocket(handEl);
+        var pocketD = self._distToPocket(handEl);
         var nearPad = padD <= GRAB_REACH;
         var nearCup = cupD <= CUP_GRAB_REACH;
         var nearPocket = pocketD <= POCKET_REACH;
@@ -263,6 +264,11 @@
         if (self.held.suppressPlace) {
           self.held.suppressPlace = false;
           self._pulseHaptic(handEl, 0.25, 30);
+          return;
+        }
+        // Release over purple bin = stash (when not a valid cup place)
+        if (self._nearPocket(handEl) && !self.ghostValid) {
+          self._interactPocket(handEl);
           return;
         }
         if (self.ghostValid && self.ghostCells) {
@@ -419,14 +425,35 @@
       return this._tmp.distanceTo(this._tmp2);
     },
 
-    _handDistToPocket: function (handEl) {
+    _pocketWorldPos: function (out) {
+      if (!this._pocket) return null;
+      this._pocket.updateWorldMatrix(true, false);
+      this._pocket.getWorldPosition(out);
+      out.y += 0.1;
+      return out;
+    },
+
+    _distToPocket: function (handEl) {
       if (!this._pocket || !handEl) return Infinity;
+      if (!this._pocketWorldPos(this._tmp2)) return Infinity;
       handEl.object3D.updateWorldMatrix(true, false);
       handEl.object3D.getWorldPosition(this._tmp);
-      this._pocket.updateWorldMatrix(true, false);
-      this._pocket.getWorldPosition(this._tmp2);
-      this._tmp2.y += 0.08;
-      return this._tmp.distanceTo(this._tmp2);
+      var d = this._tmp.distanceTo(this._tmp2);
+      // Also count held block (palm origin can miss while the mesh is over the bin)
+      if (this.held && this.held.mesh && this.held.handEl === handEl) {
+        this.held.mesh.updateWorldMatrix(true, false);
+        this.held.mesh.getWorldPosition(this._tmp);
+        d = Math.min(d, this._tmp.distanceTo(this._tmp2));
+      }
+      return d;
+    },
+
+    _handDistToPocket: function (handEl) {
+      return this._distToPocket(handEl);
+    },
+
+    _nearPocket: function (handEl) {
+      return this._distToPocket(handEl) <= POCKET_REACH;
     },
 
     _refreshPocketMesh: function () {
