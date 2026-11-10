@@ -474,23 +474,26 @@
       this._pocketMesh = mesh;
     },
 
-    /** Deposit held → pocket, or swap / take from pocket (one use until place). */
+    /** Deposit held → pocket, or swap / take from pocket.
+     *  Put-back into an empty pocket is always allowed.
+     *  Swap (pocket already full) is one-shot until the next place. */
     _interactPocket: function (handEl) {
       if (!this._canControl()) return;
-      if (this._pocketUsed && this.held) {
-        this._pulseHaptic(handEl, 0.15, 20);
-        return;
-      }
       if (this.held) {
         var incoming = this.held.type;
         var outgoing = this._pocketType;
+        // Block only a second swap this piece — empty bin put-back is fine
+        if (this._pocketUsed && outgoing) {
+          this._pulseHaptic(handEl, 0.15, 20);
+          return;
+        }
         if (this.held.mesh.parent) this.held.mesh.parent.remove(this.held.mesh);
         this.held = null;
         this._clearGhost();
         this._pocketType = incoming;
         this._refreshPocketMesh();
-        this._pocketUsed = true;
         if (outgoing) {
+          this._pocketUsed = true;
           this._spawnHeldType(handEl, outgoing);
         }
         this._pulseHaptic(handEl, 0.5, 50);
@@ -503,7 +506,7 @@
         this._pocketType = null;
         this._refreshPocketMesh();
         this._spawnHeldType(handEl, take);
-        this._pocketUsed = true;
+        // Do not lock pocketUsed on take — player must be able to put it back
         this._pulseHaptic(handEl, 0.5, 50);
         this._broadcastHold();
         this._updateHUD();
