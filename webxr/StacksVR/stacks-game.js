@@ -302,7 +302,9 @@
       });
       this._setBotStationVisible(false);
 
-      this._spawnPadPiece();
+      // No human pad piece until a real match — idle uses dual-bot preview
+      this._nextType = null;
+      this._padPiece = null;
       this._updateHUD();
       this._desktopHands();
       console.log('[StacksGame] ready');
@@ -368,6 +370,9 @@
 
     _onBotVisual: function (side, evt) {
       if (!evt || !evt.kind) return;
+      // Human owns the blue pad/pocket outside dual-bot preview — never let
+      // botBlue enable(false)/reset wipe freshly spawned player pieces.
+      if (side === 'blue' && !this._dualBotPreview) return;
       var st = this._botStation(side);
       if (evt.kind === 'reset') {
         this._clearBotStationPieces(side);
@@ -859,6 +864,7 @@
      *  Swap (pocket already full) is one-shot until the next place. */
     _interactPocket: function (handEl) {
       if (!this._canControl()) return;
+      if (!this.matchActive || this._dualBotPreview) return;
       if (performance.now() < (this._pocketLockUntil || 0)) return;
       if (this.held) {
         var incoming = this.held.type;
@@ -1318,7 +1324,7 @@
     },
 
     _grab: function (handEl) {
-      if (this._dualBotPreview) return;
+      if (!this.matchActive || this._dualBotPreview) return;
       if (this.held || !this._nextType || !this._padPiece) return;
       if (this._padPiece.userData && this._padPiece.userData.spawning) return;
 
@@ -1761,6 +1767,12 @@
     },
 
     onMatchStarted: function (mp, startTime, isBotMatch, bagSeed) {
+      // Leave dual-preview ownership BEFORE bag reset / bot disable so blue
+      // pad visuals cannot wipe the human spawn below.
+      this._dualBotPreview = false;
+      if (this.botBlue) this.botBlue.enable(false);
+      this._clearBotHoldMesh('blue');
+
       this.matchActive = true;
       this.matchState = 'PLAYING';
       var spectating = !!(global.isMobileSpectator ||
@@ -1789,10 +1801,13 @@
       this._setRemoteHeld('blue', { holding: false });
       this._setRemoteHeld('red', { holding: false });
       // Spectators mirror host board — no local spawn pad
-      if (!spectating) this._spawnPadPiece({ dropIn: true });
-      else if (this._pad) this._pad.visible = false;
-      this._dualBotPreview = false;
-      if (this.botBlue) this.botBlue.enable(false);
+      if (!spectating) {
+        if (this._pad) this._pad.visible = true;
+        if (this._pocket) this._pocket.visible = true;
+        this._spawnPadPiece({ dropIn: true });
+      } else if (this._pad) {
+        this._pad.visible = false;
+      }
       if (this.bot) {
         // reset() already applied seed in _applyMirroredBags
         this.bot.setCup(this.cups.red);
@@ -1820,13 +1835,26 @@
       if (this.botBlue) this.botBlue.enable(false);
       this._setBotStationVisible(false);
       this._clearBotHoldMesh('blue');
+      this._clearBotHoldMesh('red');
       this._clearBotStationPieces('blue');
+      this._clearBotStationPieces('red');
+      this._nextType = null;
+      this._padPiece = null;
+      this._cancelHold();
       if (window.matchRecorder && window.matchRecorder.isRecording) {
         var replay = window.matchRecorder.stopRecording();
         if (replay && window.matchReplayStorage) window.matchReplayStorage.save(replay);
       }
       this._saveMatchHistory();
       this._updateHUD();
+      // Resume dual-bot idle when offline (not in a lobby)
+      if (!global.isMultiplayer && !global.isMobileSpectator &&
+          typeof this.startOfflinePreviewMatch === 'function') {
+        var self = this;
+        setTimeout(function () {
+          if (!self.matchActive && !global.isMultiplayer) self.startOfflinePreviewMatch();
+        }, 120);
+      }
     },
 
     startOfflineBotMatch: function () {

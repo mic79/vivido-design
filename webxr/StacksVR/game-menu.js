@@ -188,7 +188,7 @@
           if (el && el.classList && el.classList.contains('menu-btn') &&
               isEffectivelyVisible(el)) {
             hit = el;
-            break;
+          break;
           }
         }
       }
@@ -229,9 +229,9 @@
       var left = this.leftHand || document.getElementById('leftHand') || this._leftHandEl;
       if (!root || !left) return;
       if (root.parentNode !== left) left.appendChild(root);
-      root.setAttribute('position', '0.02 0.11 -0.05');
-      root.setAttribute('rotation', '-70 12 0');
-      root.setAttribute('scale', '0.55 0.55 0.55');
+      root.setAttribute('position', '0.02 0.12 -0.04');
+      root.setAttribute('rotation', '-68 14 0');
+      root.setAttribute('scale', '0.62 0.62 0.62');
     },
 
     requestToggleMenu: function () {
@@ -391,10 +391,13 @@
       Object.keys(tabs).forEach(function (key) {
         var el = tabs[key];
         if (!el) return;
-        var color = key === active ? '#4488ff' : '#333333';
+        var on = key === active;
+        var color = on ? '#1e6ad4' : '#1a2433';
         el.setAttribute('material', 'color', color);
         el.dataset.baseColor = color;
-        el.dataset.hoverColor = lightenHex(color, 0.42);
+        el.dataset.hoverColor = lightenHex(color, on ? 0.28 : 0.45);
+        var label = el.querySelector('a-text');
+        if (label) label.setAttribute('color', on ? '#ffffff' : '#a8b8c8');
       });
     },
 

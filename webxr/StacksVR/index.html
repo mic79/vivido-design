@@ -27,10 +27,10 @@
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=33"></script>
   <script src="match-replay.js?v=19"></script>
-  <script src="game-menu.js?v=36"></script>
+  <script src="game-menu.js?v=37"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=64"></script>
+  <script src="stacks-game.js?v=65"></script>
   <script src="mobile-spectator.js?v=36"></script>
 
     <style>
@@ -330,85 +330,99 @@
           laser-controls="hand: left"
           raycaster="objects: .clickable; far: 10; showLine: false; enabled: false; lineColor: #ffffff; lineOpacity: 0">
           <!-- Palm / wrist menu — right hand laser selects -->
-          <a-entity id="vr-menu-root" position="0.02 0.11 -0.05" rotation="-70 12 0" scale="0.55 0.55 0.55" visible="false">
-            <a-plane width="0.72" height="0.54" color="#000000"
-              material="opacity: 0.92; transparent: true; shader: flat" position="0 0 -0.001"></a-plane>
-            <a-plane width="0.74" height="0.56" color="#4488ff"
-              material="opacity: 0.4; transparent: true; shader: flat" position="0 0 -0.002"></a-plane>
+          <a-entity id="vr-menu-root" position="0.02 0.12 -0.04" rotation="-68 14 0" scale="0.62 0.62 0.62" visible="false">
+            <!-- Layered panel: glow → frame → body → header strip -->
+            <a-plane width="0.78" height="0.60" color="#33bbff"
+              material="opacity: 0.18; transparent: true; shader: flat" position="0 0 -0.004"></a-plane>
+            <a-plane width="0.74" height="0.56" color="#1a3048"
+              material="opacity: 0.98; transparent: true; shader: flat" position="0 0 -0.002"></a-plane>
+            <a-plane width="0.72" height="0.54" color="#0a1018"
+              material="opacity: 0.96; transparent: true; shader: flat" position="0 0 -0.001"></a-plane>
+            <a-plane width="0.72" height="0.07" color="#102038"
+              material="opacity: 0.95; transparent: true; shader: flat" position="0 0.235 0"></a-plane>
+            <a-plane width="0.20" height="0.006" color="#33bbff"
+              material="opacity: 0.95; transparent: true; shader: flat; toneMapped: false" position="0 0.20 0.001"></a-plane>
 
-            <a-text value="STACKS VR" position="0 0.22 0" align="center" width="0.8" color="#ffffff"></a-text>
+            <a-text value="STACKS VR" position="0 0.235 0.002" align="center" width="0.85" color="#e8f4ff"></a-text>
 
-              <a-entity position="0 0.14 0">
-              <a-entity class="menu-btn clickable" data-action="mode-single" id="menu-single" position="-0.2 0 0"
-                          geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
-                          material="color: #4488ff; opacity: 0.9; shader: flat">
-                  <a-text value="SINGLE" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
+            <a-entity position="0 0.145 0.002">
+              <a-entity class="menu-btn clickable" data-action="mode-single" id="menu-single" position="-0.21 0 0"
+                geometry="primitive: box; width: 0.18; height: 0.055; depth: 0.008"
+                material="color: #1e6ad4; opacity: 1; shader: flat">
+                <a-text value="SINGLE" align="center" width="0.40" color="#ffffff" position="0 0 0.006"></a-text>
+              </a-entity>
               <a-entity class="menu-btn clickable" data-action="mode-multi" id="menu-multi" position="0 0 0"
-                          geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
-                          material="color: #333333; opacity: 0.9; shader: flat">
-                  <a-text value="MULTI" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-              <a-entity class="menu-btn clickable" data-action="stats" id="menu-stats" position="0.2 0 0"
-                          geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
-                          material="color: #333333; opacity: 0.9; shader: flat">
-                  <a-text value="STATS" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
+                geometry="primitive: box; width: 0.18; height: 0.055; depth: 0.008"
+                material="color: #1a2433; opacity: 1; shader: flat">
+                <a-text value="MULTI" align="center" width="0.40" color="#a8b8c8" position="0 0 0.006"></a-text>
               </a-entity>
-
-            <a-entity id="menu-single-section" position="0 0.02 0">
-              <a-text value="Bot Match:" position="-0.22 0.02 0" align="left" width="0.35" color="#cccccc"></a-text>
-              <a-text id="menu-single-hint" value="Pad grab · purple pocket" position="-0.22 -0.04 0"
-                align="left" width="0.32" color="#888888"></a-text>
+              <a-entity class="menu-btn clickable" data-action="stats" id="menu-stats" position="0.21 0 0"
+                geometry="primitive: box; width: 0.18; height: 0.055; depth: 0.008"
+                material="color: #1a2433; opacity: 1; shader: flat">
+                <a-text value="STATS" align="center" width="0.40" color="#a8b8c8" position="0 0 0.006"></a-text>
+              </a-entity>
             </a-entity>
 
-              <a-entity id="menu-lobby-section" visible="false" position="0 0.02 0">
-              <a-text value="Lobby:" position="-0.22 0.04 0" align="left" width="0.35" color="#cccccc"></a-text>
-              <a-entity class="menu-btn clickable" data-action="lobby-minus" position="-0.02 0.04 0"
-                          geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
-                          material="color: #555555; shader: flat">
-                  <a-text value="-" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-              <a-text id="menu-lobby-num" value="1" position="0.06 0.04 0" align="center" width="0.4" color="#ffffff"></a-text>
-              <a-entity class="menu-btn clickable" data-action="lobby-plus" position="0.14 0.04 0"
-                          geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
-                          material="color: #555555; shader: flat">
-                  <a-text value="+" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-              <a-entity class="menu-btn clickable" data-action="join-lobby" id="menu-join" position="0.26 0.04 0"
-                          geometry="primitive: box; width: 0.12; height: 0.05; depth: 0.005"
-                          material="color: #22aa44; shader: flat">
-                <a-text id="menu-join-text" value="JOIN" align="center" width="0.35" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-              <a-text id="menu-lobby-status" value="Not connected" position="-0.3 -0.06 0"
-                align="left" width="0.3" color="#aaaaaa"></a-text>
-              </a-entity>
-
-            <a-entity id="menu-queue-buttons" visible="false" position="0 -0.08 0">
-              <a-entity class="menu-btn clickable" data-action="join-queue" position="-0.1 0 0"
-                          geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
-                          material="color: #22aa44; shader: flat">
-                  <a-text value="JOIN QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-              <a-entity class="menu-btn clickable" data-action="leave-queue" position="0.1 0 0"
-                          geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
-                          material="color: #cc3333; shader: flat">
-                  <a-text value="LEAVE QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
-                </a-entity>
-              </a-entity>
-
-              <a-entity id="menu-stats-section" visible="false" position="0 -0.02 0">
-              <a-text id="menu-stats-text" value="No matches yet" position="-0.3 0.04 0"
-                align="left" width="0.3" color="#cccccc" baseline="top"></a-text>
-              </a-entity>
-
-            <a-entity class="menu-btn clickable" data-action="start-bot" id="menu-start-match" position="0 -0.19 0"
-                        geometry="primitive: box; width: 0.28; height: 0.06; depth: 0.005"
-                        material="color: #ff8800; shader: flat">
-              <a-text id="menu-start-match-text" value="START vs BOT" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-              </a-entity>
-            <a-text value="X to close · right laser" position="0 -0.25 0" align="center" width="0.28" color="#666666"></a-text>
+            <a-entity id="menu-single-section" position="0 0.02 0.002">
+              <a-text value="SOLO" position="-0.28 0.04 0" align="left" width="0.28" color="#33bbff"></a-text>
+              <a-text value="You vs bot · grab pad pieces" position="-0.28 -0.01 0"
+                align="left" width="0.42" color="#8a9bb0"></a-text>
+              <a-text id="menu-single-hint" value="Pocket to hold / swap · rim to move cup"
+                position="-0.28 -0.05 0" align="left" width="0.42" color="#5a6a7a"></a-text>
             </a-entity>
+
+            <a-entity id="menu-lobby-section" visible="false" position="0 0.02 0.002">
+              <a-text value="LOBBY" position="-0.28 0.05 0" align="left" width="0.28" color="#33bbff"></a-text>
+              <a-entity class="menu-btn clickable" data-action="lobby-minus" position="-0.02 0.01 0"
+                geometry="primitive: box; width: 0.055; height: 0.055; depth: 0.008"
+                material="color: #243044; shader: flat">
+                <a-text value="-" align="center" width="0.4" color="#ffffff" position="0 0 0.006"></a-text>
+              </a-entity>
+              <a-text id="menu-lobby-num" value="1" position="0.06 0.01 0" align="center" width="0.45" color="#ffffff"></a-text>
+              <a-entity class="menu-btn clickable" data-action="lobby-plus" position="0.14 0.01 0"
+                geometry="primitive: box; width: 0.055; height: 0.055; depth: 0.008"
+                material="color: #243044; shader: flat">
+                <a-text value="+" align="center" width="0.4" color="#ffffff" position="0 0 0.006"></a-text>
+              </a-entity>
+              <a-entity class="menu-btn clickable" data-action="join-lobby" id="menu-join" position="0.28 0.01 0"
+                geometry="primitive: box; width: 0.13; height: 0.055; depth: 0.008"
+                material="color: #1f9d45; shader: flat">
+                <a-text id="menu-join-text" value="JOIN" align="center" width="0.35" color="#ffffff" position="0 0 0.006"></a-text>
+              </a-entity>
+              <a-text id="menu-lobby-status" value="Not connected" position="-0.28 -0.055 0"
+                align="left" width="0.42" color="#7a8a9a"></a-text>
+            </a-entity>
+
+            <a-entity id="menu-queue-buttons" visible="false" position="0 -0.07 0.002">
+              <a-entity class="menu-btn clickable" data-action="join-queue" position="-0.11 0 0"
+                geometry="primitive: box; width: 0.20; height: 0.05; depth: 0.008"
+                material="color: #1f9d45; shader: flat">
+                <a-text value="JOIN QUEUE" align="center" width="0.32" color="#ffffff" position="0 0 0.006"></a-text>
+              </a-entity>
+              <a-entity class="menu-btn clickable" data-action="leave-queue" position="0.11 0 0"
+                geometry="primitive: box; width: 0.20; height: 0.05; depth: 0.008"
+                material="color: #b83333; shader: flat">
+                <a-text value="LEAVE QUEUE" align="center" width="0.32" color="#ffffff" position="0 0 0.006"></a-text>
+              </a-entity>
+            </a-entity>
+
+            <a-entity id="menu-stats-section" visible="false" position="0 -0.01 0.002">
+              <a-text value="HISTORY" position="-0.28 0.06 0" align="left" width="0.28" color="#33bbff"></a-text>
+              <a-text id="menu-stats-text" value="No matches yet" position="-0.28 0.02 0"
+                align="left" width="0.42" color="#9aabbc" baseline="top"></a-text>
+            </a-entity>
+
+            <!-- Primary CTA with glow rim -->
+            <a-plane width="0.36" height="0.085" color="#ffaa44"
+              material="opacity: 0.35; transparent: true; shader: flat; toneMapped: false"
+              position="0 -0.175 -0.001"></a-plane>
+            <a-entity class="menu-btn clickable" data-action="start-bot" id="menu-start-match" position="0 -0.175 0.002"
+              geometry="primitive: box; width: 0.32; height: 0.07; depth: 0.01"
+              material="color: #ff8a1a; shader: flat">
+              <a-text id="menu-start-match-text" value="START vs BOT" align="center" width="0.48" color="#ffffff" position="0 0 0.007"></a-text>
+            </a-entity>
+            <a-text value="X close  ·  right laser select" position="0 -0.245 0.002" align="center" width="0.42" color="#4a5a6a"></a-text>
+          </a-entity>
           </a-entity>
           <a-entity id="rightHand" 
           hand-controls="hand: right; handModelStyle: lowPoly; color: #ffcccc"
@@ -435,7 +449,18 @@
         var overlay = document.getElementById('pre-vr-overlay');
         if (overlay) overlay.classList.add('gone');
       }
-      document.querySelector('a-scene').addEventListener('enter-vr', hidePreVr);
+      // Idle spectacle: two bots play until you START vs BOT from the menu
+      function startDualIdle() {
+        hidePreVr();
+        if (window.isMobileSpectator) return;
+        if (window.isMultiplayer || (window.StacksLobby && window.StacksLobby.isHost)) return;
+        var el = document.querySelector('[stacks-game]');
+        var g = el && el.components && el.components['stacks-game'];
+        if (g && !g.matchActive && typeof g.startOfflinePreviewMatch === 'function') {
+          g.startOfflinePreviewMatch();
+        }
+      }
+      document.querySelector('a-scene').addEventListener('enter-vr', startDualIdle);
 
       // Mobile spectator UI/UX is handled by mobile-spectator.js (DodgeVR port).
       // Desktop / VR keyboard helpers only:
