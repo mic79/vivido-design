@@ -123,12 +123,13 @@
     }
     if (!mp.blue) return;
 
-    var isBotMatch = mp.blue && !mp.red;
+    // __BOT__ is a seat filler, not a human — treat as bot match.
+    // (Bug: `!mp.red` is false when red is already '__BOT__' from dual-idle publish.)
+    var humanRed = !!(mp.red && mp.red !== '__BOT__');
+    var isBotMatch = !!mp.blue && !humanRed;
+    if (isBotMatch) mp.red = '__BOT__';
     Lobby.isLobbyBotMatch = isBotMatch;
     global.isLobbyBotMatch = isBotMatch;
-    if (isBotMatch) {
-      mp.red = '__BOT__';
-    }
 
     Lobby.lobbyState.matchState = 'PLAYING';
     Lobby.lobbyState.matchScore = { blue: 0, red: 0 };
@@ -262,7 +263,12 @@
     if (!Lobby.isHost || !Lobby.lobbyState) return false;
     var gm = document.querySelector('[stacks-game]');
     var comp = gm && gm.components && gm.components['stacks-game'];
-    var localPlaying = !!(comp && (comp.matchActive || comp.matchState === 'PLAYING'));
+    // Dual-bot idle spectacle is NOT a real lobby match — never promote it to
+    // PLAYING or queue/start/control logic gets poisoned (isLobbyBotMatch false,
+    // host stuck unable to place / no opponent).
+    if (comp && comp._dualBotPreview) return false;
+    var localPlaying = !!(comp && comp.matchActive && !comp._dualBotPreview &&
+      (comp.matchState === 'PLAYING' || comp.matchState === 'COUNTDOWN'));
     if (Lobby.lobbyState.matchState === 'PLAYING' &&
         Lobby.lobbyState.matchPlayers.blue && Lobby.lobbyState.matchPlayers.red) {
       return true;

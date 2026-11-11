@@ -630,16 +630,25 @@
       var key = useSpectator
         ? ('spec:' + (specIdx % SPECTATOR_POSITIONS.length))
         : 'play';
+
+      // Always sync spectator flag — early pose-key return used to leave a stale
+      // isSpectator=true that blocked place/cup-grab after host vs-bot start.
+      if (useSpectator) {
+        window.isSpectator = true;
+        if (window.StacksLobby) window.StacksLobby.isSpectator = true;
+      } else {
+        window.isSpectator = false;
+        if (window.StacksLobby) window.StacksLobby.isSpectator = false;
+      }
+
       if (key === this._poseKey) return;
       this._poseKey = key;
 
       if (useSpectator) {
         var p = SPECTATOR_POSITIONS[specIdx % SPECTATOR_POSITIONS.length];
         this._movePlayerTo(p);
-        window.isSpectator = true;
-        } else {
+      } else {
         this._movePlayerTo(PLAY_POSITION);
-        window.isSpectator = false;
       }
     },
 

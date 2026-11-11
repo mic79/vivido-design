@@ -79,6 +79,15 @@ function main() {
   assert.strictEqual(started.mp.blue, Lobby.myPlayerId);
   assert.strictEqual(started.mp.red, '__BOT__');
 
+  // START while red already __BOT__ (dual-idle publish left seat filled) must stay bot match
+  g.endLobbyMatch({ cancelled: true });
+  Lobby.lobbyState.matchPlayers = { blue: Lobby.myPlayerId, red: '__BOT__' };
+  Lobby.lobbyState.matchState = 'WAITING';
+  started = null;
+  g.startLobbyMatch();
+  assert(started && started.isBotMatch === true, 'pre-filled __BOT__ red must still be bot match');
+  assert.strictEqual(g.isLobbyBotMatch, true);
+
   // Two humans seated → PvP (no bot)
   g.endLobbyMatch({ cancelled: true });
   Lobby.lobbyState.matchPlayers = { blue: Lobby.myPlayerId, red: 'peer-2' };

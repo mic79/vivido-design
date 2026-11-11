@@ -809,11 +809,19 @@
 
     _canControl: function () {
       if (global.isMobileSpectator) return false;
-      if (global.isSpectator && global.isMultiplayer && !global.isLobbyBotMatch) return false;
-      if (global.isMultiplayer && global.StacksLobby && global.lobbyState &&
-          global.lobbyState.matchState === 'PLAYING' && !global.StacksLobby.amMatchPlayer()) {
+      var ls = global.lobbyState;
+      var Lobby = global.StacksLobby;
+      var seated = !!(Lobby && Lobby.amMatchPlayer && Lobby.amMatchPlayer());
+      var botSeat = !!(global.isLobbyBotMatch ||
+        (ls && ls.matchPlayers && ls.matchPlayers.red === '__BOT__'));
+      // Seated match player always controls (ignore stale isSpectator)
+      if (global.isMultiplayer && ls && ls.matchState === 'PLAYING') {
+        if (seated) return true;
+        // Host vs bot: host may not be flagged seated if lobby publish raced
+        if (botSeat && Lobby && Lobby.isHost) return true;
         return false;
       }
+      if (global.isSpectator && global.isMultiplayer && !botSeat) return false;
       return true;
     },
 
@@ -1913,8 +1921,23 @@
       this._pendingMatch = null;
 
       var spectating = !!pending.spectating;
-      var isBotSeat = !!pending.isBotSeat;
+      // Re-resolve bot seat from live lobby — pending flag alone was wrong when
+      // startLobbyMatch passed isBotMatch=false while red was already __BOT__.
+      var mp = (pending.mp) || (global.lobbyState && global.lobbyState.matchPlayers);
+      var isBotSeat = !!pending.isBotSeat || !!(mp && mp.red === '__BOT__') ||
+        !!global.isLobbyBotMatch;
+      if (isBotSeat) {
+        global.isLobbyBotMatch = true;
+        if (global.StacksLobby) global.StacksLobby.isLobbyBotMatch = true;
+      }
       var startTime = pending.startTime || Date.now();
+
+      // Host vs bot is never a spectator seat
+      if (isBotSeat && global.StacksLobby && global.StacksLobby.isHost) {
+        spectating = false;
+        global.isSpectator = false;
+        global.StacksLobby.isSpectator = false;
+      }
 
       this.modes.start(startTime);
       if (this.matchStats) this.matchStats.start(performance.now());
@@ -1933,6 +1956,7 @@
         if (runBot) this.bot.setTargetPpm(12);
       }
       if (this.botBlue) this.botBlue.enable(false);
+      this._showMatchBodies({ showBot: !!isBotSeat && !spectating });
 
       if (window.matchRecorder) window.matchRecorder.startRecording(startTime);
       this._updateHUD();
@@ -2319,15 +2343,18 @@
         player.setAttribute('visible', true);
         if (player.object3D) player.object3D.visible = true;
       }
-      if (global.isMultiplayer) return;
 
       var bot = document.getElementById('bot-body');
-      if (bot) {
-        var showBot = !!opts.showBot;
+      var showBot = !!opts.showBot;
+      // Host/offline vs bot: show red bot avatar. Pure PvP: leave bot body to remote poses.
+      var pvpRemote = !!(global.isMultiplayer && !showBot && !global.isLobbyBotMatch);
+      if (bot && !pvpRemote) {
         bot.setAttribute('visible', showBot);
         if (bot.object3D) bot.object3D.visible = showBot;
         if (!showBot && bot.dataset) bot.dataset.posed = '';
       }
+      if (global.isMultiplayer && !showBot) return;
+
       var spec = document.getElementById('spec-blue-body');
       if (spec) {
         spec.setAttribute('visible', false);
