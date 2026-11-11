@@ -1727,21 +1727,17 @@
         scoreEl.setAttribute('text', 'value',
           'BLUE ' + (this.modes.scores.blue | 0) + '  |  RED ' + (this.modes.scores.red | 0));
       }
-      var hBlue = document.getElementById('cup-height-blue');
-      var hRed = document.getElementById('cup-height-red');
-      if (hBlue && this.cups.blue) hBlue.setAttribute('text', 'value', 'H ' + this.cups.blue.constructionHeight);
-      if (hRed && this.cups.red) hRed.setAttribute('text', 'value', 'H ' + this.cups.red.constructionHeight);
       this._updateCupStatsHUD();
       var hint = document.getElementById('control-hint');
       if (hint) {
         var msg;
-        if (this._cupGrab) msg = 'Twist = yaw · raise/lower hand = height';
+        if (this._cupGrab) msg = 'Twist = yaw · raise/lower = height';
         else if (this.held) {
           msg = this.ghostValid
-            ? 'Release to place · H/pocket = stash'
-            : 'Over cup to snap · purple pocket = hold';
+            ? 'Release to place · pocket = stash'
+            : 'Over cup to snap · pocket = hold';
         } else {
-          msg = 'Pad = grab · purple = pocket · rim = move cup';
+          msg = 'Pad = grab · purple = pocket';
         }
         hint.setAttribute('text', 'value', msg);
       }
@@ -1752,8 +1748,14 @@
       var now = performance.now();
       var blueEl = document.getElementById('stats-blue');
       var redEl = document.getElementById('stats-red');
-      if (blueEl) blueEl.setAttribute('text', 'value', this.matchStats.blue.hudText(now));
-      if (redEl) redEl.setAttribute('text', 'value', this.matchStats.red.hudText(now));
+      if (blueEl) blueEl.setAttribute('text', 'value', this.matchStats.blue.cardText(now));
+      if (redEl) redEl.setAttribute('text', 'value', this.matchStats.red.cardText(now));
+      var blueCup = document.getElementById('cup-stats-blue');
+      var redCup = document.getElementById('cup-stats-red');
+      var hBlue = this.cups.blue ? this.cups.blue.constructionHeight : 0;
+      var hRed = this.cups.red ? this.cups.red.constructionHeight : 0;
+      if (blueCup) blueCup.setAttribute('text', 'value', this.matchStats.blue.cupText(now, hBlue));
+      if (redCup) redCup.setAttribute('text', 'value', this.matchStats.red.cupText(now, hRed));
     },
 
     /** Bot pace tracks player (or rival bot) PPM with built-in wander. */
@@ -1814,13 +1816,17 @@
       cup.setThreat(urgency);
 
       if (dEl) {
-        var label = 'DMG ' + pending;
-        if (pending > 0 && minReady < Infinity) {
-          var sec = Math.max(0, (minReady - now) / 1000);
-          label += '  ' + sec.toFixed(1) + 's';
+        if (pending <= 0) {
+          dEl.setAttribute('visible', false);
+          dEl.setAttribute('text', 'value', '');
+        } else {
+          var sec = (minReady < Infinity)
+            ? Math.max(0, (minReady - now) / 1000).toFixed(1) + 's'
+            : '';
+          dEl.setAttribute('visible', true);
+          dEl.setAttribute('text', 'value', 'IN ' + pending + (sec ? '  ' + sec : ''));
+          dEl.setAttribute('text', 'color', urgency > 0.55 ? '#ff8866' : '#ccccaa');
         }
-        dEl.setAttribute('text', 'value', label);
-        dEl.setAttribute('text', 'color', urgency > 0.55 ? '#ff8866' : '#aaaaaa');
       }
     },
 

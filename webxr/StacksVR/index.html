@@ -23,14 +23,14 @@
   <script src="clear.js?v=19"></script>
   <script src="attack.js?v=19"></script>
   <script src="cup-bot.js?v=23"></script>
-  <script src="stats.js?v=2"></script>
+  <script src="stats.js?v=3"></script>
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=32"></script>
   <script src="match-replay.js?v=19"></script>
   <script src="game-menu.js?v=34"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=39"></script>
+  <script src="stacks-game.js?v=40"></script>
   <script src="mobile-spectator.js?v=35"></script>
 
   <style>
@@ -257,25 +257,28 @@
     <a-plane position="0 0 0" rotation="-90 0 0" width="12" height="12"
       material="color: #151a22; roughness: 0.92"></a-plane>
 
-    <a-entity id="score-display" position="0 2.35 0"
-      text="value: BLUE 0  |  RED 0; align: center; width: 3.5; color: #e8eef8"></a-entity>
-    <a-entity id="control-hint" position="-0.65 2.05 1.55"
-      text="value: Pad = grab · purple pocket = hold; align: center; width: 3.2; color: #9fe6b8"></a-entity>
-    <a-entity id="cup-height-blue" position="-1.2 1.85 0.85"
-      text="value: H 0; align: center; width: 1.1; color: #4A90E2"></a-entity>
-    <a-entity id="cup-height-red" position="1.2 1.85 -0.85"
-      text="value: H 0; align: center; width: 1.1; color: #E25A4A"></a-entity>
-    <a-entity id="damage-blue" position="-0.1 1.72 0.85"
-      text="value: DMG 0; align: center; width: 1.1; color: #aaa"></a-entity>
-    <a-entity id="damage-red" position="0.1 1.72 -0.85"
-      text="value: DMG 0; align: center; width: 1.1; color: #aaa"></a-entity>
-    <!-- BattleBlocks HUD: Time / Attacks / Blocks + Score / BPS / Attacks -->
-    <a-entity id="stats-blue" position="-1.55 1.55 0.85"
-      text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min)\nScore: 0\nBPS: 0.000\nAttacks: 0; align: left; width: 1.55; color: #8ec5ff; wrapCount: 28"></a-entity>
-    <a-entity id="stats-red" position="1.55 1.55 -0.85"
-      text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min)\nScore: 0\nBPS: 0.000\nAttacks: 0; align: left; width: 1.55; color: #ffb0a4; wrapCount: 28"></a-entity>
+    <a-entity id="score-display" position="0 2.25 0"
+      text="value: BLUE 0  |  RED 0; align: center; width: 2.0; color: #e8eef8"></a-entity>
+    <!-- Small local hint above blue pad — not arena-scale -->
+    <a-entity id="control-hint" position="-0.65 1.95 1.95"
+      text="value: Pad = grab · purple = pocket; align: center; width: 1.15; color: #7a9a88"></a-entity>
+    <!-- Incoming attack countdown (hidden at 0 via JS). H height folded into cup-stats. -->
+    <a-entity id="damage-blue" position="-0.65 1.88 1.35" visible="false"
+      text="value: ; align: center; width: 0.7; color: #ff8866"></a-entity>
+    <a-entity id="damage-red" position="0.65 1.88 -1.35" rotation="0 180 0" visible="false"
+      text="value: ; align: center; width: 0.7; color: #ff8866"></a-entity>
+    <!-- BattleBlocks floating card: Time / Attacks / Blocks (outside cups) -->
+    <a-entity id="stats-blue" position="-1.95 1.72 1.75"
+      text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min); align: left; width: 1.05; color: #8ec5ff; wrapCount: 26"></a-entity>
+    <a-entity id="stats-red" position="1.95 1.72 -1.75" rotation="0 180 0"
+      text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min); align: left; width: 1.05; color: #ffb0a4; wrapCount: 26"></a-entity>
+    <!-- BattleBlocks cup panel: Score / BPS / Attacks (+ Height) -->
+    <a-entity id="cup-stats-blue" position="-1.35 1.28 1.75"
+      text="value: Score: 0\nBPS: 0.000\nAttacks: 0\nHeight: 0; align: left; width: 0.85; color: #a8c8e8; wrapCount: 22"></a-entity>
+    <a-entity id="cup-stats-red" position="1.35 1.28 -1.75" rotation="0 180 0"
+      text="value: Score: 0\nBPS: 0.000\nAttacks: 0\nHeight: 0; align: left; width: 0.85; color: #e8b8b0; wrapCount: 22"></a-entity>
     <a-entity id="version-display" position="-0.65 0.12 1.7"
-      text="value: StacksVR 1.0; align: center; width: 2; color: #556"></a-entity>
+      text="value: StacksVR 1.0; align: center; width: 1.2; color: #556"></a-entity>
 
     <!-- Diagonal stagger, head-on facing: player behind blue looking -Z -->
     <a-entity id="player" position="-0.65 0 1.75" rotation="0 0 0" stick-locomotion>

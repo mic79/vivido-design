@@ -134,16 +134,18 @@
   };
 
   /** Cup-side panel: Score / BPS / Attacks — matches BattleBlocks screenshot. */
-  SideStats.prototype.cupText = function (now) {
+  SideStats.prototype.cupText = function (now, height) {
     now = now || performance.now();
-    return 'Score: ' + (this.score | 0) + '\n' +
+    var lines = 'Score: ' + (this.score | 0) + '\n' +
       'BPS: ' + this.bps(now).toFixed(3) + '\n' +
       'Attacks: ' + (this.attacks | 0);
+    if (height != null) lines += '\nHeight: ' + (height | 0);
+    return lines;
   };
 
+  // Kept for callers that want a single string — card only (no duplicate Attacks/BPS).
   SideStats.prototype.hudText = function (now) {
-    // Full BattleBlocks pair: card + cup metrics
-    return this.cardText(now) + '\n' + this.cupText(now);
+    return this.cardText(now);
   };
 
   function MatchStats() {
