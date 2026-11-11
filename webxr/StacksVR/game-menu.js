@@ -264,6 +264,8 @@
       // Lobby PLAYING is authoritative while hosting / joined
       if (window.lobbyState && window.lobbyState.matchState === 'PLAYING') return true;
       if (!comp || !comp.matchActive) return false;
+      // COUNTDOWN: modes not active yet, but End Match must still work
+      if (comp.matchState === 'COUNTDOWN' || comp.matchState === 'PLAYING') return true;
       if (!comp.modes || !comp.modes.active) return false;
       return true;
     },
@@ -422,6 +424,7 @@
           if (playing) {
             if (comp) comp.endMatch();
             this.refreshLobbyUI();
+            this.closeMenu();
             break;
           }
           // Clear dual-bot idle without sending a no-op lobby "end" while WAITING

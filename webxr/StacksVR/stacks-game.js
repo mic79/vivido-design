@@ -330,22 +330,24 @@
       }
     },
 
+    _isPieceUserData: function (ud) {
+      if (!ud) return false;
+      return !!(ud.botPadPiece || ud.padPiece || ud.padPreview || ud.botPocketPiece ||
+        ud.pocketPiece || ud.nextPreview || ud.spawning);
+    },
+
     _clearBotStationPieces: function (side) {
       var st = this._botStation(side);
       if (st.pad) {
         for (var i = st.pad.children.length - 1; i >= 0; i--) {
           var ch = st.pad.children[i];
-          if (ch.userData && (ch.userData.botPadPiece || ch.userData.padPiece || ch.userData.padPreview)) {
-            st.pad.remove(ch);
-          }
+          if (this._isPieceUserData(ch.userData)) st.pad.remove(ch);
         }
       }
       if (st.pocket) {
         for (var j = st.pocket.children.length - 1; j >= 0; j--) {
           var pch = st.pocket.children[j];
-          if (pch.userData && (pch.userData.botPocketPiece || pch.userData.pocketPiece)) {
-            st.pocket.remove(pch);
-          }
+          if (this._isPieceUserData(pch.userData)) st.pocket.remove(pch);
         }
       }
       if (side === 'red') {
@@ -355,7 +357,48 @@
         this._padPiece = null;
         this._previewPiece = null;
         this._pocketMesh = null;
+        this._nextType = null;
       }
+    },
+
+    /** Kill in-flight queue→pad tweens and any detached spawn meshes. */
+    _clearPieceAnims: function () {
+      var anims = this._pieceAnims || [];
+      for (var i = 0; i < anims.length; i++) {
+        var m = anims[i] && anims[i].mesh;
+        if (m && m.parent) m.parent.remove(m);
+      }
+      this._pieceAnims = [];
+      // Orphans attached to scene root during queue advance
+      if (this._sceneRoot) {
+        for (var c = this._sceneRoot.children.length - 1; c >= 0; c--) {
+          var ch = this._sceneRoot.children[c];
+          if (this._isPieceUserData(ch.userData)) this._sceneRoot.remove(ch);
+        }
+      }
+    },
+
+    _clearNextQueue: function (side) {
+      var col = side === 'red' ? this._nextRed : this._nextBlue;
+      if (!col || !col.slots) return;
+      while (col.slots.children.length) col.slots.remove(col.slots.children[0]);
+    },
+
+    /** Full station wipe before a real match so dual-preview scraps can't overlap. */
+    _resetStationsForMatch: function () {
+      this._clearPieceAnims();
+      this._clearBotStationPieces('blue');
+      this._clearBotStationPieces('red');
+      this._clearBotHoldMesh('blue');
+      this._clearBotHoldMesh('red');
+      this._clearNextQueue('blue');
+      this._clearNextQueue('red');
+      this._cancelHold();
+      this._pocketType = null;
+      this._pocketUsed = false;
+      this._refreshPocketMesh();
+      this._nextType = null;
+      this._padPiece = null;
     },
 
     _clearBotHoldMesh: function (side) {
@@ -864,7 +907,7 @@
      *  Swap (pocket already full) is one-shot until the next place. */
     _interactPocket: function (handEl) {
       if (!this._canControl()) return;
-      if (!this.matchActive || this._dualBotPreview) return;
+      if (!this.matchActive || this._dualBotPreview || this.matchState === 'COUNTDOWN') return;
       if (performance.now() < (this._pocketLockUntil || 0)) return;
       if (this.held) {
         var incoming = this.held.type;
@@ -1147,9 +1190,12 @@
 
     _spawnPadPiece: function (opts) {
       opts = opts || {};
-      for (var i = this._pad.children.length - 1; i >= 0; i--) {
-        var ch = this._pad.children[i];
-        if (ch.userData && (ch.userData.padPiece || ch.userData.padPreview)) this._pad.remove(ch);
+      // Always wipe pad first — dual-preview / failed anims left overlapping scraps
+      if (this._pad) {
+        for (var i = this._pad.children.length - 1; i >= 0; i--) {
+          var ch = this._pad.children[i];
+          if (this._isPieceUserData(ch.userData)) this._pad.remove(ch);
+        }
       }
       this._nextType = this.bag.next();
       this._padPiece = null;
@@ -1324,7 +1370,7 @@
     },
 
     _grab: function (handEl) {
-      if (!this.matchActive || this._dualBotPreview) return;
+      if (!this.matchActive || this._dualBotPreview || this.matchState === 'COUNTDOWN') return;
       if (this.held || !this._nextType || !this._padPiece) return;
       if (this._padPiece.userData && this._padPiece.userData.spawning) return;
 
@@ -1769,18 +1815,27 @@
     onMatchStarted: function (mp, startTime, isBotMatch, bagSeed) {
       if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
       this._clearVictory();
+      this._clearMatchBanner();
       this._endingMatch = false;
       // Leave dual-preview ownership BEFORE bag reset / bot disable so blue
       // pad visuals cannot wipe the human spawn below.
       this._dualBotPreview = false;
+      if (this.bot) this.bot.enable(false);
       if (this.botBlue) this.botBlue.enable(false);
-      this._clearBotHoldMesh('blue');
 
       this.matchActive = true;
-      this.matchState = 'PLAYING';
+      this.matchState = 'COUNTDOWN';
+      this._pendingMatch = {
+        mp: mp,
+        startTime: startTime || Date.now(),
+        isBotMatch: !!isBotMatch,
+        bagSeed: bagSeed
+      };
       var spectating = !!(global.isMobileSpectator ||
         (global.isSpectator && global.isMultiplayer &&
           !(global.StacksLobby && global.StacksLobby.amMatchPlayer && global.StacksLobby.amMatchPlayer())));
+      this._pendingMatch.spectating = spectating;
+
       // Spectators must NOT clear — late-join snapshot would be wiped by match-started
       if (!spectating) {
         this.cups.blue.clearAll();
@@ -1792,44 +1847,141 @@
       this.clearSys = this.clearSysBlue;
       this.attackSys.reset();
       this.modes.setMode(this.data.mode);
-      this.modes.start(startTime || Date.now());
-      if (this.matchStats) this.matchStats.start(performance.now());
+      // Timer / play begin after countdown — keep modes inactive until GO
+      if (this.modes.stop) this.modes.stop();
       this.playerScore = 0;
       this.botScore = 0;
       this._applyMirroredBags(bagSeed);
-      this._cancelHold();
-      this._pocketType = null;
-      this._pocketUsed = false;
-      this._refreshPocketMesh();
+      this._resetStationsForMatch();
       this._setRemoteHeld('blue', { holding: false });
       this._setRemoteHeld('red', { holding: false });
-      // Spectators mirror host board — no local spawn pad
-      if (!spectating) {
-        if (this._pad) this._pad.visible = true;
-        if (this._pocket) this._pocket.visible = true;
-        this._spawnPadPiece({ dropIn: true });
-      } else if (this._pad) {
-        this._pad.visible = false;
-      }
+
       var isBotSeat = !!isBotMatch || (mp && mp.red === '__BOT__');
-      if (this.bot) {
-        // reset() already applied seed in _applyMirroredBags
-        this.bot.setCup(this.cups.red);
-        // Only the host (or offline) runs the red bot AI; spectators receive poses
-        var runBot = (!spectating) && isBotSeat;
-        // Show red pad/pocket to everyone in a bot match (host animates; peers see platforms)
-        this._setBotStationVisible(!!isBotSeat);
-        this.bot.enable(runBot);
-        if (runBot) this.bot.setTargetPpm(12);
-      }
-      // Dual-preview had been force-hiding avatars every tick — restore for real play
+      this._pendingMatch.isBotSeat = isBotSeat;
+      if (this._pad) this._pad.visible = !spectating;
+      if (this._pocket) this._pocket.visible = !spectating;
+      this._setBotStationVisible(!!isBotSeat && !spectating);
       this._showMatchBodies({ showBot: !!isBotSeat && !spectating });
-      if (window.matchRecorder) window.matchRecorder.startRecording(startTime || Date.now());
-      this._updateHUD();
-      // Host pushes a clean board to everyone
+
+      // Host pushes board wipe; live pad spawn happens on GO
       if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.isHost) {
         this._broadcastState('match-start');
       }
+      this._updateHUD();
+      this._startCountdown(this._pendingMatch.startTime);
+    },
+
+    _startCountdown: function (startTime) {
+      this.matchState = 'COUNTDOWN';
+      this._countdownStart = startTime || Date.now();
+      this._countdownDur = 3;
+      this._countdownLastShown = null;
+      this._countdownGoAt = null;
+      this._showMatchBanner('3');
+    },
+
+    _tickCountdown: function (now) {
+      if (this.matchState !== 'COUNTDOWN') return;
+      now = now || Date.now();
+      if (this._countdownGoAt) {
+        if (now >= this._countdownGoAt) {
+          this._countdownGoAt = null;
+          this._beginLivePlay();
+        }
+        return;
+      }
+      var elapsed = (now - (this._countdownStart || now)) / 1000;
+      var remaining = Math.ceil(this._countdownDur - elapsed);
+      if (remaining > 0) {
+        if (remaining !== this._countdownLastShown) {
+          this._countdownLastShown = remaining;
+          this._showMatchBanner(String(remaining));
+          var hand = document.getElementById('rightHand') || document.getElementById('leftHand');
+          this._pulseHaptic(hand, 0.45, 40);
+        }
+      } else {
+        this._countdownLastShown = 0;
+        this._showMatchBanner('GO!');
+        this._countdownGoAt = now + 450;
+      }
+    },
+
+    _beginLivePlay: function () {
+      var pending = this._pendingMatch || {};
+      this._clearMatchBanner();
+      this.matchState = 'PLAYING';
+      this._pendingMatch = null;
+
+      var spectating = !!pending.spectating;
+      var isBotSeat = !!pending.isBotSeat;
+      var startTime = pending.startTime || Date.now();
+
+      this.modes.start(startTime);
+      if (this.matchStats) this.matchStats.start(performance.now());
+
+      if (!spectating) {
+        this._resetStationsForMatch();
+        this._applyMirroredBags(pending.bagSeed != null ? pending.bagSeed : this.bagSeed);
+        this._spawnPadPiece({ dropIn: true });
+      }
+
+      if (this.bot) {
+        this.bot.setCup(this.cups.red);
+        var runBot = (!spectating) && isBotSeat;
+        this._setBotStationVisible(!!isBotSeat && !spectating);
+        this.bot.enable(runBot);
+        if (runBot) this.bot.setTargetPpm(12);
+      }
+      if (this.botBlue) this.botBlue.enable(false);
+
+      if (window.matchRecorder) window.matchRecorder.startRecording(startTime);
+      this._updateHUD();
+      if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.isHost) {
+        this._broadcastState('match-go');
+      }
+    },
+
+    _showMatchBanner: function (text) {
+      this._clearMatchBanner();
+      if (!this._sceneRoot || !THREE) return;
+      var canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 256;
+      var ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, 512, 256);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 140px Arial, Helvetica, sans-serif';
+      ctx.shadowColor = '#33bbff';
+      ctx.shadowBlur = 24;
+      ctx.fillText(String(text || ''), 256, 128);
+      var tex = new THREE.CanvasTexture(canvas);
+      var mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.1, 0.55),
+        new THREE.MeshBasicMaterial({
+          map: tex, transparent: true, depthWrite: false, toneMapped: false, side: THREE.DoubleSide
+        })
+      );
+      mesh.position.set(0, 1.55, 0);
+      var player = document.getElementById('player');
+      if (player && player.object3D) {
+        var look = new THREE.Vector3();
+        player.object3D.getWorldPosition(look);
+        look.y = mesh.position.y;
+        mesh.lookAt(look);
+      }
+      this._sceneRoot.add(mesh);
+      this._matchBanner = { mesh: mesh, tex: tex };
+    },
+
+    _clearMatchBanner: function () {
+      var b = this._matchBanner;
+      if (!b) return;
+      if (b.mesh && b.mesh.parent) b.mesh.parent.remove(b.mesh);
+      if (b.tex) b.tex.dispose();
+      if (b.mesh && b.mesh.material) b.mesh.material.dispose();
+      this._matchBanner = null;
     },
 
     onMatchEnded: function (opts) {
@@ -1837,16 +1989,21 @@
       this.matchActive = false;
       this.matchState = 'WAITING';
       this._dualBotPreview = false;
+      this._pendingMatch = null;
+      this._countdownGoAt = null;
+      this._clearMatchBanner();
       if (this.bot) this.bot.enable(false);
       if (this.botBlue) this.botBlue.enable(false);
       this._setBotStationVisible(false);
+      this._clearPieceAnims();
       this._clearBotHoldMesh('blue');
       this._clearBotHoldMesh('red');
       this._clearBotStationPieces('blue');
       this._clearBotStationPieces('red');
+      this._clearNextQueue('blue');
+      this._clearNextQueue('red');
       this._nextType = null;
       this._padPiece = null;
-      this._pieceAnims = [];
       this._cancelHold();
 
       // Multiplayer peers may only learn the winner from match-ended payload
@@ -1887,14 +2044,25 @@
       if (scene) scene.emit('lobby-state-updated');
     },
 
+    /**
+     * Dual-bot spectacle resumes whenever no REAL match is PLAYING.
+     * Hosting a WAITING lobby must still show 2 bots (user can START vs BOT / queue later).
+     */
+    _canResumeDualIdle: function () {
+      if (global.isMobileSpectator) return false;
+      if (global.lobbyState && global.lobbyState.matchState === 'PLAYING') return false;
+      return true;
+    },
+
     _scheduleDualIdle: function (delayMs) {
-      if (global.isMultiplayer || global.isMobileSpectator) return;
+      if (!this._canResumeDualIdle()) return;
       if (typeof this.startOfflinePreviewMatch !== 'function') return;
       var self = this;
       if (this._dualIdleTimer) clearTimeout(this._dualIdleTimer);
       this._dualIdleTimer = setTimeout(function () {
         self._dualIdleTimer = null;
-        if (self.matchActive || global.isMultiplayer) return;
+        if (self.matchActive) return;
+        if (!self._canResumeDualIdle()) return;
         self._clearVictory();
         self.startOfflinePreviewMatch();
       }, delayMs == null ? 400 : delayMs);
@@ -2082,7 +2250,9 @@
     startOfflinePreviewMatch: function () {
       if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
       this._clearVictory();
+      this._clearMatchBanner();
       this._endingMatch = false;
+      this._pendingMatch = null;
       global.offlinePreview = true;
       global.isLobbyBotMatch = true;
       this._dualBotPreview = true;
@@ -2101,16 +2271,7 @@
       this.playerScore = 0;
       this.botScore = 0;
       var seed = this._applyMirroredBags(null);
-      this._cancelHold();
-      this._pocketType = null;
-      this._pocketUsed = false;
-      this._nextType = null;
-
-      // Human pad/pocket become the blue bot station
-      this._clearBotStationPieces('blue');
-      this._clearBotStationPieces('red');
-      this._clearBotHoldMesh('blue');
-      this._clearBotHoldMesh('red');
+      this._resetStationsForMatch();
       if (this._pad) this._pad.visible = true;
       if (this._pocket) this._pocket.visible = true;
       this._setBotStationVisible(true);
@@ -2190,6 +2351,8 @@
       if (this._endingMatch) return;
       this._endingMatch = true;
       if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
+      this._countdownGoAt = null;
+      this._clearMatchBanner();
       var result = this._matchEndResult(null, true);
       var lobbyPlaying = !!(global.lobbyState && global.lobbyState.matchState === 'PLAYING');
 
@@ -2205,6 +2368,7 @@
         }
         return;
       }
+      // Offline / WAITING lobby / COUNTDOWN local: always tear down + resume dual idle
       this.onMatchEnded(result);
     },
 
@@ -2770,41 +2934,45 @@
       }
 
       if (this.matchActive && !this._endingMatch) {
-        // In multiplayer, only host (or offline/bot) advances attack timers —
-        // peers receive board via state/place snapshots (avoids RNG garbage desync).
-        var mp = !!global.isMultiplayer;
-        var host = global.StacksLobby && global.StacksLobby.isHost;
-        var tickAttack = !mp || host || !!global.isLobbyBotMatch;
-        if (tickAttack) {
-          var applied = this.attackSys.tick(this.cups, performance.now());
-          if (applied && applied.length) {
-            for (var i = 0; i < applied.length; i++) {
-              if (this.cups[applied[i].side].isToppedOut()) {
-                var over = this.modes.onOverflow(applied[i].side);
-                if (over) this._endFromMode(over);
+        if (this.matchState === 'COUNTDOWN') {
+          this._tickCountdown(Date.now());
+        } else {
+          // In multiplayer, only host (or offline/bot) advances attack timers —
+          // peers receive board via state/place snapshots (avoids RNG garbage desync).
+          var mp = !!global.isMultiplayer;
+          var host = global.StacksLobby && global.StacksLobby.isHost;
+          var tickAttack = !mp || host || !!global.isLobbyBotMatch;
+          if (tickAttack) {
+            var applied = this.attackSys.tick(this.cups, performance.now());
+            if (applied && applied.length) {
+              for (var i = 0; i < applied.length; i++) {
+                if (this.cups[applied[i].side].isToppedOut()) {
+                  var over = this.modes.onOverflow(applied[i].side);
+                  if (over) this._endFromMode(over);
+                }
+                if (applied[i].side === (this._localCup() && this._localCup().side)) {
+                  var hand = (this.held && this.held.handEl) || document.getElementById('rightHand');
+                  this._pulseHaptic(hand, 0.8, 90);
+                }
               }
-              if (applied[i].side === (this._localCup() && this._localCup().side)) {
-                var hand = (this.held && this.held.handEl) || document.getElementById('rightHand');
-                this._pulseHaptic(hand, 0.8, 90);
-              }
+              if (mp && host) this._broadcastState('garbage');
+              this._updateHUD();
             }
-            if (mp && host) this._broadcastState('garbage');
-            this._updateHUD();
           }
+          this._updateDamageHUD();
+          var t = this.modes.tick(Date.now());
+          if (t && t.ended) this._endFromMode(t);
+          this._updateBotPace();
+          if (this.bot && this.bot.enabled) this.bot.tick(performance.now());
+          if (this.botBlue && this.botBlue.enabled) this.botBlue.tick(performance.now());
+          if (this._dualBotPreview) this._hidePreviewBotBodies();
+          // Refresh PPM / timer on cup-side stats ~4Hz
+          if (!this._lastStatsHud || performance.now() - this._lastStatsHud > 250) {
+            this._lastStatsHud = performance.now();
+            this._updateCupStatsHUD();
+          }
+          this._heartbeatSpectatorSync();
         }
-        this._updateDamageHUD();
-        var t = this.modes.tick(Date.now());
-        if (t && t.ended) this._endFromMode(t);
-        this._updateBotPace();
-        if (this.bot && this.bot.enabled) this.bot.tick(performance.now());
-        if (this.botBlue && this.botBlue.enabled) this.botBlue.tick(performance.now());
-        if (this._dualBotPreview) this._hidePreviewBotBodies();
-        // Refresh PPM / timer on cup-side stats ~4Hz
-        if (!this._lastStatsHud || performance.now() - this._lastStatsHud > 250) {
-          this._lastStatsHud = performance.now();
-          this._updateCupStatsHUD();
-        }
-        this._heartbeatSpectatorSync();
       } else {
         if (this.cups.blue) this.cups.blue.setThreat(0);
         if (this.cups.red) this.cups.red.setThreat(0);
