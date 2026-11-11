@@ -310,6 +310,7 @@
           if (!isEffectivelyVisible(el)) return;
           var hand = (evt.detail && evt.detail.cursorEl) || null;
           pulseHaptic(hand, 0.7, 55);
+          if (window.StacksAudio) window.StacksAudio.sfx('ui');
           var action = el.getAttribute('data-action');
           self.handleAction(action);
         });
@@ -364,6 +365,7 @@
         }
         this.refreshLobbyUI();
         this.setRaycasters(true);
+        if (window.StacksAudio) window.StacksAudio.sfx('ui');
         pulseHaptic(this.leftHand || document.getElementById('leftHand'), 0.4, 35);
       } else {
         this._clearHover();

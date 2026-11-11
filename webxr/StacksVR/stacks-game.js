@@ -771,6 +771,24 @@
       });
     },
 
+    _sfx: function (name, opts) {
+      if (global.StacksAudio && typeof global.StacksAudio.sfx === 'function') {
+        global.StacksAudio.sfx(name, opts);
+      }
+    },
+
+    _musicMatch: function () {
+      if (global.StacksAudio && typeof global.StacksAudio.toMatch === 'function') {
+        global.StacksAudio.toMatch();
+      }
+    },
+
+    _musicIdle: function () {
+      if (global.StacksAudio && typeof global.StacksAudio.toIdle === 'function') {
+        global.StacksAudio.toIdle();
+      }
+    },
+
     _pulseHaptic: function (handEl, intensity, durationMs) {
       if (!handEl) return;
       // Prefer shared helper (covers oculus-touch / webxr / vive gamepads)
@@ -1022,6 +1040,7 @@
         startHandY: this._tmp.y,
         startCupY: cup.getHeight ? cup.getHeight() : (cup.pivot ? cup.pivot.position.y : cup.root.position.y)
       };
+      this._sfx('rotate');
       this._pulseHaptic(handEl, 0.4, 40);
       this._updateHUD();
     },
@@ -1427,6 +1446,7 @@
       };
       this._nextType = null;
       this._spawnPadPiece({ animate: true });
+      this._sfx('grab');
       this._pulseHaptic(hand, 0.55, 55);
       this._broadcastHold();
       this._updateGhost();
@@ -1630,11 +1650,14 @@
       var cup = this.cups[side];
       var clearSys = side === 'red' ? this.clearSysRed : this.clearSysBlue;
       var clearResult = clearSys.resolveAfterPlace(cup, placed, type);
+      if (!this._dualBotPreview) this._sfx('place');
       if (this.matchStats) this.matchStats.onPlace(side, clearResult, performance.now());
       if (clearResult.layersCleared > 0) {
+        if (!this._dualBotPreview) this._sfx('clear');
         var atk = this.attackSys.onClear(side, clearResult, performance.now());
         if (this.matchStats && atk && atk.sent > 0) {
           this.matchStats.onAttack(side, atk.sent, performance.now());
+          if (!this._dualBotPreview) this._sfx('attack');
         }
         if (this.matchActive) {
           var endInfo = this.modes.addClear(side, clearResult);
@@ -1876,6 +1899,7 @@
         this._broadcastState('match-start');
       }
       this._updateHUD();
+      this._musicMatch();
       this._startCountdown(this._pendingMatch.startTime);
     },
 
@@ -1886,6 +1910,7 @@
       this._countdownLastShown = null;
       this._countdownGoAt = null;
       this._showMatchBanner('3');
+      this._sfx('ui');
     },
 
     _tickCountdown: function (now) {
@@ -1904,12 +1929,14 @@
         if (remaining !== this._countdownLastShown) {
           this._countdownLastShown = remaining;
           this._showMatchBanner(String(remaining));
+          this._sfx('ui');
           var hand = document.getElementById('rightHand') || document.getElementById('leftHand');
           this._pulseHaptic(hand, 0.45, 40);
         }
       } else {
         this._countdownLastShown = 0;
         this._showMatchBanner('GO!');
+        this._sfx('boom');
         this._countdownGoAt = now + 450;
       }
     },
@@ -2052,6 +2079,7 @@
 
       var winner = (opts && opts.winner) || (this.modes && this.modes.winner);
       var festive = !opts.cancelled && !!winner;
+      this._musicIdle();
       if (festive) {
         this._playVictory({
           winner: winner,
@@ -2203,6 +2231,7 @@
         root.lookAt(look);
       }
 
+      this._sfx('win');
       var hand = document.getElementById('rightHand') || document.getElementById('leftHand');
       this._pulseHaptic(hand, 0.95, 160);
       setTimeout(function () {
@@ -2316,6 +2345,7 @@
       // Dual preview: hide undriven bot avatars only — never the local player body
       this._hidePreviewBotBodies();
 
+      this._musicIdle();
       this._updateHUD();
       console.log('[StacksGame] offline preview: blue bot vs red bot seed=' + seed);
     },

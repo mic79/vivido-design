@@ -27,10 +27,11 @@
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=37"></script>
   <script src="match-replay.js?v=19"></script>
-  <script src="game-menu.js?v=40"></script>
+  <script src="stacks-audio.js?v=1"></script>
+  <script src="game-menu.js?v=41"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=72"></script>
+  <script src="stacks-game.js?v=73"></script>
   <script src="mobile-spectator.js?v=36"></script>
 
     <style>
@@ -441,6 +442,18 @@
       mixamo-body="mode: bot; color: #E25A4A; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
     <a-entity id="spec-blue-body" visible="false"
       mixamo-body="mode: bot; color: #4A90E2; modelPath: assets/YBot.fbx; botEntitySelector: #spec-blue-anchor"></a-entity>
+
+    <!-- Audio: lobby ambient + match action + one-shot SFX (project-local) -->
+    <a-entity id="sfx-bg-music" sound="src: url(audio/bg-music.mp3); autoplay: false; loop: true; volume: 0.28; positional: false"></a-entity>
+    <a-entity id="sfx-match-music" sound="src: url(audio/match-music.mp3); autoplay: false; loop: true; volume: 0; positional: false"></a-entity>
+    <a-entity id="sfx-grab" sound="src: url(audio/grab.mp3); autoplay: false; loop: false; volume: 0.55; positional: false; poolSize: 3"></a-entity>
+    <a-entity id="sfx-place" sound="src: url(audio/place.mp3); autoplay: false; loop: false; volume: 0.7; positional: false; poolSize: 4"></a-entity>
+    <a-entity id="sfx-clear" sound="src: url(audio/clear.mp3); autoplay: false; loop: false; volume: 0.75; positional: false; poolSize: 3"></a-entity>
+    <a-entity id="sfx-attack" sound="src: url(audio/attack.mp3); autoplay: false; loop: false; volume: 0.65; positional: false; poolSize: 3"></a-entity>
+    <a-entity id="sfx-boom" sound="src: url(audio/boom.mp3); autoplay: false; loop: false; volume: 0.7; positional: false; poolSize: 2"></a-entity>
+    <a-entity id="sfx-win" sound="src: url(audio/win.mp3); autoplay: false; loop: false; volume: 0.8; positional: false; poolSize: 1"></a-entity>
+    <a-entity id="sfx-ui" sound="src: url(audio/ui.mp3); autoplay: false; loop: false; volume: 0.45; positional: false; poolSize: 4"></a-entity>
+    <a-entity id="sfx-rotate" sound="src: url(audio/rotate.mp3); autoplay: false; loop: false; volume: 0.4; positional: false; poolSize: 3"></a-entity>
     </a-scene>
 
   <script>
