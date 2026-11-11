@@ -27,10 +27,10 @@
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=32"></script>
   <script src="match-replay.js?v=19"></script>
-  <script src="game-menu.js?v=32"></script>
+  <script src="game-menu.js?v=33"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=37"></script>
+  <script src="stacks-game.js?v=38"></script>
   <script src="mobile-spectator.js?v=35"></script>
 
   <style>
@@ -259,26 +259,26 @@
 
     <a-entity id="score-display" position="0 2.35 0"
       text="value: BLUE 0  |  RED 0; align: center; width: 3.5; color: #e8eef8"></a-entity>
-    <a-entity id="control-hint" position="-1.2 2.05 1.2"
+    <a-entity id="control-hint" position="-0.65 2.05 1.55"
       text="value: Pad = grab · purple pocket = hold; align: center; width: 3.2; color: #9fe6b8"></a-entity>
-    <a-entity id="cup-height-blue" position="-1.15 1.85 0.7"
+    <a-entity id="cup-height-blue" position="-1.2 1.85 0.85"
       text="value: H 0; align: center; width: 1.1; color: #4A90E2"></a-entity>
-    <a-entity id="cup-height-red" position="1.15 1.85 -0.7"
+    <a-entity id="cup-height-red" position="1.2 1.85 -0.85"
       text="value: H 0; align: center; width: 1.1; color: #E25A4A"></a-entity>
-    <a-entity id="damage-blue" position="-0.25 1.72 1.15"
+    <a-entity id="damage-blue" position="-0.1 1.72 0.85"
       text="value: DMG 0; align: center; width: 1.1; color: #aaa"></a-entity>
-    <a-entity id="damage-red" position="0.25 1.72 -1.15"
+    <a-entity id="damage-red" position="0.1 1.72 -0.85"
       text="value: DMG 0; align: center; width: 1.1; color: #aaa"></a-entity>
     <!-- BattleBlocks HUD: Time / Attacks / Blocks + Score / BPS / Attacks -->
-    <a-entity id="stats-blue" position="-1.55 1.55 0.55"
+    <a-entity id="stats-blue" position="-1.55 1.55 0.85"
       text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min)\nScore: 0\nBPS: 0.000\nAttacks: 0; align: left; width: 1.55; color: #8ec5ff; wrapCount: 28"></a-entity>
-    <a-entity id="stats-red" position="1.55 1.55 -0.55"
+    <a-entity id="stats-red" position="1.55 1.55 -0.85"
       text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min)\nScore: 0\nBPS: 0.000\nAttacks: 0; align: left; width: 1.55; color: #ffb0a4; wrapCount: 28"></a-entity>
-    <a-entity id="version-display" position="-1.3 0.12 1.3"
+    <a-entity id="version-display" position="-0.65 0.12 1.7"
       text="value: StacksVR 1.0; align: center; width: 2; color: #556"></a-entity>
 
-    <!-- Diagonal layout: blue left-near, player behind it facing red (~-45° yaw) -->
-    <a-entity id="player" position="-1.37 0 1.37" rotation="0 -45 0" stick-locomotion>
+    <!-- Diagonal stagger, head-on facing: player behind blue looking -Z -->
+    <a-entity id="player" position="-0.65 0 1.75" rotation="0 0 0" stick-locomotion>
       <a-entity id="rig">
         <a-entity id="camera" camera look-controls="pointerLockEnabled: true" wasd-controls position="0 1.6 0"></a-entity>
         <a-entity id="leftHand"
@@ -297,9 +297,9 @@
     <a-entity id="player-body"
       mixamo-body="mode: player; color: #4A90E2; modelPath: assets/YBot.fbx"></a-entity>
 
-    <a-entity id="cup-bot" position="1.37 1.5 -1.37"></a-entity>
-    <a-entity id="spec-blue-anchor" position="-1.37 1.6 1.37"></a-entity>
-    <a-entity id="bot-body" position="1.37 0 -1.37" rotation="0 135 0"
+    <a-entity id="cup-bot" position="0.65 1.5 -1.75"></a-entity>
+    <a-entity id="spec-blue-anchor" position="-0.65 1.6 1.75"></a-entity>
+    <a-entity id="bot-body" position="0.65 0 -1.75" rotation="0 180 0"
       mixamo-body="mode: bot; color: #E25A4A; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
     <a-entity id="spec-blue-body" visible="false"
       mixamo-body="mode: bot; color: #4A90E2; modelPath: assets/YBot.fbx; botEntitySelector: #spec-blue-anchor"></a-entity>

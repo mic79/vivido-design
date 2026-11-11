@@ -102,34 +102,39 @@
       this._sceneRoot.name = 'stacks-arena';
       scene.add(this._sceneRoot);
 
-      // Layout from BattleBlocks screenshot: cups on a DIAGONAL, facing each other.
-      // Blue = left-near floor square; red/orange = right-far. Avatar stands between.
-      // Scale: cup footprint ~0.72m; diagonal center distance ~2.0m.
+      // Layout from BattleBlocks screenshot:
+      // - POSITION is diagonal (blue left-near, red right-far)
+      // - ROTATION stays axis-aligned — cups face each other head-on along Z
+      //   (floor squares are not diamond-rotated).
       var CUP_Y = 0.92;
       var CUP_HALF = (6 * CELL) / 2; // 0.36
       var PAD_Y = 1.12;
-      var DIAG = 0.70; // |x|=|z| offset from origin → ~1.98m apart
-      var blueC = { x: -DIAG, z: DIAG };
-      var redC = { x: DIAG, z: -DIAG };
-      // THREE forward after yaw Y = (-sin y, -cos y); aim each cup at the other
-      var blueYaw = -Math.PI / 4;      // faces toward red (+X, -Z)
-      var redYaw = (3 * Math.PI) / 4;  // faces toward blue (-X, +Z)
+      var SHIFT_X = 0.65; // lateral stagger
+      var SHIFT_Z = 0.85; // depth separation
+      var blueC = { x: -SHIFT_X, z: SHIFT_Z };
+      var redC = { x: SHIFT_X, z: -SHIFT_Z };
+      // Head-on along Z: blue faces -Z (toward red), red faces +Z (toward blue)
+      var blueYaw = 0;
+      var redYaw = Math.PI;
 
       function cornerFromCenter(c) {
         return { x: c.x - CUP_HALF, y: CUP_Y, z: c.z - CUP_HALF };
       }
-      function basis(yaw) {
+      // Axis-aligned offsets: fwd = toward opponent along Z, right = +X in player view
+      function offsetBlue(alongFwd, alongRight) {
+        // blue faces -Z ⇒ forward is -Z, right is +X
         return {
-          fx: -Math.sin(yaw), fz: -Math.cos(yaw),
-          rx: Math.cos(yaw), rz: -Math.sin(yaw)
+          x: blueC.x + alongRight,
+          y: PAD_Y,
+          z: blueC.z - alongFwd
         };
       }
-      function offset(c, yaw, alongFwd, alongRight) {
-        var b = basis(yaw);
+      function offsetRed(alongFwd, alongRight) {
+        // red faces +Z ⇒ forward is +Z, right is -X (mirrored)
         return {
-          x: c.x + b.fx * alongFwd + b.rx * alongRight,
+          x: redC.x - alongRight,
           y: PAD_Y,
-          z: c.z + b.fz * alongFwd + b.rz * alongRight
+          z: redC.z + alongFwd
         };
       }
 
@@ -150,11 +155,11 @@
       if (blue.pivot) { blue.pivot.rotation.y = blueYaw; blue.yaw = blueYaw; }
       if (red.pivot) { red.pivot.rotation.y = redYaw; red.yaw = redYaw; }
 
-      // Spawn (right) + storage (left), slightly toward each player from cup
-      var bluePadPos = offset(blueC, blueYaw, -0.28, 0.55);
-      var bluePocketPos = offset(blueC, blueYaw, -0.28, -0.55);
-      var redPadPos = offset(redC, redYaw, -0.28, 0.55);
-      var redPocketPos = offset(redC, redYaw, -0.28, -0.55);
+      // Spawn (right) + storage (left), on the player's near side of each cup
+      var bluePadPos = offsetBlue(-0.45, 0.55);   // toward blue player (+Z), right
+      var bluePocketPos = offsetBlue(-0.45, -0.55);
+      var redPadPos = offsetRed(-0.45, 0.55);     // toward red player (-Z), their right
+      var redPocketPos = offsetRed(-0.45, -0.55);
 
       this._pad = new THREE.Group();
       this._pad.position.set(bluePadPos.x, bluePadPos.y, bluePadPos.z);
@@ -223,16 +228,12 @@
       this._botPocketMesh = null;
       this._botHoldMesh = null;
 
-      // Expose for HUD / player spawn alignment (floor Y = 0)
-      var playerPos = offset(blueC, blueYaw, -0.95, 0);
-      var oppPos = offset(redC, redYaw, -0.95, 0);
-      playerPos.y = 0;
-      oppPos.y = 0;
+      // Players stand behind their cup, looking head-on along Z
       this._layout = {
         blueC: blueC, redC: redC,
         blueYaw: blueYaw, redYaw: redYaw,
-        player: playerPos,
-        opponent: oppPos
+        player: { x: blueC.x, y: 0, z: blueC.z + 0.90 },
+        opponent: { x: redC.x, y: 0, z: redC.z - 0.90 }
       };
 
       var self = this;

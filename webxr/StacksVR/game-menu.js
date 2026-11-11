@@ -2,14 +2,14 @@
 (function () {
   'use strict';
 
-  // Diagonal BB layout: blue (-0.7,0.7), player behind facing red
-  var PLAY_POSITION = { x: -1.37, y: 0, z: 1.37, ry: -45 };
+  // Diagonal position stagger, head-on Z facing (not 45° cup yaw)
+  var PLAY_POSITION = { x: -0.65, y: 0, z: 1.75, ry: 0 };
 
   var SPECTATOR_POSITIONS = [
-    { x: -3.2, y: 0, z: 3.2, ry: -45 },
-    { x: 3.2, y: 0, z: 3.2, ry: 45 },
-    { x: -3.2, y: 0, z: -3.2, ry: -135 },
-    { x: 3.2, y: 0, z: -3.2, ry: 135 }
+    { x: -3.2, y: 0, z: 2.8, ry: -20 },
+    { x: 3.2, y: 0, z: 2.8, ry: 20 },
+    { x: -3.2, y: 0, z: -2.8, ry: -160 },
+    { x: 3.2, y: 0, z: -2.8, ry: 160 }
   ];
 
   AFRAME.registerComponent('vr-menu', {
