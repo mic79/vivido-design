@@ -188,14 +188,41 @@
     }).join(',');
   }
 
-  function ShapeBag() {
+  /** Deterministic PRNG (mulberry32). Same seed ⇒ same stream. */
+  function mulberry32(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /** Fresh per-match seed (unique across sessions). */
+  function newBagSeed() {
+    var t = Date.now() & 0xffffffff;
+    var r = (Math.random() * 0x100000000) >>> 0;
+    return (t ^ r ^ ((performance && performance.now)
+      ? (performance.now() * 1000) >>> 0
+      : 0)) >>> 0;
+  }
+
+  /**
+   * 7-bag randomizer. Pass the same seed to two bags for fair mirrored PvP —
+   * each side's Nth piece matches; refill streams stay aligned by piece index.
+   */
+  function ShapeBag(seed) {
     this._bag = [];
+    this.seed = seed == null ? null : (seed >>> 0);
+    this._rng = this.seed == null ? Math.random.bind(Math) : mulberry32(this.seed);
   }
 
   ShapeBag.prototype._refill = function () {
     var next = BAG_ORDER.slice();
+    var rand = this._rng;
     for (var i = next.length - 1; i > 0; i--) {
-      var j = Math.floor(Math.random() * (i + 1));
+      var j = Math.floor(rand() * (i + 1));
       var tmp = next[i]; next[i] = next[j]; next[j] = tmp;
     }
     this._bag = this._bag.concat(next);
@@ -299,6 +326,7 @@
     DEFS: DEFS,
     BAG_ORDER: BAG_ORDER,
     ShapeBag: ShapeBag,
+    newBagSeed: newBagSeed,
     createShapeMesh: createShapeMesh,
     shapeExtent: shapeExtent,
     extentOfCells: extentOfCells,

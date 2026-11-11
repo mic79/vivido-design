@@ -135,6 +135,11 @@
     Lobby.lobbyState.matchGameState = 'PLAYING';
     var startTime = Date.now();
     Lobby.lobbyState.matchStartTime = startTime;
+    // Unique per-match bag seed — both seats share the same piece sequence
+    var bagSeed = (global.StacksShapes && global.StacksShapes.newBagSeed)
+      ? global.StacksShapes.newBagSeed()
+      : ((Date.now() ^ (Math.random() * 0x100000000)) >>> 0);
+    Lobby.lobbyState.bagSeed = bagSeed;
     Lobby.isSpectator = !(mp.blue === Lobby.myPlayerId || mp.red === Lobby.myPlayerId);
     global.isSpectator = Lobby.isSpectator;
     global.lobbyState = Lobby.lobbyState;
@@ -150,12 +155,13 @@
           },
           startTime: startTime,
           isBotMatch: isBotMatch,
+          bagSeed: bagSeed,
           state: Lobby.lobbyState
         });
       }
     }
     broadcastLobbyState();
-    if (Lobby.onMatchStarted) Lobby.onMatchStarted(mp, startTime, isBotMatch);
+    if (Lobby.onMatchStarted) Lobby.onMatchStarted(mp, startTime, isBotMatch, bagSeed);
   }
 
   function endLobbyMatch() {
@@ -219,6 +225,7 @@
       matchPlayers: { blue: mp.blue, red: mp.red },
       startTime: Lobby.lobbyState.matchStartTime,
       isBotMatch: !!Lobby.isLobbyBotMatch || mp.red === '__BOT__',
+      bagSeed: Lobby.lobbyState.bagSeed,
       state: Lobby.lobbyState
     });
   }
@@ -390,6 +397,9 @@
       Lobby.lobbyState.matchState = 'PLAYING';
       Lobby.lobbyState.matchGameState = 'PLAYING';
       Lobby.lobbyState.matchStartTime = data.startTime || Date.now();
+      var bagSeed = data.bagSeed;
+      if (bagSeed == null && data.state && data.state.bagSeed != null) bagSeed = data.state.bagSeed;
+      if (bagSeed != null) Lobby.lobbyState.bagSeed = bagSeed >>> 0;
       global.lobbyState = Lobby.lobbyState;
       Lobby.isSpectator = !(Lobby.lobbyState.matchPlayers &&
         (Lobby.lobbyState.matchPlayers.blue === Lobby.myPlayerId ||
@@ -397,7 +407,12 @@
       global.isSpectator = Lobby.isSpectator;
       syncWindowState();
       if (Lobby.onMatchStarted) {
-        Lobby.onMatchStarted(Lobby.lobbyState.matchPlayers, data.startTime, data.isBotMatch);
+        Lobby.onMatchStarted(
+          Lobby.lobbyState.matchPlayers,
+          data.startTime,
+          data.isBotMatch,
+          Lobby.lobbyState.bagSeed
+        );
       }
       var scene2 = document.querySelector('a-scene');
       if (scene2) scene2.emit('lobby-state-updated');

@@ -6,7 +6,8 @@
     opts = opts || {};
     this.cup = opts.cup || null;
     this.side = opts.side || 'red';
-    this.bag = opts.bag || new global.StacksShapes.ShapeBag();
+    this._bagSeed = opts.bagSeed != null ? opts.bagSeed : null;
+    this.bag = opts.bag || new global.StacksShapes.ShapeBag(this._bagSeed);
     this.enabled = false;
     this.thinkIntervalMs = opts.thinkIntervalMs != null ? opts.thinkIntervalMs : 1200;
     // Long enough for move-above → orient → lower (3 readable phases)
@@ -34,8 +35,14 @@
     this.cup = cup;
   };
 
-  CupBot.prototype.reset = function () {
-    this.bag = new global.StacksShapes.ShapeBag();
+  CupBot.prototype.setBagSeed = function (seed) {
+    this._bagSeed = seed == null ? null : (seed >>> 0);
+    this.bag = new global.StacksShapes.ShapeBag(this._bagSeed);
+  };
+
+  CupBot.prototype.reset = function (seed) {
+    if (seed != null) this._bagSeed = seed >>> 0;
+    this.bag = new global.StacksShapes.ShapeBag(this._bagSeed);
     this.currentType = null;
     this.pocketType = null;
     this.pocketUsed = false;

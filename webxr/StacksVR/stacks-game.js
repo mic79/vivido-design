@@ -1511,7 +1511,28 @@
       return null;
     },
 
-    onMatchStarted: function (mp, startTime, isBotMatch) {
+    _resolveBagSeed: function (bagSeed) {
+      if (bagSeed != null) return bagSeed >>> 0;
+      if (global.lobbyState && global.lobbyState.bagSeed != null) {
+        return global.lobbyState.bagSeed >>> 0;
+      }
+      return global.StacksShapes.newBagSeed
+        ? global.StacksShapes.newBagSeed()
+        : ((Date.now() ^ (Math.random() * 0x100000000)) >>> 0);
+    },
+
+    /** Fair mirrored bags: same seed for local + both bots / both seats. */
+    _applyMirroredBags: function (bagSeed) {
+      var seed = this._resolveBagSeed(bagSeed);
+      this.bagSeed = seed;
+      if (global.lobbyState) global.lobbyState.bagSeed = seed;
+      this.bag = new global.StacksShapes.ShapeBag(seed);
+      if (this.bot) this.bot.reset(seed);
+      if (this.botBlue) this.botBlue.reset(seed);
+      return seed;
+    },
+
+    onMatchStarted: function (mp, startTime, isBotMatch, bagSeed) {
       this.matchActive = true;
       this.matchState = 'PLAYING';
       var spectating = !!(global.isMobileSpectator ||
@@ -1532,7 +1553,7 @@
       if (this.matchStats) this.matchStats.start(performance.now());
       this.playerScore = 0;
       this.botScore = 0;
-      this.bag = new global.StacksShapes.ShapeBag();
+      this._applyMirroredBags(bagSeed);
       this._cancelHold();
       this._pocketType = null;
       this._pocketUsed = false;
@@ -1545,7 +1566,7 @@
       this._dualBotPreview = false;
       if (this.botBlue) this.botBlue.enable(false);
       if (this.bot) {
-        this.bot.reset();
+        // reset() already applied seed in _applyMirroredBags
         this.bot.setCup(this.cups.red);
         // Only the host (or offline) runs the red bot AI; spectators receive poses
         var isBotSeat = !!isBotMatch || (mp && mp.red === '__BOT__');
@@ -1587,7 +1608,10 @@
         return;
       }
       global.isLobbyBotMatch = true;
-      this.onMatchStarted({ blue: 'local', red: '__BOT__' }, Date.now(), true);
+      var seed = global.StacksShapes.newBagSeed
+        ? global.StacksShapes.newBagSeed()
+        : ((Date.now() ^ (Math.random() * 0x100000000)) >>> 0);
+      this.onMatchStarted({ blue: 'local', red: '__BOT__' }, Date.now(), true, seed);
     },
 
     /**
@@ -1612,6 +1636,7 @@
       if (this.matchStats) this.matchStats.start(performance.now());
       this.playerScore = 0;
       this.botScore = 0;
+      var seed = this._applyMirroredBags(null);
       this._cancelHold();
       this._pocketType = null;
       this._pocketUsed = false;
@@ -1627,14 +1652,12 @@
       this._setBotStationVisible(true);
 
       if (this.bot) {
-        this.bot.reset();
         this.bot.setCup(this.cups.red);
         this.bot._lastThink = performance.now() - 400;
         this.bot.setTargetPpm(14);
         this.bot.enable(true);
       }
       if (this.botBlue) {
-        this.botBlue.reset();
         this.botBlue.setCup(this.cups.blue);
         this.botBlue._lastThink = performance.now();
         this.botBlue.setTargetPpm(13);
@@ -1645,7 +1668,7 @@
       this._hideBotBodies();
 
       this._updateHUD();
-      console.log('[StacksGame] offline preview: blue bot vs red bot');
+      console.log('[StacksGame] offline preview: blue bot vs red bot seed=' + seed);
     },
 
     _hideBotBodies: function () {
