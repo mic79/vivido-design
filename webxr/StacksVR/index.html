@@ -30,7 +30,7 @@
   <script src="game-menu.js?v=35"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=46"></script>
+  <script src="stacks-game.js?v=47"></script>
   <script src="mobile-spectator.js?v=35"></script>
 
   <style>
@@ -276,69 +276,67 @@
       text="value: ; align: center; width: 0.5; color: #ff8866"></a-entity>
 
     <!--
-      BattleBlocks match UI — fixed yaw facing +Z (readable from blue seat /
-      looking across arena). No lookAt billboard (that hid single-sided text).
+      BattleBlocks: TWO panels per player, different jobs / positions — not stacked.
+      - Card (name/Time/Attacks/Blocks): toward that seat, in front of the player
+      - Cup (Score/BPS/Attacks): beside the cup, same depth as the playfield
+      World pose is driven each frame from cup centers (see _placeMatchHud).
     -->
-    <!-- Blue floating card: outboard left of blue cup -->
-    <a-entity id="hud-card-blue" position="-1.55 1.58 1.55" rotation="0 0 0">
-      <a-text id="hud-name-blue" value="BLUE" align="center" width="1.2" color="#ffffff"
-        position="0 0.28 0"></a-text>
-      <a-text value="Time" align="center" width="0.6" color="#dddddd" position="0 0.18 0"></a-text>
-      <a-text id="hud-time-blue" value="0:00.00" align="center" width="1.1" color="#ffffff"
-        position="0 0.10 0"></a-text>
-      <a-text value="Attacks" align="center" width="0.6" color="#dddddd" position="-0.12 0.00 0"></a-text>
-      <a-text id="hud-atk-blue" value="0" align="center" width="0.9" color="#ffffff"
-        position="-0.12 -0.08 0"></a-text>
-      <a-text id="hud-atk-rate-blue" value="0.0/min" align="center" width="0.6" color="#cccccc"
-        position="0.20 -0.08 0"></a-text>
-      <a-text value="Blocks" align="center" width="0.6" color="#dddddd" position="-0.12 -0.18 0"></a-text>
-      <a-text id="hud-blk-blue" value="0" align="center" width="0.9" color="#ffffff"
-        position="-0.12 -0.26 0"></a-text>
-      <a-text id="hud-blk-rate-blue" value="0.0/min" align="center" width="0.6" color="#cccccc"
-        position="0.20 -0.26 0"></a-text>
+    <a-entity id="hud-card-blue" position="0 1.5 0" rotation="0 0 0">
+      <a-text id="hud-name-blue" value="BLUE" align="center" width="1.05" color="#ffffff"
+        position="0 0.26 0"></a-text>
+      <a-text value="Time" align="center" width="0.5" color="#dddddd" position="0 0.16 0"></a-text>
+      <a-text id="hud-time-blue" value="0:00.00" align="center" width="0.95" color="#ffffff"
+        position="0 0.08 0"></a-text>
+      <a-text value="Attacks" align="center" width="0.5" color="#dddddd" position="-0.12 -0.02 0"></a-text>
+      <a-text id="hud-atk-blue" value="0" align="center" width="0.8" color="#ffffff"
+        position="-0.12 -0.10 0"></a-text>
+      <a-text id="hud-atk-rate-blue" value="0.0/min" align="center" width="0.5" color="#cccccc"
+        position="0.18 -0.10 0"></a-text>
+      <a-text value="Blocks" align="center" width="0.5" color="#dddddd" position="-0.12 -0.20 0"></a-text>
+      <a-text id="hud-blk-blue" value="0" align="center" width="0.8" color="#ffffff"
+        position="-0.12 -0.28 0"></a-text>
+      <a-text id="hud-blk-rate-blue" value="0.0/min" align="center" width="0.5" color="#cccccc"
+        position="0.18 -0.28 0"></a-text>
     </a-entity>
-    <!-- Blue cup panel -->
-    <a-entity id="hud-cup-blue" position="-1.65 1.35 0.95" rotation="0 0 0">
-      <a-text value="Score" align="center" width="0.55" color="#dddddd" position="0 0.20 0"></a-text>
-      <a-text id="hud-score-blue" value="0" align="center" width="1.0" color="#ffffff"
-        position="0 0.12 0"></a-text>
-      <a-text value="BPS" align="center" width="0.55" color="#dddddd" position="0 0.02 0"></a-text>
-      <a-text id="hud-bps-blue" value="0.000" align="center" width="1.0" color="#ffffff"
-        position="0 -0.06 0"></a-text>
-      <a-text value="Attacks" align="center" width="0.55" color="#dddddd" position="0 -0.16 0"></a-text>
-      <a-text id="hud-cup-atk-blue" value="0" align="center" width="1.0" color="#ffffff"
-        position="0 -0.24 0"></a-text>
+    <a-entity id="hud-cup-blue" position="0 1.2 0" rotation="0 0 0">
+      <a-text value="Score" align="center" width="0.45" color="#dddddd" position="0 0.18 0"></a-text>
+      <a-text id="hud-score-blue" value="0" align="center" width="0.85" color="#ffffff"
+        position="0 0.10 0"></a-text>
+      <a-text value="BPS" align="center" width="0.45" color="#dddddd" position="0 0.00 0"></a-text>
+      <a-text id="hud-bps-blue" value="0.000" align="center" width="0.85" color="#ffffff"
+        position="0 -0.08 0"></a-text>
+      <a-text value="Attacks" align="center" width="0.45" color="#dddddd" position="0 -0.18 0"></a-text>
+      <a-text id="hud-cup-atk-blue" value="0" align="center" width="0.85" color="#ffffff"
+        position="0 -0.26 0"></a-text>
     </a-entity>
 
-    <!-- Red floating card -->
-    <a-entity id="hud-card-red" position="1.55 1.58 -1.55" rotation="0 0 0">
-      <a-text id="hud-name-red" value="RED" align="center" width="1.2" color="#ffffff"
-        position="0 0.28 0"></a-text>
-      <a-text value="Time" align="center" width="0.6" color="#dddddd" position="0 0.18 0"></a-text>
-      <a-text id="hud-time-red" value="0:00.00" align="center" width="1.1" color="#ffffff"
-        position="0 0.10 0"></a-text>
-      <a-text value="Attacks" align="center" width="0.6" color="#dddddd" position="-0.12 0.00 0"></a-text>
-      <a-text id="hud-atk-red" value="0" align="center" width="0.9" color="#ffffff"
-        position="-0.12 -0.08 0"></a-text>
-      <a-text id="hud-atk-rate-red" value="0.0/min" align="center" width="0.6" color="#cccccc"
-        position="0.20 -0.08 0"></a-text>
-      <a-text value="Blocks" align="center" width="0.6" color="#dddddd" position="-0.12 -0.18 0"></a-text>
-      <a-text id="hud-blk-red" value="0" align="center" width="0.9" color="#ffffff"
-        position="-0.12 -0.26 0"></a-text>
-      <a-text id="hud-blk-rate-red" value="0.0/min" align="center" width="0.6" color="#cccccc"
-        position="0.20 -0.26 0"></a-text>
+    <a-entity id="hud-card-red" position="0 1.5 0" rotation="0 0 0">
+      <a-text id="hud-name-red" value="RED" align="center" width="1.05" color="#ffffff"
+        position="0 0.26 0"></a-text>
+      <a-text value="Time" align="center" width="0.5" color="#dddddd" position="0 0.16 0"></a-text>
+      <a-text id="hud-time-red" value="0:00.00" align="center" width="0.95" color="#ffffff"
+        position="0 0.08 0"></a-text>
+      <a-text value="Attacks" align="center" width="0.5" color="#dddddd" position="-0.12 -0.02 0"></a-text>
+      <a-text id="hud-atk-red" value="0" align="center" width="0.8" color="#ffffff"
+        position="-0.12 -0.10 0"></a-text>
+      <a-text id="hud-atk-rate-red" value="0.0/min" align="center" width="0.5" color="#cccccc"
+        position="0.18 -0.10 0"></a-text>
+      <a-text value="Blocks" align="center" width="0.5" color="#dddddd" position="-0.12 -0.20 0"></a-text>
+      <a-text id="hud-blk-red" value="0" align="center" width="0.8" color="#ffffff"
+        position="-0.12 -0.28 0"></a-text>
+      <a-text id="hud-blk-rate-red" value="0.0/min" align="center" width="0.5" color="#cccccc"
+        position="0.18 -0.28 0"></a-text>
     </a-entity>
-    <!-- Red cup panel -->
-    <a-entity id="hud-cup-red" position="1.65 1.35 -0.95" rotation="0 0 0">
-      <a-text value="Score" align="center" width="0.55" color="#dddddd" position="0 0.20 0"></a-text>
-      <a-text id="hud-score-red" value="0" align="center" width="1.0" color="#ffffff"
-        position="0 0.12 0"></a-text>
-      <a-text value="BPS" align="center" width="0.55" color="#dddddd" position="0 0.02 0"></a-text>
-      <a-text id="hud-bps-red" value="0.000" align="center" width="1.0" color="#ffffff"
-        position="0 -0.06 0"></a-text>
-      <a-text value="Attacks" align="center" width="0.55" color="#dddddd" position="0 -0.16 0"></a-text>
-      <a-text id="hud-cup-atk-red" value="0" align="center" width="1.0" color="#ffffff"
-        position="0 -0.24 0"></a-text>
+    <a-entity id="hud-cup-red" position="0 1.2 0" rotation="0 0 0">
+      <a-text value="Score" align="center" width="0.45" color="#dddddd" position="0 0.18 0"></a-text>
+      <a-text id="hud-score-red" value="0" align="center" width="0.85" color="#ffffff"
+        position="0 0.10 0"></a-text>
+      <a-text value="BPS" align="center" width="0.45" color="#dddddd" position="0 0.00 0"></a-text>
+      <a-text id="hud-bps-red" value="0.000" align="center" width="0.85" color="#ffffff"
+        position="0 -0.08 0"></a-text>
+      <a-text value="Attacks" align="center" width="0.45" color="#dddddd" position="0 -0.18 0"></a-text>
+      <a-text id="hud-cup-atk-red" value="0" align="center" width="0.85" color="#ffffff"
+        position="0 -0.26 0"></a-text>
     </a-entity>
 
     <!-- Hidden mirrors for automated tests -->

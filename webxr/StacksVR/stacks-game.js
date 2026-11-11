@@ -1935,10 +1935,10 @@
     },
 
     /**
-     * Match HUD faces +Z (readable from blue seat looking -Z at the arena).
-     * Do NOT billboard/lookAt — that fought A-Frame rotation attrs and flipped
-     * single-sided a-text away from the camera (invisible). Also disable fog on
-     * text materials so FogExp2 cannot erase white glyphs.
+     * BattleBlocks has two panels per player (card + cup), but they must not
+     * stack in the same sightline. Anchor each to its cup: card toward that
+     * seat (in front of the player), cup panel beside the playfield.
+     * Face the seated player so glyphs aren't behind them.
      */
     _prepareMatchHud: function () {
       var ids = ['hud-card-blue', 'hud-cup-blue', 'hud-card-red', 'hud-cup-red'];
@@ -1947,11 +1947,7 @@
         var root = document.getElementById(ids[i]);
         if (!root) continue;
         root.setAttribute('visible', true);
-        root.setAttribute('rotation', '0 0 0');
-        if (root.object3D) {
-          root.object3D.visible = true;
-          root.object3D.rotation.set(0, 0, 0);
-        }
+        if (root.object3D) root.object3D.visible = true;
         root.querySelectorAll('a-text').forEach(function (t) {
           t.setAttribute('visible', true);
           if (t.object3D) {
@@ -1969,8 +1965,47 @@
           }
         });
       }
-      // a-text meshes spawn a frame late — keep retrying briefly
       if (fogged > 0) this._hudPrepared = true;
+    },
+
+    _placeMatchHud: function () {
+      if (!this.cups) return;
+      this._placeSideHud('blue', 'hud-card-blue', 'hud-cup-blue');
+      this._placeSideHud('red', 'hud-card-red', 'hud-cup-red');
+    },
+
+    _placeSideHud: function (side, cardId, cupPanelId) {
+      var cup = this.cups[side];
+      if (!cup || !cup.getWorldCenter) return;
+      var card = document.getElementById(cardId);
+      var panel = document.getElementById(cupPanelId);
+      if (!card || !card.object3D || !panel || !panel.object3D) return;
+
+      if (!this._hudPlaceTmp) this._hudPlaceTmp = new THREE.Vector3();
+      var c = this._hudPlaceTmp;
+      cup.getWorldCenter(c);
+
+      // Blue seat is +Z of cup; red seat is -Z. Outboard is -X / +X.
+      var towardSeat = side === 'blue' ? 1 : -1;
+      var outboard = side === 'blue' ? -1 : 1;
+      // Face the seated player (a-text +Z toward them)
+      var yaw = side === 'blue' ? 0 : Math.PI;
+
+      // Card: between cup and seat, outboard — in front of the player looking in
+      var cx = c.x + outboard * 0.72;
+      var cy = c.y + 0.58;
+      var cz = c.z + towardSeat * 0.55;
+      card.setAttribute('position', cx.toFixed(3) + ' ' + cy.toFixed(3) + ' ' + cz.toFixed(3));
+      card.setAttribute('rotation', '0 ' + (yaw * 180 / Math.PI) + ' 0');
+      card.setAttribute('visible', true);
+
+      // Cup panel: beside cup at playfield depth — NOT stacked behind the card
+      var px = c.x + outboard * 0.78;
+      var py = c.y + 0.22;
+      var pz = c.z + towardSeat * 0.02;
+      panel.setAttribute('position', px.toFixed(3) + ' ' + py.toFixed(3) + ' ' + pz.toFixed(3));
+      panel.setAttribute('rotation', '0 ' + (yaw * 180 / Math.PI) + ' 0');
+      panel.setAttribute('visible', true);
     },
 
     /** Bot pace tracks player (or rival bot) PPM with built-in wander. */
@@ -2177,6 +2212,7 @@
       if (!this._sceneRoot) return;
       if (this._poseDesktop) this._poseDesktop();
       this._prepareMatchHud();
+      this._placeMatchHud();
 
       this._updateCupGrab();
 
