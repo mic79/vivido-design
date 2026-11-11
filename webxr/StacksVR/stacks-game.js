@@ -1822,7 +1822,8 @@
 
       var sceneEl = this.el.sceneEl;
       if (sceneEl && sceneEl.object3D) {
-        sceneEl.object3D.fog = new THREE.FogExp2(0x09060c, 0.045);
+        // Mild fog only — dense FogExp2 was washing a-text to invisible
+        sceneEl.object3D.fog = new THREE.FogExp2(0x09060c, 0.012);
         sceneEl.setAttribute('background', 'color', '#06040a');
       }
 
@@ -1933,29 +1934,43 @@
       root.add(redLamp);
     },
 
-    /** Keep match HUD front-facing (no mirrored back faces like side:double). */
-    _faceMatchHudToCamera: function () {
-      var cam = document.getElementById('camera');
-      if (!cam || !cam.object3D) return;
-      if (!this._hudBillboard) {
-        this._hudBillboard = {
-          cam: new THREE.Vector3(),
-          pos: new THREE.Vector3(),
-          ids: ['hud-card-blue', 'hud-cup-blue', 'hud-card-red', 'hud-cup-red']
-        };
+    /**
+     * Match HUD faces +Z (readable from blue seat looking -Z at the arena).
+     * Do NOT billboard/lookAt — that fought A-Frame rotation attrs and flipped
+     * single-sided a-text away from the camera (invisible). Also disable fog on
+     * text materials so FogExp2 cannot erase white glyphs.
+     */
+    _prepareMatchHud: function () {
+      var ids = ['hud-card-blue', 'hud-cup-blue', 'hud-card-red', 'hud-cup-red'];
+      var fogged = 0;
+      for (var i = 0; i < ids.length; i++) {
+        var root = document.getElementById(ids[i]);
+        if (!root) continue;
+        root.setAttribute('visible', true);
+        root.setAttribute('rotation', '0 0 0');
+        if (root.object3D) {
+          root.object3D.visible = true;
+          root.object3D.rotation.set(0, 0, 0);
+        }
+        root.querySelectorAll('a-text').forEach(function (t) {
+          t.setAttribute('visible', true);
+          if (t.object3D) {
+            t.object3D.visible = true;
+            t.object3D.traverse(function (obj) {
+              var mats = obj.material
+                ? (Array.isArray(obj.material) ? obj.material : [obj.material])
+                : [];
+              for (var mi = 0; mi < mats.length; mi++) {
+                if (!mats[mi]) continue;
+                mats[mi].fog = false;
+                fogged++;
+              }
+            });
+          }
+        });
       }
-      var b = this._hudBillboard;
-      cam.object3D.getWorldPosition(b.cam);
-      for (var i = 0; i < b.ids.length; i++) {
-        var el = document.getElementById(b.ids[i]);
-        if (!el || !el.object3D) continue;
-        el.object3D.getWorldPosition(b.pos);
-        // Yaw-only billboard so panels stay upright
-        b.cam.y = b.pos.y;
-        el.object3D.lookAt(b.cam);
-        // lookAt aims -Z; a-text faces +Z
-        el.object3D.rotateY(Math.PI);
-      }
+      // a-text meshes spawn a frame late — keep retrying briefly
+      if (fogged > 0) this._hudPrepared = true;
     },
 
     /** Bot pace tracks player (or rival bot) PPM with built-in wander. */
@@ -2161,7 +2176,7 @@
     tick: function () {
       if (!this._sceneRoot) return;
       if (this._poseDesktop) this._poseDesktop();
-      this._faceMatchHudToCamera();
+      this._prepareMatchHud();
 
       this._updateCupGrab();
 
