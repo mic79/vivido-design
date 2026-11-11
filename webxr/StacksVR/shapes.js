@@ -4,16 +4,19 @@
 
   var CELL = 0.12;
   var HALF_PI = Math.PI / 2;
+  // BattleBlocks look: all pieces one dark solid — not tetromino rainbow
+  var BLOCK_COLOR = '#1c1e24';
+  var GARBAGE_COLOR = '#3a3d46';
 
   // Relative cell offsets for each shape (y-up). Default pose is flat on XZ.
   var DEFS = {
-    I: { color: '#4FC3F7', cells: [[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]] },
-    O: { color: '#FFD54F', cells: [[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]] },
-    T: { color: '#BA68C8', cells: [[0, 0, 0], [1, 0, 0], [2, 0, 0], [1, 0, 1]] },
-    L: { color: '#FF8A65', cells: [[0, 0, 0], [0, 0, 1], [0, 0, 2], [1, 0, 2]] },
-    J: { color: '#7986CB', cells: [[1, 0, 0], [1, 0, 1], [1, 0, 2], [0, 0, 2]] },
-    S: { color: '#81C784', cells: [[1, 0, 0], [2, 0, 0], [0, 0, 1], [1, 0, 1]] },
-    Z: { color: '#E57373', cells: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [2, 0, 1]] }
+    I: { color: BLOCK_COLOR, cells: [[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]] },
+    O: { color: BLOCK_COLOR, cells: [[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]] },
+    T: { color: BLOCK_COLOR, cells: [[0, 0, 0], [1, 0, 0], [2, 0, 0], [1, 0, 1]] },
+    L: { color: BLOCK_COLOR, cells: [[0, 0, 0], [0, 0, 1], [0, 0, 2], [1, 0, 2]] },
+    J: { color: BLOCK_COLOR, cells: [[1, 0, 0], [1, 0, 1], [1, 0, 2], [0, 0, 2]] },
+    S: { color: BLOCK_COLOR, cells: [[1, 0, 0], [2, 0, 0], [0, 0, 1], [1, 0, 1]] },
+    Z: { color: BLOCK_COLOR, cells: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [2, 0, 1]] }
   };
 
   var BAG_ORDER = ['I', 'O', 'T', 'L', 'J', 'S', 'Z'];
@@ -305,7 +308,7 @@
     group.userData.placed = false;
     group.userData.isGhost = !!opts.ghost;
 
-    var color = opts.garbage ? '#9E9E9E' : (opts.color || def.color);
+    var color = opts.garbage ? GARBAGE_COLOR : BLOCK_COLOR;
     var geo = roundedBlockGeo() || new THREE.BoxGeometry(CELL * 0.92, CELL * 0.92, CELL * 0.92);
     var mat;
     if (opts.ghost) {
@@ -320,8 +323,8 @@
     } else {
       mat = new THREE.MeshStandardMaterial({
         color: color,
-        roughness: 0.42,
-        metalness: 0.12
+        roughness: 0.48,
+        metalness: 0.18
       });
     }
 
@@ -363,6 +366,8 @@
 
   global.StacksShapes = {
     CELL: CELL,
+    BLOCK_COLOR: BLOCK_COLOR,
+    GARBAGE_COLOR: GARBAGE_COLOR,
     DEFS: DEFS,
     BAG_ORDER: BAG_ORDER,
     ShapeBag: ShapeBag,

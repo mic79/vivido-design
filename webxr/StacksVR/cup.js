@@ -292,9 +292,9 @@
       ? StacksShapes.roundedBlockGeo()
       : new THREE.BoxGeometry(this.cellSize * 0.92, this.cellSize * 0.92, this.cellSize * 0.92);
     var mat = new THREE.MeshStandardMaterial({
-      color: color,
-      roughness: 0.42,
-      metalness: 0.12
+      color: color || (global.StacksShapes && StacksShapes.BLOCK_COLOR) || '#1c1e24',
+      roughness: 0.48,
+      metalness: 0.18
     });
     var mesh = new THREE.Mesh(geo, mat);
     mesh.castShadow = true;
@@ -304,7 +304,9 @@
 
   Cup.prototype.placeCells = function (cells, meta) {
     meta = meta || {};
-    var color = meta.color || (meta.garbage ? '#9E9E9E' : '#EEEEEE');
+    var color = meta.garbage
+      ? ((global.StacksShapes && StacksShapes.GARBAGE_COLOR) || '#3a3d46')
+      : ((global.StacksShapes && StacksShapes.BLOCK_COLOR) || '#1c1e24');
     var placed = [];
     for (var i = 0; i < cells.length; i++) {
       var cx = cells[i][0], cy = cells[i][1], cz = cells[i][2];
@@ -536,10 +538,11 @@
             this.grid[0][z2][x2] = null;
             continue;
           }
-          var mesh = this._makeBlockMesh('#9E9E9E');
+          var gCol = (global.StacksShapes && StacksShapes.GARBAGE_COLOR) || '#3a3d46';
+          var mesh = this._makeBlockMesh(gCol);
           mesh.position.copy(this.cellCenterLocal(x2, 0, z2));
           this.blocksRoot.add(mesh);
-          this.grid[0][z2][x2] = { color: '#9E9E9E', owner: 'garbage', garbage: true, mesh: mesh };
+          this.grid[0][z2][x2] = { color: gCol, owner: 'garbage', garbage: true, mesh: mesh };
         }
       }
       results.push(true);
