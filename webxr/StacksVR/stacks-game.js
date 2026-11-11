@@ -2471,47 +2471,8 @@
       underGlow.position.y = 0.012;
       root.add(underGlow);
 
-      function stationPlate(cx, cz, color) {
-        var g = new THREE.Group();
-        g.position.set(cx, 0.015, cz);
-        var plateMat = new THREE.MeshStandardMaterial({
-          color: 0x080a12,
-          roughness: 0.22,
-          metalness: 0.85,
-          envMapIntensity: 1.4,
-          transparent: true,
-          opacity: 0.92
-        });
-        if (envMap) plateMat.envMap = envMap;
-        var plate = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 1.15), plateMat);
-        plate.rotation.x = -Math.PI / 2;
-        plate.receiveShadow = true;
-        g.add(plate);
-        var edge = new THREE.Mesh(
-          new THREE.RingGeometry(0.72, 0.76, 4),
-          new THREE.MeshBasicMaterial({
-            color: color, transparent: true, opacity: 0.95,
-            side: THREE.DoubleSide, toneMapped: false
-          })
-        );
-        edge.rotation.x = -Math.PI / 2;
-        edge.rotation.z = Math.PI / 4;
-        g.add(edge);
-        var edge2 = new THREE.Mesh(
-          new THREE.RingGeometry(0.58, 0.61, 4),
-          new THREE.MeshBasicMaterial({
-            color: color, transparent: true, opacity: 0.4,
-            side: THREE.DoubleSide, toneMapped: false
-          })
-        );
-        edge2.rotation.x = -Math.PI / 2;
-        edge2.rotation.z = Math.PI / 4;
-        g.add(edge2);
-        root.add(g);
-        return g;
-      }
-      stationPlate(blueC.x, blueC.z, 0x33bbff);
-      stationPlate(redC.x, redC.z, 0xff6a3d);
+      // Station floor plates (black squares + neon diamond rings) removed —
+      // they z-fought / flickered against the arena ground.
 
       // Distant horizon band
       var horizon = new THREE.Mesh(
