@@ -156,14 +156,13 @@
       if (blue.pivot) { blue.pivot.rotation.y = blueYaw; blue.yaw = blueYaw; }
       if (red.pivot) { red.pivot.rotation.y = redYaw; red.yaw = redYaw; }
 
-      // BattleBlocks: NEXT on playfield-right; pad+pocket far enough apart that
-      // full tetromino footprints never collide (I-piece ~0.44m at scale 1).
-      var blueNextPos = offsetBlue(-0.38, 0.90);
-      var bluePadPos = offsetBlue(-0.58, 0.48);
-      var bluePocketPos = offsetBlue(-0.58, 1.28);
-      var redNextPos = offsetRed(-0.38, 0.90);
-      var redPadPos = offsetRed(-0.58, 0.48);
-      var redPocketPos = offsetRed(-0.58, 1.28);
+      // BattleBlocks station: compact NEXT + pad/pocket under it
+      var blueNextPos = offsetBlue(-0.40, 0.85);
+      var bluePadPos = offsetBlue(-0.60, 0.55);
+      var bluePocketPos = offsetBlue(-0.60, 1.15);
+      var redNextPos = offsetRed(-0.40, 0.85);
+      var redPadPos = offsetRed(-0.60, 0.55);
+      var redPocketPos = offsetRed(-0.60, 1.15);
 
       // Floor diamond outline (no fill) — BattleBlocks station marks
       function neonDiamond(half, color) {
@@ -183,8 +182,8 @@
         var root = new THREE.Group();
         root.position.set(pos.x, pos.y, pos.z);
         root.rotation.y = yaw;
-        // Tall neon frame (slightly wider at bottom like BB)
-        var fwTop = 0.26, fwBot = 0.34, fh = 1.28, r = 0.05, tube = 0.009;
+        // Snug trapezoid around 3 pieces (not an empty tower)
+        var fwTop = 0.22, fwBot = 0.28, fh = 0.72, r = 0.04, tube = 0.008;
         var path = new THREE.CurvePath();
         function L(a, b) { path.add(new THREE.LineCurve3(a, b)); }
         function C(a, ctrl, b) { path.add(new THREE.QuadraticBezierCurve3(a, ctrl, b)); }
@@ -202,45 +201,46 @@
           new THREE.TubeGeometry(path, 80, tube, 5, true),
           new THREE.MeshBasicMaterial({ color: color, toneMapped: false })
         );
-        frame.position.y = 0.78;
+        frame.position.y = 0.50;
         root.add(frame);
-        // "NEXT" label
+        // "NEXT" label — just above frame
         var canvas = document.createElement('canvas');
         canvas.width = 256; canvas.height = 64;
         var ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, 256, 64);
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'italic 600 40px Arial, sans-serif';
+        ctx.font = 'italic 700 44px Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('NEXT', 128, 32);
         var label = new THREE.Mesh(
-          new THREE.PlaneGeometry(0.20, 0.05),
+          new THREE.PlaneGeometry(0.18, 0.045),
           new THREE.MeshBasicMaterial({
             map: new THREE.CanvasTexture(canvas),
-            transparent: true, depthWrite: false, toneMapped: false
+            transparent: true, depthWrite: false, toneMapped: false, depthTest: false
           })
         );
-        label.position.set(0, 1.40, 0.02);
+        label.position.set(0, 0.90, 0.02);
+        label.renderOrder = 21;
         root.add(label);
         var slots = new THREE.Group();
         slots.name = 'nextSlots';
-        slots.position.set(0, 0.20, 0);
+        slots.position.set(0, 0.22, 0);
         root.add(slots);
         this._sceneRoot.add(root);
-        return { root: root, slots: slots };
+        return { root: root, slots: slots, frameH: fh, frameY: 0.50 };
       }
 
       this._pad = new THREE.Group();
       this._pad.position.set(bluePadPos.x, bluePadPos.y, bluePadPos.z);
       this._sceneRoot.add(this._pad);
-      this._padMesh = neonDiamond(0.18, 0x33bbff);
+      this._padMesh = neonDiamond(0.15, 0x33bbff);
       this._pad.add(this._padMesh);
 
       this._pocket = new THREE.Group();
       this._pocket.position.set(bluePocketPos.x, bluePocketPos.y, bluePocketPos.z);
       this._sceneRoot.add(this._pocket);
-      this._pocket.add(neonDiamond(0.18, 0x33bbff));
+      this._pocket.add(neonDiamond(0.15, 0x33bbff));
       this._pocketType = null;
       this._pocketUsed = false;
 
@@ -250,13 +250,13 @@
       this._botPad = new THREE.Group();
       this._botPad.position.set(redPadPos.x, redPadPos.y, redPadPos.z);
       this._sceneRoot.add(this._botPad);
-      this._botPad.add(neonDiamond(0.18, 0xff6a3d));
+      this._botPad.add(neonDiamond(0.15, 0xff6a3d));
       this._botPadPiece = null;
 
       this._botPocket = new THREE.Group();
       this._botPocket.position.set(redPocketPos.x, redPocketPos.y, redPocketPos.z);
       this._sceneRoot.add(this._botPocket);
-      this._botPocket.add(neonDiamond(0.18, 0xff6a3d));
+      this._botPocket.add(neonDiamond(0.15, 0xff6a3d));
       this._botPocketMesh = null;
       this._botHoldMesh = null;
 
@@ -1112,15 +1112,15 @@
       this._updateHUD();
     },
 
-    // Vertical stack inside NEXT — only 3 upcoming pieces visible
+    // Vertical stack inside NEXT — 3 pieces, sized to fill the snug frame
     _nextQueueCount: 3,
-    _nextSlotY: function (i) { return 0.04 + i * 0.28; },
-    _nextSlotScale: function (i) { return Math.max(0.11, 0.22 - i * 0.04); },
+    _nextSlotY: function (i) { return 0.05 + i * 0.20; },
+    _nextSlotScale: function (i) { return Math.max(0.20, 0.36 - i * 0.06); },
 
     /** Scale pad/pocket pieces so longest tetromino fits inside its diamond. */
     _fitStationPiece: function (mesh, maxSpan) {
       if (!mesh) return;
-      maxSpan = maxSpan || 0.30;
+      maxSpan = maxSpan || 0.26;
       var type = mesh.userData && mesh.userData.shapeType;
       var span = CELL * 3;
       if (type && global.StacksShapes && StacksShapes.shapeExtent) {
@@ -1967,7 +1967,7 @@
       }
     },
 
-    /** BattleBlocks station card: canvas parented to NEXT — clear of the frame. */
+    /** BattleBlocks station card — compact, right of NEXT, aligned columns. */
     _ensureStationCard: function (side) {
       if (!this._stationCards) this._stationCards = {};
       if (this._stationCards[side]) return this._stationCards[side];
@@ -1975,8 +1975,8 @@
       if (!nextCol || !nextCol.root) return null;
 
       var canvas = document.createElement('canvas');
-      canvas.width = 512;
-      canvas.height = 720;
+      canvas.width = 480;
+      canvas.height = 560;
       var tex = new THREE.CanvasTexture(canvas);
       tex.minFilter = THREE.LinearFilter;
       tex.magFilter = THREE.LinearFilter;
@@ -1988,13 +1988,12 @@
         toneMapped: false,
         side: THREE.DoubleSide
       });
-      // Left-aligned plane: origin at left-center so we park the left edge past NEXT
-      var mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.72), mat);
-      mesh.geometry.translate(0.275, 0, 0);
+      // Left-origin plane: left edge clears NEXT frame (~0.14 half-width)
+      var mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.40, 0.47), mat);
+      mesh.geometry.translate(0.20, 0, 0);
       mesh.frustumCulled = false;
       mesh.renderOrder = 20;
-      // Local +X = to the right of NEXT for both sides (red root is yaw-flipped)
-      mesh.position.set(0.22, 0.55, 0.06);
+      mesh.position.set(0.18, 0.48, 0.05);
       nextCol.root.add(mesh);
       var card = { mesh: mesh, canvas: canvas, tex: tex, mat: mat, side: side };
       this._stationCards[side] = card;
@@ -2010,32 +2009,29 @@
       var H = card.canvas.height;
       ctx.clearRect(0, 0, W, H);
       ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
+      ctx.textBaseline = 'alphabetic';
       ctx.fillStyle = '#ffffff';
 
-      var y = 12;
-      var left = 16;
-      function label(t) {
-        ctx.font = 'italic 600 52px Arial, Helvetica, sans-serif';
-        ctx.fillText(t, left, y);
-        y += 62;
-      }
-      function row(main, rate) {
-        ctx.font = 'italic 700 96px Arial, Helvetica, sans-serif';
+      var left = 8;
+      var rateX = 300;
+      var y = 48;
+
+      function block(label, main, rate) {
+        ctx.font = 'italic 600 40px Arial, Helvetica, sans-serif';
+        ctx.fillText(label, left, y);
+        y += 58;
+        ctx.font = 'italic 700 78px Arial, Helvetica, sans-serif';
         ctx.fillText(String(main), left, y);
         if (rate != null && rate !== '') {
-          ctx.font = 'italic 600 58px Arial, Helvetica, sans-serif';
-          ctx.fillText(String(rate), left + 240, y + 24);
+          ctx.font = 'italic 600 48px Arial, Helvetica, sans-serif';
+          ctx.fillText(String(rate), rateX, y);
         }
-        y += 122;
+        y += 88;
       }
 
-      label('Blocks');
-      row(f.blocks, f.blockRate);
-      label('Attacks');
-      row(f.attacks, f.attackRate);
-      label('Time');
-      row(f.time, null);
+      block('Blocks', f.blocks, f.blockRate);
+      block('Attacks', f.attacks, f.attackRate);
+      block('Time', f.time, null);
 
       card.tex.needsUpdate = true;
       card.mesh.visible = true;
@@ -2263,8 +2259,8 @@
     _placeStationCard: function (side) {
       var card = this._ensureStationCard(side);
       if (!card || !card.mesh) return;
-      // Locked to NEXT root: left edge just past the neon frame (never clipped)
-      card.mesh.position.set(0.24, 0.58, 0.08);
+      // Mid-height of snug NEXT frame, left edge clear of neon
+      card.mesh.position.set(0.18, 0.48, 0.05);
       card.mesh.rotation.set(0, 0, 0);
       card.mesh.visible = true;
     },
