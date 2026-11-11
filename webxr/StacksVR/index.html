@@ -23,14 +23,14 @@
   <script src="clear.js?v=19"></script>
   <script src="attack.js?v=19"></script>
   <script src="cup-bot.js?v=23"></script>
-  <script src="stats.js?v=3"></script>
+  <script src="stats.js?v=4"></script>
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=32"></script>
   <script src="match-replay.js?v=19"></script>
   <script src="game-menu.js?v=35"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=41"></script>
+  <script src="stacks-game.js?v=42"></script>
   <script src="mobile-spectator.js?v=35"></script>
 
   <style>
@@ -257,26 +257,94 @@
     <a-plane position="0 0 0" rotation="-90 0 0" width="12" height="12"
       material="color: #151a22; roughness: 0.92"></a-plane>
 
-    <!-- DodgeVR-style overhead scoreboard -->
-    <a-entity id="version-display" position="0 2.55 0"
-      text="value: StacksVR; align: center; width: 1.4; color: #ffffff"></a-entity>
-    <a-entity id="score-display" position="0 2.3 0">
-      <a-entity id="blue-score" position="-0.28 0 0"
-        text="value: 0; align: center; width: 3.2; color: #0099ff"></a-entity>
+    <!-- Subtle center scoreboard (DodgeVR) — match detail is BB world UI below -->
+    <a-entity id="version-display" position="0 2.45 0"
+      text="value: StacksVR; align: center; width: 1.1; color: #8899aa"></a-entity>
+    <a-entity id="score-display" position="0 2.25 0">
+      <a-entity id="blue-score" position="-0.22 0 0"
+        text="value: 0; align: center; width: 2.2; color: #0099ff"></a-entity>
       <a-entity position="0 0 0"
-        text="value: -; align: center; width: 3.2; color: #ffffff"></a-entity>
-      <a-entity id="red-score" position="0.28 0 0"
-        text="value: 0; align: center; width: 3.2; color: #ff4444"></a-entity>
+        text="value: -; align: center; width: 2.2; color: #ffffff"></a-entity>
+      <a-entity id="red-score" position="0.22 0 0"
+        text="value: 0; align: center; width: 2.2; color: #ff4444"></a-entity>
     </a-entity>
-    <a-entity id="timer-display" position="0 2.05 0"
-      text="value: Time: 0:00; align: center; width: 1.6; color: #ffff00"></a-entity>
-    <a-entity id="control-hint" position="0 1.85 0"
-      text="value: ; align: center; width: 1.4; color: #aaaaaa"></a-entity>
-    <a-entity id="damage-blue" position="-0.65 1.88 1.35" visible="false"
-      text="value: ; align: center; width: 0.55; color: #ff8866"></a-entity>
-    <a-entity id="damage-red" position="0.65 1.88 -1.35" rotation="0 180 0" visible="false"
-      text="value: ; align: center; width: 0.55; color: #ff8866"></a-entity>
-    <!-- Keep ids for tests; hidden — live stats live on wrist panel -->
+    <a-entity id="timer-display" visible="false"></a-entity>
+    <a-entity id="control-hint" position="0 2.05 0"
+      text="value: ; align: center; width: 1.2; color: #889999"></a-entity>
+    <a-entity id="damage-blue" position="-0.65 1.92 1.25" visible="false"
+      text="value: ; align: center; width: 0.5; color: #ff8866"></a-entity>
+    <a-entity id="damage-red" position="0.65 1.92 -1.25" rotation="0 180 0" visible="false"
+      text="value: ; align: center; width: 0.5; color: #ff8866"></a-entity>
+
+    <!--
+      BattleBlocks screenshot match UI (white diegetic text, no panels):
+      - Floating card near each station: Name + Time / Attacks(+rate) / Blocks(+rate)
+      - Cup panel beside each cup: Score / BPS / Attacks
+      Blue station (-0.65, 0.85), Red station (0.65, -0.85), head-on along Z.
+    -->
+    <!-- Blue floating card: outboard left of blue station, faces blue player (+Z) -->
+    <a-entity id="hud-card-blue" position="-1.72 1.58 1.45" rotation="0 12 0">
+      <a-text id="hud-name-blue" value="BLUE" align="center" width="1.15" color="#ffffff"
+        position="0 0.28 0"></a-text>
+      <a-text value="Time" align="center" width="0.55" color="#c8c8c8" position="0 0.18 0"></a-text>
+      <a-text id="hud-time-blue" value="0:00.00" align="center" width="1.05" color="#ffffff"
+        position="0 0.10 0"></a-text>
+      <a-text value="Attacks" align="center" width="0.55" color="#c8c8c8" position="-0.12 0.00 0"></a-text>
+      <a-text id="hud-atk-blue" value="0" align="center" width="0.85" color="#ffffff"
+        position="-0.12 -0.08 0"></a-text>
+      <a-text id="hud-atk-rate-blue" value="0.0/min" align="center" width="0.55" color="#bbbbbb"
+        position="0.20 -0.08 0"></a-text>
+      <a-text value="Blocks" align="center" width="0.55" color="#c8c8c8" position="-0.12 -0.18 0"></a-text>
+      <a-text id="hud-blk-blue" value="0" align="center" width="0.85" color="#ffffff"
+        position="-0.12 -0.26 0"></a-text>
+      <a-text id="hud-blk-rate-blue" value="0.0/min" align="center" width="0.55" color="#bbbbbb"
+        position="0.20 -0.26 0"></a-text>
+    </a-entity>
+    <!-- Blue cup panel: outer side of blue cup -->
+    <a-entity id="hud-cup-blue" position="-1.42 1.32 0.85" rotation="0 8 0">
+      <a-text value="Score" align="center" width="0.5" color="#c8c8c8" position="0 0.20 0"></a-text>
+      <a-text id="hud-score-blue" value="0" align="center" width="0.95" color="#ffffff"
+        position="0 0.12 0"></a-text>
+      <a-text value="BPS" align="center" width="0.5" color="#c8c8c8" position="0 0.02 0"></a-text>
+      <a-text id="hud-bps-blue" value="0.000" align="center" width="0.95" color="#ffffff"
+        position="0 -0.06 0"></a-text>
+      <a-text value="Attacks" align="center" width="0.5" color="#c8c8c8" position="0 -0.16 0"></a-text>
+      <a-text id="hud-cup-atk-blue" value="0" align="center" width="0.95" color="#ffffff"
+        position="0 -0.24 0"></a-text>
+    </a-entity>
+
+    <!-- Red floating card: outboard of red station, faces red player (looks +Z ⇒ yaw 180) -->
+    <a-entity id="hud-card-red" position="1.72 1.58 -1.45" rotation="0 192 0">
+      <a-text id="hud-name-red" value="RED" align="center" width="1.15" color="#ffffff"
+        position="0 0.28 0"></a-text>
+      <a-text value="Time" align="center" width="0.55" color="#c8c8c8" position="0 0.18 0"></a-text>
+      <a-text id="hud-time-red" value="0:00.00" align="center" width="1.05" color="#ffffff"
+        position="0 0.10 0"></a-text>
+      <a-text value="Attacks" align="center" width="0.55" color="#c8c8c8" position="-0.12 0.00 0"></a-text>
+      <a-text id="hud-atk-red" value="0" align="center" width="0.85" color="#ffffff"
+        position="-0.12 -0.08 0"></a-text>
+      <a-text id="hud-atk-rate-red" value="0.0/min" align="center" width="0.55" color="#bbbbbb"
+        position="0.20 -0.08 0"></a-text>
+      <a-text value="Blocks" align="center" width="0.55" color="#c8c8c8" position="-0.12 -0.18 0"></a-text>
+      <a-text id="hud-blk-red" value="0" align="center" width="0.85" color="#ffffff"
+        position="-0.12 -0.26 0"></a-text>
+      <a-text id="hud-blk-rate-red" value="0.0/min" align="center" width="0.55" color="#bbbbbb"
+        position="0.20 -0.26 0"></a-text>
+    </a-entity>
+    <!-- Red cup panel: outer side of red cup -->
+    <a-entity id="hud-cup-red" position="1.42 1.32 -0.85" rotation="0 188 0">
+      <a-text value="Score" align="center" width="0.5" color="#c8c8c8" position="0 0.20 0"></a-text>
+      <a-text id="hud-score-red" value="0" align="center" width="0.95" color="#ffffff"
+        position="0 0.12 0"></a-text>
+      <a-text value="BPS" align="center" width="0.5" color="#c8c8c8" position="0 0.02 0"></a-text>
+      <a-text id="hud-bps-red" value="0.000" align="center" width="0.95" color="#ffffff"
+        position="0 -0.06 0"></a-text>
+      <a-text value="Attacks" align="center" width="0.5" color="#c8c8c8" position="0 -0.16 0"></a-text>
+      <a-text id="hud-cup-atk-red" value="0" align="center" width="0.95" color="#ffffff"
+        position="0 -0.24 0"></a-text>
+    </a-entity>
+
+    <!-- Hidden mirrors for automated tests -->
     <a-entity id="stats-blue" visible="false"></a-entity>
     <a-entity id="stats-red" visible="false"></a-entity>
     <a-entity id="cup-stats-blue" visible="false"></a-entity>
@@ -373,14 +441,6 @@
           oculus-touch-controls="hand: left"
           laser-controls="hand: left"
           raycaster="objects: .clickable; far: 10; showLine: false; enabled: false; lineColor: #ffffff; lineOpacity: 0">
-          <!-- DodgeVR-style wrist stats -->
-          <a-entity id="arm-stats" position="0 0.1 0.05" rotation="-45 0 0">
-            <a-plane width="0.34" height="0.26" color="#000000"
-              material="opacity: 0.8; transparent: true" position="0 0 -0.001"></a-plane>
-            <a-text id="arm-stats-text"
-              value="Blue S:0 BPS:0.0 A:0&#10;Time 0:00  Atk 0  Blk 0&#10;Red  S:0 BPS:0.0 A:0&#10;Time 0:00  Atk 0  Blk 0"
-              position="0 0 0" align="center" width="0.28" color="#00ff00"></a-text>
-          </a-entity>
         </a-entity>
         <a-entity id="rightHand"
           hand-controls="hand: right; handModelStyle: lowPoly; color: #ffcccc"

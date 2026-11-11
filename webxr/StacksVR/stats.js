@@ -128,19 +128,37 @@
     now = now || performance.now();
     var apm = this.attacksPerMin(now);
     var bpm = this.bps(now);
-    return 'Time: ' + this.formatTime(now) + '\n' +
-      'Attacks: ' + (this.attacks | 0) + ' (' + apm.toFixed(1) + '/min)\n' +
-      'Blocks: ' + (this.blocks | 0) + ' (' + bpm.toFixed(1) + '/min)';
+    return 'Time\n' + this.formatTime(now) + '\n' +
+      'Attacks\n' + (this.attacks | 0) + '   ' + apm.toFixed(1) + '/min\n' +
+      'Blocks\n' + (this.blocks | 0) + '   ' + bpm.toFixed(1) + '/min';
+  };
+
+  SideStats.prototype.cardFields = function (now) {
+    now = now || performance.now();
+    return {
+      time: this.formatTime(now),
+      attacks: String(this.attacks | 0),
+      attackRate: this.attacksPerMin(now).toFixed(1) + '/min',
+      blocks: String(this.blocks | 0),
+      blockRate: this.bps(now).toFixed(1) + '/min'
+    };
   };
 
   /** Cup-side panel: Score / BPS / Attacks — matches BattleBlocks screenshot. */
-  SideStats.prototype.cupText = function (now, height) {
+  SideStats.prototype.cupText = function (now) {
     now = now || performance.now();
-    var lines = 'Score: ' + (this.score | 0) + '\n' +
-      'BPS: ' + this.bps(now).toFixed(3) + '\n' +
-      'Attacks: ' + (this.attacks | 0);
-    if (height != null) lines += '\nHeight: ' + (height | 0);
-    return lines;
+    return 'Score\n' + (this.score | 0) + '\n' +
+      'BPS\n' + this.bps(now).toFixed(3) + '\n' +
+      'Attacks\n' + (this.attacks | 0);
+  };
+
+  SideStats.prototype.cupFields = function (now) {
+    now = now || performance.now();
+    return {
+      score: String(this.score | 0),
+      bps: this.bps(now).toFixed(3),
+      attacks: String(this.attacks | 0)
+    };
   };
 
   // Kept for callers that want a single string — card only (no duplicate Attacks/BPS).

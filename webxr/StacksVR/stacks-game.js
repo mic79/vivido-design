@@ -1727,14 +1727,6 @@
       if (blueScore) blueScore.setAttribute('text', 'value', String(this.modes.scores.blue | 0));
       if (redScore) redScore.setAttribute('text', 'value', String(this.modes.scores.red | 0));
 
-      var timerEl = document.getElementById('timer-display');
-      if (timerEl && this.matchStats) {
-        var t = this.matchStats.blue.formatTime(performance.now());
-        timerEl.setAttribute('text', 'value', 'Time: ' + t);
-      } else if (timerEl) {
-        timerEl.setAttribute('text', 'value', 'Time: 0:00');
-      }
-
       this._updateCupStatsHUD();
       var hint = document.getElementById('control-hint');
       if (hint) {
@@ -1749,13 +1741,66 @@
       }
     },
 
+    _setTextValue: function (id, value) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      if (el.tagName && String(el.tagName).toLowerCase() === 'a-text') {
+        el.setAttribute('value', value);
+      } else {
+        el.setAttribute('text', 'value', value);
+      }
+    },
+
+    _fillBbCard: function (side, stats, now) {
+      var f = stats.cardFields(now);
+      var s = side === 'red' ? 'red' : 'blue';
+      this._setTextValue('hud-time-' + s, f.time);
+      this._setTextValue('hud-atk-' + s, f.attacks);
+      this._setTextValue('hud-atk-rate-' + s, f.attackRate);
+      this._setTextValue('hud-blk-' + s, f.blocks);
+      this._setTextValue('hud-blk-rate-' + s, f.blockRate);
+    },
+
+    _fillBbCup: function (side, stats, now) {
+      var f = stats.cupFields(now);
+      var s = side === 'red' ? 'red' : 'blue';
+      this._setTextValue('hud-score-' + s, f.score);
+      this._setTextValue('hud-bps-' + s, f.bps);
+      this._setTextValue('hud-cup-atk-' + s, f.attacks);
+    },
+
+    _updatePlayerHudNames: function () {
+      var blueName = 'BLUE';
+      var redName = 'RED';
+      if (global.isLobbyBotMatch || this._dualBotPreview) {
+        if (this._dualBotPreview) {
+          blueName = 'BOT BLUE';
+          redName = 'BOT RED';
+        } else {
+          blueName = 'YOU';
+          redName = 'BOT';
+        }
+      } else if (global.lobbyState && global.lobbyState.matchPlayers) {
+        var mp = global.lobbyState.matchPlayers;
+        if (mp.blue && mp.blue !== '__BOT__') blueName = String(mp.blue).slice(0, 14);
+        if (mp.red === '__BOT__') redName = 'BOT';
+        else if (mp.red) redName = String(mp.red).slice(0, 14);
+      }
+      this._setTextValue('hud-name-blue', blueName);
+      this._setTextValue('hud-name-red', redName);
+    },
+
     _updateCupStatsHUD: function () {
       if (!this.matchStats) return;
       var now = performance.now();
       var blue = this.matchStats.blue;
       var red = this.matchStats.red;
-      var hBlue = this.cups.blue ? this.cups.blue.constructionHeight : 0;
-      var hRed = this.cups.red ? this.cups.red.constructionHeight : 0;
+
+      this._updatePlayerHudNames();
+      this._fillBbCard('blue', blue, now);
+      this._fillBbCard('red', red, now);
+      this._fillBbCup('blue', blue, now);
+      this._fillBbCup('red', red, now);
 
       // Hidden test mirrors (card / cup panels)
       var blueEl = document.getElementById('stats-blue');
@@ -1764,24 +1809,8 @@
       if (redEl) redEl.setAttribute('text', 'value', red.cardText(now));
       var blueCup = document.getElementById('cup-stats-blue');
       var redCup = document.getElementById('cup-stats-red');
-      if (blueCup) blueCup.setAttribute('text', 'value', blue.cupText(now, hBlue));
-      if (redCup) redCup.setAttribute('text', 'value', red.cupText(now, hRed));
-
-      // DodgeVR-style wrist readout (both sides)
-      var arm = document.getElementById('arm-stats-text');
-      if (arm) {
-        var line = function (tag, s, h) {
-          return tag + ' S:' + (s.score | 0) +
-            ' BPS:' + s.bps(now).toFixed(1) +
-            ' A:' + (s.attacks | 0) +
-            ' H:' + (h | 0) + '\n' +
-            '  ' + s.formatTime(now) +
-            '  Atk ' + (s.attacks | 0) +
-            '  Blk ' + (s.blocks | 0);
-        };
-        arm.setAttribute('value',
-          line('Blue', blue, hBlue) + '\n' + line('Red', red, hRed));
-      }
+      if (blueCup) blueCup.setAttribute('text', 'value', blue.cupText(now));
+      if (redCup) redCup.setAttribute('text', 'value', red.cupText(now));
     },
 
     /** Bot pace tracks player (or rival bot) PPM with built-in wander. */
