@@ -1109,8 +1109,14 @@
       this._updateHUD();
     },
 
-    _nextSlotY: function (i) { return 0.08 + i * 0.18; },
-    _nextSlotScale: function (i) { return Math.max(0.42, 0.72 - i * 0.06); },
+    // Vertical stack: farther slots smaller; spawn pad is full-size (1)
+    _nextSlotY: function (i) { return 0.10 + i * 0.22; },
+    _nextSlotScale: function (i) { return Math.max(0.30, 0.82 - i * 0.12); },
+    /** Stand pieces in XY so silhouettes read clearly in the NEXT frame. */
+    _orientNextQueueMesh: function (mesh) {
+      if (!mesh) return;
+      mesh.rotation.set(Math.PI / 2, 0, 0);
+    },
 
     _spawnPadPiece: function (opts) {
       opts = opts || {};
@@ -1153,6 +1159,7 @@
           rotationY: 0
         });
         m.userData.nextPreview = true;
+        this._orientNextQueueMesh(m);
         var y = this._nextSlotY(i);
         var s = this._nextSlotScale(i);
         if (opts.dropIn) {
@@ -1195,15 +1202,17 @@
 
       var toLocal = this._sceneRoot.worldToLocal(toWorld.clone());
       var now = performance.now();
-      var self = this;
+      var flatQ = new THREE.Quaternion();
       this._pieceAnims.push({
         mesh: bottomMesh,
         fromPos: bottomMesh.position.clone(),
         toPos: toLocal,
         fromScale: bottomMesh.scale.x,
         toScale: 1,
+        fromQuat: bottomMesh.quaternion.clone(),
+        toQuat: flatQ,
         t0: now,
-        dur: 340,
+        dur: 360,
         onDone: function () {
           pad.attach(bottomMesh);
           bottomMesh.position.set(0, 0.1, 0);
@@ -1235,6 +1244,7 @@
           rotationY: 0
         });
         m.userData.nextPreview = true;
+        this._orientNextQueueMesh(m);
         var y = this._nextSlotY(newIdx);
         m.position.set(0, y + 0.3, 0);
         m.scale.setScalar(0.12);
@@ -1263,6 +1273,9 @@
         a.mesh.position.lerpVectors(a.fromPos, a.toPos, e);
         var s = a.fromScale + (a.toScale - a.fromScale) * e;
         a.mesh.scale.setScalar(s);
+        if (a.fromQuat && a.toQuat) {
+          a.mesh.quaternion.slerpQuaternions(a.fromQuat, a.toQuat, e);
+        }
         if (u >= 1) {
           if (a.onDone) a.onDone();
           this._pieceAnims.splice(i, 1);
