@@ -161,69 +161,40 @@
       var redPadPos = offsetRed(-0.45, 0.55);     // toward red player (-Z), their right
       var redPocketPos = offsetRed(-0.45, -0.55);
 
+      // Neon ring markers only — no opaque disc platforms (BattleBlocks)
+      function neonRing(radius, color) {
+        var m = new THREE.Mesh(
+          new THREE.TorusGeometry(radius, 0.01, 8, 40),
+          new THREE.MeshBasicMaterial({ color: color, toneMapped: false })
+        );
+        m.rotation.x = Math.PI / 2;
+        m.position.y = 0.008;
+        return m;
+      }
+
       this._pad = new THREE.Group();
       this._pad.position.set(bluePadPos.x, bluePadPos.y, bluePadPos.z);
       this._sceneRoot.add(this._pad);
-      this._padMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.22, 0.24, 0.035, 24),
-        new THREE.MeshStandardMaterial({ color: 0x121820, roughness: 0.4, metalness: 0.55 })
-      );
+      this._padMesh = neonRing(0.16, 0x69F0AE);
       this._pad.add(this._padMesh);
-      var ring = new THREE.Mesh(
-        new THREE.TorusGeometry(0.16, 0.012, 10, 40),
-        new THREE.MeshBasicMaterial({ color: 0x69F0AE, toneMapped: false })
-      );
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = 0.025;
-      this._pad.add(ring);
 
       this._pocket = new THREE.Group();
       this._pocket.position.set(bluePocketPos.x, bluePocketPos.y, bluePocketPos.z);
       this._sceneRoot.add(this._pocket);
-      this._pocket.add(new THREE.Mesh(
-        new THREE.CylinderGeometry(0.18, 0.20, 0.035, 24),
-        new THREE.MeshStandardMaterial({ color: 0x1a1220, roughness: 0.4, metalness: 0.5 })
-      ));
-      var pocketRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.13, 0.012, 10, 36),
-        new THREE.MeshBasicMaterial({ color: 0xCE93D8, toneMapped: false })
-      );
-      pocketRing.rotation.x = Math.PI / 2;
-      pocketRing.position.y = 0.025;
-      this._pocket.add(pocketRing);
+      this._pocket.add(neonRing(0.13, 0xCE93D8));
       this._pocketType = null;
       this._pocketUsed = false;
 
       this._botPad = new THREE.Group();
       this._botPad.position.set(redPadPos.x, redPadPos.y, redPadPos.z);
       this._sceneRoot.add(this._botPad);
-      this._botPad.add(new THREE.Mesh(
-        new THREE.CylinderGeometry(0.22, 0.24, 0.035, 24),
-        new THREE.MeshStandardMaterial({ color: 0x1a1210, roughness: 0.4, metalness: 0.55 })
-      ));
-      var botRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.16, 0.012, 10, 40),
-        new THREE.MeshBasicMaterial({ color: 0xff6a3d, toneMapped: false })
-      );
-      botRing.rotation.x = Math.PI / 2;
-      botRing.position.y = 0.025;
-      this._botPad.add(botRing);
+      this._botPad.add(neonRing(0.16, 0xff6a3d));
       this._botPadPiece = null;
 
       this._botPocket = new THREE.Group();
       this._botPocket.position.set(redPocketPos.x, redPocketPos.y, redPocketPos.z);
       this._sceneRoot.add(this._botPocket);
-      this._botPocket.add(new THREE.Mesh(
-        new THREE.CylinderGeometry(0.18, 0.20, 0.035, 24),
-        new THREE.MeshStandardMaterial({ color: 0x1a1014, roughness: 0.4, metalness: 0.5 })
-      ));
-      var botPocketRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.13, 0.012, 10, 36),
-        new THREE.MeshBasicMaterial({ color: 0xCE93D8, toneMapped: false })
-      );
-      botPocketRing.rotation.x = Math.PI / 2;
-      botPocketRing.position.y = 0.025;
-      this._botPocket.add(botPocketRing);
+      this._botPocket.add(neonRing(0.13, 0xCE93D8));
       this._botPocketMesh = null;
       this._botHoldMesh = null;
 
