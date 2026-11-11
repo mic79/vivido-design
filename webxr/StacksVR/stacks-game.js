@@ -45,6 +45,7 @@
       this._padPiece = null;
       this._previewPiece = null;
       this._nextType = null;
+      this._pieceAnims = [];
       this._pocket = null;
       this._pocketMesh = null;
       this._pocketType = null; // stashed shape type or null
@@ -383,18 +384,24 @@
         if (side === 'red') this._botPadPiece = null;
         else { this._padPiece = null; this._previewPiece = null; }
         if (!evt.type || !st.pad) return;
-        var mesh = global.StacksShapes.createShapeMesh(evt.type, {
-          centerPivot: true, rotationY: 0
-        });
-        mesh.userData.botPadPiece = true;
-        mesh.userData.padPiece = true;
-        mesh.position.set(side === 'blue' ? -0.06 : 0, 0.1, 0);
-        st.pad.add(mesh);
-        if (side === 'red') this._botPadPiece = mesh;
-        else this._padPiece = mesh;
-        // Refresh NEXT column from that side's bot bag
         var bot = side === 'blue' ? this.botBlue : this.bot;
-        if (bot && bot.bag) this._refreshNextQueue(side, bot.bag);
+        var col = side === 'red' ? this._nextRed : this._nextBlue;
+        var bottom = col && col.slots && col.slots.children[0];
+        if (bottom && bot && bot.bag) {
+          // Bag already advanced — slide queue bottom onto pad
+          this._animateQueueAdvance(side, bot.bag, bottom);
+        } else {
+          var mesh = global.StacksShapes.createShapeMesh(evt.type, {
+            centerPivot: true, rotationY: 0
+          });
+          mesh.userData.botPadPiece = true;
+          mesh.userData.padPiece = true;
+          mesh.position.set(0, 0.1, 0);
+          st.pad.add(mesh);
+          if (side === 'red') this._botPadPiece = mesh;
+          else this._padPiece = mesh;
+          if (bot && bot.bag) this._rebuildNextQueue(side, bot.bag, { dropIn: true });
+        }
         return;
       }
       if (evt.kind === 'pocket') {
@@ -1102,12 +1109,25 @@
       this._updateHUD();
     },
 
-    _spawnPadPiece: function () {
+    _nextSlotY: function (i) { return 0.08 + i * 0.18; },
+    _nextSlotScale: function (i) { return Math.max(0.42, 0.72 - i * 0.06); },
+
+    _spawnPadPiece: function (opts) {
+      opts = opts || {};
       for (var i = this._pad.children.length - 1; i >= 0; i--) {
         var ch = this._pad.children[i];
         if (ch.userData && (ch.userData.padPiece || ch.userData.padPreview)) this._pad.remove(ch);
       }
       this._nextType = this.bag.next();
+      this._padPiece = null;
+      this._previewPiece = null;
+
+      var bottom = this._nextBlue && this._nextBlue.slots && this._nextBlue.slots.children[0];
+      if (opts.animate && bottom) {
+        this._animateQueueAdvance('blue', this.bag, bottom);
+        return;
+      }
+
       var mesh = global.StacksShapes.createShapeMesh(this._nextType, {
         centerPivot: true,
         rotationY: 0
@@ -1116,33 +1136,149 @@
       mesh.position.set(0, 0.1, 0);
       this._pad.add(mesh);
       this._padPiece = mesh;
-      this._previewPiece = null;
-      this._refreshNextQueue('blue', this.bag);
+      this._rebuildNextQueue('blue', this.bag, { dropIn: !!opts.dropIn });
     },
 
-    /** BattleBlocks vertical NEXT column — upcoming pieces (peek, don't consume). */
-    _refreshNextQueue: function (side, bag) {
+    /** Instant or drop-in fill of the NEXT column from bag.peek. */
+    _rebuildNextQueue: function (side, bag, opts) {
+      opts = opts || {};
       var col = side === 'red' ? this._nextRed : this._nextBlue;
       if (!col || !col.slots || !bag || !bag.peek) return;
       while (col.slots.children.length) col.slots.remove(col.slots.children[0]);
       var peek = bag.peek(5);
+      var now = performance.now();
       for (var i = 0; i < peek.length; i++) {
         var m = global.StacksShapes.createShapeMesh(peek[i], {
           centerPivot: true,
           rotationY: 0
         });
         m.userData.nextPreview = true;
-        // Bottom slot is soonest; stack upward like BB
-        var scale = 0.72 - i * 0.06;
-        m.scale.setScalar(Math.max(0.42, scale));
-        m.position.set(0, 0.08 + i * 0.18, 0);
-        col.slots.add(m);
+        var y = this._nextSlotY(i);
+        var s = this._nextSlotScale(i);
+        if (opts.dropIn) {
+          m.position.set(0, y + 0.28 + i * 0.04, 0);
+          m.scale.setScalar(0.12);
+          col.slots.add(m);
+          this._pieceAnims.push({
+            mesh: m,
+            fromPos: m.position.clone(),
+            toPos: new THREE.Vector3(0, y, 0),
+            fromScale: 0.12,
+            toScale: s,
+            t0: now + i * 40,
+            dur: 320
+          });
+        } else {
+          m.scale.setScalar(s);
+          m.position.set(0, y, 0);
+          col.slots.add(m);
+        }
       }
+    },
+
+    /** Slide queue[0] onto the pad; shift others down; drop a new piece in at the top. */
+    _animateQueueAdvance: function (side, bag, bottomMesh) {
+      var col = side === 'red' ? this._nextRed : this._nextBlue;
+      var pad = side === 'red' ? this._botPad : this._pad;
+      if (!col || !pad || !bottomMesh || !this._sceneRoot) return;
+
+      pad.updateWorldMatrix(true, false);
+      var toWorld = pad.localToWorld(new THREE.Vector3(0, 0.1, 0));
+
+      this._sceneRoot.attach(bottomMesh);
+      bottomMesh.userData.nextPreview = false;
+      bottomMesh.userData.padPiece = true;
+      bottomMesh.userData.botPadPiece = side === 'red';
+      bottomMesh.userData.spawning = true;
+      if (side === 'blue') this._padPiece = bottomMesh;
+      else this._botPadPiece = bottomMesh;
+
+      var toLocal = this._sceneRoot.worldToLocal(toWorld.clone());
+      var now = performance.now();
+      var self = this;
+      this._pieceAnims.push({
+        mesh: bottomMesh,
+        fromPos: bottomMesh.position.clone(),
+        toPos: toLocal,
+        fromScale: bottomMesh.scale.x,
+        toScale: 1,
+        t0: now,
+        dur: 340,
+        onDone: function () {
+          pad.attach(bottomMesh);
+          bottomMesh.position.set(0, 0.1, 0);
+          bottomMesh.scale.setScalar(1);
+          bottomMesh.quaternion.identity();
+          bottomMesh.userData.spawning = false;
+        }
+      });
+
+      var remaining = Array.prototype.slice.call(col.slots.children);
+      for (var i = 0; i < remaining.length; i++) {
+        var k = remaining[i];
+        this._pieceAnims.push({
+          mesh: k,
+          fromPos: k.position.clone(),
+          toPos: new THREE.Vector3(0, this._nextSlotY(i), 0),
+          fromScale: k.scale.x,
+          toScale: this._nextSlotScale(i),
+          t0: now,
+          dur: 300
+        });
+      }
+
+      var peek = bag.peek(5);
+      var newIdx = remaining.length;
+      if (peek[newIdx]) {
+        var m = global.StacksShapes.createShapeMesh(peek[newIdx], {
+          centerPivot: true,
+          rotationY: 0
+        });
+        m.userData.nextPreview = true;
+        var y = this._nextSlotY(newIdx);
+        m.position.set(0, y + 0.3, 0);
+        m.scale.setScalar(0.12);
+        col.slots.add(m);
+        this._pieceAnims.push({
+          mesh: m,
+          fromPos: m.position.clone(),
+          toPos: new THREE.Vector3(0, y, 0),
+          fromScale: 0.12,
+          toScale: this._nextSlotScale(newIdx),
+          t0: now + 40,
+          dur: 340
+        });
+      }
+    },
+
+    _tickPieceAnims: function (now) {
+      if (!this._pieceAnims || !this._pieceAnims.length) return;
+      now = now || performance.now();
+      for (var i = this._pieceAnims.length - 1; i >= 0; i--) {
+        var a = this._pieceAnims[i];
+        if (!a.mesh) { this._pieceAnims.splice(i, 1); continue; }
+        if (now < a.t0) continue;
+        var u = Math.min(1, (now - a.t0) / Math.max(1, a.dur));
+        var e = 1 - Math.pow(1 - u, 3);
+        a.mesh.position.lerpVectors(a.fromPos, a.toPos, e);
+        var s = a.fromScale + (a.toScale - a.fromScale) * e;
+        a.mesh.scale.setScalar(s);
+        if (u >= 1) {
+          if (a.onDone) a.onDone();
+          this._pieceAnims.splice(i, 1);
+        }
+      }
+    },
+
+    /** @deprecated — use _rebuildNextQueue */
+    _refreshNextQueue: function (side, bag) {
+      this._rebuildNextQueue(side, bag, { dropIn: false });
     },
 
     _grab: function (handEl) {
       if (this._dualBotPreview) return;
       if (this.held || !this._nextType || !this._padPiece) return;
+      if (this._padPiece.userData && this._padPiece.userData.spawning) return;
 
       var hand = handEl || document.getElementById('rightHand');
       if (!hand) return;
@@ -1188,7 +1324,7 @@
         wasGhostValid: false
       };
       this._nextType = null;
-      this._spawnPadPiece();
+      this._spawnPadPiece({ animate: true });
       this._pulseHaptic(hand, 0.55, 55);
       this._broadcastHold();
       this._updateGhost();
@@ -2249,6 +2385,7 @@
     tick: function () {
       if (!this._sceneRoot) return;
       if (this._poseDesktop) this._poseDesktop();
+      this._tickPieceAnims();
       this._prepareMatchHud();
       this._placeMatchHud();
 
