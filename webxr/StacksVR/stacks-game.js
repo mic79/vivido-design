@@ -156,13 +156,13 @@
       if (blue.pivot) { blue.pivot.rotation.y = blueYaw; blue.yaw = blueYaw; }
       if (red.pivot) { red.pivot.rotation.y = redYaw; red.yaw = redYaw; }
 
-      // BattleBlocks: spawn + storage + NEXT column on the RIGHT of the playfield
-      var bluePadPos = offsetBlue(-0.50, 0.58);
-      var bluePocketPos = offsetBlue(-0.50, 0.98);
-      var blueNextPos = offsetBlue(-0.42, 0.78);
-      var redPadPos = offsetRed(-0.50, 0.58);
-      var redPocketPos = offsetRed(-0.50, 0.98);
-      var redNextPos = offsetRed(-0.42, 0.78);
+      // BattleBlocks: NEXT column on playfield-right; pad+pocket diamonds at its feet
+      var blueNextPos = offsetBlue(-0.38, 0.78);
+      var bluePadPos = offsetBlue(-0.58, 0.60);
+      var bluePocketPos = offsetBlue(-0.58, 0.96);
+      var redNextPos = offsetRed(-0.38, 0.78);
+      var redPadPos = offsetRed(-0.58, 0.60);
+      var redPocketPos = offsetRed(-0.58, 0.96);
 
       // Floor diamond outline (no fill) — BattleBlocks station marks
       function neonDiamond(half, color) {
@@ -182,22 +182,23 @@
         var root = new THREE.Group();
         root.position.set(pos.x, pos.y, pos.z);
         root.rotation.y = yaw;
-        // Vertical rounded neon frame (local XY, faces seat after yaw)
-        var fw = 0.30, fh = 1.35, r = 0.055, tube = 0.01;
+        // Tall neon frame (slightly wider at bottom like BB)
+        var fwTop = 0.26, fwBot = 0.34, fh = 1.28, r = 0.05, tube = 0.009;
         var path = new THREE.CurvePath();
         function L(a, b) { path.add(new THREE.LineCurve3(a, b)); }
         function C(a, ctrl, b) { path.add(new THREE.QuadraticBezierCurve3(a, ctrl, b)); }
         var p = function (x, y) { return new THREE.Vector3(x, y, 0); };
-        L(p(-fw / 2 + r, -fh / 2), p(fw / 2 - r, -fh / 2));
-        C(p(fw / 2 - r, -fh / 2), p(fw / 2, -fh / 2), p(fw / 2, -fh / 2 + r));
-        L(p(fw / 2, -fh / 2 + r), p(fw / 2, fh / 2 - r));
-        C(p(fw / 2, fh / 2 - r), p(fw / 2, fh / 2), p(fw / 2 - r, fh / 2));
-        L(p(fw / 2 - r, fh / 2), p(-fw / 2 + r, fh / 2));
-        C(p(-fw / 2 + r, fh / 2), p(-fw / 2, fh / 2), p(-fw / 2, fh / 2 - r));
-        L(p(-fw / 2, fh / 2 - r), p(-fw / 2, -fh / 2 + r));
-        C(p(-fw / 2, -fh / 2 + r), p(-fw / 2, -fh / 2), p(-fw / 2 + r, -fh / 2));
+        var y0 = -fh / 2, y1 = fh / 2;
+        L(p(-fwBot / 2 + r, y0), p(fwBot / 2 - r, y0));
+        C(p(fwBot / 2 - r, y0), p(fwBot / 2, y0), p(fwBot / 2, y0 + r));
+        L(p(fwBot / 2, y0 + r), p(fwTop / 2, y1 - r));
+        C(p(fwTop / 2, y1 - r), p(fwTop / 2, y1), p(fwTop / 2 - r, y1));
+        L(p(fwTop / 2 - r, y1), p(-fwTop / 2 + r, y1));
+        C(p(-fwTop / 2 + r, y1), p(-fwTop / 2, y1), p(-fwTop / 2, y1 - r));
+        L(p(-fwTop / 2, y1 - r), p(-fwBot / 2, y0 + r));
+        C(p(-fwBot / 2, y0 + r), p(-fwBot / 2, y0), p(-fwBot / 2 + r, y0));
         var frame = new THREE.Mesh(
-          new THREE.TubeGeometry(path, 72, tube, 5, true),
+          new THREE.TubeGeometry(path, 80, tube, 5, true),
           new THREE.MeshBasicMaterial({ color: color, toneMapped: false })
         );
         frame.position.y = 0.78;
@@ -208,22 +209,22 @@
         var ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, 256, 64);
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 42px sans-serif';
+        ctx.font = 'italic 600 40px Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('NEXT', 128, 32);
         var label = new THREE.Mesh(
-          new THREE.PlaneGeometry(0.22, 0.055),
+          new THREE.PlaneGeometry(0.20, 0.05),
           new THREE.MeshBasicMaterial({
             map: new THREE.CanvasTexture(canvas),
             transparent: true, depthWrite: false, toneMapped: false
           })
         );
-        label.position.set(0, 1.42, 0.02);
+        label.position.set(0, 1.40, 0.02);
         root.add(label);
         var slots = new THREE.Group();
         slots.name = 'nextSlots';
-        slots.position.set(0, 0.16, 0);
+        slots.position.set(0, 0.20, 0);
         root.add(slots);
         this._sceneRoot.add(root);
         return { root: root, slots: slots };
@@ -1109,9 +1110,9 @@
       this._updateHUD();
     },
 
-    // Vertical stack: compact silhouettes, clear gaps; spawn pad is full-size (1)
-    _nextSlotY: function (i) { return 0.05 + i * 0.32; },
-    _nextSlotScale: function (i) { return Math.max(0.14, 0.32 - i * 0.04); },
+    // Vertical stack inside NEXT — small, well-gapped; spawn pad is full-size (1)
+    _nextSlotY: function (i) { return 0.04 + i * 0.26; },
+    _nextSlotScale: function (i) { return Math.max(0.12, 0.28 - i * 0.035); },
     /** Stand pieces in XY so silhouettes read clearly in the NEXT frame. */
     _orientNextQueueMesh: function (mesh) {
       if (!mesh) return;
@@ -2181,14 +2182,13 @@
       var next = side === 'blue' ? L.blueNext : L.redNext;
       if (!pad || !next) return;
 
-      // RIGHT of the NEXT column (BattleBlocks reference) — outboard from playfield
+      // Flush to the RIGHT of the NEXT frame (BattleBlocks reference)
       var outboard = side === 'blue' ? 1 : -1;
-      var towardCup = side === 'blue' ? -1 : 1;
       var yaw = side === 'blue' ? 0 : Math.PI;
 
-      var cx = next.x + outboard * 0.42;
-      var cy = (pad.y || 1.12) + 0.58;
-      var cz = next.z + towardCup * 0.04;
+      var cx = next.x + outboard * 0.30;
+      var cy = (pad.y || 1.12) + 0.72;
+      var cz = next.z;
       card.setAttribute('position', cx.toFixed(3) + ' ' + cy.toFixed(3) + ' ' + cz.toFixed(3));
       card.setAttribute('rotation', '0 ' + (yaw * 180 / Math.PI) + ' 0');
       card.setAttribute('visible', true);

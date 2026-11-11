@@ -138,9 +138,9 @@
     return {
       time: this.formatTime(now),
       attacks: String(this.attacks | 0),
-      attackRate: this.attacksPerMin(now).toFixed(1) + '/min',
+      attackRate: this.attacksPerMin(now).toFixed(2),
       blocks: String(this.blocks | 0),
-      blockRate: this.bps(now).toFixed(1) + '/min'
+      blockRate: this.bps(now).toFixed(1)
     };
   };
 
