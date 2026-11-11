@@ -1110,9 +1110,9 @@
       this._updateHUD();
     },
 
-    // Vertical stack inside NEXT — small, well-gapped; spawn pad is full-size (1)
-    _nextSlotY: function (i) { return 0.04 + i * 0.26; },
-    _nextSlotScale: function (i) { return Math.max(0.12, 0.28 - i * 0.035); },
+    // Vertical stack inside NEXT — small silhouettes with clear gaps
+    _nextSlotY: function (i) { return 0.02 + i * 0.24; },
+    _nextSlotScale: function (i) { return Math.max(0.09, 0.20 - i * 0.022); },
     /** Stand pieces in XY so silhouettes read clearly in the NEXT frame. */
     _orientNextQueueMesh: function (mesh) {
       if (!mesh) return;
@@ -1939,43 +1939,71 @@
       }
     },
 
-    _fillBbCard: function (side, stats, now) {
+    /** BattleBlocks station card: one canvas — Blocks / Attacks / Time, italic, no name. */
+    _ensureStationCard: function (side) {
+      if (!this._stationCards) this._stationCards = {};
+      if (this._stationCards[side]) return this._stationCards[side];
+      if (!this._sceneRoot) return null;
+      var canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 700;
+      var tex = new THREE.CanvasTexture(canvas);
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      var mat = new THREE.MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        depthWrite: false,
+        toneMapped: false,
+        side: THREE.DoubleSide
+      });
+      var mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.66), mat);
+      mesh.frustumCulled = false;
+      this._sceneRoot.add(mesh);
+      var card = { mesh: mesh, canvas: canvas, tex: tex, mat: mat };
+      this._stationCards[side] = card;
+      return card;
+    },
+
+    _drawStationCard: function (side, stats, now) {
+      var card = this._ensureStationCard(side);
+      if (!card || !stats) return;
       var f = stats.cardFields(now);
-      var s = side === 'red' ? 'red' : 'blue';
-      this._setTextValue('hud-time-' + s, f.time);
-      this._setTextValue('hud-atk-' + s, f.attacks);
-      this._setTextValue('hud-atk-rate-' + s, f.attackRate);
-      this._setTextValue('hud-blk-' + s, f.blocks);
-      this._setTextValue('hud-blk-rate-' + s, f.blockRate);
-    },
+      var ctx = card.canvas.getContext('2d');
+      var W = card.canvas.width;
+      var H = card.canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#ffffff';
 
-    _fillBbCup: function (side, stats, now) {
-      var f = stats.cupFields(now);
-      var s = side === 'red' ? 'red' : 'blue';
-      this._setTextValue('hud-score-' + s, f.score);
-      this._setTextValue('hud-bps-' + s, f.bps);
-      this._setTextValue('hud-cup-atk-' + s, f.attacks);
-    },
-
-    _updatePlayerHudNames: function () {
-      var blueName = 'BLUE';
-      var redName = 'RED';
-      if (global.isLobbyBotMatch || this._dualBotPreview) {
-        if (this._dualBotPreview) {
-          blueName = 'BOT BLUE';
-          redName = 'BOT RED';
-        } else {
-          blueName = 'YOU';
-          redName = 'BOT';
-        }
-      } else if (global.lobbyState && global.lobbyState.matchPlayers) {
-        var mp = global.lobbyState.matchPlayers;
-        if (mp.blue && mp.blue !== '__BOT__') blueName = String(mp.blue).slice(0, 14);
-        if (mp.red === '__BOT__') redName = 'BOT';
-        else if (mp.red) redName = String(mp.red).slice(0, 14);
+      var y = 8;
+      function label(t) {
+        ctx.font = 'italic 600 48px Arial, Helvetica, sans-serif';
+        ctx.globalAlpha = 1;
+        ctx.fillText(t, 8, y);
+        y += 58;
       }
-      this._setTextValue('hud-name-blue', blueName);
-      this._setTextValue('hud-name-red', redName);
+      function row(main, rate) {
+        ctx.font = 'italic 700 92px Arial, Helvetica, sans-serif';
+        ctx.globalAlpha = 1;
+        ctx.fillText(String(main), 8, y);
+        if (rate != null && rate !== '') {
+          ctx.font = 'italic 600 56px Arial, Helvetica, sans-serif';
+          ctx.fillText(String(rate), 250, y + 22);
+        }
+        y += 118;
+      }
+
+      label('Blocks');
+      row(f.blocks, f.blockRate);
+      label('Attacks');
+      row(f.attacks, f.attackRate);
+      label('Time');
+      row(f.time, null);
+
+      card.tex.needsUpdate = true;
+      card.mesh.visible = true;
     },
 
     _updateCupStatsHUD: function () {
@@ -1984,11 +2012,8 @@
       var blue = this.matchStats.blue;
       var red = this.matchStats.red;
 
-      this._updatePlayerHudNames();
-      this._fillBbCard('blue', blue, now);
-      this._fillBbCard('red', red, now);
-      this._fillBbCup('blue', blue, now);
-      this._fillBbCup('red', red, now);
+      this._drawStationCard('blue', blue, now);
+      this._drawStationCard('red', red, now);
 
       // Hidden test mirrors (card / cup panels)
       var blueEl = document.getElementById('stats-blue');
@@ -2179,71 +2204,45 @@
       root.add(keyFill);
     },
 
-    /**
-     * BattleBlocks: one stats column to the RIGHT of the NEXT frame
-     * (Time / Attacks / Blocks). Cup Score/BPS panel is hidden — it was
-     * duplicating Attacks in the same sightline.
-     */
     _prepareMatchHud: function () {
-      var ids = ['hud-card-blue', 'hud-card-red'];
-      var hideIds = ['hud-cup-blue', 'hud-cup-red'];
-      var fogged = 0;
+      // Legacy a-text cards stay hidden; canvas station cards are the HUD
+      var hideIds = [
+        'hud-card-blue', 'hud-card-red', 'hud-cup-blue', 'hud-cup-red',
+        'hud-name-blue', 'hud-name-red'
+      ];
       for (var h = 0; h < hideIds.length; h++) {
         var hide = document.getElementById(hideIds[h]);
         if (!hide) continue;
         hide.setAttribute('visible', false);
         if (hide.object3D) hide.object3D.visible = false;
       }
-      for (var i = 0; i < ids.length; i++) {
-        var root = document.getElementById(ids[i]);
-        if (!root) continue;
-        root.setAttribute('visible', true);
-        if (root.object3D) root.object3D.visible = true;
-        root.querySelectorAll('a-text').forEach(function (t) {
-          t.setAttribute('visible', true);
-          if (t.object3D) {
-            t.object3D.visible = true;
-            t.object3D.traverse(function (obj) {
-              var mats = obj.material
-                ? (Array.isArray(obj.material) ? obj.material : [obj.material])
-                : [];
-              for (var mi = 0; mi < mats.length; mi++) {
-                if (!mats[mi]) continue;
-                mats[mi].fog = false;
-                fogged++;
-              }
-            });
-          }
-        });
-      }
-      if (fogged > 0) this._hudPrepared = true;
+      this._hudPrepared = true;
     },
 
     _placeMatchHud: function () {
       if (!this.cups) return;
-      this._placeSideHud('blue', 'hud-card-blue');
-      this._placeSideHud('red', 'hud-card-red');
+      this._placeStationCard('blue');
+      this._placeStationCard('red');
     },
 
-    _placeSideHud: function (side, cardId) {
-      var card = document.getElementById(cardId);
-      if (!card || !card.object3D) return;
-
+    _placeStationCard: function (side) {
+      var card = this._ensureStationCard(side);
+      if (!card || !card.mesh) return;
       var L = this._layout || {};
       var pad = side === 'blue' ? L.bluePad : L.redPad;
       var next = side === 'blue' ? L.blueNext : L.redNext;
       if (!pad || !next) return;
 
-      // Flush to the RIGHT of the NEXT frame (BattleBlocks reference)
+      // Flush right of NEXT — mid-height of the frame (BattleBlocks)
       var outboard = side === 'blue' ? 1 : -1;
       var yaw = side === 'blue' ? 0 : Math.PI;
-
-      var cx = next.x + outboard * 0.30;
-      var cy = (pad.y || 1.12) + 0.72;
-      var cz = next.z;
-      card.setAttribute('position', cx.toFixed(3) + ' ' + cy.toFixed(3) + ' ' + cz.toFixed(3));
-      card.setAttribute('rotation', '0 ' + (yaw * 180 / Math.PI) + ' 0');
-      card.setAttribute('visible', true);
+      card.mesh.position.set(
+        next.x + outboard * 0.34,
+        (pad.y || 1.12) + 0.78,
+        next.z
+      );
+      card.mesh.rotation.set(0, yaw, 0);
+      card.mesh.visible = true;
     },
 
     /** Bot pace tracks player (or rival bot) PPM with built-in wander. */

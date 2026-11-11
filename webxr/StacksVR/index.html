@@ -30,7 +30,7 @@
   <script src="game-menu.js?v=35"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=59"></script>
+  <script src="stacks-game.js?v=60"></script>
   <script src="mobile-spectator.js?v=35"></script>
 
   <style>
@@ -278,35 +278,19 @@
     <a-entity id="damage-red" position="0.65 1.92 -1.25" rotation="0 180 0" visible="false"
       text="value: ; align: center; width: 0.5; color: #ff8866"></a-entity>
 
-    <!--
-      BattleBlocks station card (right of NEXT): Blocks → Attacks → Time only.
-      No name, no Score/BPS/Attacks cup panel.
-    -->
-    <a-entity id="hud-card-blue" position="0 1.5 0" rotation="0 0 0">
-      <a-text value="Blocks" align="left" width="0.7" color="#ffffff" position="0 0.22 0"></a-text>
-      <a-text id="hud-blk-blue" value="0" align="left" width="0.85" color="#ffffff" position="0 0.12 0"></a-text>
-      <a-text id="hud-blk-rate-blue" value="0.0" align="left" width="0.55" color="#ffffff" position="0.28 0.12 0"></a-text>
-      <a-text value="Attacks" align="left" width="0.7" color="#ffffff" position="0 -0.02 0"></a-text>
-      <a-text id="hud-atk-blue" value="0" align="left" width="0.85" color="#ffffff" position="0 -0.12 0"></a-text>
-      <a-text id="hud-atk-rate-blue" value="0.00" align="left" width="0.55" color="#ffffff" position="0.28 -0.12 0"></a-text>
-      <a-text value="Time" align="left" width="0.7" color="#ffffff" position="0 -0.26 0"></a-text>
-      <a-text id="hud-time-blue" value="0:00.00" align="left" width="1.0" color="#ffffff" position="0 -0.36 0"></a-text>
-      <a-text id="hud-name-blue" value="" visible="false"></a-text>
-    </a-entity>
+    <!-- Station cards are canvas meshes (BattleBlocks style) — built in stacks-game.js -->
+    <a-entity id="hud-card-blue" visible="false"></a-entity>
     <a-entity id="hud-cup-blue" visible="false"></a-entity>
-
-    <a-entity id="hud-card-red" position="0 1.5 0" rotation="0 0 0">
-      <a-text value="Blocks" align="left" width="0.7" color="#ffffff" position="0 0.22 0"></a-text>
-      <a-text id="hud-blk-red" value="0" align="left" width="0.85" color="#ffffff" position="0 0.12 0"></a-text>
-      <a-text id="hud-blk-rate-red" value="0.0" align="left" width="0.55" color="#ffffff" position="0.28 0.12 0"></a-text>
-      <a-text value="Attacks" align="left" width="0.7" color="#ffffff" position="0 -0.02 0"></a-text>
-      <a-text id="hud-atk-red" value="0" align="left" width="0.85" color="#ffffff" position="0 -0.12 0"></a-text>
-      <a-text id="hud-atk-rate-red" value="0.00" align="left" width="0.55" color="#ffffff" position="0.28 -0.12 0"></a-text>
-      <a-text value="Time" align="left" width="0.7" color="#ffffff" position="0 -0.26 0"></a-text>
-      <a-text id="hud-time-red" value="0:00.00" align="left" width="1.0" color="#ffffff" position="0 -0.36 0"></a-text>
-      <a-text id="hud-name-red" value="" visible="false"></a-text>
-    </a-entity>
+    <a-entity id="hud-card-red" visible="false"></a-entity>
     <a-entity id="hud-cup-red" visible="false"></a-entity>
+    <a-entity id="hud-name-blue" visible="false"></a-entity>
+    <a-entity id="hud-name-red" visible="false"></a-entity>
+    <a-entity id="hud-time-blue" visible="false"></a-entity>
+    <a-entity id="hud-time-red" visible="false"></a-entity>
+    <a-entity id="hud-atk-blue" visible="false"></a-entity>
+    <a-entity id="hud-atk-red" visible="false"></a-entity>
+    <a-entity id="hud-blk-blue" visible="false"></a-entity>
+    <a-entity id="hud-blk-red" visible="false"></a-entity>
 
     <!-- Hidden mirrors for automated tests -->
     <a-entity id="stats-blue" visible="false"></a-entity>
