@@ -1110,9 +1110,8 @@
     },
 
     // Vertical stack: compact silhouettes, clear gaps; spawn pad is full-size (1)
-    // I-piece ~0.44m tall at scale 1 → keep queue scales small enough not to overlap
-    _nextSlotY: function (i) { return 0.06 + i * 0.28; },
-    _nextSlotScale: function (i) { return Math.max(0.16, 0.38 - i * 0.045); },
+    _nextSlotY: function (i) { return 0.05 + i * 0.32; },
+    _nextSlotScale: function (i) { return Math.max(0.14, 0.32 - i * 0.04); },
     /** Stand pieces in XY so silhouettes read clearly in the NEXT frame. */
     _orientNextQueueMesh: function (mesh) {
       if (!mesh) return;
@@ -2128,12 +2127,20 @@
     },
 
     /**
-     * BattleBlocks: spawn+storage sit together on the outboard; card + cup
-     * HUD sit behind that cluster (further outboard / toward the seat).
+     * BattleBlocks: one stats column to the RIGHT of the NEXT frame
+     * (Time / Attacks / Blocks). Cup Score/BPS panel is hidden — it was
+     * duplicating Attacks in the same sightline.
      */
     _prepareMatchHud: function () {
-      var ids = ['hud-card-blue', 'hud-cup-blue', 'hud-card-red', 'hud-cup-red'];
+      var ids = ['hud-card-blue', 'hud-card-red'];
+      var hideIds = ['hud-cup-blue', 'hud-cup-red'];
       var fogged = 0;
+      for (var h = 0; h < hideIds.length; h++) {
+        var hide = document.getElementById(hideIds[h]);
+        if (!hide) continue;
+        hide.setAttribute('visible', false);
+        if (hide.object3D) hide.object3D.visible = false;
+      }
       for (var i = 0; i < ids.length; i++) {
         var root = document.getElementById(ids[i]);
         if (!root) continue;
@@ -2161,39 +2168,30 @@
 
     _placeMatchHud: function () {
       if (!this.cups) return;
-      this._placeSideHud('blue', 'hud-card-blue', 'hud-cup-blue');
-      this._placeSideHud('red', 'hud-card-red', 'hud-cup-red');
+      this._placeSideHud('blue', 'hud-card-blue');
+      this._placeSideHud('red', 'hud-card-red');
     },
 
-    _placeSideHud: function (side, cardId, cupPanelId) {
+    _placeSideHud: function (side, cardId) {
       var card = document.getElementById(cardId);
-      var panel = document.getElementById(cupPanelId);
-      if (!card || !card.object3D || !panel || !panel.object3D) return;
+      if (!card || !card.object3D) return;
 
       var L = this._layout || {};
       var pad = side === 'blue' ? L.bluePad : L.redPad;
       var next = side === 'blue' ? L.blueNext : L.redNext;
       if (!pad || !next) return;
 
-      // Spawn is on the RIGHT of the playfield. HUD sits behind the NEXT
-      // column toward the cup (playfield side) — not toward the seat.
-      var towardCup = side === 'blue' ? -1 : 1;   // -Z for blue
-      var towardCenter = side === 'blue' ? -1 : 1; // -X for blue (left from right-side station)
+      // RIGHT of the NEXT column (BattleBlocks reference) — outboard from playfield
+      var outboard = side === 'blue' ? 1 : -1;
+      var towardCup = side === 'blue' ? -1 : 1;
       var yaw = side === 'blue' ? 0 : Math.PI;
 
-      var cx = next.x + towardCenter * 0.38;
-      var cy = (pad.y || 1.12) + 0.52;
-      var cz = next.z + towardCup * 0.08;
+      var cx = next.x + outboard * 0.42;
+      var cy = (pad.y || 1.12) + 0.58;
+      var cz = next.z + towardCup * 0.04;
       card.setAttribute('position', cx.toFixed(3) + ' ' + cy.toFixed(3) + ' ' + cz.toFixed(3));
       card.setAttribute('rotation', '0 ' + (yaw * 180 / Math.PI) + ' 0');
       card.setAttribute('visible', true);
-
-      var px = cx;
-      var py = cy - 0.52;
-      var pz = cz;
-      panel.setAttribute('position', px.toFixed(3) + ' ' + py.toFixed(3) + ' ' + pz.toFixed(3));
-      panel.setAttribute('rotation', '0 ' + (yaw * 180 / Math.PI) + ' 0');
-      panel.setAttribute('visible', true);
     },
 
     /** Bot pace tracks player (or rival bot) PPM with built-in wander. */
