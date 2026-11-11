@@ -127,6 +127,10 @@
   function updateMobileHudStatus() {
     var statusEl = document.getElementById('mobile-hud-status');
     if (!statusEl) return;
+    if (global.offlinePreview) {
+      statusEl.textContent = 'Offline Preview — swipe to orbit camera';
+      return;
+    }
     var ls = global.lobbyState;
     if (!ls) {
       statusEl.textContent = 'Connecting...';
@@ -272,15 +276,19 @@
     var redName = document.getElementById('mobile-red-name');
     var blueName = document.getElementById('mobile-blue-name');
     if (redName) redName.textContent = 'Red Bot';
-    if (blueName) blueName.textContent = 'Blue';
+    if (blueName) blueName.textContent = 'Blue Bot';
     requestWakeLock();
-    activateSpectatorBodies();
 
     var gm = document.querySelector('[stacks-game]');
     var comp = gm && gm.components && gm.components['stacks-game'];
-    if (comp && typeof comp.startOfflineBotMatch === 'function' && !comp.matchActive) {
+    if (comp && typeof comp.startOfflinePreviewMatch === 'function' && !comp.matchActive) {
+      comp.startOfflinePreviewMatch();
+    } else if (comp && typeof comp.startOfflineBotMatch === 'function' && !comp.matchActive) {
+      // legacy fallback
       comp.startOfflineBotMatch();
     }
+    activateSpectatorBodies();
+    updateMobileHudScores();
 
     var previewStart = Date.now();
     setInterval(function () {
