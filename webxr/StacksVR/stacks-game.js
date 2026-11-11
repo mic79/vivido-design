@@ -1752,6 +1752,8 @@
       var now = performance.now();
       this._updateThreat('blue', now);
       this._updateThreat('red', now);
+      if (this.cups.blue && this.cups.blue.tickHighLine) this.cups.blue.tickHighLine(now);
+      if (this.cups.red && this.cups.red.tickHighLine) this.cups.red.tickHighLine(now);
     },
 
     _updateThreat: function (side, now) {

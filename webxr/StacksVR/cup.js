@@ -63,12 +63,23 @@
     var h = this.height * this.cellSize;
     var rimColor = this.side === 'blue' ? 0x4A90E2 : 0xE25A4A;
 
+    // Floor — translucent (not opaque)
+    var floorMat = new THREE.MeshStandardMaterial({
+      color: 0x222830,
+      transparent: true,
+      opacity: 0.28,
+      roughness: 0.7,
+      metalness: 0.1,
+      depthWrite: false
+    });
+    this._shellMats.push(floorMat);
     var floor = new THREE.Mesh(
-      new THREE.BoxGeometry(w + 0.04, 0.04, d + 0.04),
-      new THREE.MeshStandardMaterial({ color: 0x222830, roughness: 0.7, metalness: 0.1 })
+      new THREE.BoxGeometry(w + 0.04, 0.03, d + 0.04),
+      floorMat
     );
-    floor.position.set(w / 2, -0.02, d / 2);
+    floor.position.set(w / 2, -0.015, d / 2);
     this.root.add(floor);
+    this._floor = floor;
 
     var wallMat = new THREE.MeshStandardMaterial({
       color: rimColor,
@@ -78,7 +89,6 @@
       roughness: 0.4,
       metalness: 0.2
     });
-    var edgeMat = new THREE.MeshStandardMaterial({ color: rimColor, roughness: 0.35, metalness: 0.4 });
 
     var self = this;
     function tagGrab(m) {
@@ -100,8 +110,16 @@
     this.root.add(wall(new THREE.BoxGeometry(w, h, 0.02), w / 2, h / 2, -0.01));
     this.root.add(wall(new THREE.BoxGeometry(w, h, 0.02), w / 2, h / 2, d + 0.01));
 
-    // Top rim — primary grab handle
-    var rimMat = edgeMat.clone();
+    // Top rim — translucent grab handle (not opaque)
+    var rimMat = new THREE.MeshStandardMaterial({
+      color: rimColor,
+      transparent: true,
+      opacity: 0.32,
+      roughness: 0.35,
+      metalness: 0.45,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
     this._shellMats.push(rimMat);
     this._rimMat = rimMat;
     var rim = tagGrab(new THREE.Mesh(
@@ -128,6 +146,25 @@
       ]);
       this.root.add(new THREE.Line(g2, lineMat));
     }
+
+    // Highest-layer highlight band (updated in _recomputeHeight)
+    var hiMat = new THREE.MeshBasicMaterial({
+      color: rimColor,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false
+    });
+    this._highLineMat = hiMat;
+    var hi = new THREE.Mesh(
+      new THREE.BoxGeometry(w + 0.02, 0.018, d + 0.02),
+      hiMat
+    );
+    hi.position.set(w / 2, 0, d / 2);
+    hi.visible = false;
+    this.root.add(hi);
+    this._highLine = hi;
   };
 
   Cup.prototype.setYaw = function (yaw) {
@@ -137,8 +174,9 @@
   };
 
   Cup.prototype.setHeight = function (y) {
-    var minY = 0.35;
-    var maxY = 1.75;
+    // Was 0.35–1.75 (1.4m span); at least 2× travel → ~2.8m span
+    var minY = 0.15;
+    var maxY = 3.0;
     this.heightOffset = THREE.MathUtils.clamp(y, minY, maxY);
     if (this.pivot) this.pivot.position.y = this.heightOffset;
     else this.root.position.y = this.heightOffset;
@@ -332,6 +370,32 @@
       }
     }
     this.constructionHeight = maxY + 1;
+    this._updateHighLine(maxY);
+  };
+
+  /** Glow band on the current highest occupied layer. */
+  Cup.prototype._updateHighLine = function (maxOccupiedY) {
+    if (!this._highLine) return;
+    if (maxOccupiedY < 0) {
+      this._highLine.visible = false;
+      return;
+    }
+    var w = this.width * this.cellSize;
+    var d = this.depth * this.cellSize;
+    // Sit on top face of the highest cell layer
+    this._highLine.position.set(
+      w / 2,
+      (maxOccupiedY + 1) * this.cellSize + 0.004,
+      d / 2
+    );
+    this._highLine.visible = true;
+  };
+
+  /** Soft pulse on the highest-line band (call from match tick). */
+  Cup.prototype.tickHighLine = function (now) {
+    if (!this._highLine || !this._highLine.visible || !this._highLineMat) return;
+    now = now || performance.now();
+    this._highLineMat.opacity = 0.38 + 0.32 * (0.5 + 0.5 * Math.sin(now * 0.008));
   };
 
   Cup.prototype.isToppedOut = function () {
