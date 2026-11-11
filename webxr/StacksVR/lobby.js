@@ -237,7 +237,7 @@
           Lobby.lobbyState.players.push({ id: fromId, nickname: data.nickname || 'Player', mobile: !!isMobile });
         }
         if (isMobile) Lobby.lobbyState.mobileSpectatorCount++;
-        else assignSpectatorSlot(fromId);
+        assignSpectatorSlot(fromId);
         broadcastLobbyState();
         // Late join during a match — push current board
         if (Lobby.lobbyState.matchState === 'PLAYING' && Lobby.onRequestSnapshot) {
@@ -277,63 +277,131 @@
     }
   }
 
+  // Same ICE path as DodgeVR — STUN alone fails Quest↔mobile NAT; TURN is required.
+  // Proxy may be CORS-blocked on mic79.github.io / localhost; fall back to same-origin ice-servers.json.
   async function getIceServers() {
-    return [
+    var stunOnly = [
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
+      { urls: 'stun:stun.cloudflare.com:3478' }
     ];
+    function hasTurn(list) {
+      return Array.isArray(list) && list.some(function (s) {
+        var u = s && s.urls;
+        var str = Array.isArray(u) ? u.join(',') : String(u || '');
+        return /turn:/i.test(str);
+      });
+    }
+    try {
+      var response = await fetch('https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev');
+      if (response.ok) {
+        var remote = await response.json();
+        if (hasTurn(remote)) return remote;
+      }
+    } catch (e) {
+      console.warn('[StacksLobby] TURN proxy fetch failed, trying local ice-servers.json');
+    }
+    var localTries = ['ice-servers.json'];
+    if (typeof location !== 'undefined' && /\/scripts\//.test(location.pathname || '')) {
+      localTries.push('../ice-servers.json');
+    }
+    for (var li = 0; li < localTries.length; li++) {
+      try {
+        var local = await fetch(localTries[li]);
+        if (local.ok) {
+          var fileIce = await local.json();
+          if (hasTurn(fileIce)) {
+            Lobby._iceSource = localTries[li];
+            return fileIce;
+          }
+        }
+      } catch (e2) {}
+    }
+    console.warn('[StacksLobby] No TURN config — mobile spectate across NATs will fail');
+    return stunOnly;
   }
 
-  // Returns true if the PeerJS id is free (no host). False if taken (host online).
-  // Uses ID-claim (unavailable-id) — NOT a DataConnection probe (those false-timeout
-  // on Quest/mobile NAT and were reporting "No lobby found" while VR was hosting).
+  function syncWindowState() {
+    global.isMultiplayer = Lobby.isMultiplayer;
+    global.isHost = Lobby.isHost;
+    global.isSpectator = Lobby.isSpectator;
+    global.isMobileSpectator = Lobby.isMobileSpectator;
+    global.isLobbyBotMatch = Lobby.isLobbyBotMatch;
+    global.lobbyState = Lobby.lobbyState;
+    global.myPlayerId = Lobby.myPlayerId;
+    global.connectionState = Lobby.connectionState;
+    global.StacksLobbyStatus = Lobby.statusText || '';
+  }
+
+  function setStatus(text) {
+    Lobby.statusText = text || '';
+    syncWindowState();
+    var scene = document.querySelector('a-scene');
+    if (scene) scene.emit('lobby-state-updated');
+    if (Lobby.onStatus) Lobby.onStatus(text);
+  }
+
+  // DodgeVR semantics: true = id free, false = taken (or ambiguous timeout → try join)
   function checkPeerAvailability(id) {
     return new Promise(function (resolve) {
-      var tempPeer = null;
-      var done = false;
-      function finish(available) {
-        if (done) return;
-        done = true;
-        try { if (tempPeer) tempPeer.destroy(); } catch (e) {}
-        resolve(available);
-      }
-      try {
-        tempPeer = new Peer(id, { host: '0.peerjs.com', port: 443, secure: true });
-      } catch (e) {
-        finish(true);
-        return;
-      }
+      var tempPeer = new Peer(id, { host: '0.peerjs.com', port: 443, secure: true });
       var timeout = setTimeout(function () {
-        // Ambiguous — treat as free so VR can still host; mobile will try connect anyway
-        finish(true);
-      }, 4000);
+        try { tempPeer.destroy(); } catch (e) {}
+        resolve(false);
+      }, 2000);
       tempPeer.on('open', function () {
         clearTimeout(timeout);
-        // Successfully registered as this id ⇒ nobody was hosting
-        finish(true);
+        try { tempPeer.destroy(); } catch (e) {}
+        resolve(true);
       });
       tempPeer.on('error', function (err) {
         clearTimeout(timeout);
-        if (err && err.type === 'unavailable-id') {
-          finish(false); // id taken ⇒ host exists
-        } else {
-          finish(true);
-        }
+        try { tempPeer.destroy(); } catch (e) {}
+        if (err && err.type === 'unavailable-id') resolve(false);
+        else resolve(true);
       });
     });
   }
 
+  function cleanupMultiplayer() {
+    try {
+      if (Lobby.conn) { Lobby.conn.close(); }
+    } catch (e) {}
+    Lobby.conn = null;
+    for (var i = 0; i < Lobby.connections.length; i++) {
+      try { Lobby.connections[i].conn.close(); } catch (e2) {}
+    }
+    Lobby.connections = [];
+    try {
+      if (Lobby.peer) Lobby.peer.destroy();
+    } catch (e3) {}
+    Lobby.peer = null;
+    Lobby.isMultiplayer = false;
+    Lobby.isHost = false;
+    Lobby.isSpectator = false;
+    Lobby.isMobileSpectator = false;
+    Lobby.lobbyState = null;
+    Lobby.myPlayerId = null;
+    Lobby.connectionState = 'idle';
+    Lobby.statusText = '';
+    syncWindowState();
+  }
+
+  function endMultiplayer() {
+    cleanupMultiplayer();
+    setStatus('Disconnected');
+  }
+
   async function setupHost(lobbyNum) {
+    cleanupMultiplayer();
     Lobby.lobbyNum = lobbyNum;
     Lobby.lobbyState = createLobbyState();
     Lobby.myPlayerId = 'stacksvr-host-' + lobbyNum;
     Lobby.lobbyState.players.push({ id: Lobby.myPlayerId, nickname: 'Host', mobile: false });
-    Lobby.isHost = true;
-    Lobby.isMultiplayer = true;
-    global.isMultiplayer = true;
-    global.isHost = true;
-    global.lobbyState = Lobby.lobbyState;
-    global.myPlayerId = Lobby.myPlayerId;
+    assignSpectatorSlot(Lobby.myPlayerId);
+    Lobby.isHost = false; // set true only after peer open (DodgeVR)
+    Lobby.isMultiplayer = false;
+    syncWindowState();
+    setStatus('Creating lobby ' + lobbyNum + '...');
 
     var ice = await getIceServers();
     Lobby.peer = new Peer(Lobby.myPlayerId, {
@@ -342,41 +410,59 @@
     });
 
     Lobby.peer.on('open', function () {
+      Lobby.isMultiplayer = true;
+      Lobby.isHost = true;
       Lobby.connectionState = 'connected';
+      syncWindowState();
+      setStatus('HOSTING Lobby ' + lobbyNum + ' — waiting for players');
       broadcastLobbyState();
     });
 
     Lobby.peer.on('connection', function (newConn) {
+      if (Lobby.connections.length >= 13) {
+        newConn.close();
+        return;
+      }
       var peerId = newConn.peer;
-      var entry = { id: peerId, conn: newConn, isMobileSpectator: peerId.indexOf('stacksvr-mspec-') === 0 };
-      Lobby.connections.push(entry);
+      var entry = {
+        id: peerId,
+        conn: newConn,
+        isMobileSpectator: peerId.indexOf('stacksvr-mspec-') === 0
+      };
       newConn.on('open', function () {
+        Lobby.connections.push(entry);
         newConn.send({ type: 'lobby-state', state: Lobby.lobbyState });
+        setStatus('HOSTING Lobby ' + lobbyNum + ' — ' + Lobby.connections.length + ' connected');
       });
       newConn.on('data', function (data) {
         if (data && data.type === 'mobile-spectator') entry.isMobileSpectator = true;
-        if (data && data.type === 'hello') handleData(peerId, data, entry.isMobileSpectator);
-        else handleData(peerId, data, entry.isMobileSpectator);
+        handleData(peerId, data, entry.isMobileSpectator);
       });
       newConn.on('close', function () {
         Lobby.connections = Lobby.connections.filter(function (c) { return c.id !== peerId; });
         removePlayer(peerId);
+        setStatus('HOSTING Lobby ' + lobbyNum + ' — ' + Lobby.connections.length + ' connected');
       });
     });
 
     Lobby.peer.on('error', function (err) {
       console.warn('[StacksLobby] host error', err);
+      setStatus('Host error: ' + (err && err.type ? err.type : 'unknown'));
+      Lobby.connectionState = 'idle';
+      syncWindowState();
     });
   }
 
   async function setupPeer(lobbyNum, asMobile) {
+    cleanupMultiplayer();
     Lobby.lobbyNum = lobbyNum;
     Lobby.isHost = false;
     var peerIdNum = Date.now().toString(36) + Math.random().toString(36).substr(2, 4);
     Lobby.myPlayerId = asMobile ? ('stacksvr-mspec-' + peerIdNum) : ('stacksvr-peer-' + peerIdNum);
-    global.myPlayerId = Lobby.myPlayerId;
     Lobby.isMobileSpectator = !!asMobile;
-    global.isMobileSpectator = Lobby.isMobileSpectator;
+    Lobby.isSpectator = !!asMobile;
+    syncWindowState();
+    setStatus(asMobile ? 'Spectating — opening peer...' : 'Joining lobby ' + lobbyNum + '...');
 
     var ice = await getIceServers();
     Lobby.peer = new Peer(Lobby.myPlayerId, {
@@ -385,23 +471,62 @@
     });
 
     var hostId = 'stacksvr-host-' + lobbyNum;
-    Lobby.peer.on('open', function () {
-      Lobby.conn = Lobby.peer.connect(hostId);
-      Lobby.conn.on('open', function () {
-        Lobby.isMultiplayer = true;
-        global.isMultiplayer = true;
-        Lobby.connectionState = 'connected';
-        if (asMobile) {
-          Lobby.conn.send({ type: 'mobile-spectator', nickname: 'Spectator' });
-          Lobby.conn.send({ type: 'hello', nickname: 'Spectator' });
-        } else {
-          Lobby.conn.send({ type: 'hello', nickname: 'Player' });
-        }
-      });
-      Lobby.conn.on('data', function (data) { handleData(hostId, data, false); });
-      Lobby.conn.on('close', function () {
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      function fail(msg) {
+        if (settled) return;
+        settled = true;
+        Lobby.connectionState = 'idle';
         Lobby.isMultiplayer = false;
-        if (Lobby.onDisconnected) Lobby.onDisconnected();
+        syncWindowState();
+        setStatus(msg);
+        reject(new Error(msg));
+      }
+      function ok() {
+        if (settled) return;
+        settled = true;
+        resolve(true);
+      }
+
+      var timer = setTimeout(function () {
+        fail('Connection timed out to lobby ' + lobbyNum);
+      }, 20000);
+
+      Lobby.peer.on('open', function () {
+        setStatus(asMobile ? 'Connecting to host...' : 'Connecting to host...');
+        Lobby.conn = Lobby.peer.connect(hostId, { reliable: true });
+        Lobby.conn.on('open', function () {
+          clearTimeout(timer);
+          Lobby.isMultiplayer = true;
+          Lobby.isHost = false;
+          Lobby.connectionState = 'connected';
+          syncWindowState();
+          if (asMobile) {
+            Lobby.conn.send({ type: 'mobile-spectator', nickname: 'Spectator' });
+            Lobby.conn.send({ type: 'hello', nickname: 'Spectator' });
+            setStatus('WATCHING Lobby ' + lobbyNum);
+          } else {
+            Lobby.conn.send({ type: 'hello', nickname: 'Player' });
+            setStatus('JOINED Lobby ' + lobbyNum);
+          }
+          ok();
+        });
+        Lobby.conn.on('data', function (data) { handleData(hostId, data, false); });
+        Lobby.conn.on('error', function () {
+          clearTimeout(timer);
+          fail('Connection failed to lobby ' + lobbyNum);
+        });
+        Lobby.conn.on('close', function () {
+          Lobby.isMultiplayer = false;
+          Lobby.connectionState = 'idle';
+          syncWindowState();
+          setStatus('Disconnected from lobby');
+          if (Lobby.onDisconnected) Lobby.onDisconnected();
+        });
+      });
+      Lobby.peer.on('error', function (err) {
+        clearTimeout(timer);
+        fail('Peer error: ' + (err && err.type ? err.type : 'unknown'));
       });
     });
   }
@@ -409,48 +534,42 @@
   async function connectToLobby(lobbyNum) {
     if (Lobby.isMultiplayer || Lobby.connectionState === 'connecting') return;
     Lobby.connectionState = 'connecting';
+    global.connectionState = 'connecting';
+    setStatus('Connecting to lobby ' + lobbyNum + '...');
     var hostId = 'stacksvr-host-' + lobbyNum;
     var hostTaken = !(await checkPeerAvailability(hostId));
-    if (hostTaken) await setupPeer(lobbyNum, false);
-    else await setupHost(lobbyNum);
+    if (hostTaken) {
+      try {
+        await setupPeer(lobbyNum, false);
+      } catch (e) {
+        setStatus((e && e.message) || 'Join failed');
+      }
+    } else {
+      await setupHost(lobbyNum);
+    }
   }
 
+  // DodgeVR-style mobile spectator: TURN + wait on real conn open (not a short poll).
   async function connectAsMobileSpectator(lobbyNum) {
     if (Lobby.isMultiplayer || Lobby.connectionState === 'connecting') {
       return { ok: false, error: 'Already connecting.' };
     }
     Lobby.connectionState = 'connecting';
+    global.connectionState = 'connecting';
+    setStatus('Looking for lobby ' + lobbyNum + '...');
     var hostId = 'stacksvr-host-' + lobbyNum;
-    var hostAvailable = await checkPeerAvailability(hostId);
-    var hostTaken = !hostAvailable;
+    var hostTaken = !(await checkPeerAvailability(hostId));
     if (!hostTaken) {
       Lobby.connectionState = 'idle';
-      return { ok: false, error: 'No lobby found. In VR: Multi Lobby → Connect Lobby ' + lobbyNum + ' first.' };
+      syncWindowState();
+      return { ok: false, error: 'No lobby found. Host must create it in VR first.' };
     }
     try {
       await setupPeer(lobbyNum, true);
-      // Wait briefly for the data connection to open
-      var ok = await new Promise(function (resolve) {
-        var n = 0;
-        var iv = setInterval(function () {
-          n++;
-          if (Lobby.conn && Lobby.conn.open) {
-            clearInterval(iv);
-            resolve(true);
-          } else if (n > 50) {
-            clearInterval(iv);
-            resolve(false);
-          }
-        }, 100);
-      });
-      if (!ok) {
-        Lobby.connectionState = 'idle';
-        Lobby.isMultiplayer = false;
-        return { ok: false, error: 'Lobby id exists but connection failed. Same Wi‑Fi / retry.' };
-      }
       return { ok: true };
     } catch (e) {
       Lobby.connectionState = 'idle';
+      syncWindowState();
       return { ok: false, error: (e && e.message) || 'Connect failed' };
     }
   }
@@ -516,6 +635,8 @@
   global.StacksLobby = Lobby;
   global.connectToLobby = connectToLobby;
   global.connectAsMobileSpectator = connectAsMobileSpectator;
+  global.endMultiplayer = endMultiplayer;
+  global.cleanupMultiplayer = cleanupMultiplayer;
   global.sendQueueAction = sendQueueAction;
   global.sendMatchAction = sendMatchAction;
   global.sendCupEvent = sendCupEvent;
@@ -532,6 +653,7 @@
   Lobby.sendPlayerPose = sendPlayerPose;
   Lobby.connectToLobby = connectToLobby;
   Lobby.connectAsMobileSpectator = connectAsMobileSpectator;
+  Lobby.endMultiplayer = endMultiplayer;
   Lobby.amMatchPlayer = amMatchPlayer;
   Lobby.mySide = mySide;
   Lobby.startLobbyMatch = startLobbyMatch;
@@ -542,4 +664,6 @@
   global.isSpectator = false;
   global.isLobbyBotMatch = false;
   global.lobbyState = null;
+  global.connectionState = 'idle';
+  global.StacksLobbyStatus = '';
 })(window);

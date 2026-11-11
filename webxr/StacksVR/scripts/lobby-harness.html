@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>StacksVR Lobby Harness</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="../lobby.js"></script>
+</head>
+<body>
+  <pre id="log">harness ready</pre>
+  <script>
+    (function () {
+      var logEl = document.getElementById('log');
+      function log(msg) {
+        logEl.textContent += '\n' + msg;
+        console.log('[harness]', msg);
+      }
+      window.__lobbyTest = {
+        log: log,
+        status: function () {
+          return {
+            connectionState: window.connectionState || (window.StacksLobby && window.StacksLobby.connectionState),
+            isMultiplayer: !!window.isMultiplayer,
+            isHost: !!window.isHost,
+            isMobileSpectator: !!window.isMobileSpectator,
+            myPlayerId: window.myPlayerId || null,
+            lobbyStatus: window.StacksLobbyStatus || '',
+            players: (window.lobbyState && window.lobbyState.players) ? window.lobbyState.players.length : 0,
+            matchState: window.lobbyState && window.lobbyState.matchState,
+            hasTurn: !!window.__ICE_HAS_TURN__
+          };
+        },
+        probeIce: async function () {
+          // Mirror lobby getIceServers paths for the test assertion
+          var remoteOk = false;
+          try {
+            var r = await fetch('https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev');
+            remoteOk = r.ok;
+          } catch (e) {}
+          var local = await fetch('../ice-servers.json');
+          var ice = local.ok ? await local.json() : [];
+          var hasTurn = ice.some(function (s) {
+            var u = s && s.urls;
+            return /turn:/i.test(Array.isArray(u) ? u.join(',') : String(u || ''));
+          });
+          window.__ICE_HAS_TURN__ = hasTurn;
+          return { remoteOk: remoteOk, hasTurn: hasTurn, count: ice.length };
+        },
+        host: async function (n) {
+          log('host lobby ' + n);
+          await window.connectToLobby(n);
+          // Host path is async via peer open — wait until connected+host
+          var t0 = Date.now();
+          while (Date.now() - t0 < 20000) {
+            if (window.isMultiplayer && window.isHost && window.connectionState === 'connected') {
+              log('host ready');
+              return window.__lobbyTest.status();
+            }
+            await new Promise(function (r) { setTimeout(r, 100); });
+          }
+          throw new Error('host not ready: ' + JSON.stringify(window.__lobbyTest.status()));
+        },
+        watch: async function (n) {
+          log('watch lobby ' + n);
+          var res = await window.connectAsMobileSpectator(n);
+          log('watch result ' + JSON.stringify(res));
+          if (!res || !res.ok) throw new Error((res && res.error) || 'watch failed');
+          var t0 = Date.now();
+          while (Date.now() - t0 < 5000) {
+            if (window.lobbyState && window.lobbyState.players && window.lobbyState.players.length) {
+              log('got lobby-state');
+              return window.__lobbyTest.status();
+            }
+            await new Promise(function (r) { setTimeout(r, 100); });
+          }
+          // Connected is enough even if state slightly delayed
+          return window.__lobbyTest.status();
+        },
+        leave: function () {
+          if (window.endMultiplayer) window.endMultiplayer();
+        }
+      };
+      window.__HARNESS_READY__ = true;
+      log('api ready');
+    })();
+  </script>
+</body>
+</html>

@@ -229,7 +229,12 @@
           this._setLobbyLabel();
           break;
         case 'join-lobby':
-          if (window.connectToLobby) window.connectToLobby(this.lobbyNumber);
+          if (window.isMultiplayer) {
+            if (window.endMultiplayer) window.endMultiplayer();
+            this.refreshLobbyUI();
+          } else if (window.connectToLobby) {
+            window.connectToLobby(this.lobbyNumber);
+          }
           break;
         case 'join-queue':
           if (window.sendQueueAction) window.sendQueueAction('join');
@@ -256,7 +261,17 @@
       var el = document.getElementById('menu-lobby-num');
       if (el) el.setAttribute('text', 'value', 'Lobby ' + this.lobbyNumber);
       var joinBtn = document.querySelector('[data-action="join-lobby"]');
-      if (joinBtn) joinBtn.setAttribute('text', 'value', 'Connect Lobby ' + this.lobbyNumber);
+      if (!joinBtn) return;
+      if (window.connectionState === 'connecting') {
+        joinBtn.setAttribute('text', 'value', 'JOINING...');
+        joinBtn.setAttribute('material', 'color', '#cc8800');
+      } else if (window.isMultiplayer) {
+        joinBtn.setAttribute('text', 'value', window.isHost ? 'HOSTING — Leave' : 'JOINED — Leave');
+        joinBtn.setAttribute('material', 'color', '#cc3333');
+      } else {
+        joinBtn.setAttribute('text', 'value', 'Connect Lobby ' + this.lobbyNumber);
+        joinBtn.setAttribute('material', 'color', '#2a5080');
+      }
     },
 
     refreshLobbyUI: function () {
@@ -269,17 +284,25 @@
 
       var status = document.getElementById('menu-lobby-status');
       if (status) {
+        var live = window.StacksLobbyStatus || '';
         var ls = window.lobbyState;
-        if (!window.isMultiplayer) {
-          status.setAttribute('text', 'value', 'Not connected');
+        if (window.connectionState === 'connecting' && live) {
+          status.setAttribute('text', 'value', live);
+        } else if (!window.isMultiplayer) {
+          status.setAttribute('text', 'value', live || 'Not connected');
         } else if (!ls) {
-          status.setAttribute('text', 'value', 'Connecting...');
+          status.setAttribute('text', 'value', live || 'Connecting...');
         } else {
           var mp = ls.matchPlayers || {};
           var q = (ls.queue || []).length;
-          status.setAttribute('text', 'value',
-            ls.matchState + ' | B:' + (mp.blue ? 'Y' : '-') + ' R:' + (mp.red ? (mp.red === '__BOT__' ? 'BOT' : 'Y') : '-') +
-            ' | Q:' + q + ' Spec:' + (ls.spectatorSlots || []).filter(Boolean).length);
+          var role = window.isHost ? 'HOST' : (window.isMobileSpectator ? 'WATCH' : 'JOINED');
+          var detail = role + ' L' + (window.StacksLobby && window.StacksLobby.lobbyNum ? window.StacksLobby.lobbyNum : '?') +
+            ' | ' + (ls.matchState || 'WAITING') +
+            ' | B:' + (mp.blue ? 'Y' : '-') +
+            ' R:' + (mp.red ? (mp.red === '__BOT__' ? 'BOT' : 'Y') : '-') +
+            ' | Q:' + q +
+            ' Spec:' + (ls.spectatorSlots || []).filter(Boolean).length;
+          status.setAttribute('text', 'value', live ? (live + ' · ' + detail) : detail);
         }
       }
 
