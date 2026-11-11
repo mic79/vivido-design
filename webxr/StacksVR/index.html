@@ -24,32 +24,165 @@
   <script src="attack.js?v=19"></script>
   <script src="cup-bot.js?v=19"></script>
   <script src="modes.js?v=19"></script>
-  <script src="lobby.js?v=27"></script>
+  <script src="lobby.js?v=28"></script>
   <script src="match-replay.js?v=19"></script>
-  <script src="game-menu.js?v=27"></script>
+  <script src="game-menu.js?v=28"></script>
   <script src="mixamo-body.js?v=19"></script>
   <script src="locomotion.js?v=19"></script>
   <script src="stacks-game.js?v=25"></script>
+  <script src="mobile-spectator.js?v=28"></script>
 
   <style>
-    html, body { margin: 0; height: 100%; background: #0b0e14; font-family: system-ui, sans-serif; }
+    html, body { margin: 0; height: 100%; background: #0b0e14; font-family: 'Segoe UI', Arial, sans-serif; }
     #boot {
       position: fixed; inset: 0; z-index: 50;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       background: #0b0e14; color: #e8eef8; text-align: center; gap: 12px;
     }
     #boot.gone { display: none !important; }
+    body.mobile-spectator #boot { display: none !important; }
     #boot button {
       padding: 14px 32px; border: 0; border-radius: 10px;
       background: #1f9d45; color: #fff; font-size: 1.15rem; font-weight: 700; cursor: pointer;
     }
     #boot .keys { opacity: 0.75; font-size: 0.95rem; line-height: 1.45; max-width: 460px; }
-    #mobile-lobby-screen { display: none; }
-    body.mobile-spectator #mobile-lobby-screen {
-      display: flex; position: fixed; inset: 0; z-index: 40; flex-direction: column;
-      align-items: center; justify-content: center; background: #0b0e14; color: #fff;
-      }
-    </style>
+
+    /* DodgeVR mobile spectator UI (ported) */
+    #mobile-spectator-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      z-index: 9999;
+      pointer-events: none;
+    }
+    #mobile-spectator-overlay.active { display: block; }
+    #mobile-spectator-overlay * { pointer-events: auto; }
+
+    #mobile-lobby-screen {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.92);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+    #mobile-lobby-screen h1 {
+      font-size: 2em;
+      margin: 0 0 0.1em;
+      letter-spacing: 0.05em;
+      color: #4A90E2;
+    }
+    #mobile-lobby-screen .subtitle {
+      font-size: 0.9em;
+      color: #999;
+      margin-bottom: 1.5em;
+    }
+    #mobile-lobby-screen .lobby-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 1em;
+    }
+    #mobile-lobby-screen .lobby-row label { font-size: 1.1em; color: #ccc; }
+    #mobile-lobby-screen .lobby-num-btn {
+      width: 44px; height: 44px;
+      border: none; border-radius: 8px;
+      background: #333; color: #fff; font-size: 1.4em;
+      cursor: pointer; touch-action: manipulation;
+    }
+    #mobile-lobby-screen .lobby-num-btn:active { background: #555; }
+    #mobile-lobby-screen .lobby-num {
+      font-size: 1.6em; min-width: 2em; text-align: center; color: #fff;
+    }
+    #mobile-lobby-screen .watch-btn {
+      padding: 14px 48px;
+      border: none; border-radius: 10px;
+      background: #22aa44; color: #fff;
+      font-size: 1.2em; font-weight: bold;
+      cursor: pointer; touch-action: manipulation; margin-top: 0.5em;
+    }
+    #mobile-lobby-screen .watch-btn:active { background: #1a8836; }
+    #mobile-lobby-screen .watch-btn:disabled { background: #555; color: #999; }
+    #mobile-lobby-screen .status-msg {
+      margin-top: 1em; font-size: 0.95em; color: #ffcc00; min-height: 1.5em;
+    }
+    #mobile-lobby-screen .preview-btn {
+      padding: 10px 32px;
+      border: 2px solid #555; border-radius: 10px;
+      background: transparent; color: #999; font-size: 0.9em;
+      cursor: pointer; touch-action: manipulation; margin-top: 1.2em;
+    }
+    #mobile-lobby-screen .preview-btn:active { background: rgba(255,255,255,0.08); }
+
+    #mobile-match-hud {
+      display: none;
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none;
+    }
+    #mobile-match-hud.active { display: block; }
+    #mobile-hud-top {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      display: flex; justify-content: center; align-items: center;
+      padding: 8px 16px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+    }
+    #mobile-hud-scores {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 1.8em; font-weight: bold;
+    }
+    #mobile-hud-scores .blue-name,
+    #mobile-hud-scores .red-name {
+      font-size: 0.5em; font-weight: normal;
+      max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #mobile-hud-scores .blue-side { color: #4499ff; text-align: right; }
+    #mobile-hud-scores .red-side { color: #ff4444; text-align: left; }
+    #mobile-hud-scores .score-sep { color: #888; font-size: 0.8em; }
+    #mobile-hud-timer {
+      position: absolute; top: 52px; left: 0; right: 0;
+      text-align: center; font-size: 1em; color: #ffdd00;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+    }
+    #mobile-hud-status {
+      position: absolute; bottom: 12px; left: 0; right: 0;
+      text-align: center; font-size: 0.9em; color: #aaa;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+    }
+    #mobile-preview-exit {
+      display: none;
+      position: absolute; bottom: 12px; right: 16px;
+      padding: 8px 20px; border: 1px solid #555; border-radius: 8px;
+      background: rgba(0,0,0,0.6); color: #aaa; font-size: 0.85em;
+      cursor: pointer; touch-action: manipulation; pointer-events: auto !important;
+    }
+    body.offline-preview #mobile-preview-exit { display: block; }
+
+    #mobile-rotate-prompt {
+      display: none;
+      position: fixed; inset: 0; z-index: 99999;
+      background: rgba(0,0,0,0.95); color: #fff;
+      flex-direction: column; align-items: center; justify-content: center;
+      font-size: 1.2em; text-align: center; padding: 20px;
+    }
+    #mobile-rotate-prompt .rotate-icon {
+      font-size: 3em; margin-bottom: 16px;
+      animation: rotateHint 2s ease-in-out infinite;
+    }
+    @keyframes rotateHint {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(90deg); }
+    }
+    @media (orientation: portrait) {
+      body.mobile-spectator #mobile-rotate-prompt { display: flex; }
+    }
+    @media (orientation: landscape) {
+      body.mobile-spectator #mobile-rotate-prompt { display: none; }
+    }
+  </style>
   </head>
   <body>
   <div id="boot">
@@ -59,25 +192,55 @@
       Empty hand on <b>cup rim</b> = rotate + raise/lower<br/>
       Ghost in-cup · release place · other hand can steal<br/>
       Menu: left X (or M) · lasers only while menu open · Multi lobby for PvP
-      </div>
+    </div>
     <button id="boot-btn" type="button">START</button>
-    </div>
+  </div>
 
-      <div id="mobile-lobby-screen">
-    <h1>STACKSVR Spectate</h1>
-    <div>
-      <button id="mobile-lobby-minus" type="button">-</button>
-      <span id="mobile-lobby-num">1</span>
-      <button id="mobile-lobby-plus" type="button">+</button>
-        </div>
-    <button id="mobile-watch-btn" type="button">Watch</button>
-    <div id="mobile-status-msg"></div>
+  <!-- Mobile Spectator Overlay (DodgeVR UX) -->
+  <div id="mobile-spectator-overlay">
+    <div id="mobile-lobby-screen">
+      <h1>STACKS VR</h1>
+      <div class="subtitle">Mobile Spectator</div>
+      <div class="lobby-row">
+        <label>Lobby:</label>
+        <button class="lobby-num-btn" id="mobile-lobby-minus" type="button">&minus;</button>
+        <span class="lobby-num" id="mobile-lobby-num">1</span>
+        <button class="lobby-num-btn" id="mobile-lobby-plus" type="button">+</button>
+      </div>
+      <button class="watch-btn" id="mobile-watch-btn" type="button">WATCH</button>
+      <button class="preview-btn" id="mobile-preview-btn" type="button">OFFLINE PREVIEW</button>
+      <div class="status-msg" id="mobile-status-msg"></div>
     </div>
+    <div id="mobile-match-hud">
+      <div id="mobile-hud-top">
+        <div id="mobile-hud-scores">
+          <span class="red-side">
+            <span class="red-name" id="mobile-red-name">Red</span>
+            <span id="mobile-red-score">0</span>
+          </span>
+          <span class="score-sep">&ndash;</span>
+          <span class="blue-side">
+            <span id="mobile-blue-score">0</span>
+            <span class="blue-name" id="mobile-blue-name">Blue</span>
+          </span>
+        </div>
+      </div>
+      <div id="mobile-hud-timer"></div>
+      <div id="mobile-hud-status">Waiting for match...</div>
+      <button id="mobile-preview-exit" type="button">EXIT PREVIEW</button>
+    </div>
+  </div>
+
+  <div id="mobile-rotate-prompt">
+    <div class="rotate-icon">&#x1F4F1;</div>
+    <div>Rotate your phone to landscape mode</div>
+  </div>
 
   <a-scene
     stacks-game="mode: pvp"
     vr-menu
     match-replay-ticker
+    mobile-spectator-cam
     background="color: #0b0e14"
     renderer="colorManagement: true; antialias: true"
     webxr="optionalFeatures: local-floor, bounded-floor, hand-tracking"
@@ -193,70 +356,10 @@
       document.getElementById('boot-btn').addEventListener('click', start);
       document.querySelector('a-scene').addEventListener('enter-vr', start);
 
-      var ua = navigator.userAgent || '';
-      var params = new URLSearchParams(location.search);
-      // Quest / Oculus / Pico / VR headsets must NOT be forced into phone spectate mode
-      var isHeadset = /Quest|Oculus|Pico|Vive|Windows MR|XR|Headset/i.test(ua);
-      var isPhoneTablet = /iPhone|iPad|iPod|Android/i.test(ua) && !isHeadset;
-      // Android Quest still contains "Android" — isHeadset catches Quest/OculusBrowser
-      if (/OculusBrowser|Quest/i.test(ua)) isHeadset = true;
-      if (params.get('spectate') === '1' || (isPhoneTablet && !isHeadset && params.get('vr') !== '1')) {
-        document.body.classList.add('mobile-spectator');
-        window.isMobileSpectator = true;
-        start();
-      }
-
-      var lobbyNum = 1;
-      function setLobby(n) {
-        lobbyNum = n;
-        var el = document.getElementById('mobile-lobby-num');
-        if (el) el.textContent = String(n);
-      }
-      var minus = document.getElementById('mobile-lobby-minus');
-      var plus = document.getElementById('mobile-lobby-plus');
-      if (minus) minus.onclick = function () { setLobby(Math.max(1, lobbyNum - 1)); };
-      if (plus) plus.onclick = function () { setLobby(Math.min(10, lobbyNum + 1)); };
-      var watch = document.getElementById('mobile-watch-btn');
-      if (watch) {
-        watch.onclick = async function () {
-          var status = document.getElementById('mobile-status-msg');
-          if (status) status.textContent = 'Looking for lobby ' + lobbyNum + '…';
-          watch.disabled = true;
-          try {
-            var res = await window.connectAsMobileSpectator(lobbyNum);
-            if (!res || !res.ok) {
-              if (status) status.textContent = (res && res.error) || 'Failed';
-              watch.disabled = false;
-            } else if (status) {
-              status.textContent = 'Connected — watching lobby ' + lobbyNum;
-            }
-          } catch (e) {
-            if (status) status.textContent = (e && e.message) || 'Failed';
-            watch.disabled = false;
-          }
-        };
-      }
-
-      if (window.StacksLobby) {
-        window.StacksLobby.onPlayerPose = function (fromId, data) {
-          var mp = window.lobbyState && window.lobbyState.matchPlayers;
-          var myId = window.myPlayerId || (window.StacksLobby && window.StacksLobby.myPlayerId);
-          if (fromId === myId) return;
-          var body = null;
-          if (mp && fromId === mp.red) body = document.getElementById('bot-body');
-          else if (mp && fromId === mp.blue) body = document.getElementById('spec-blue-body');
-          if (!body) return;
-          body.object3D.visible = true;
-          var mb = body.components && body.components['mixamo-body'];
-          if (mb) mb.remoteHandData = {
-            head: data.head,
-            leftHand: data.leftHand,
-            rightHand: data.rightHand
-          };
-        };
-      }
-
+      // Mobile spectator UI/UX is handled by mobile-spectator.js (DodgeVR port).
+      // Desktop / VR keyboard helpers only:
       window.addEventListener('keydown', function (e) {
+        if (window.isMobileSpectator) return;
         if (e.key === 'b' || e.key === 'B') {
           var el = document.querySelector('[stacks-game]');
           var g = el && el.components && el.components['stacks-game'];
@@ -265,9 +368,9 @@
         if (e.key === 'm' || e.key === 'M') {
           var menu = document.querySelector('[vr-menu]');
           if (menu && menu.components['vr-menu']) menu.components['vr-menu'].toggleMenu();
-          }
-        });
-      })();
-    </script>
+        }
+      });
+    })();
+  </script>
   </body>
 </html> 
