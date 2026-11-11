@@ -3,9 +3,9 @@
   'use strict';
 
   var CELL = (global.StacksShapes && global.StacksShapes.CELL) || 0.12;
-  var GRAB_REACH = 0.32;       // pad piece pickup
-  // Pocket is at x=-0.55, pad at x=0.2 (~0.75m apart) — 0.28 won't steal pad grabs
-  var POCKET_REACH = 0.28;
+  var GRAB_REACH = 0.28;       // pad piece pickup
+  // Pad/pocket sit ~0.4m apart — keep reaches tight so they don't steal each other
+  var POCKET_REACH = 0.22;
   var REGRAB_REACH = 0.28;
   var CUP_GRAB_REACH = 0.28;
   var CUP_MARGIN = CELL * 0.85;
