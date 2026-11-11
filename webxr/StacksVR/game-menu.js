@@ -260,8 +260,11 @@
     _isRealMatchPlaying: function () {
       var gm = document.querySelector('[stacks-game]');
       var comp = gm && gm.components['stacks-game'];
-      if (!comp || !comp.modes || !comp.modes.active) return false;
-      if (comp._dualBotPreview) return false;
+      if (comp && comp._dualBotPreview) return false;
+      // Lobby PLAYING is authoritative while hosting / joined
+      if (window.lobbyState && window.lobbyState.matchState === 'PLAYING') return true;
+      if (!comp || !comp.matchActive) return false;
+      if (!comp.modes || !comp.modes.active) return false;
       return true;
     },
 
@@ -421,13 +424,21 @@
             this.refreshLobbyUI();
             break;
           }
-          // Clear dual-bot desktop preview so human vs bot can take the pad
-          if (comp && (comp._dualBotPreview || (comp.matchActive && !playing))) {
-            comp.endMatch();
+          // Clear dual-bot idle without sending a no-op lobby "end" while WAITING
+          if (comp && typeof comp.stopLocalPreview === 'function') {
+            comp.stopLocalPreview();
+          } else if (comp && (comp._dualBotPreview || (comp.matchActive && !playing))) {
+            if (typeof comp.onMatchEnded === 'function') comp.onMatchEnded({ cancelled: true });
           }
           if (this.menuMode === 'multi') {
-            if (window.sendMatchAction) window.sendMatchAction('start');
-            else if (window.StacksLobby && window.StacksLobby.isHost) window.startLobbyMatch();
+            if (window.StacksLobby && window.StacksLobby.isHost &&
+                typeof window.startLobbyMatch === 'function') {
+              // Host start: alone → vs bot; two queued → PvP
+              window.startLobbyMatch();
+            } else if (window.sendMatchAction) {
+              window.sendMatchAction('start');
+            }
+            this.refreshLobbyUI();
             this.closeMenu();
             break;
           }
@@ -441,6 +452,7 @@
           } else if (comp) {
             comp.startOfflineBotMatch();
           }
+          this.refreshLobbyUI();
           this.closeMenu();
           break;
         case 'end-match':

@@ -1882,6 +1882,9 @@
         this._scheduleDualIdle(350);
       }
       this._endingMatch = false;
+      // Keep VR menu START/END label in sync after lobby/local ends
+      var scene = this.el && this.el.sceneEl;
+      if (scene) scene.emit('lobby-state-updated');
     },
 
     _scheduleDualIdle: function (delayMs) {
@@ -2188,8 +2191,32 @@
       this._endingMatch = true;
       if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
       var result = this._matchEndResult(null, true);
-      if (global.isMultiplayer && global.sendMatchAction) global.sendMatchAction('end', result);
-      else this.onMatchEnded(result);
+      var lobbyPlaying = !!(global.lobbyState && global.lobbyState.matchState === 'PLAYING');
+
+      // Only hit the lobby end path while a lobby match is actually PLAYING.
+      // Hosting + dual-bot idle is WAITING — sendMatchAction('end') was a no-op and
+      // left _endingMatch stuck true (START button stayed on END MATCH).
+      if (global.isMultiplayer && lobbyPlaying && global.sendMatchAction) {
+        global.sendMatchAction('end', result);
+        // Host: endLobbyMatch → onMatchEnded sync. Peer: wait for match-ended.
+        // Safety if host end somehow skipped the callback:
+        if (this._endingMatch && global.StacksLobby && global.StacksLobby.isHost) {
+          this.onMatchEnded(result);
+        }
+        return;
+      }
+      this.onMatchEnded(result);
+    },
+
+    /** Stop dual-bot idle / local preview without touching lobby match state. */
+    stopLocalPreview: function () {
+      if (!this._dualBotPreview && !(this.matchActive && !(global.lobbyState &&
+          global.lobbyState.matchState === 'PLAYING'))) {
+        return;
+      }
+      if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
+      this._endingMatch = false;
+      this.onMatchEnded({ cancelled: true });
     },
 
     _endFromMode: function (info) {
