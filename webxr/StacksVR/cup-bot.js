@@ -1,4 +1,4 @@
-// cup-bot.js — simple placement AI for StacksVR __BOT__ seat
+// cup-bot.js — visible pad/pocket + clear-focused placement AI for StacksVR
 (function (global) {
   'use strict';
 
@@ -8,10 +8,18 @@
     this.side = opts.side || 'red';
     this.bag = opts.bag || new global.StacksShapes.ShapeBag();
     this.enabled = false;
-    this.thinkIntervalMs = opts.thinkIntervalMs || 900;
+    this.thinkIntervalMs = opts.thinkIntervalMs != null ? opts.thinkIntervalMs : 1200;
+    this.placeAnimMs = opts.placeAnimMs != null ? opts.placeAnimMs : 600;
     this._lastThink = 0;
     this.currentType = null;
+    this.pocketType = null;
+    this.pocketUsed = false;
     this.onPlace = opts.onPlace || null;
+    this.onVisual = opts.onVisual || null;
+
+    this.state = 'idle'; // idle | animating
+    this._anim = null;
+    this._busyUntil = 0;
   }
 
   CupBot.prototype.setCup = function (cup) {
@@ -21,74 +29,162 @@
   CupBot.prototype.reset = function () {
     this.bag = new global.StacksShapes.ShapeBag();
     this.currentType = null;
+    this.pocketType = null;
+    this.pocketUsed = false;
     this._lastThink = 0;
+    this._busyUntil = 0;
+    this.state = 'idle';
+    this._anim = null;
+    this._emit({ kind: 'reset' });
   };
 
   CupBot.prototype.enable = function (on) {
     this.enabled = !!on;
-    if (on && !this.currentType) this.currentType = this.bag.next();
+    if (on) {
+      if (!this.currentType) this.currentType = this.bag.next();
+      this._emit({ kind: 'pad', type: this.currentType });
+      this._emit({ kind: 'pocket', type: this.pocketType });
+    } else {
+      this.state = 'idle';
+      this._anim = null;
+      this._emit({ kind: 'pad', type: null });
+      this._emit({ kind: 'pocket', type: null });
+      this._emit({ kind: 'hold', holding: false });
+    }
+  };
+
+  CupBot.prototype._emit = function (evt) {
+    if (typeof this.onVisual === 'function') this.onVisual(evt);
   };
 
   CupBot.prototype.tick = function (now) {
     if (!this.enabled || !this.cup) return null;
     now = now || performance.now();
+
+    if (this.state === 'animating' && this._anim) {
+      return this._tickAnim(now);
+    }
+
+    if (now < this._busyUntil) return null;
     if (now - this._lastThink < this.thinkIntervalMs) return null;
     this._lastThink = now;
 
-    if (!this.currentType) this.currentType = this.bag.next();
-    var best = this._findBestPlacement(this.currentType);
-    if (!best) {
+    if (!this.currentType) {
       this.currentType = this.bag.next();
+      this._emit({ kind: 'pad', type: this.currentType });
+    }
+
+    var plan = this._planMove();
+    if (!plan) return null;
+
+    if (plan.action === 'hold') {
+      // Current → pocket, draw next
+      this.pocketType = this.currentType;
+      this.currentType = this.bag.next();
+      this.pocketUsed = true;
+      this._emit({ kind: 'pad', type: this.currentType });
+      this._emit({ kind: 'pocket', type: this.pocketType });
+      this._busyUntil = now + 320;
       return null;
     }
 
-    var placed = this.cup.placeCells(best.cells, {
-      color: global.StacksShapes.DEFS[this.currentType].color,
-      owner: this.side,
-      shapeType: this.currentType
-    });
-    var type = this.currentType;
-    this.currentType = this.bag.next();
-    if (placed && this.onPlace) {
-      this.onPlace(this.side, type, best.cells, { placed: placed, rotationY: best.rot });
+    if (plan.action === 'swap') {
+      var held = this.currentType;
+      this.currentType = this.pocketType;
+      this.pocketType = held;
+      this.pocketUsed = true;
+      this._emit({ kind: 'pad', type: this.currentType });
+      this._emit({ kind: 'pocket', type: this.pocketType });
+      this._busyUntil = now + 320;
+      return null;
     }
-    return { type: type, cells: best.cells, placed: placed, score: best.score };
+
+    // Animate place
+    this.state = 'animating';
+    this._anim = {
+      type: plan.type,
+      cells: plan.cells,
+      score: plan.score,
+      started: now,
+      duration: this.placeAnimMs
+    };
+    this._emit({ kind: 'pad', type: null });
+    this._emit({
+      kind: 'hold',
+      holding: true,
+      type: plan.type,
+      cells: plan.cells,
+      progress: 0
+    });
+    return null;
   };
 
-  CupBot.prototype._findBestPlacement = function (type) {
+  CupBot.prototype._tickAnim = function (now) {
+    var a = this._anim;
+    if (!a) {
+      this.state = 'idle';
+      return null;
+    }
+    var t = (now - a.started) / Math.max(1, a.duration);
+    this._emit({
+      kind: 'hold',
+      holding: true,
+      type: a.type,
+      cells: a.cells,
+      progress: Math.min(1, t)
+    });
+    if (t < 1) return null;
+
+    var placed = this.cup.placeCells(a.cells, {
+      color: global.StacksShapes.DEFS[a.type].color,
+      owner: this.side,
+      shapeType: a.type
+    });
+    var type = a.type;
+    var cells = a.cells;
+    var score = a.score;
+    this._anim = null;
+    this.state = 'idle';
+    this._emit({ kind: 'hold', holding: false });
+
+    this.currentType = this.bag.next();
+    this.pocketUsed = false;
+    this._emit({ kind: 'pad', type: this.currentType });
+    this._busyUntil = now + 250;
+
+    if (placed && this.onPlace) {
+      this.onPlace(this.side, type, cells, { placed: placed, score: score });
+    }
+    return { type: type, cells: cells, placed: placed, score: score };
+  };
+
+  CupBot.prototype._orientations = function (type) {
     var def = global.StacksShapes.DEFS[type];
-    if (!def) return null;
-    var cup = this.cup;
-    var best = null;
-
-    for (var rot = 0; rot < 4; rot++) {
-      var local = global.StacksShapes.normalizeXZ(global.StacksShapes.rotateY(def.cells, rot));
-      var maxX = 0, maxZ = 0;
-      for (var i = 0; i < local.length; i++) {
-        if (local[i][0] > maxX) maxX = local[i][0];
-        if (local[i][2] > maxZ) maxZ = local[i][2];
+    if (!def) return [];
+    var seen = {};
+    var out = [];
+    var quats = global.StacksShapes.cubeOrients ? global.StacksShapes.cubeOrients() : null;
+    if (quats && quats.length) {
+      for (var i = 0; i < quats.length; i++) {
+        var cells = global.StacksShapes.orientCells(def.cells, quats[i]);
+        var key = cells.map(function (c) { return c.join(','); }).sort().join('|');
+        if (seen[key]) continue;
+        seen[key] = true;
+        out.push(cells);
       }
-
-      for (var ox = 0; ox <= cup.width - 1 - maxX; ox++) {
-        for (var oz = 0; oz <= cup.depth - 1 - maxZ; oz++) {
-          var dropped = this._dropAt(cup, local, ox, oz);
-          if (!dropped) continue;
-          var score = this._scorePlacement(cup, dropped);
-          if (!best || score > best.score) {
-            best = { cells: dropped, rot: rot, score: score };
-          }
-        }
+    } else {
+      for (var rot = 0; rot < 4; rot++) {
+        out.push(global.StacksShapes.normalizeXZ(global.StacksShapes.rotateY(def.cells, rot)));
       }
     }
-    return best;
+    return out;
   };
 
   CupBot.prototype._dropAt = function (cup, local, ox, oz) {
-    // Spawn from the highest fitting Y, then gravity-drop
     var found = null;
     for (var y = cup.height - 1; y >= 0; y--) {
-      var cells = local.map(function (c) { return [ox + c[0], y + c[1], oz + c[2]]; });
-      if (cup.canPlace(cells)) { found = cells; break; }
+      var tryCells = local.map(function (c) { return [ox + c[0], y + c[1], oz + c[2]]; });
+      if (cup.canPlace(tryCells)) { found = tryCells; break; }
     }
     if (!found) return null;
 
@@ -98,47 +194,167 @@
       found = next;
     }
 
-    var resting = false;
     for (var i = 0; i < found.length; i++) {
-      if (found[i][1] <= 0) { resting = true; break; }
-      if (!cup.isEmpty(found[i][0], found[i][1] - 1, found[i][2])) { resting = true; break; }
+      if (found[i][1] <= 0) return found;
+      if (!cup.isEmpty(found[i][0], found[i][1] - 1, found[i][2])) return found;
     }
-    return resting ? found : null;
+    return null;
   };
 
-  CupBot.prototype._scorePlacement = function (cup, cells) {
-    var sumY = 0;
-    var touching = 0;
-    for (var i = 0; i < cells.length; i++) {
-      sumY += cells[i][1];
-      var x = cells[i][0], y = cells[i][1], z = cells[i][2];
-      var neigh = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, -1, 0]];
-      for (var n = 0; n < neigh.length; n++) {
-        var nx = x + neigh[n][0], ny = y + neigh[n][1], nz = z + neigh[n][2];
-        if (!cup.inBounds(nx, ny, nz)) { touching += 0.25; continue; }
-        if (!cup.isEmpty(nx, ny, nz)) touching += 1;
-      }
-    }
+  CupBot.prototype._bestForType = function (type) {
+    if (!type || !this.cup) return null;
+    var cup = this.cup;
+    var orients = this._orientations(type);
+    var best = null;
 
-    var fillBonus = 0;
-    var layerAdds = {};
-    for (var j = 0; j < cells.length; j++) {
-      var ly = cells[j][1];
-      layerAdds[ly] = (layerAdds[ly] || 0) + 1;
-    }
-    Object.keys(layerAdds).forEach(function (key) {
-      var yv = parseInt(key, 10);
-      var filled = 0;
-      for (var zz = 0; zz < cup.depth; zz++) {
-        for (var xx = 0; xx < cup.width; xx++) {
-          if (!cup.isEmpty(xx, yv, zz)) filled++;
+    for (var oi = 0; oi < orients.length; oi++) {
+      var local = orients[oi];
+      var maxX = 0, maxZ = 0, maxY = 0;
+      for (var i = 0; i < local.length; i++) {
+        if (local[i][0] > maxX) maxX = local[i][0];
+        if (local[i][1] > maxY) maxY = local[i][1];
+        if (local[i][2] > maxZ) maxZ = local[i][2];
+      }
+      if (maxY >= cup.height) continue;
+
+      for (var ox = 0; ox <= cup.width - 1 - maxX; ox++) {
+        for (var oz = 0; oz <= cup.depth - 1 - maxZ; oz++) {
+          var dropped = this._dropAt(cup, local, ox, oz);
+          if (!dropped) continue;
+          var score = this._scorePlacement(cup, dropped, type);
+          if (!best || score > best.score) {
+            best = { type: type, cells: dropped, score: score };
+          }
         }
       }
-      filled += layerAdds[key];
-      if (filled >= cup.width * cup.depth) fillBonus += 80;
-    });
+    }
+    return best;
+  };
 
-    return fillBonus * 10 + touching * 3 - sumY * 2;
+  CupBot.prototype._planMove = function () {
+    var cur = this._bestForType(this.currentType);
+    if (!cur) return null;
+
+    var pocketBest = this.pocketType ? this._bestForType(this.pocketType) : null;
+
+    // Swap if pocket piece is clearly better
+    if (!this.pocketUsed && pocketBest && pocketBest.score > cur.score + 35) {
+      return { action: 'swap' };
+    }
+
+    // Hold current into empty pocket if it's awful and next looks better
+    if (!this.pocketUsed && !this.pocketType && cur.score < -100) {
+      var peek = this.bag.peek ? this.bag.peek(1) : null;
+      var nextType = peek && peek[0];
+      if (nextType) {
+        var nextBest = this._bestForType(nextType);
+        if (nextBest && nextBest.score > cur.score + 80) {
+          return { action: 'hold' };
+        }
+      }
+    }
+
+    return { action: 'place', type: cur.type, cells: cur.cells, score: cur.score };
+  };
+
+  /** Occupancy clone — never touches live meshes (scoring must be cheap). */
+  CupBot.prototype._cloneOcc = function (cup) {
+    var g = [];
+    for (var y = 0; y < cup.height; y++) {
+      var layer = [];
+      for (var z = 0; z < cup.depth; z++) {
+        var row = [];
+        for (var x = 0; x < cup.width; x++) {
+          row.push(cup.grid[y][z][x] ? 1 : 0);
+        }
+        layer.push(row);
+      }
+      g.push(layer);
+    }
+    return g;
+  };
+
+  CupBot.prototype._scorePlacement = function (cup, cells, type) {
+    var w = cup.width, d = cup.depth, h = cup.height;
+    var g = this._cloneOcc(cup);
+    for (var i = 0; i < cells.length; i++) {
+      var cx = cells[i][0], cy = cells[i][1], cz = cells[i][2];
+      if (cx < 0 || cy < 0 || cz < 0 || cx >= w || cy >= h || cz >= d) return -99999;
+      if (g[cy][cz][cx]) return -99999;
+      g[cy][cz][cx] = 1;
+    }
+
+    var full = [];
+    for (var y = 0; y < h; y++) {
+      var layerFull = true;
+      for (var z = 0; z < d && layerFull; z++) {
+        for (var x = 0; x < w; x++) {
+          if (!g[y][z][x]) { layerFull = false; break; }
+        }
+      }
+      if (layerFull) full.push(y);
+    }
+    var lines = full.length;
+
+    // Collapse full layers on the occupancy clone
+    if (lines > 0) {
+      var keep = [];
+      for (var yy = 0; yy < h; yy++) {
+        if (full.indexOf(yy) < 0) keep.push(g[yy]);
+      }
+      while (keep.length < h) {
+        var empty = [];
+        for (var zz = 0; zz < d; zz++) {
+          var erow = [];
+          for (var xx = 0; xx < w; xx++) erow.push(0);
+          empty.push(erow);
+        }
+        keep.push(empty);
+      }
+      g = keep;
+    }
+
+    var holes = 0;
+    var aggHeight = 0;
+    var colHeights = [];
+    var maxH = 0;
+    for (var x2 = 0; x2 < w; x2++) {
+      for (var z2 = 0; z2 < d; z2++) {
+        var ch = 0;
+        var blockSeen = false;
+        for (var y2 = h - 1; y2 >= 0; y2--) {
+          if (g[y2][z2][x2]) {
+            if (!blockSeen) {
+              ch = y2 + 1;
+              blockSeen = true;
+            }
+          } else if (blockSeen) {
+            holes++;
+          }
+        }
+        colHeights.push(ch);
+        aggHeight += ch;
+        if (ch > maxH) maxH = ch;
+      }
+    }
+
+    var bumpiness = 0;
+    for (var b = 0; b < colHeights.length - 1; b++) {
+      bumpiness += Math.abs(colHeights[b] - colHeights[b + 1]);
+    }
+
+    var sumY = 0;
+    for (var c = 0; c < cells.length; c++) sumY += cells[c][1];
+
+    return lines * 5200 +
+      (lines >= 2 ? 1800 : 0) +
+      (lines >= 3 ? 2400 : 0) +
+      (lines >= 4 ? 4000 : 0) -
+      holes * 160 -
+      aggHeight * 8 -
+      bumpiness * 6 -
+      maxH * 25 -
+      sumY * 2;
   };
 
   global.StacksCupBot = CupBot;

@@ -311,6 +311,7 @@
     snapQuatToGrid: snapQuatToGrid,
     orientCells: orientCells,
     cellsOriented: cellsOriented,
-    orientKey: orientKey
+    orientKey: orientKey,
+    cubeOrients: cubeOrients
   };
 })(window);

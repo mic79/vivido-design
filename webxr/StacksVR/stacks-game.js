@@ -17,7 +17,9 @@
 
     init: function () {
       this.cups = {};
-      this.clearSys = new global.StacksClear();
+      this.clearSysBlue = new global.StacksClear();
+      this.clearSysRed = new global.StacksClear();
+      this.clearSys = this.clearSysBlue; // back-compat
       this.attackSys = new global.StacksAttack();
       this.modes = new global.StacksModes.ModeController({ mode: this.data.mode });
       this.bag = new global.StacksShapes.ShapeBag();
@@ -148,19 +150,195 @@
       this._pocketType = null;
       this._pocketUsed = false;
 
+      // Bot's own pad + pocket on the red / far side of the table
+      this._botPad = new THREE.Group();
+      this._botPad.position.set(0.75, 1.05, -0.95);
+      this._sceneRoot.add(this._botPad);
+      this._botPad.add(new THREE.Mesh(
+        new THREE.BoxGeometry(0.45, 0.04, 0.32),
+        new THREE.MeshStandardMaterial({ color: 0x553030, roughness: 0.65, metalness: 0.15 })
+      ));
+      var botRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.16, 0.01, 8, 32),
+        new THREE.MeshBasicMaterial({ color: 0xE25A4A })
+      );
+      botRing.rotation.x = Math.PI / 2;
+      botRing.position.y = 0.03;
+      this._botPad.add(botRing);
+      this._botPadPiece = null;
+
+      this._botPocket = new THREE.Group();
+      this._botPocket.position.set(0.25, 1.05, -0.95);
+      this._sceneRoot.add(this._botPocket);
+      this._botPocket.add(new THREE.Mesh(
+        new THREE.BoxGeometry(0.32, 0.04, 0.32),
+        new THREE.MeshStandardMaterial({ color: 0x4a3040, roughness: 0.6, metalness: 0.2 })
+      ));
+      var botPocketRing = new THREE.Mesh(
+        new THREE.TorusGeometry(0.12, 0.01, 8, 24),
+        new THREE.MeshBasicMaterial({ color: 0xCE93D8 })
+      );
+      botPocketRing.rotation.x = Math.PI / 2;
+      botPocketRing.position.y = 0.03;
+      this._botPocket.add(botPocketRing);
+      this._botPocketMesh = null;
+      this._botHoldMesh = null;
+
       var self = this;
       this.bot = new global.StacksCupBot({
         cup: red,
         side: 'red',
         onPlace: function (side, type, cells, meta) {
           self._afterPlace(side, type, cells, meta.placed, true);
+        },
+        onVisual: function (evt) {
+          self._onBotVisual(evt);
         }
       });
+      this._setBotStationVisible(false);
 
       this._spawnPadPiece();
       this._updateHUD();
       this._desktopHands();
       console.log('[StacksGame] ready');
+    },
+
+    _setBotStationVisible: function (on) {
+      if (this._botPad) this._botPad.visible = !!on;
+      if (this._botPocket) this._botPocket.visible = !!on;
+      if (!on) {
+        this._clearBotPadPiece();
+        this._clearBotPocketPiece();
+        this._clearBotHoldMesh();
+      }
+    },
+
+    _clearBotPadPiece: function () {
+      if (!this._botPad) return;
+      for (var i = this._botPad.children.length - 1; i >= 0; i--) {
+        var ch = this._botPad.children[i];
+        if (ch.userData && ch.userData.botPadPiece) this._botPad.remove(ch);
+      }
+      this._botPadPiece = null;
+    },
+
+    _clearBotPocketPiece: function () {
+      if (!this._botPocket) return;
+      for (var i = this._botPocket.children.length - 1; i >= 0; i--) {
+        var ch = this._botPocket.children[i];
+        if (ch.userData && ch.userData.botPocketPiece) this._botPocket.remove(ch);
+      }
+      this._botPocketMesh = null;
+    },
+
+    _clearBotHoldMesh: function () {
+      if (this._botHoldMesh && this._botHoldMesh.parent) {
+        this._botHoldMesh.parent.remove(this._botHoldMesh);
+      }
+      this._botHoldMesh = null;
+      this._setRemoteHeld('red', { holding: false });
+    },
+
+    _onBotVisual: function (evt) {
+      if (!evt || !evt.kind) return;
+      if (evt.kind === 'reset') {
+        this._clearBotPadPiece();
+        this._clearBotPocketPiece();
+        this._clearBotHoldMesh();
+        return;
+      }
+      if (evt.kind === 'pad') {
+        this._clearBotPadPiece();
+        if (!evt.type || !this._botPad) return;
+        var mesh = global.StacksShapes.createShapeMesh(evt.type, {
+          centerPivot: true, rotationY: 0
+        });
+        mesh.userData.botPadPiece = true;
+        mesh.position.set(0, 0.1, 0);
+        this._botPad.add(mesh);
+        this._botPadPiece = mesh;
+        return;
+      }
+      if (evt.kind === 'pocket') {
+        this._clearBotPocketPiece();
+        if (!evt.type || !this._botPocket) return;
+        var pm = global.StacksShapes.createShapeMesh(evt.type, {
+          centerPivot: true, rotationY: 0
+        });
+        pm.userData.botPocketPiece = true;
+        pm.position.set(0, 0.1, 0);
+        pm.scale.setScalar(0.85);
+        this._botPocket.add(pm);
+        this._botPocketMesh = pm;
+        return;
+      }
+      if (evt.kind === 'hold') {
+        if (!evt.holding) {
+          this._clearBotHoldMesh();
+          if (global.sendCupEvent) {
+            global.sendCupEvent({ kind: 'hold', side: 'red', holding: false });
+          }
+          return;
+        }
+        var cup = this.cups.red;
+        if (!cup || !evt.cells || !evt.cells.length) return;
+        var target = new THREE.Vector3();
+        var tmp = new THREE.Vector3();
+        for (var i = 0; i < evt.cells.length; i++) {
+          cup.cellCenterWorld(evt.cells[i][0], evt.cells[i][1], evt.cells[i][2], tmp);
+          target.add(tmp);
+        }
+        target.multiplyScalar(1 / evt.cells.length);
+
+        if (!this._botHoldMesh) {
+          this._botHoldMesh = global.StacksShapes.createShapeMesh(evt.type, {
+            centerPivot: true, rotationY: 0
+          });
+          this._sceneRoot.add(this._botHoldMesh);
+        }
+        var p = Math.max(0, Math.min(1, evt.progress != null ? evt.progress : 0));
+        // Ease from pad → above cup → settle into cells
+        var from = new THREE.Vector3();
+        if (this._botPad) {
+          this._botPad.updateWorldMatrix(true, false);
+          this._botPad.getWorldPosition(from);
+          from.y += 0.12;
+        } else {
+          from.copy(target).add(new THREE.Vector3(0, 0.45, -0.4));
+        }
+        var mid = target.clone().add(new THREE.Vector3(0, 0.35, 0));
+        var pos;
+        if (p < 0.55) {
+          var u = p / 0.55;
+          pos = from.clone().lerp(mid, u);
+        } else {
+          var v = (p - 0.55) / 0.45;
+          pos = mid.clone().lerp(target, v);
+        }
+        // Convert world → sceneRoot local
+        this._sceneRoot.updateWorldMatrix(true, false);
+        this._sceneRoot.worldToLocal(pos);
+        this._botHoldMesh.position.copy(pos);
+
+        // Throttled network hold so mobile spectators see the piece fly in
+        var now = performance.now();
+        if (!this._lastBotHoldSend || now - this._lastBotHoldSend > 80 || p < 0.02) {
+          this._lastBotHoldSend = now;
+          if (global.sendCupEvent) {
+            global.sendCupEvent({
+              kind: 'hold',
+              side: 'red',
+              holding: true,
+              shapeType: evt.type,
+              pos: {
+                x: this._botHoldMesh.position.x,
+                y: this._botHoldMesh.position.y,
+                z: this._botHoldMesh.position.z
+              }
+            });
+          }
+        }
+      }
     },
 
     _desktopHands: function () {
@@ -1019,7 +1197,8 @@
 
     _afterPlace: function (side, type, cells, placed, broadcast) {
       var cup = this.cups[side];
-      var clearResult = this.clearSys.resolveAfterPlace(cup, placed, type);
+      var clearSys = side === 'red' ? this.clearSysRed : this.clearSysBlue;
+      var clearResult = clearSys.resolveAfterPlace(cup, placed, type);
       if (clearResult.layersCleared > 0) {
         this.attackSys.onClear(side, clearResult, performance.now());
         if (this.matchActive) {
@@ -1038,7 +1217,7 @@
           });
         }
       } else {
-        this.clearSys.resetCombo();
+        clearSys.resetCombo();
       }
 
       if (window.matchRecorder) {
@@ -1197,7 +1376,9 @@
         this.cups.red.clearAll();
       }
       if (this._sceneRoot) this._sceneRoot.visible = true;
-      this.clearSys = new global.StacksClear();
+      this.clearSysBlue = new global.StacksClear();
+      this.clearSysRed = new global.StacksClear();
+      this.clearSys = this.clearSysBlue;
       this.attackSys.reset();
       this.modes.setMode(this.data.mode);
       this.modes.start(startTime || Date.now());
@@ -1217,7 +1398,10 @@
         this.bot.reset();
         this.bot.setCup(this.cups.red);
         // Only the host (or offline) runs the red bot AI; spectators receive poses
-        var runBot = (!spectating) && (!!isBotMatch || (mp && mp.red === '__BOT__'));
+        var isBotSeat = !!isBotMatch || (mp && mp.red === '__BOT__');
+        var runBot = (!spectating) && isBotSeat;
+        // Show red pad/pocket to everyone in a bot match (host animates; peers see platforms)
+        this._setBotStationVisible(!!isBotSeat);
         this.bot.enable(runBot);
       }
       if (window.matchRecorder) window.matchRecorder.startRecording(startTime || Date.now());
@@ -1232,6 +1416,7 @@
       this.matchActive = false;
       this.matchState = 'WAITING';
       if (this.bot) this.bot.enable(false);
+      this._setBotStationVisible(false);
       if (window.matchRecorder && window.matchRecorder.isRecording) {
         var replay = window.matchRecorder.stopRecording();
         if (replay && window.matchReplayStorage) window.matchReplayStorage.save(replay);

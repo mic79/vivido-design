@@ -196,6 +196,14 @@
     );
   };
 
+  Cup.prototype.cellCenterWorld = function (cx, cy, cz, out) {
+    out = out || new THREE.Vector3();
+    out.copy(this.cellCenterLocal(cx, cy, cz));
+    this.root.updateWorldMatrix(true, false);
+    this.root.localToWorld(out);
+    return out;
+  };
+
   Cup.prototype.inBounds = function (cx, cy, cz) {
     return cx >= 0 && cx < this.width &&
       cy >= 0 && cy < this.height &&
