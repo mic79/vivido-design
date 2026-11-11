@@ -27,11 +27,11 @@
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=31"></script>
   <script src="match-replay.js?v=19"></script>
-  <script src="game-menu.js?v=30"></script>
+  <script src="game-menu.js?v=31"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=33"></script>
-  <script src="mobile-spectator.js?v=33"></script>
+  <script src="stacks-game.js?v=34"></script>
+  <script src="mobile-spectator.js?v=34"></script>
 
   <style>
     html, body { margin: 0; height: 100%; background: #0b0e14; font-family: 'Segoe UI', Arial, sans-serif; }
@@ -257,27 +257,28 @@
     <a-plane position="0 0 0" rotation="-90 0 0" width="12" height="12"
       material="color: #151a22; roughness: 0.92"></a-plane>
 
-    <a-entity id="score-display" position="0 2.15 -0.6"
+    <a-entity id="score-display" position="0 2.25 0"
       text="value: BLUE 0  |  RED 0; align: center; width: 3.5; color: #e8eef8"></a-entity>
-    <a-entity id="control-hint" position="0 1.95 -0.6"
+    <a-entity id="control-hint" position="0 2.05 0.9"
       text="value: Pad = grab · purple pocket = hold; align: center; width: 3.2; color: #9fe6b8"></a-entity>
-    <a-entity id="cup-height-blue" position="-0.4 1.95 -0.15"
+    <a-entity id="cup-height-blue" position="-0.55 1.85 0.85"
       text="value: H 0; align: center; width: 1.1; color: #4A90E2"></a-entity>
-    <a-entity id="cup-height-red" position="0.55 1.95 -0.15"
+    <a-entity id="cup-height-red" position="-0.55 1.85 -0.85"
       text="value: H 0; align: center; width: 1.1; color: #E25A4A"></a-entity>
-    <a-entity id="damage-blue" position="-0.4 1.82 -0.15"
+    <a-entity id="damage-blue" position="0.55 1.72 0.85"
       text="value: DMG 0; align: center; width: 1.1; color: #aaa"></a-entity>
-    <a-entity id="damage-red" position="0.55 1.82 -0.15"
+    <a-entity id="damage-red" position="0.55 1.72 -0.85"
       text="value: DMG 0; align: center; width: 1.1; color: #aaa"></a-entity>
     <!-- BattleBlocks HUD: Time / Attacks / Blocks + Score / BPS / Attacks -->
-    <a-entity id="stats-blue" position="-1.05 1.62 0.2"
+    <a-entity id="stats-blue" position="-1.15 1.55 0.85"
       text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min)\nScore: 0\nBPS: 0.000\nAttacks: 0; align: left; width: 1.55; color: #8ec5ff; wrapCount: 28"></a-entity>
-    <a-entity id="stats-red" position="1.15 1.62 0.2"
+    <a-entity id="stats-red" position="-1.15 1.55 -0.85"
       text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min)\nScore: 0\nBPS: 0.000\nAttacks: 0; align: left; width: 1.55; color: #ffb0a4; wrapCount: 28"></a-entity>
-    <a-entity id="version-display" position="0 0.12 0.9"
+    <a-entity id="version-display" position="0 0.12 1.2"
       text="value: StacksVR 1.0; align: center; width: 2; color: #556"></a-entity>
 
-    <a-entity id="player" position="0 0 1.35" stick-locomotion>
+    <!-- Player stands behind blue cup (~0.8m from cup center), facing opponent -->
+    <a-entity id="player" position="0 0 1.65" stick-locomotion>
       <a-entity id="rig">
         <a-entity id="camera" camera look-controls="pointerLockEnabled: true" wasd-controls position="0 1.6 0"></a-entity>
         <a-entity id="leftHand"
@@ -296,9 +297,9 @@
     <a-entity id="player-body"
       mixamo-body="mode: player; color: #4A90E2; modelPath: assets/YBot.fbx"></a-entity>
 
-    <a-entity id="cup-bot" position="0 1.5 -2.4"></a-entity>
-    <a-entity id="spec-blue-anchor" position="0 1.6 1.2"></a-entity>
-    <a-entity id="bot-body" position="0 0 -2.4"
+    <a-entity id="cup-bot" position="0 1.5 -1.65"></a-entity>
+    <a-entity id="spec-blue-anchor" position="0 1.6 1.65"></a-entity>
+    <a-entity id="bot-body" position="0 0 -1.65"
       mixamo-body="mode: bot; color: #E25A4A; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
     <a-entity id="spec-blue-body" visible="false"
       mixamo-body="mode: bot; color: #4A90E2; modelPath: assets/YBot.fbx; botEntitySelector: #spec-blue-anchor"></a-entity>

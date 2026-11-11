@@ -102,44 +102,60 @@
       this._sceneRoot.name = 'stacks-arena';
       scene.add(this._sceneRoot);
 
+      // Layout from BattleBlocks screenshot (face-to-face cups, neon floor
+      // footprints, spawn+storage floating beside each cup at reach height).
+      // Scale cue: avatar ~1.7m; cup footprints ~0.72m (6×0.12); centers ~1.7m apart.
+      var CUP_Y = 0.92;
+      var CUP_HALF = (6 * CELL) / 2; // 0.36
+      var BLUE_CZ = 0.85;
+      var RED_CZ = -0.85;
+      var PAD_Y = 1.12;
+      var PAD_LAT = 0.52;   // lateral offset from midline
+      var PAD_Z_NEAR = 1.30; // toward blue player
+      var PAD_Z_FAR = -1.30; // toward red player
+
       var blue = new global.StacksCup({
         id: 'blue', side: 'blue',
         width: 6, depth: 6, height: 12,
-        position: { x: -0.4, y: 0.9, z: -0.15 }
+        position: { x: -CUP_HALF, y: CUP_Y, z: BLUE_CZ - CUP_HALF }
       });
       var red = new global.StacksCup({
         id: 'red', side: 'red',
         width: 6, depth: 6, height: 12,
-        position: { x: 0.55, y: 0.9, z: -0.15 }
+        position: { x: -CUP_HALF, y: CUP_Y, z: RED_CZ - CUP_HALF }
       });
       this.cups.blue = blue;
       this.cups.red = red;
       this._sceneRoot.add(blue.pivot || blue.root);
       this._sceneRoot.add(red.pivot || red.root);
+      // Face red cup toward the far player (mirrors BB opposing stations)
+      if (red.pivot) {
+        red.pivot.rotation.y = Math.PI;
+        red.yaw = Math.PI;
+      }
 
-      // Spawn stack pad — in front of player, easy reach
+      // Blue spawn pad (right) + storage pocket (left) — near player side
       this._pad = new THREE.Group();
-      this._pad.position.set(0.2, 1.05, 0.85);
+      this._pad.position.set(PAD_LAT, PAD_Y, PAD_Z_NEAR);
       this._sceneRoot.add(this._pad);
       this._padMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.45, 0.04, 0.32),
+        new THREE.BoxGeometry(0.40, 0.04, 0.40),
         new THREE.MeshStandardMaterial({ color: 0x314055, roughness: 0.65, metalness: 0.15 })
       );
       this._pad.add(this._padMesh);
       var ring = new THREE.Mesh(
-        new THREE.TorusGeometry(0.16, 0.01, 8, 32),
+        new THREE.TorusGeometry(0.15, 0.01, 8, 32),
         new THREE.MeshBasicMaterial({ color: 0x69F0AE })
       );
       ring.rotation.x = Math.PI / 2;
       ring.position.y = 0.03;
       this._pad.add(ring);
 
-      // Hold / storage pocket (Tetris-style swap)
       this._pocket = new THREE.Group();
-      this._pocket.position.set(-0.55, 1.05, 0.85);
+      this._pocket.position.set(-PAD_LAT, PAD_Y, PAD_Z_NEAR);
       this._sceneRoot.add(this._pocket);
       var pocketBase = new THREE.Mesh(
-        new THREE.BoxGeometry(0.32, 0.04, 0.32),
+        new THREE.BoxGeometry(0.34, 0.04, 0.34),
         new THREE.MeshStandardMaterial({ color: 0x3a3050, roughness: 0.6, metalness: 0.2 })
       );
       this._pocket.add(pocketBase);
@@ -153,16 +169,16 @@
       this._pocketType = null;
       this._pocketUsed = false;
 
-      // Bot's own pad + pocket on the red / far side of the table
+      // Red spawn + storage — mirrored on the far station
       this._botPad = new THREE.Group();
-      this._botPad.position.set(0.75, 1.05, -0.95);
+      this._botPad.position.set(PAD_LAT, PAD_Y, PAD_Z_FAR);
       this._sceneRoot.add(this._botPad);
       this._botPad.add(new THREE.Mesh(
-        new THREE.BoxGeometry(0.45, 0.04, 0.32),
+        new THREE.BoxGeometry(0.40, 0.04, 0.40),
         new THREE.MeshStandardMaterial({ color: 0x553030, roughness: 0.65, metalness: 0.15 })
       ));
       var botRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.16, 0.01, 8, 32),
+        new THREE.TorusGeometry(0.15, 0.01, 8, 32),
         new THREE.MeshBasicMaterial({ color: 0xE25A4A })
       );
       botRing.rotation.x = Math.PI / 2;
@@ -171,10 +187,10 @@
       this._botPadPiece = null;
 
       this._botPocket = new THREE.Group();
-      this._botPocket.position.set(0.25, 1.05, -0.95);
+      this._botPocket.position.set(-PAD_LAT, PAD_Y, PAD_Z_FAR);
       this._sceneRoot.add(this._botPocket);
       this._botPocket.add(new THREE.Mesh(
-        new THREE.BoxGeometry(0.32, 0.04, 0.32),
+        new THREE.BoxGeometry(0.34, 0.04, 0.34),
         new THREE.MeshStandardMaterial({ color: 0x4a3040, roughness: 0.6, metalness: 0.2 })
       ));
       var botPocketRing = new THREE.Mesh(

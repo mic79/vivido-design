@@ -415,8 +415,9 @@
       init: function () {
         // Do NOT early-return forever — flag may be set in same tick; always allow setup
         var self = this;
-        this._orbitRadius = 3.4;
-        this._orbitHeight = 2.05;
+        // Face-to-face cups span ~±0.85m; orbit a bit wider than old side-by-side
+        this._orbitRadius = 3.8;
+        this._orbitHeight = 2.15;
         this._orbitAngle = Math.PI / 2;
         this._orbitTargetAngle = Math.PI / 2;
         this._touchStartX = 0;

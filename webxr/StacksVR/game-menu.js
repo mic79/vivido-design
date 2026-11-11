@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var PLAY_POSITION = { x: 0, y: 0, z: 1.35, ry: 0 };
+  var PLAY_POSITION = { x: 0, y: 0, z: 1.65, ry: 0 };
 
   var SPECTATOR_POSITIONS = [
     { x: -3.5, y: 0, z: 2.5, ry: -40 },
