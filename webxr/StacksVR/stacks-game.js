@@ -1966,28 +1966,36 @@
       }
     },
 
-    /** BattleBlocks station card: one canvas — Blocks / Attacks / Time, italic, no name. */
+    /** BattleBlocks station card: canvas parented to NEXT — clear of the frame. */
     _ensureStationCard: function (side) {
       if (!this._stationCards) this._stationCards = {};
       if (this._stationCards[side]) return this._stationCards[side];
-      if (!this._sceneRoot) return null;
+      var nextCol = side === 'red' ? this._nextRed : this._nextBlue;
+      if (!nextCol || !nextCol.root) return null;
+
       var canvas = document.createElement('canvas');
       canvas.width = 512;
-      canvas.height = 700;
+      canvas.height = 720;
       var tex = new THREE.CanvasTexture(canvas);
       tex.minFilter = THREE.LinearFilter;
       tex.magFilter = THREE.LinearFilter;
       var mat = new THREE.MeshBasicMaterial({
         map: tex,
         transparent: true,
+        depthTest: false,
         depthWrite: false,
         toneMapped: false,
         side: THREE.DoubleSide
       });
-      var mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.66), mat);
+      // Left-aligned plane: origin at left-center so we park the left edge past NEXT
+      var mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.72), mat);
+      mesh.geometry.translate(0.275, 0, 0);
       mesh.frustumCulled = false;
-      this._sceneRoot.add(mesh);
-      var card = { mesh: mesh, canvas: canvas, tex: tex, mat: mat };
+      mesh.renderOrder = 20;
+      // Local +X = to the right of NEXT for both sides (red root is yaw-flipped)
+      mesh.position.set(0.22, 0.55, 0.06);
+      nextCol.root.add(mesh);
+      var card = { mesh: mesh, canvas: canvas, tex: tex, mat: mat, side: side };
       this._stationCards[side] = card;
       return card;
     },
@@ -2004,22 +2012,21 @@
       ctx.textBaseline = 'top';
       ctx.fillStyle = '#ffffff';
 
-      var y = 8;
+      var y = 12;
+      var left = 16;
       function label(t) {
-        ctx.font = 'italic 600 48px Arial, Helvetica, sans-serif';
-        ctx.globalAlpha = 1;
-        ctx.fillText(t, 8, y);
-        y += 58;
+        ctx.font = 'italic 600 52px Arial, Helvetica, sans-serif';
+        ctx.fillText(t, left, y);
+        y += 62;
       }
       function row(main, rate) {
-        ctx.font = 'italic 700 92px Arial, Helvetica, sans-serif';
-        ctx.globalAlpha = 1;
-        ctx.fillText(String(main), 8, y);
+        ctx.font = 'italic 700 96px Arial, Helvetica, sans-serif';
+        ctx.fillText(String(main), left, y);
         if (rate != null && rate !== '') {
-          ctx.font = 'italic 600 56px Arial, Helvetica, sans-serif';
-          ctx.fillText(String(rate), 250, y + 22);
+          ctx.font = 'italic 600 58px Arial, Helvetica, sans-serif';
+          ctx.fillText(String(rate), left + 240, y + 24);
         }
-        y += 118;
+        y += 122;
       }
 
       label('Blocks');
@@ -2255,20 +2262,9 @@
     _placeStationCard: function (side) {
       var card = this._ensureStationCard(side);
       if (!card || !card.mesh) return;
-      var L = this._layout || {};
-      var pad = side === 'blue' ? L.bluePad : L.redPad;
-      var next = side === 'blue' ? L.blueNext : L.redNext;
-      if (!pad || !next) return;
-
-      // Flush right of NEXT — mid-height of the frame (BattleBlocks)
-      var outboard = side === 'blue' ? 1 : -1;
-      var yaw = side === 'blue' ? 0 : Math.PI;
-      card.mesh.position.set(
-        next.x + outboard * 0.34,
-        (pad.y || 1.12) + 0.78,
-        next.z
-      );
-      card.mesh.rotation.set(0, yaw, 0);
+      // Locked to NEXT root: left edge just past the neon frame (never clipped)
+      card.mesh.position.set(0.24, 0.58, 0.08);
+      card.mesh.rotation.set(0, 0, 0);
       card.mesh.visible = true;
     },
 
