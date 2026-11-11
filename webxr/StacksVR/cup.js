@@ -291,13 +291,17 @@
     var geo = (global.StacksShapes && StacksShapes.roundedBlockGeo)
       ? StacksShapes.roundedBlockGeo()
       : new THREE.BoxGeometry(this.cellSize * 0.92, this.cellSize * 0.92, this.cellSize * 0.92);
-    var mat = new THREE.MeshStandardMaterial({
-      color: color || (global.StacksShapes && StacksShapes.BLOCK_COLOR) || '#ffffff',
-      roughness: 0.55,
-      metalness: 0.0,
-      emissive: new THREE.Color(0xffffff),
-      emissiveIntensity: 0.22
-    });
+    var col = color || (global.StacksShapes && StacksShapes.BLOCK_COLOR) || '#ffffff';
+    var mat = (global.StacksShapes && StacksShapes.makeBlockMaterial)
+      ? StacksShapes.makeBlockMaterial(col)
+      : new THREE.MeshStandardMaterial({
+          color: col,
+          roughness: 0.62,
+          metalness: 0.0,
+          emissive: new THREE.Color(0xffffff),
+          emissiveIntensity: 0.85,
+          toneMapped: false
+        });
     var mesh = new THREE.Mesh(geo, mat);
     mesh.castShadow = true;
     mesh.receiveShadow = true;

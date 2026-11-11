@@ -6,7 +6,19 @@
   var HALF_PI = Math.PI / 2;
   // BattleBlocks look: bright white play blocks (dark debris is background only)
   var BLOCK_COLOR = '#ffffff';
-  var GARBAGE_COLOR = '#e8e8ee';
+  var GARBAGE_COLOR = '#f0f0f4';
+
+  /** White that stays white under A-Frame tone-mapping / dark arena lights. */
+  function makeBlockMaterial(color) {
+    return new THREE.MeshStandardMaterial({
+      color: color || BLOCK_COLOR,
+      roughness: 0.62,
+      metalness: 0.0,
+      emissive: new THREE.Color(0xffffff),
+      emissiveIntensity: 0.85,
+      toneMapped: false
+    });
+  }
 
   // Relative cell offsets for each shape (y-up). Default pose is flat on XZ.
   var DEFS = {
@@ -321,13 +333,7 @@
         toneMapped: false
       });
     } else {
-      mat = new THREE.MeshStandardMaterial({
-        color: color,
-        roughness: 0.55,
-        metalness: 0.0,
-        emissive: new THREE.Color(0xffffff),
-        emissiveIntensity: 0.22
-      });
+      mat = makeBlockMaterial(color);
     }
 
     for (var i = 0; i < cells.length; i++) {
@@ -370,6 +376,7 @@
     CELL: CELL,
     BLOCK_COLOR: BLOCK_COLOR,
     GARBAGE_COLOR: GARBAGE_COLOR,
+    makeBlockMaterial: makeBlockMaterial,
     DEFS: DEFS,
     BAG_ORDER: BAG_ORDER,
     ShapeBag: ShapeBag,
