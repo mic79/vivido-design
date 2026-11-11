@@ -2001,72 +2001,114 @@
       if (redCup) redCup.setAttribute('text', 'value', red.cupText(now));
     },
 
-    /** BattleBlocks-like void arena: fog, neon station plates, horizon glow. */
+    /** Bake a neon void into scene.environment for IBL reflections. */
+    _setupArenaEnvMap: function (sceneEl) {
+      if (!sceneEl || !sceneEl.renderer || !THREE.PMREMGenerator) return null;
+      if (this._envMap) return this._envMap;
+      var renderer = sceneEl.renderer;
+      var bake = new THREE.Scene();
+      bake.add(new THREE.AmbientLight(0xffffff, 0.15));
+      bake.add(new THREE.HemisphereLight(0xaa88cc, 0x100818, 1.4));
+      function glowOrb(color, x, y, z, s) {
+        var m = new THREE.Mesh(
+          new THREE.SphereGeometry(s || 0.6, 16, 16),
+          new THREE.MeshBasicMaterial({ color: color })
+        );
+        m.position.set(x, y, z);
+        bake.add(m);
+      }
+      glowOrb(0x66ddff, -4, 2.5, 3, 0.9);
+      glowOrb(0xff7744, 4, 2.2, -3, 0.9);
+      glowOrb(0xffe8d8, 0, 6, 1, 1.6);
+      glowOrb(0x331144, 0, -2, 0, 3.5);
+      var pmrem = new THREE.PMREMGenerator(renderer);
+      var rt = pmrem.fromScene(bake, 0.06);
+      this._envMap = rt.texture;
+      pmrem.dispose();
+      bake.traverse(function (o) {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      return this._envMap;
+    },
+
+    /** BattleBlocks-like void arena: glossy floor, IBL, neon lamps, soft shadows. */
     _buildArenaAtmosphere: function (blueC, redC) {
       var root = this._sceneRoot;
       if (!root || this._arenaBuilt) return;
       this._arenaBuilt = true;
 
       var sceneEl = this.el.sceneEl;
-      if (sceneEl && sceneEl.object3D) {
-        // Mild fog only — dense FogExp2 was washing a-text to invisible
-        sceneEl.object3D.fog = new THREE.FogExp2(0x09060c, 0.012);
+      var scene3d = sceneEl && sceneEl.object3D;
+      if (scene3d) {
+        scene3d.fog = new THREE.FogExp2(0x09060c, 0.010);
         sceneEl.setAttribute('background', 'color', '#06040a');
       }
       if (sceneEl && sceneEl.renderer) {
         sceneEl.renderer.shadowMap.enabled = true;
         sceneEl.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        if (sceneEl.renderer.toneMappingExposure != null) {
+          sceneEl.renderer.toneMappingExposure = 1.12;
+        }
       }
 
-      // Dark reflective ground disc under play (receives block shadows)
-      var ground = new THREE.Mesh(
-        new THREE.CircleGeometry(7.5, 64),
-        new THREE.MeshStandardMaterial({
-          color: 0x07080e,
-          roughness: 0.88,
-          metalness: 0.35
-        })
-      );
+      var envMap = this._setupArenaEnvMap(sceneEl);
+      if (envMap && scene3d) {
+        scene3d.environment = envMap;
+        if (scene3d.environmentIntensity != null) scene3d.environmentIntensity = 0.95;
+      }
+
+      // Glossy dark floor — picks up IBL + neon (BattleBlocks reflections)
+      var groundMat = new THREE.MeshStandardMaterial({
+        color: 0x06070c,
+        roughness: 0.16,
+        metalness: 0.92,
+        envMapIntensity: 1.6
+      });
+      if (envMap) groundMat.envMap = envMap;
+      var ground = new THREE.Mesh(new THREE.CircleGeometry(7.5, 64), groundMat);
       ground.rotation.x = -Math.PI / 2;
       ground.position.y = 0.001;
       ground.receiveShadow = true;
       root.add(ground);
+      this._groundMat = groundMat;
 
-      // Soft radial neon under-glow
+      // Soft radial neon under-glow (additive so it reads as floor bloom)
       var underGlow = new THREE.Mesh(
-        new THREE.CircleGeometry(3.2, 48),
+        new THREE.CircleGeometry(3.4, 48),
         new THREE.MeshBasicMaterial({
-          color: 0x2a1040,
+          color: 0x3a1858,
           transparent: true,
-          opacity: 0.22,
+          opacity: 0.28,
           toneMapped: false,
-          depthWrite: false
+          depthWrite: false,
+          blending: THREE.AdditiveBlending
         })
       );
       underGlow.rotation.x = -Math.PI / 2;
-      underGlow.position.y = 0.01;
+      underGlow.position.y = 0.012;
       root.add(underGlow);
 
       function stationPlate(cx, cz, color) {
         var g = new THREE.Group();
         g.position.set(cx, 0.015, cz);
-        var plate = new THREE.Mesh(
-          new THREE.PlaneGeometry(1.15, 1.15),
-          new THREE.MeshStandardMaterial({
-            color: 0x0a0c14,
-            roughness: 0.55,
-            metalness: 0.4,
-            transparent: true,
-            opacity: 0.9
-          })
-        );
+        var plateMat = new THREE.MeshStandardMaterial({
+          color: 0x080a12,
+          roughness: 0.22,
+          metalness: 0.85,
+          envMapIntensity: 1.4,
+          transparent: true,
+          opacity: 0.92
+        });
+        if (envMap) plateMat.envMap = envMap;
+        var plate = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 1.15), plateMat);
         plate.rotation.x = -Math.PI / 2;
         plate.receiveShadow = true;
         g.add(plate);
         var edge = new THREE.Mesh(
           new THREE.RingGeometry(0.72, 0.76, 4),
           new THREE.MeshBasicMaterial({
-            color: color, transparent: true, opacity: 0.9,
+            color: color, transparent: true, opacity: 0.95,
             side: THREE.DoubleSide, toneMapped: false
           })
         );
@@ -2076,7 +2118,7 @@
         var edge2 = new THREE.Mesh(
           new THREE.RingGeometry(0.58, 0.61, 4),
           new THREE.MeshBasicMaterial({
-            color: color, transparent: true, opacity: 0.35,
+            color: color, transparent: true, opacity: 0.4,
             side: THREE.DoubleSide, toneMapped: false
           })
         );
@@ -2089,7 +2131,7 @@
       stationPlate(blueC.x, blueC.z, 0x33bbff);
       stationPlate(redC.x, redC.z, 0xff6a3d);
 
-      // Distant horizon band (suggests BB skyline without assets)
+      // Distant horizon band
       var horizon = new THREE.Mesh(
         new THREE.CylinderGeometry(9.5, 9.5, 1.6, 48, 1, true),
         new THREE.MeshBasicMaterial({
@@ -2109,7 +2151,7 @@
         new THREE.MeshBasicMaterial({
           color: 0x4a1838,
           transparent: true,
-          opacity: 0.18,
+          opacity: 0.2,
           side: THREE.BackSide,
           depthWrite: false,
           toneMapped: false
@@ -2118,13 +2160,23 @@
       haze.position.y = 1.4;
       root.add(haze);
 
-      // Accent points
-      var blueLamp = new THREE.PointLight(0x33bbff, 0.55, 5, 2);
-      blueLamp.position.set(blueC.x, 2.1, blueC.z);
+      // Neon station lamps — light the white blocks + feed glossy floor
+      var blueLamp = new THREE.PointLight(0x66ddff, 1.4, 6.5, 1.6);
+      blueLamp.position.set(blueC.x, 2.35, blueC.z + 0.15);
       root.add(blueLamp);
-      var redLamp = new THREE.PointLight(0xff6a3d, 0.5, 5, 2);
-      redLamp.position.set(redC.x, 2.1, redC.z);
+      var blueRim = new THREE.PointLight(0x33bbff, 0.7, 3.5, 2);
+      blueRim.position.set(blueC.x + 0.55, 1.35, blueC.z);
+      root.add(blueRim);
+      var redLamp = new THREE.PointLight(0xff8855, 1.3, 6.5, 1.6);
+      redLamp.position.set(redC.x, 2.35, redC.z - 0.15);
       root.add(redLamp);
+      var redRim = new THREE.PointLight(0xff6a3d, 0.7, 3.5, 2);
+      redRim.position.set(redC.x - 0.55, 1.35, redC.z);
+      root.add(redRim);
+      // Soft overhead fill for block tops
+      var keyFill = new THREE.PointLight(0xfff0e8, 0.55, 10, 1.8);
+      keyFill.position.set(0, 4.2, 0.4);
+      root.add(keyFill);
     },
 
     /**

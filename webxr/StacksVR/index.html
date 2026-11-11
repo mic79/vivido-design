@@ -18,8 +18,8 @@
     };
   </script>
 
-  <script src="shapes.js?v=26"></script>
-  <script src="cup.js?v=29"></script>
+  <script src="shapes.js?v=27"></script>
+  <script src="cup.js?v=30"></script>
   <script src="clear.js?v=19"></script>
   <script src="attack.js?v=19"></script>
   <script src="cup-bot.js?v=23"></script>
@@ -30,7 +30,7 @@
   <script src="game-menu.js?v=35"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=58"></script>
+  <script src="stacks-game.js?v=59"></script>
   <script src="mobile-spectator.js?v=35"></script>
 
   <style>
@@ -249,10 +249,12 @@
     renderer="colorManagement: true; antialias: true; physicallyCorrectLights: true; shadow: true"
     webxr="optionalFeatures: local-floor, bounded-floor, hand-tracking"
   >
-    <a-entity light="type: ambient; color: #2a2030; intensity: 0.38"></a-entity>
-    <a-entity light="type: directional; color: #ffe0d0; intensity: 0.75; castShadow: true; shadowMapWidth: 2048; shadowMapHeight: 2048; shadowCameraLeft: -5; shadowCameraRight: 5; shadowCameraTop: 5; shadowCameraBottom: -5; shadowCameraNear: 0.5; shadowCameraFar: 16; shadowBias: -0.0005"
-      position="2.4 6.5 1.8"></a-entity>
-    <a-entity light="type: hemisphere; color: #3a2848; groundColor: #0a0610; intensity: 0.32"></a-entity>
+    <a-entity light="type: ambient; color: #1a1420; intensity: 0.22"></a-entity>
+    <a-entity light="type: directional; color: #fff2e8; intensity: 1.15; castShadow: true; shadowMapWidth: 2048; shadowMapHeight: 2048; shadowCameraLeft: -5; shadowCameraRight: 5; shadowCameraTop: 5; shadowCameraBottom: -5; shadowCameraNear: 0.5; shadowCameraFar: 16; shadowBias: -0.0004"
+      position="2.8 7.2 2.2"></a-entity>
+    <a-entity light="type: directional; color: #a8c8ff; intensity: 0.35"
+      position="-3.5 4.5 -2.0"></a-entity>
+    <a-entity light="type: hemisphere; color: #5a3a68; groundColor: #08060c; intensity: 0.45"></a-entity>
 
     <!-- Hide flat floor — arena ground is built in stacks-game -->
     <a-plane visible="false" position="0 -0.05 0" rotation="-90 0 0" width="1" height="1"></a-plane>

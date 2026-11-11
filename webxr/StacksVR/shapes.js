@@ -8,14 +8,18 @@
   var BLOCK_COLOR = '#ffffff';
   var GARBAGE_COLOR = '#f0f0f4';
 
-  /** White that stays white under A-Frame tone-mapping / dark arena lights. */
+  /** White play blocks — bright + clearcoat so arena IBL/lights read as reflections. */
   function makeBlockMaterial(color) {
-    return new THREE.MeshStandardMaterial({
+    var Mat = THREE.MeshPhysicalMaterial || THREE.MeshStandardMaterial;
+    return new Mat({
       color: color || BLOCK_COLOR,
-      roughness: 0.62,
-      metalness: 0.0,
+      roughness: 0.32,
+      metalness: 0.04,
+      clearcoat: 0.55,
+      clearcoatRoughness: 0.22,
       emissive: new THREE.Color(0xffffff),
-      emissiveIntensity: 0.85,
+      emissiveIntensity: 0.42,
+      envMapIntensity: 1.35,
       toneMapped: false
     });
   }

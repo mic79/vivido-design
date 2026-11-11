@@ -93,11 +93,12 @@
     var neon = this.side === 'blue' ? 0x33bbff : 0xff6a3d;
     var neonDim = this.side === 'blue' ? 0x1a4a6e : 0x6e2a1a;
 
-    // Dark floor plate (receives block shadows)
+    // Glossy cup floor (receives shadows + IBL)
     var floorMat = new THREE.MeshStandardMaterial({
-      color: 0x0a0c12,
-      roughness: 0.55,
-      metalness: 0.35
+      color: 0x080a10,
+      roughness: 0.2,
+      metalness: 0.82,
+      envMapIntensity: 1.4
     });
     this._shellMats.push(floorMat);
     var floor = new THREE.Mesh(
