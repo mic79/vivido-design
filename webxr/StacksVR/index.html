@@ -19,7 +19,7 @@
   </script>
 
   <script src="shapes.js?v=21"></script>
-  <script src="cup.js?v=21"></script>
+  <script src="cup.js?v=22"></script>
   <script src="clear.js?v=19"></script>
   <script src="attack.js?v=19"></script>
   <script src="cup-bot.js?v=23"></script>
@@ -30,7 +30,7 @@
   <script src="game-menu.js?v=35"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=44"></script>
+  <script src="stacks-game.js?v=45"></script>
   <script src="mobile-spectator.js?v=35"></script>
 
   <style>
@@ -245,32 +245,31 @@
     vr-menu
     match-replay-ticker
     mobile-spectator-cam
-    background="color: #0b0e14"
-    renderer="colorManagement: true; antialias: true"
+    background="color: #06040a"
+    renderer="colorManagement: true; antialias: true; physicallyCorrectLights: true"
     webxr="optionalFeatures: local-floor, bounded-floor, hand-tracking"
   >
-    <a-entity light="type: ambient; color: #9aacbf; intensity: 0.7"></a-entity>
-    <a-entity light="type: directional; intensity: 0.9" position="1.5 3 2"></a-entity>
-    <a-entity light="type: point; color: #4A90E2; intensity: 0.4; distance: 6" position="-0.5 2 1"></a-entity>
-    <a-entity light="type: point; color: #E25A4A; intensity: 0.35; distance: 6" position="0.8 2 1"></a-entity>
+    <a-entity light="type: ambient; color: #2a2030; intensity: 0.45"></a-entity>
+    <a-entity light="type: directional; color: #ffd8c8; intensity: 0.35" position="2 5 1"></a-entity>
+    <a-entity light="type: hemisphere; color: #3a2848; groundColor: #0a0610; intensity: 0.4"></a-entity>
 
-    <a-plane position="0 0 0" rotation="-90 0 0" width="12" height="12"
-      material="color: #151a22; roughness: 0.92"></a-plane>
+    <!-- Hide flat floor — arena ground is built in stacks-game -->
+    <a-plane visible="false" position="0 -0.05 0" rotation="-90 0 0" width="1" height="1"></a-plane>
 
-    <!-- Subtle center scoreboard (DodgeVR) — match detail is BB world UI below -->
-    <a-entity id="version-display" position="0 2.45 0"
-      text="value: StacksVR; align: center; width: 1.1; color: #8899aa"></a-entity>
-    <a-entity id="score-display" position="0 2.25 0">
-      <a-entity id="blue-score" position="-0.22 0 0"
-        text="value: 0; align: center; width: 2.2; color: #0099ff"></a-entity>
+    <!-- Tiny status only — BattleBlocks keeps score on diegetic cards -->
+    <a-entity id="version-display" position="0 2.35 0"
+      text="value: ; align: center; width: 0.8; color: #556070"></a-entity>
+    <a-entity id="score-display" position="0 2.2 0">
+      <a-entity id="blue-score" position="-0.16 0 0"
+        text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>
       <a-entity position="0 0 0"
-        text="value: -; align: center; width: 2.2; color: #ffffff"></a-entity>
-      <a-entity id="red-score" position="0.22 0 0"
-        text="value: 0; align: center; width: 2.2; color: #ff4444"></a-entity>
+        text="value: ·; align: center; width: 1.1; color: #667788"></a-entity>
+      <a-entity id="red-score" position="0.16 0 0"
+        text="value: 0; align: center; width: 1.35; color: #ff8866"></a-entity>
     </a-entity>
     <a-entity id="timer-display" visible="false"></a-entity>
-    <a-entity id="control-hint" position="0 2.05 0"
-      text="value: ; align: center; width: 1.2; color: #889999"></a-entity>
+    <a-entity id="control-hint" position="0 2.02 0"
+      text="value: ; align: center; width: 1.0; color: #667788"></a-entity>
     <a-entity id="damage-blue" position="-0.65 1.92 1.25" visible="false"
       text="value: ; align: center; width: 0.5; color: #ff8866"></a-entity>
     <a-entity id="damage-red" position="0.65 1.92 -1.25" rotation="0 180 0" visible="false"

@@ -61,33 +61,53 @@
     var w = this.width * this.cellSize;
     var d = this.depth * this.cellSize;
     var h = this.height * this.cellSize;
-    var rimColor = this.side === 'blue' ? 0x4A90E2 : 0xE25A4A;
+    var neon = this.side === 'blue' ? 0x33bbff : 0xff6a3d;
+    var neonDim = this.side === 'blue' ? 0x1a4a6e : 0x6e2a1a;
 
-    // Floor — translucent (not opaque)
+    // Dark glass floor with neon edge
     var floorMat = new THREE.MeshStandardMaterial({
-      color: 0x222830,
+      color: 0x0a0c12,
       transparent: true,
-      opacity: 0.28,
-      roughness: 0.7,
-      metalness: 0.1,
+      opacity: 0.55,
+      roughness: 0.35,
+      metalness: 0.55,
       depthWrite: false
     });
     this._shellMats.push(floorMat);
     var floor = new THREE.Mesh(
-      new THREE.BoxGeometry(w + 0.04, 0.03, d + 0.04),
+      new THREE.BoxGeometry(w + 0.02, 0.02, d + 0.02),
       floorMat
     );
-    floor.position.set(w / 2, -0.015, d / 2);
+    floor.position.set(w / 2, -0.01, d / 2);
     this.root.add(floor);
     this._floor = floor;
 
+    // Neon floor frame (BattleBlocks station outline)
+    var frameMat = new THREE.MeshBasicMaterial({
+      color: neon, transparent: true, opacity: 0.95, toneMapped: false
+    });
+    this._shellMats.push(frameMat);
+    function frameBar(len, thick, px, py, pz, rotY) {
+      var m = new THREE.Mesh(new THREE.BoxGeometry(len, thick, thick), frameMat);
+      m.position.set(px, py, pz);
+      if (rotY) m.rotation.y = rotY;
+      return m;
+    }
+    var ft = 0.012;
+    this.root.add(frameBar(w + ft * 2, ft, w / 2, 0.002, -ft / 2));
+    this.root.add(frameBar(w + ft * 2, ft, w / 2, 0.002, d + ft / 2));
+    this.root.add(frameBar(d + ft * 2, ft, -ft / 2, 0.002, d / 2, Math.PI / 2));
+    this.root.add(frameBar(d + ft * 2, ft, w + ft / 2, 0.002, d / 2, Math.PI / 2));
+
+    // Glass-tint walls (standard only — Physical/transmission is heavy on Quest)
     var wallMat = new THREE.MeshStandardMaterial({
-      color: rimColor,
+      color: neonDim,
       transparent: true,
-      opacity: 0.22,
+      opacity: 0.15,
+      roughness: 0.18,
+      metalness: 0.12,
       side: THREE.DoubleSide,
-      roughness: 0.4,
-      metalness: 0.2
+      depthWrite: false
     });
 
     var self = this;
@@ -104,61 +124,79 @@
       return m;
     }
 
-    // Four thin walls
-    this.root.add(wall(new THREE.BoxGeometry(0.02, h, d), -0.01, h / 2, d / 2));
-    this.root.add(wall(new THREE.BoxGeometry(0.02, h, d), w + 0.01, h / 2, d / 2));
-    this.root.add(wall(new THREE.BoxGeometry(w, h, 0.02), w / 2, h / 2, -0.01));
-    this.root.add(wall(new THREE.BoxGeometry(w, h, 0.02), w / 2, h / 2, d + 0.01));
+    this.root.add(wall(new THREE.BoxGeometry(0.012, h, d), -0.006, h / 2, d / 2));
+    this.root.add(wall(new THREE.BoxGeometry(0.012, h, d), w + 0.006, h / 2, d / 2));
+    this.root.add(wall(new THREE.BoxGeometry(w, h, 0.012), w / 2, h / 2, -0.006));
+    this.root.add(wall(new THREE.BoxGeometry(w, h, 0.012), w / 2, h / 2, d + 0.006));
 
-    // Top rim — translucent grab handle (not opaque)
+    // Vertical neon corner posts
+    var postMat = new THREE.MeshBasicMaterial({
+      color: neon, transparent: true, opacity: 0.85, toneMapped: false
+    });
+    this._shellMats.push(postMat);
+    var corners = [[0, 0], [w, 0], [0, d], [w, d]];
+    for (var ci = 0; ci < corners.length; ci++) {
+      var post = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.008, 0.008, h, 8),
+        postMat
+      );
+      post.position.set(corners[ci][0], h / 2, corners[ci][1]);
+      this.root.add(post);
+    }
+
+    // Top neon rim (grab) — emissive tube frame feel
     var rimMat = new THREE.MeshStandardMaterial({
-      color: rimColor,
+      color: neon,
+      emissive: new THREE.Color(neon),
+      emissiveIntensity: 0.85,
       transparent: true,
-      opacity: 0.32,
-      roughness: 0.35,
-      metalness: 0.45,
+      opacity: 0.75,
+      roughness: 0.25,
+      metalness: 0.6,
       depthWrite: false,
-      side: THREE.DoubleSide
+      side: THREE.DoubleSide,
+      toneMapped: false
     });
     this._shellMats.push(rimMat);
     this._rimMat = rimMat;
     var rim = tagGrab(new THREE.Mesh(
-      new THREE.BoxGeometry(w + 0.06, 0.03, d + 0.06),
+      new THREE.BoxGeometry(w + 0.04, 0.018, d + 0.04),
       rimMat
     ));
     rim.position.set(w / 2, h, d / 2);
     this.root.add(rim);
     this._rim = rim;
 
-    // Guide lines on floor
-    var lineMat = new THREE.LineBasicMaterial({ color: rimColor, transparent: true, opacity: 0.35 });
+    // Bright cell grid on floor
+    var lineMat = new THREE.LineBasicMaterial({
+      color: neon, transparent: true, opacity: 0.55, toneMapped: false
+    });
     for (var x = 0; x <= this.width; x++) {
       var g1 = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(x * this.cellSize, 0.001, 0),
-        new THREE.Vector3(x * this.cellSize, 0.001, d)
+        new THREE.Vector3(x * this.cellSize, 0.002, 0),
+        new THREE.Vector3(x * this.cellSize, 0.002, d)
       ]);
       this.root.add(new THREE.Line(g1, lineMat));
     }
     for (var z = 0; z <= this.depth; z++) {
       var g2 = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0.001, z * this.cellSize),
-        new THREE.Vector3(w, 0.001, z * this.cellSize)
+        new THREE.Vector3(0, 0.002, z * this.cellSize),
+        new THREE.Vector3(w, 0.002, z * this.cellSize)
       ]);
       this.root.add(new THREE.Line(g2, lineMat));
     }
 
-    // Highest-layer highlight band (updated in _recomputeHeight)
     var hiMat = new THREE.MeshBasicMaterial({
-      color: rimColor,
+      color: neon,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.65,
       depthWrite: false,
       side: THREE.DoubleSide,
       toneMapped: false
     });
     this._highLineMat = hiMat;
     var hi = new THREE.Mesh(
-      new THREE.BoxGeometry(w + 0.02, 0.018, d + 0.02),
+      new THREE.BoxGeometry(w + 0.02, 0.014, d + 0.02),
       hiMat
     );
     hi.position.set(w / 2, 0, d / 2);
@@ -204,7 +242,7 @@
   Cup.prototype.setThreat = function (urgency) {
     urgency = Math.max(0, Math.min(1, urgency || 0));
     if (!this._rimMat) return;
-    var base = this.side === 'blue' ? 0x4A90E2 : 0xE25A4A;
+    var base = this.side === 'blue' ? 0x33bbff : 0xff6a3d;
     if (!this._rimMat.emissive) this._rimMat.emissive = new THREE.Color(0x000000);
     if (urgency <= 0) {
       this._rimMat.color.setHex(base);
@@ -265,10 +303,10 @@
     var geo = new THREE.BoxGeometry(this.cellSize * 0.92, this.cellSize * 0.92, this.cellSize * 0.92);
     var mat = new THREE.MeshStandardMaterial({
       color: color,
-      roughness: 0.45,
-      metalness: 0.15,
+      roughness: 0.32,
+      metalness: 0.28,
       emissive: new THREE.Color(color),
-      emissiveIntensity: 0.1
+      emissiveIntensity: 0.28
     });
     return new THREE.Mesh(geo, mat);
   };

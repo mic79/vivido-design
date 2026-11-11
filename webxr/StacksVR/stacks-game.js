@@ -165,32 +165,31 @@
       this._pad.position.set(bluePadPos.x, bluePadPos.y, bluePadPos.z);
       this._sceneRoot.add(this._pad);
       this._padMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.40, 0.04, 0.40),
-        new THREE.MeshStandardMaterial({ color: 0x314055, roughness: 0.65, metalness: 0.15 })
+        new THREE.CylinderGeometry(0.22, 0.24, 0.035, 24),
+        new THREE.MeshStandardMaterial({ color: 0x121820, roughness: 0.4, metalness: 0.55 })
       );
       this._pad.add(this._padMesh);
       var ring = new THREE.Mesh(
-        new THREE.TorusGeometry(0.15, 0.01, 8, 32),
-        new THREE.MeshBasicMaterial({ color: 0x69F0AE })
+        new THREE.TorusGeometry(0.16, 0.012, 10, 40),
+        new THREE.MeshBasicMaterial({ color: 0x69F0AE, toneMapped: false })
       );
       ring.rotation.x = Math.PI / 2;
-      ring.position.y = 0.03;
+      ring.position.y = 0.025;
       this._pad.add(ring);
 
       this._pocket = new THREE.Group();
       this._pocket.position.set(bluePocketPos.x, bluePocketPos.y, bluePocketPos.z);
       this._sceneRoot.add(this._pocket);
-      var pocketBase = new THREE.Mesh(
-        new THREE.BoxGeometry(0.34, 0.04, 0.34),
-        new THREE.MeshStandardMaterial({ color: 0x3a3050, roughness: 0.6, metalness: 0.2 })
-      );
-      this._pocket.add(pocketBase);
+      this._pocket.add(new THREE.Mesh(
+        new THREE.CylinderGeometry(0.18, 0.20, 0.035, 24),
+        new THREE.MeshStandardMaterial({ color: 0x1a1220, roughness: 0.4, metalness: 0.5 })
+      ));
       var pocketRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.12, 0.01, 8, 24),
-        new THREE.MeshBasicMaterial({ color: 0xCE93D8 })
+        new THREE.TorusGeometry(0.13, 0.012, 10, 36),
+        new THREE.MeshBasicMaterial({ color: 0xCE93D8, toneMapped: false })
       );
       pocketRing.rotation.x = Math.PI / 2;
-      pocketRing.position.y = 0.03;
+      pocketRing.position.y = 0.025;
       this._pocket.add(pocketRing);
       this._pocketType = null;
       this._pocketUsed = false;
@@ -199,15 +198,15 @@
       this._botPad.position.set(redPadPos.x, redPadPos.y, redPadPos.z);
       this._sceneRoot.add(this._botPad);
       this._botPad.add(new THREE.Mesh(
-        new THREE.BoxGeometry(0.40, 0.04, 0.40),
-        new THREE.MeshStandardMaterial({ color: 0x553030, roughness: 0.65, metalness: 0.15 })
+        new THREE.CylinderGeometry(0.22, 0.24, 0.035, 24),
+        new THREE.MeshStandardMaterial({ color: 0x1a1210, roughness: 0.4, metalness: 0.55 })
       ));
       var botRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.15, 0.01, 8, 32),
-        new THREE.MeshBasicMaterial({ color: 0xE25A4A })
+        new THREE.TorusGeometry(0.16, 0.012, 10, 40),
+        new THREE.MeshBasicMaterial({ color: 0xff6a3d, toneMapped: false })
       );
       botRing.rotation.x = Math.PI / 2;
-      botRing.position.y = 0.03;
+      botRing.position.y = 0.025;
       this._botPad.add(botRing);
       this._botPadPiece = null;
 
@@ -215,18 +214,20 @@
       this._botPocket.position.set(redPocketPos.x, redPocketPos.y, redPocketPos.z);
       this._sceneRoot.add(this._botPocket);
       this._botPocket.add(new THREE.Mesh(
-        new THREE.BoxGeometry(0.34, 0.04, 0.34),
-        new THREE.MeshStandardMaterial({ color: 0x4a3040, roughness: 0.6, metalness: 0.2 })
+        new THREE.CylinderGeometry(0.18, 0.20, 0.035, 24),
+        new THREE.MeshStandardMaterial({ color: 0x1a1014, roughness: 0.4, metalness: 0.5 })
       ));
       var botPocketRing = new THREE.Mesh(
-        new THREE.TorusGeometry(0.12, 0.01, 8, 24),
-        new THREE.MeshBasicMaterial({ color: 0xCE93D8 })
+        new THREE.TorusGeometry(0.13, 0.012, 10, 36),
+        new THREE.MeshBasicMaterial({ color: 0xCE93D8, toneMapped: false })
       );
       botPocketRing.rotation.x = Math.PI / 2;
-      botPocketRing.position.y = 0.03;
+      botPocketRing.position.y = 0.025;
       this._botPocket.add(botPocketRing);
       this._botPocketMesh = null;
       this._botHoldMesh = null;
+
+      this._buildArenaAtmosphere(blueC, redC);
 
       // Players stand behind their cup, looking head-on along Z
       this._layout = {
@@ -1811,6 +1812,125 @@
       var redCup = document.getElementById('cup-stats-red');
       if (blueCup) blueCup.setAttribute('text', 'value', blue.cupText(now));
       if (redCup) redCup.setAttribute('text', 'value', red.cupText(now));
+    },
+
+    /** BattleBlocks-like void arena: fog, neon station plates, horizon glow. */
+    _buildArenaAtmosphere: function (blueC, redC) {
+      var root = this._sceneRoot;
+      if (!root || this._arenaBuilt) return;
+      this._arenaBuilt = true;
+
+      var sceneEl = this.el.sceneEl;
+      if (sceneEl && sceneEl.object3D) {
+        sceneEl.object3D.fog = new THREE.FogExp2(0x09060c, 0.045);
+        sceneEl.setAttribute('background', 'color', '#06040a');
+      }
+
+      // Dark reflective ground disc under play
+      var ground = new THREE.Mesh(
+        new THREE.CircleGeometry(7.5, 64),
+        new THREE.MeshStandardMaterial({
+          color: 0x07080e,
+          roughness: 0.88,
+          metalness: 0.35
+        })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = 0.001;
+      root.add(ground);
+
+      // Soft radial neon under-glow
+      var underGlow = new THREE.Mesh(
+        new THREE.CircleGeometry(3.2, 48),
+        new THREE.MeshBasicMaterial({
+          color: 0x2a1040,
+          transparent: true,
+          opacity: 0.22,
+          toneMapped: false,
+          depthWrite: false
+        })
+      );
+      underGlow.rotation.x = -Math.PI / 2;
+      underGlow.position.y = 0.01;
+      root.add(underGlow);
+
+      function stationPlate(cx, cz, color) {
+        var g = new THREE.Group();
+        g.position.set(cx, 0.015, cz);
+        var plate = new THREE.Mesh(
+          new THREE.PlaneGeometry(1.15, 1.15),
+          new THREE.MeshStandardMaterial({
+            color: 0x0a0c14,
+            roughness: 0.55,
+            metalness: 0.4,
+            transparent: true,
+            opacity: 0.9
+          })
+        );
+        plate.rotation.x = -Math.PI / 2;
+        g.add(plate);
+        var edge = new THREE.Mesh(
+          new THREE.RingGeometry(0.72, 0.76, 4),
+          new THREE.MeshBasicMaterial({
+            color: color, transparent: true, opacity: 0.9,
+            side: THREE.DoubleSide, toneMapped: false
+          })
+        );
+        edge.rotation.x = -Math.PI / 2;
+        edge.rotation.z = Math.PI / 4;
+        g.add(edge);
+        var edge2 = new THREE.Mesh(
+          new THREE.RingGeometry(0.58, 0.61, 4),
+          new THREE.MeshBasicMaterial({
+            color: color, transparent: true, opacity: 0.35,
+            side: THREE.DoubleSide, toneMapped: false
+          })
+        );
+        edge2.rotation.x = -Math.PI / 2;
+        edge2.rotation.z = Math.PI / 4;
+        g.add(edge2);
+        root.add(g);
+        return g;
+      }
+      stationPlate(blueC.x, blueC.z, 0x33bbff);
+      stationPlate(redC.x, redC.z, 0xff6a3d);
+
+      // Distant horizon band (suggests BB skyline without assets)
+      var horizon = new THREE.Mesh(
+        new THREE.CylinderGeometry(9.5, 9.5, 1.6, 48, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0x1a0a18,
+          transparent: true,
+          opacity: 0.55,
+          side: THREE.BackSide,
+          depthWrite: false,
+          toneMapped: false
+        })
+      );
+      horizon.position.y = 0.7;
+      root.add(horizon);
+
+      var haze = new THREE.Mesh(
+        new THREE.CylinderGeometry(9.2, 9.2, 0.8, 48, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: 0x4a1838,
+          transparent: true,
+          opacity: 0.18,
+          side: THREE.BackSide,
+          depthWrite: false,
+          toneMapped: false
+        })
+      );
+      haze.position.y = 1.4;
+      root.add(haze);
+
+      // Accent points
+      var blueLamp = new THREE.PointLight(0x33bbff, 0.55, 5, 2);
+      blueLamp.position.set(blueC.x, 2.1, blueC.z);
+      root.add(blueLamp);
+      var redLamp = new THREE.PointLight(0xff6a3d, 0.5, 5, 2);
+      redLamp.position.set(redC.x, 2.1, redC.z);
+      root.add(redLamp);
     },
 
     /** Keep match HUD front-facing (no mirrored back faces like side:double). */
