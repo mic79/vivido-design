@@ -177,23 +177,26 @@
     this.root.add(rimGroup);
     this._rim = rimGroup;
 
-    // Bright cell grid on floor
-    var lineMat = new THREE.LineBasicMaterial({
-      color: neon, transparent: true, opacity: 0.55, toneMapped: false
+    // Floor cell markers — "+" at each grid intersection (no full lines)
+    var plusMat = new THREE.LineBasicMaterial({
+      color: neon, transparent: true, opacity: 0.7, toneMapped: false
     });
-    for (var x = 0; x <= this.width; x++) {
-      var g1 = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(x * this.cellSize, 0.002, 0),
-        new THREE.Vector3(x * this.cellSize, 0.002, d)
-      ]);
-      this.root.add(new THREE.Line(g1, lineMat));
-    }
-    for (var z = 0; z <= this.depth; z++) {
-      var g2 = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0.002, z * this.cellSize),
-        new THREE.Vector3(w, 0.002, z * this.cellSize)
-      ]);
-      this.root.add(new THREE.Line(g2, lineMat));
+    var plusArm = this.cellSize * 0.16;
+    for (var gx = 0; gx <= this.width; gx++) {
+      for (var gz = 0; gz <= this.depth; gz++) {
+        var px = gx * this.cellSize;
+        var pz = gz * this.cellSize;
+        var hSeg = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(px - plusArm, 0.003, pz),
+          new THREE.Vector3(px + plusArm, 0.003, pz)
+        ]);
+        var vSeg = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(px, 0.003, pz - plusArm),
+          new THREE.Vector3(px, 0.003, pz + plusArm)
+        ]);
+        this.root.add(new THREE.Line(hSeg, plusMat));
+        this.root.add(new THREE.Line(vSeg, plusMat));
+      }
     }
 
     // Highest-layer highlight — OUTER line only (no filled platform)
