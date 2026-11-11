@@ -30,8 +30,8 @@
     while (node && node !== node.sceneEl) {
       if (node.object3D && !node.object3D.visible) return false;
       node = node.parentNode;
-    }
-    return true;
+        }
+        return true;
   }
 
   function getHandGamepad(handEl) {
@@ -105,12 +105,25 @@
         if (leftHand) {
           leftHand.addEventListener('xbuttondown', onMenuButton);
           self._leftHandEl = leftHand;
+          self._attachMenuToLeftHand();
+        }
+        if (rightHand && !rightHand.dataset.menuTriggerBound) {
+          rightHand.dataset.menuTriggerBound = '1';
+          // Fallback select when laser-controls click doesn't fire
+          rightHand.addEventListener('triggerdown', function () {
+            if (!self.menuVisible || !self._hoveredBtn) return;
+            var el = self._hoveredBtn;
+            if (!isEffectivelyVisible(el)) return;
+            pulseHaptic(rightHand, 0.7, 55);
+            self.handleAction(el.getAttribute('data-action'));
+          });
         }
         // laser-controls re-enables lines on controllerconnected — stamp them back off
         function guardLasers(hand) {
           if (!hand) return;
           hand.addEventListener('controllerconnected', function () {
             if (!self.menuVisible) self.setRaycasters(false);
+            else self.setRaycasters(true); // right-only when open
           });
         }
         guardLasers(leftHand);
@@ -166,25 +179,18 @@
 
     _syncRayHover: function () {
       var hit = null;
-      var hitHand = null;
-      var hands = [
-        this.leftHand || document.getElementById('leftHand'),
-        this.rightHand || document.getElementById('rightHand')
-      ];
-      for (var i = 0; i < hands.length; i++) {
-        var hand = hands[i];
-        var rc = hand && hand.components && hand.components.raycaster;
-        if (!rc || !rc.intersectedEls || !rc.intersectedEls.length) continue;
+      var hitHand = this.rightHand || document.getElementById('rightHand');
+      var hand = hitHand;
+      var rc = hand && hand.components && hand.components.raycaster;
+      if (rc && rc.intersectedEls && rc.intersectedEls.length) {
         for (var j = 0; j < rc.intersectedEls.length; j++) {
           var el = rc.intersectedEls[j];
           if (el && el.classList && el.classList.contains('menu-btn') &&
               isEffectivelyVisible(el)) {
             hit = el;
-            hitHand = hand;
             break;
           }
         }
-        if (hit) break;
       }
       if (hit === this._hoveredBtn) return;
       if (!hit) {
@@ -217,6 +223,17 @@
       });
     },
 
+    /** Keep the panel parented to the left controller (palm-facing). */
+    _attachMenuToLeftHand: function () {
+      var root = document.getElementById('vr-menu-root');
+      var left = this.leftHand || document.getElementById('leftHand') || this._leftHandEl;
+      if (!root || !left) return;
+      if (root.parentNode !== left) left.appendChild(root);
+      root.setAttribute('position', '0.02 0.11 -0.05');
+      root.setAttribute('rotation', '-70 12 0');
+      root.setAttribute('scale', '0.55 0.55 0.55');
+    },
+
     requestToggleMenu: function () {
       var now = performance.now();
       if (now - this._menuToggleAt < 250) return;
@@ -233,9 +250,19 @@
       this.leftHand = document.getElementById('leftHand');
       this.rightHand = document.getElementById('rightHand');
       this._refsReady = true;
+      this._attachMenuToLeftHand();
       this._bindClicks();
       this.setRaycasters(false);
       this.refreshLobbyUI();
+    },
+
+    /** Real human/bot/multi match — dual-bot desktop preview does not count. */
+    _isRealMatchPlaying: function () {
+      var gm = document.querySelector('[stacks-game]');
+      var comp = gm && gm.components['stacks-game'];
+      if (!comp || !comp.modes || !comp.modes.active) return false;
+      if (comp._dualBotPreview) return false;
+      return true;
     },
 
     _bindClicks: function () {
@@ -293,7 +320,8 @@
     },
 
     setRaycasters: function (enabled) {
-      this._setHandRaycaster(this.leftHand || document.getElementById('leftHand'), enabled);
+      // Menu lives on the left hand — only the right controller gets a select laser
+      this._setHandRaycaster(this.leftHand || document.getElementById('leftHand'), false);
       this._setHandRaycaster(this.rightHand || document.getElementById('rightHand'), enabled);
     },
 
@@ -324,10 +352,8 @@
       this.menuVisible = !this.menuVisible;
       var root = document.getElementById('vr-menu-root');
       if (this.menuVisible) {
-        // Camera-local like DodgeVR (parented under #camera)
+        this._attachMenuToLeftHand();
         if (root) {
-          root.setAttribute('position', '0 -0.05 -0.8');
-          root.setAttribute('rotation', '0 0 0');
           root.setAttribute('visible', true);
           if (root.object3D) root.object3D.visible = true;
         }
@@ -375,7 +401,7 @@
     handleAction: function (action) {
       var gm = document.querySelector('[stacks-game]');
       var comp = gm && gm.components['stacks-game'];
-      var playing = !!(comp && comp.modes && comp.modes.active);
+      var playing = this._isRealMatchPlaying();
       switch (action) {
         case 'mode-single':
           this.menuMode = 'single';
@@ -391,6 +417,10 @@
             if (comp) comp.endMatch();
             this.refreshLobbyUI();
             break;
+          }
+          // Clear dual-bot desktop preview so human vs bot can take the pad
+          if (comp && (comp._dualBotPreview || (comp.matchActive && !playing))) {
+            comp.endMatch();
           }
           if (this.menuMode === 'multi') {
             if (window.sendMatchAction) window.sendMatchAction('start');
@@ -423,12 +453,12 @@
           this._setLobbyLabel();
           break;
         case 'join-lobby':
-          if (window.isMultiplayer) {
+      if (window.isMultiplayer) {
             if (window.endMultiplayer) window.endMultiplayer();
             this.refreshLobbyUI();
           } else if (window.connectToLobby) {
-            window.connectToLobby(this.lobbyNumber);
-          }
+          window.connectToLobby(this.lobbyNumber);
+        }
           break;
         case 'join-queue':
           if (window.sendQueueAction) window.sendQueueAction('join');
@@ -483,9 +513,7 @@
       var btn = document.getElementById('menu-start-match');
       var txt = document.getElementById('menu-start-match-text');
       if (!btn) return;
-      var gm = document.querySelector('[stacks-game]');
-      var comp = gm && gm.components['stacks-game'];
-      var playing = !!(comp && comp.modes && comp.modes.active);
+      var playing = this._isRealMatchPlaying();
       var label;
       var color;
       if (playing) {
@@ -523,7 +551,7 @@
       var status = document.getElementById('menu-lobby-status');
       if (status) {
         var live = window.StacksLobbyStatus || '';
-        var ls = window.lobbyState;
+      var ls = window.lobbyState;
         var msg;
         if (window.connectionState === 'connecting' && live) {
           msg = live;
@@ -549,7 +577,7 @@
     },
 
     _resetRigLocal: function () {
-      var rig = document.getElementById('rig');
+          var rig = document.getElementById('rig');
       if (!rig) return;
       rig.setAttribute('position', '0 0 0');
       rig.setAttribute('rotation', '0 0 0');
@@ -591,7 +619,7 @@
         var p = SPECTATOR_POSITIONS[specIdx % SPECTATOR_POSITIONS.length];
         this._movePlayerTo(p);
         window.isSpectator = true;
-      } else {
+        } else {
         this._movePlayerTo(PLAY_POSITION);
         window.isSpectator = false;
       }
