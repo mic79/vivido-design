@@ -30,7 +30,7 @@
   <script src="game-menu.js?v=35"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=51"></script>
+  <script src="stacks-game.js?v=52"></script>
   <script src="mobile-spectator.js?v=35"></script>
 
   <style>
@@ -277,8 +277,8 @@
       text="value: ; align: center; width: 0.5; color: #ff8866"></a-entity>
 
     <!--
-      BattleBlocks: spawn+storage sit together outboard; card + cup HUD behind that.
-      World pose is driven each frame from pad/pocket (see _placeMatchHud).
+      BattleBlocks: NEXT+spawn+storage on the RIGHT of the playfield;
+      card/cup HUD behind NEXT toward the cup (see _placeMatchHud).
     -->
     <a-entity id="hud-card-blue" position="0 1.5 0" rotation="0 0 0">
       <a-text id="hud-name-blue" value="BLUE" align="center" width="1.05" color="#ffffff"

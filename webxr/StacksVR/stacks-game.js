@@ -155,49 +155,110 @@
       if (blue.pivot) { blue.pivot.rotation.y = blueYaw; blue.yaw = blueYaw; }
       if (red.pivot) { red.pivot.rotation.y = redYaw; red.yaw = redYaw; }
 
-      // BattleBlocks: spawn + storage side-by-side on the outboard (player-left),
-      // near the seat — NOT flanking opposite sides of the cup.
-      var bluePadPos = offsetBlue(-0.52, -0.55);
-      var bluePocketPos = offsetBlue(-0.52, -0.95);
-      var redPadPos = offsetRed(-0.52, -0.55);
-      var redPocketPos = offsetRed(-0.52, -0.95);
+      // BattleBlocks: spawn + storage + NEXT column on the RIGHT of the playfield
+      var bluePadPos = offsetBlue(-0.50, 0.58);
+      var bluePocketPos = offsetBlue(-0.50, 0.98);
+      var blueNextPos = offsetBlue(-0.42, 0.78);
+      var redPadPos = offsetRed(-0.50, 0.58);
+      var redPocketPos = offsetRed(-0.50, 0.98);
+      var redNextPos = offsetRed(-0.42, 0.78);
 
-      // Neon ring markers only — no opaque disc platforms (BattleBlocks)
-      function neonRing(radius, color) {
-        var m = new THREE.Mesh(
-          new THREE.TorusGeometry(radius, 0.01, 8, 40),
+      // Floor diamond outline (no fill) — BattleBlocks station marks
+      function neonDiamond(half, color) {
+        var edge = new THREE.Mesh(
+          new THREE.RingGeometry(half * 0.82, half, 4),
+          new THREE.MeshBasicMaterial({
+            color: color, side: THREE.DoubleSide, toneMapped: false
+          })
+        );
+        edge.rotation.x = -Math.PI / 2;
+        edge.rotation.z = Math.PI / 4;
+        edge.position.y = 0.006;
+        return edge;
+      }
+
+      function buildNextColumn(pos, color, yaw) {
+        var root = new THREE.Group();
+        root.position.set(pos.x, pos.y, pos.z);
+        root.rotation.y = yaw;
+        // Vertical rounded neon frame (local XY, faces seat after yaw)
+        var fw = 0.34, fh = 1.05, r = 0.06, tube = 0.01;
+        var path = new THREE.CurvePath();
+        function L(a, b) { path.add(new THREE.LineCurve3(a, b)); }
+        function C(a, ctrl, b) { path.add(new THREE.QuadraticBezierCurve3(a, ctrl, b)); }
+        var p = function (x, y) { return new THREE.Vector3(x, y, 0); };
+        L(p(-fw / 2 + r, -fh / 2), p(fw / 2 - r, -fh / 2));
+        C(p(fw / 2 - r, -fh / 2), p(fw / 2, -fh / 2), p(fw / 2, -fh / 2 + r));
+        L(p(fw / 2, -fh / 2 + r), p(fw / 2, fh / 2 - r));
+        C(p(fw / 2, fh / 2 - r), p(fw / 2, fh / 2), p(fw / 2 - r, fh / 2));
+        L(p(fw / 2 - r, fh / 2), p(-fw / 2 + r, fh / 2));
+        C(p(-fw / 2 + r, fh / 2), p(-fw / 2, fh / 2), p(-fw / 2, fh / 2 - r));
+        L(p(-fw / 2, fh / 2 - r), p(-fw / 2, -fh / 2 + r));
+        C(p(-fw / 2, -fh / 2 + r), p(-fw / 2, -fh / 2), p(-fw / 2 + r, -fh / 2));
+        var frame = new THREE.Mesh(
+          new THREE.TubeGeometry(path, 72, tube, 5, true),
           new THREE.MeshBasicMaterial({ color: color, toneMapped: false })
         );
-        m.rotation.x = Math.PI / 2;
-        m.position.y = 0.008;
-        return m;
+        frame.position.y = 0.62;
+        root.add(frame);
+        // "NEXT" label
+        var canvas = document.createElement('canvas');
+        canvas.width = 256; canvas.height = 64;
+        var ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, 256, 64);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 42px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('NEXT', 128, 32);
+        var label = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.22, 0.055),
+          new THREE.MeshBasicMaterial({
+            map: new THREE.CanvasTexture(canvas),
+            transparent: true, depthWrite: false, toneMapped: false
+          })
+        );
+        label.position.set(0, 1.12, 0.02);
+        root.add(label);
+        var slots = new THREE.Group();
+        slots.name = 'nextSlots';
+        slots.position.set(0, 0.22, 0);
+        root.add(slots);
+        this._sceneRoot.add(root);
+        return { root: root, slots: slots };
       }
 
       this._pad = new THREE.Group();
       this._pad.position.set(bluePadPos.x, bluePadPos.y, bluePadPos.z);
       this._sceneRoot.add(this._pad);
-      this._padMesh = neonRing(0.16, 0x69F0AE);
+      this._padMesh = neonDiamond(0.16, 0x33bbff);
       this._pad.add(this._padMesh);
 
       this._pocket = new THREE.Group();
       this._pocket.position.set(bluePocketPos.x, bluePocketPos.y, bluePocketPos.z);
       this._sceneRoot.add(this._pocket);
-      this._pocket.add(neonRing(0.13, 0xCE93D8));
+      this._pocket.add(neonDiamond(0.13, 0x33bbff));
       this._pocketType = null;
       this._pocketUsed = false;
+
+      var blueNext = buildNextColumn.call(this, blueNextPos, 0x33bbff, 0);
+      this._nextBlue = blueNext;
 
       this._botPad = new THREE.Group();
       this._botPad.position.set(redPadPos.x, redPadPos.y, redPadPos.z);
       this._sceneRoot.add(this._botPad);
-      this._botPad.add(neonRing(0.16, 0xff6a3d));
+      this._botPad.add(neonDiamond(0.16, 0xff6a3d));
       this._botPadPiece = null;
 
       this._botPocket = new THREE.Group();
       this._botPocket.position.set(redPocketPos.x, redPocketPos.y, redPocketPos.z);
       this._sceneRoot.add(this._botPocket);
-      this._botPocket.add(neonRing(0.13, 0xCE93D8));
+      this._botPocket.add(neonDiamond(0.13, 0xff6a3d));
       this._botPocketMesh = null;
       this._botHoldMesh = null;
+
+      var redNext = buildNextColumn.call(this, redNextPos, 0xff6a3d, Math.PI);
+      this._nextRed = redNext;
 
       this._buildArenaAtmosphere(blueC, redC);
 
@@ -205,8 +266,8 @@
       this._layout = {
         blueC: blueC, redC: redC,
         blueYaw: blueYaw, redYaw: redYaw,
-        bluePad: bluePadPos, bluePocket: bluePocketPos,
-        redPad: redPadPos, redPocket: redPocketPos,
+        bluePad: bluePadPos, bluePocket: bluePocketPos, blueNext: blueNextPos,
+        redPad: redPadPos, redPocket: redPocketPos, redNext: redNextPos,
         player: { x: blueC.x, y: 0, z: blueC.z + 0.90 },
         opponent: { x: redC.x, y: 0, z: redC.z - 0.90 }
       };
@@ -331,6 +392,9 @@
         st.pad.add(mesh);
         if (side === 'red') this._botPadPiece = mesh;
         else this._padPiece = mesh;
+        // Refresh NEXT column from that side's bot bag
+        var bot = side === 'blue' ? this.botBlue : this.bot;
+        if (bot && bot.bag) this._refreshNextQueue(side, bot.bag);
         return;
       }
       if (evt.kind === 'pocket') {
@@ -1049,31 +1113,30 @@
         rotationY: 0
       });
       mesh.userData.padPiece = true;
-      mesh.position.set(-0.06, 0.1, 0);
+      mesh.position.set(0, 0.1, 0);
       this._pad.add(mesh);
       this._padPiece = mesh;
-
-      // Next-piece preview (peek, don't consume)
-      var peek = this.bag.peek(1);
       this._previewPiece = null;
-      if (peek && peek[0]) {
-        var prev = global.StacksShapes.createShapeMesh(peek[0], {
+      this._refreshNextQueue('blue', this.bag);
+    },
+
+    /** BattleBlocks vertical NEXT column — upcoming pieces (peek, don't consume). */
+    _refreshNextQueue: function (side, bag) {
+      var col = side === 'red' ? this._nextRed : this._nextBlue;
+      if (!col || !col.slots || !bag || !bag.peek) return;
+      while (col.slots.children.length) col.slots.remove(col.slots.children[0]);
+      var peek = bag.peek(5);
+      for (var i = 0; i < peek.length; i++) {
+        var m = global.StacksShapes.createShapeMesh(peek[i], {
           centerPivot: true,
-          rotationY: 0,
-          ghost: true,
-          valid: true
+          rotationY: 0
         });
-        prev.userData.padPreview = true;
-        prev.position.set(0.16, 0.08, 0);
-        prev.scale.setScalar(0.55);
-        prev.traverse(function (o) {
-          if (o.isMesh && o.material) {
-            o.material.opacity = 0.45;
-            o.material.transparent = true;
-          }
-        });
-        this._pad.add(prev);
-        this._previewPiece = prev;
+        m.userData.nextPreview = true;
+        // Bottom slot is soonest; stack upward like BB
+        var scale = 0.72 - i * 0.06;
+        m.scale.setScalar(Math.max(0.42, scale));
+        m.position.set(0, 0.08 + i * 0.18, 0);
+        col.slots.add(m);
       }
     },
 
@@ -1959,27 +2022,24 @@
 
       var L = this._layout || {};
       var pad = side === 'blue' ? L.bluePad : L.redPad;
-      var pocket = side === 'blue' ? L.bluePocket : L.redPocket;
-      if (!pad || !pocket) return;
+      var next = side === 'blue' ? L.blueNext : L.redNext;
+      if (!pad || !next) return;
 
-      // Midpoint of spawn+storage cluster
-      var mx = (pad.x + pocket.x) * 0.5;
-      var mz = (pad.z + pocket.z) * 0.5;
-      var towardSeat = side === 'blue' ? 1 : -1;
-      var outboard = side === 'blue' ? -1 : 1;
+      // Spawn is on the RIGHT of the playfield. HUD sits behind the NEXT
+      // column toward the cup (playfield side) — not toward the seat.
+      var towardCup = side === 'blue' ? -1 : 1;   // -Z for blue
+      var towardCenter = side === 'blue' ? -1 : 1; // -X for blue (left from right-side station)
       var yaw = side === 'blue' ? 0 : Math.PI;
 
-      // Card HUD behind the pad/pocket cluster (further outboard + toward seat)
-      var cx = mx + outboard * 0.42;
-      var cy = (pad.y || 1.12) + 0.55;
-      var cz = mz + towardSeat * 0.28;
+      var cx = next.x + towardCenter * 0.38;
+      var cy = (pad.y || 1.12) + 0.52;
+      var cz = next.z + towardCup * 0.08;
       card.setAttribute('position', cx.toFixed(3) + ' ' + cy.toFixed(3) + ' ' + cz.toFixed(3));
       card.setAttribute('rotation', '0 ' + (yaw * 180 / Math.PI) + ' 0');
       card.setAttribute('visible', true);
 
-      // Cup panel under the card — same cluster, still behind pads
       var px = cx;
-      var py = cy - 0.55;
+      var py = cy - 0.52;
       var pz = cz;
       panel.setAttribute('position', px.toFixed(3) + ' ' + py.toFixed(3) + ' ' + pz.toFixed(3));
       panel.setAttribute('rotation', '0 ' + (yaw * 180 / Math.PI) + ' 0');
