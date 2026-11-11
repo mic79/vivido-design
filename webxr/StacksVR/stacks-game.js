@@ -155,11 +155,12 @@
       if (blue.pivot) { blue.pivot.rotation.y = blueYaw; blue.yaw = blueYaw; }
       if (red.pivot) { red.pivot.rotation.y = redYaw; red.yaw = redYaw; }
 
-      // Spawn (right) + storage (left), on the player's near side of each cup
-      var bluePadPos = offsetBlue(-0.45, 0.55);   // toward blue player (+Z), right
-      var bluePocketPos = offsetBlue(-0.45, -0.55);
-      var redPadPos = offsetRed(-0.45, 0.55);     // toward red player (-Z), their right
-      var redPocketPos = offsetRed(-0.45, -0.55);
+      // BattleBlocks: spawn + storage side-by-side on the outboard (player-left),
+      // near the seat — NOT flanking opposite sides of the cup.
+      var bluePadPos = offsetBlue(-0.52, -0.55);
+      var bluePocketPos = offsetBlue(-0.52, -0.95);
+      var redPadPos = offsetRed(-0.52, -0.55);
+      var redPocketPos = offsetRed(-0.52, -0.95);
 
       // Neon ring markers only — no opaque disc platforms (BattleBlocks)
       function neonRing(radius, color) {
@@ -204,6 +205,8 @@
       this._layout = {
         blueC: blueC, redC: redC,
         blueYaw: blueYaw, redYaw: redYaw,
+        bluePad: bluePadPos, bluePocket: bluePocketPos,
+        redPad: redPadPos, redPocket: redPocketPos,
         player: { x: blueC.x, y: 0, z: blueC.z + 0.90 },
         opponent: { x: redC.x, y: 0, z: redC.z - 0.90 }
       };
@@ -1912,10 +1915,8 @@
     },
 
     /**
-     * BattleBlocks has two panels per player (card + cup), but they must not
-     * stack in the same sightline. Anchor each to its cup: card toward that
-     * seat (in front of the player), cup panel beside the playfield.
-     * Face the seated player so glyphs aren't behind them.
+     * BattleBlocks: spawn+storage sit together on the outboard; card + cup
+     * HUD sit behind that cluster (further outboard / toward the seat).
      */
     _prepareMatchHud: function () {
       var ids = ['hud-card-blue', 'hud-cup-blue', 'hud-card-red', 'hud-cup-red'];
@@ -1952,34 +1953,34 @@
     },
 
     _placeSideHud: function (side, cardId, cupPanelId) {
-      var cup = this.cups[side];
-      if (!cup || !cup.getWorldCenter) return;
       var card = document.getElementById(cardId);
       var panel = document.getElementById(cupPanelId);
       if (!card || !card.object3D || !panel || !panel.object3D) return;
 
-      if (!this._hudPlaceTmp) this._hudPlaceTmp = new THREE.Vector3();
-      var c = this._hudPlaceTmp;
-      cup.getWorldCenter(c);
+      var L = this._layout || {};
+      var pad = side === 'blue' ? L.bluePad : L.redPad;
+      var pocket = side === 'blue' ? L.bluePocket : L.redPocket;
+      if (!pad || !pocket) return;
 
-      // Blue seat is +Z of cup; red seat is -Z. Outboard is -X / +X.
+      // Midpoint of spawn+storage cluster
+      var mx = (pad.x + pocket.x) * 0.5;
+      var mz = (pad.z + pocket.z) * 0.5;
       var towardSeat = side === 'blue' ? 1 : -1;
       var outboard = side === 'blue' ? -1 : 1;
-      // Face the seated player (a-text +Z toward them)
       var yaw = side === 'blue' ? 0 : Math.PI;
 
-      // Card: between cup and seat, outboard — in front of the player looking in
-      var cx = c.x + outboard * 0.72;
-      var cy = c.y + 0.58;
-      var cz = c.z + towardSeat * 0.55;
+      // Card HUD behind the pad/pocket cluster (further outboard + toward seat)
+      var cx = mx + outboard * 0.42;
+      var cy = (pad.y || 1.12) + 0.55;
+      var cz = mz + towardSeat * 0.28;
       card.setAttribute('position', cx.toFixed(3) + ' ' + cy.toFixed(3) + ' ' + cz.toFixed(3));
       card.setAttribute('rotation', '0 ' + (yaw * 180 / Math.PI) + ' 0');
       card.setAttribute('visible', true);
 
-      // Cup panel: beside cup at playfield depth — NOT stacked behind the card
-      var px = c.x + outboard * 0.78;
-      var py = c.y + 0.22;
-      var pz = c.z + towardSeat * 0.02;
+      // Cup panel under the card — same cluster, still behind pads
+      var px = cx;
+      var py = cy - 0.55;
+      var pz = cz;
       panel.setAttribute('position', px.toFixed(3) + ' ' + py.toFixed(3) + ' ' + pz.toFixed(3));
       panel.setAttribute('rotation', '0 ' + (yaw * 180 / Math.PI) + ' 0');
       panel.setAttribute('visible', true);
