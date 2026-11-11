@@ -411,8 +411,6 @@
         this._orbitHeight = 2.05;
         this._orbitAngle = Math.PI / 2;
         this._orbitTargetAngle = Math.PI / 2;
-        this._orbitMinAngle = 0;
-        this._orbitMaxAngle = Math.PI;
         this._touchStartX = 0;
         this._touchStartAngle = 0;
         this._isTouching = false;
@@ -503,8 +501,8 @@
         document.addEventListener('touchmove', function (e) {
           if (!self._isTouching) return;
           var deltaX = e.touches[0].clientX - self._touchStartX;
-          var newAngle = self._touchStartAngle - deltaX * sensitivity();
-          self._orbitTargetAngle = Math.max(self._orbitMinAngle, Math.min(self._orbitMaxAngle, newAngle));
+          // Full 360° free orbit — no clamp; keep spinning across revolutions
+          self._orbitTargetAngle = self._touchStartAngle - deltaX * sensitivity();
           e.preventDefault();
         }, { passive: false, capture: true });
 
@@ -522,8 +520,7 @@
         document.addEventListener('mousemove', function (e) {
           if (!self._isTouching || !e.buttons) return;
           var deltaX = e.clientX - self._touchStartX;
-          var newAngle = self._touchStartAngle - deltaX * sensitivity();
-          self._orbitTargetAngle = Math.max(self._orbitMinAngle, Math.min(self._orbitMaxAngle, newAngle));
+          self._orbitTargetAngle = self._touchStartAngle - deltaX * sensitivity();
         }, true);
 
         document.addEventListener('mouseup', function () {

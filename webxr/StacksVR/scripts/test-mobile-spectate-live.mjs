@@ -242,8 +242,7 @@ async function main() {
       // emulate move handler
       const sensitivity = Math.PI / Math.max(window.innerWidth, 1);
       const deltaX = 120;
-      cam._orbitTargetAngle = Math.max(cam._orbitMinAngle, Math.min(cam._orbitMaxAngle,
-        cam._touchStartAngle - deltaX * sensitivity));
+      cam._orbitTargetAngle = cam._touchStartAngle - deltaX * sensitivity;
       cam._isTouching = false;
       // tick a few times
       for (var i = 0; i < 20; i++) cam.tick();
