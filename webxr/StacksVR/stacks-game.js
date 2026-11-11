@@ -1747,7 +1747,7 @@
       this._setRemoteHeld('blue', { holding: false });
       this._setRemoteHeld('red', { holding: false });
       // Spectators mirror host board — no local spawn pad
-      if (!spectating) this._spawnPadPiece();
+      if (!spectating) this._spawnPadPiece({ dropIn: true });
       else if (this._pad) this._pad.visible = false;
       this._dualBotPreview = false;
       if (this.botBlue) this.botBlue.enable(false);
