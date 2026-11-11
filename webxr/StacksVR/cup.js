@@ -93,24 +93,7 @@
     var neon = this.side === 'blue' ? 0x33bbff : 0xff6a3d;
     var neonDim = this.side === 'blue' ? 0x1a4a6e : 0x6e2a1a;
 
-    // Glossy cup floor (receives shadows + IBL)
-    var floorMat = new THREE.MeshStandardMaterial({
-      color: 0x080a10,
-      roughness: 0.2,
-      metalness: 0.82,
-      envMapIntensity: 1.4
-    });
-    this._shellMats.push(floorMat);
-    var floor = new THREE.Mesh(
-      new THREE.BoxGeometry(w + 0.02, 0.02, d + 0.02),
-      floorMat
-    );
-    floor.position.set(w / 2, -0.01, d / 2);
-    floor.receiveShadow = true;
-    this.root.add(floor);
-    this._floor = floor;
-
-    // Base neon frame — rounded corners, no verticals
+    // Base neon frame only — no opaque cup floor / cell "+" markers
     var frameMat = new THREE.MeshBasicMaterial({
       color: neon, transparent: true, opacity: 0.95, toneMapped: false
     });
@@ -160,26 +143,6 @@
     this._shellMats.push(rimMat);
     this._rimMat = rimMat;
     this._rim = this._addRoundedFrame(this.root, w, d, h, 0.014, rimMat, true);
-
-    // Floor cell markers — "+" at each grid intersection
-    var plusMat = new THREE.LineBasicMaterial({
-      color: neon, transparent: true, opacity: 0.65, toneMapped: false
-    });
-    var plusArm = this.cellSize * 0.16;
-    for (var gx = 0; gx <= this.width; gx++) {
-      for (var gz = 0; gz <= this.depth; gz++) {
-        var px = gx * this.cellSize;
-        var pz = gz * this.cellSize;
-        this.root.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(px - plusArm, 0.003, pz),
-          new THREE.Vector3(px + plusArm, 0.003, pz)
-        ]), plusMat));
-        this.root.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(px, 0.003, pz - plusArm),
-          new THREE.Vector3(px, 0.003, pz + plusArm)
-        ]), plusMat));
-      }
-    }
 
     // Highest-layer highlight — rounded outer frame only
     var hiMat = new THREE.MeshBasicMaterial({
