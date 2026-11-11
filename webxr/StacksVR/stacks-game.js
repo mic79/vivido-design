@@ -1112,9 +1112,10 @@
       this._updateHUD();
     },
 
-    // Vertical stack inside NEXT — small silhouettes with clear gaps
-    _nextSlotY: function (i) { return 0.02 + i * 0.24; },
-    _nextSlotScale: function (i) { return Math.max(0.09, 0.20 - i * 0.022); },
+    // Vertical stack inside NEXT — only 3 upcoming pieces visible
+    _nextQueueCount: 3,
+    _nextSlotY: function (i) { return 0.04 + i * 0.28; },
+    _nextSlotScale: function (i) { return Math.max(0.11, 0.22 - i * 0.04); },
 
     /** Scale pad/pocket pieces so longest tetromino fits inside its diamond. */
     _fitStationPiece: function (mesh, maxSpan) {
@@ -1172,7 +1173,7 @@
       var col = side === 'red' ? this._nextRed : this._nextBlue;
       if (!col || !col.slots || !bag || !bag.peek) return;
       while (col.slots.children.length) col.slots.remove(col.slots.children[0]);
-      var peek = bag.peek(5);
+      var peek = bag.peek(this._nextQueueCount);
       var now = performance.now();
       for (var i = 0; i < peek.length; i++) {
         var m = global.StacksShapes.createShapeMesh(peek[i], {
@@ -1264,7 +1265,7 @@
         });
       }
 
-      var peek = bag.peek(5);
+      var peek = bag.peek(this._nextQueueCount);
       var newIdx = remaining.length;
       if (peek[newIdx]) {
         var m = global.StacksShapes.createShapeMesh(peek[newIdx], {
