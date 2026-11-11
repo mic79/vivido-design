@@ -1848,6 +1848,18 @@
       this._padPiece = null;
       this._pieceAnims = [];
       this._cancelHold();
+
+      // Multiplayer peers may only learn the winner from match-ended payload
+      if (this.modes) {
+        if (opts.winner) this.modes.winner = opts.winner;
+        if (opts.reason) this.modes.reason = opts.reason;
+        if (opts.scores) {
+          if (opts.scores.blue != null) this.modes.scores.blue = opts.scores.blue;
+          if (opts.scores.red != null) this.modes.scores.red = opts.scores.red;
+        }
+        if (this.modes.stop) this.modes.stop();
+      }
+
       try {
         if (window.matchRecorder && window.matchRecorder.isRecording) {
           var replay = window.matchRecorder.stopRecording();
@@ -1857,11 +1869,12 @@
       try { this._saveMatchHistory(); } catch (e2) { console.warn('[StacksGame] history save failed', e2); }
       this._updateHUD();
 
-      var festive = !opts.cancelled && !!(this.modes && this.modes.winner);
+      var winner = (opts && opts.winner) || (this.modes && this.modes.winner);
+      var festive = !opts.cancelled && !!winner;
       if (festive) {
         this._playVictory({
-          winner: this.modes.winner,
-          reason: this.modes.reason || (opts && opts.reason)
+          winner: winner,
+          reason: (opts && opts.reason) || (this.modes && this.modes.reason)
         });
         this._scheduleDualIdle(3800);
       } else {
@@ -2130,7 +2143,11 @@
       }
     },
 
-    /** Local player body always on; red bot avatar on for offline/bot matches. */
+    /**
+     * Local player body always on.
+     * Offline bot: show red bot avatar.
+     * Multiplayer: do NOT force-hide bot/spec-blue — remote poses own those entities.
+     */
     _showMatchBodies: function (opts) {
       opts = opts || {};
       var player = document.getElementById('player-body');
@@ -2138,6 +2155,8 @@
         player.setAttribute('visible', true);
         if (player.object3D) player.object3D.visible = true;
       }
+      if (global.isMultiplayer) return;
+
       var bot = document.getElementById('bot-body');
       if (bot) {
         var showBot = !!opts.showBot;
@@ -2146,18 +2165,31 @@
         if (!showBot && bot.dataset) bot.dataset.posed = '';
       }
       var spec = document.getElementById('spec-blue-body');
-      if (spec && !global.isMultiplayer) {
+      if (spec) {
         spec.setAttribute('visible', false);
         if (spec.object3D) spec.object3D.visible = false;
       }
+    },
+
+    _matchEndResult: function (info, cancelled) {
+      info = info || {};
+      return {
+        cancelled: !!cancelled,
+        winner: cancelled ? null : (info.winner || (this.modes && this.modes.winner) || null),
+        reason: cancelled ? null : (info.reason || (this.modes && this.modes.reason) || null),
+        scores: this.modes && this.modes.scores
+          ? { blue: this.modes.scores.blue | 0, red: this.modes.scores.red | 0 }
+          : null
+      };
     },
 
     endMatch: function () {
       if (this._endingMatch) return;
       this._endingMatch = true;
       if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
-      if (global.isMultiplayer && global.sendMatchAction) global.sendMatchAction('end');
-      else this.onMatchEnded({ cancelled: true });
+      var result = this._matchEndResult(null, true);
+      if (global.isMultiplayer && global.sendMatchAction) global.sendMatchAction('end', result);
+      else this.onMatchEnded(result);
     },
 
     _endFromMode: function (info) {
@@ -2170,12 +2202,14 @@
       if (this.botBlue) this.botBlue.enable(false);
       if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
 
+      var result = this._matchEndResult(info, false);
       if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.isHost) {
-        global.endLobbyMatch();
+        global.endLobbyMatch(result);
       } else if (!global.isMultiplayer) {
-        this.onMatchEnded({ victory: true, winner: info && info.winner, reason: info && info.reason });
+        this.onMatchEnded(Object.assign({ victory: true }, result));
       } else if (global.sendMatchAction) {
-        global.sendMatchAction('end');
+        global.sendMatchAction('end', result);
+        // onMatchEnded arrives via match-ended broadcast (with winner payload)
         this._endingMatch = false;
       }
     },

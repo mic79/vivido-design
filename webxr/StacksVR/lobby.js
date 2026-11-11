@@ -164,8 +164,9 @@
     if (Lobby.onMatchStarted) Lobby.onMatchStarted(mp, startTime, isBotMatch, bagSeed);
   }
 
-  function endLobbyMatch() {
+  function endLobbyMatch(result) {
     if (!Lobby.lobbyState) return;
+    result = result || {};
     Lobby.isLobbyBotMatch = false;
     global.isLobbyBotMatch = false;
     var oldBlue = Lobby.lobbyState.matchPlayers.blue;
@@ -190,16 +191,31 @@
     if (Lobby.lobbyState.matchPlayers.red !== '__BOT__') Lobby.lobbyState.matchPlayers.red = null;
     tryAssignMatchPlayers();
 
+    var endMsg = {
+      type: 'match-ended',
+      winner: result.winner || null,
+      reason: result.reason || null,
+      scores: result.scores || null,
+      cancelled: !!result.cancelled || !result.winner
+    };
     for (var i = 0; i < Lobby.connections.length; i++) {
       if (Lobby.connections[i].conn.open) {
-        Lobby.connections[i].conn.send({ type: 'match-ended' });
+        Lobby.connections[i].conn.send(endMsg);
       }
     }
     broadcastLobbyState();
-    if (Lobby.onMatchEnded) Lobby.onMatchEnded();
+    if (Lobby.onMatchEnded) {
+      Lobby.onMatchEnded({
+        cancelled: endMsg.cancelled,
+        victory: !endMsg.cancelled && !!endMsg.winner,
+        winner: endMsg.winner,
+        reason: endMsg.reason,
+        scores: endMsg.scores
+      });
+    }
   }
 
-  function handleMatchAction(playerId, action) {
+  function handleMatchAction(playerId, action, result) {
     if (!Lobby.lobbyState) return;
     var mp = Lobby.lobbyState.matchPlayers;
     // Host may start/end even before seating (startLobbyMatch auto-seats host as blue).
@@ -211,7 +227,7 @@
     if (action === 'start' && Lobby.lobbyState.matchState !== 'PLAYING') {
       startLobbyMatch();
     } else if (action === 'end' && Lobby.lobbyState.matchState === 'PLAYING') {
-      endLobbyMatch();
+      endLobbyMatch(result || null);
     }
   }
 
@@ -306,7 +322,7 @@
 
     if (Lobby.isHost) {
       if (data.type === 'queue-action') handleQueueAction(fromId, data.action);
-      else if (data.type === 'match-action') handleMatchAction(fromId, data.action);
+      else if (data.type === 'match-action') handleMatchAction(fromId, data.action, data.result);
       else if (data.type === 'cup-event') {
         if (!data.from) data.from = fromId;
         // Rebroadcast to other peers, then apply locally on host
@@ -422,7 +438,15 @@
         Lobby.lobbyState.matchGameState = null;
         global.lobbyState = Lobby.lobbyState;
       }
-      if (Lobby.onMatchEnded) Lobby.onMatchEnded();
+      if (Lobby.onMatchEnded) {
+        Lobby.onMatchEnded({
+          cancelled: !!data.cancelled || !data.winner,
+          victory: !data.cancelled && !!data.winner,
+          winner: data.winner || null,
+          reason: data.reason || null,
+          scores: data.scores || null
+        });
+      }
       var scene3 = document.querySelector('a-scene');
       if (scene3) scene3.emit('lobby-state-updated');
     } else if (data.type === 'cup-event' || data.type === 'cup-snapshot') {
@@ -747,9 +771,11 @@
     else if (Lobby.conn && Lobby.conn.open) Lobby.conn.send({ type: 'queue-action', action: action });
   }
 
-  function sendMatchAction(action) {
-    if (Lobby.isHost) handleMatchAction(Lobby.myPlayerId, action);
-    else if (Lobby.conn && Lobby.conn.open) Lobby.conn.send({ type: 'match-action', action: action });
+  function sendMatchAction(action, result) {
+    if (Lobby.isHost) handleMatchAction(Lobby.myPlayerId, action, result);
+    else if (Lobby.conn && Lobby.conn.open) {
+      Lobby.conn.send({ type: 'match-action', action: action, result: result || null });
+    }
   }
 
   function sendCupEvent(evt) {

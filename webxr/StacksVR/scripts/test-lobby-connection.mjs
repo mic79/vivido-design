@@ -141,9 +141,36 @@ async function main() {
     await latePage.evaluate(() => window.__lobbyTest.leave());
     await lateCtx.close();
 
+    // Match end must carry winner so peers/spectators can celebrate
+    await watchPage.evaluate(() => { window.__lastMatchEnded = null; });
+    await watchPage.evaluate(() => {
+      if (!window.StacksLobby) return;
+      window.StacksLobby.onMatchEnded = function (opts) {
+        window.__lastMatchEnded = opts || null;
+      };
+    });
+    const hostEnd = await hostPage.evaluate(() => window.__lobbyTest.endMatch({
+      winner: 'red',
+      reason: 'overflow',
+      scores: { blue: 1, red: 4 },
+      cancelled: false
+    }));
+    console.log('HOST endMatch', hostEnd);
+    if (!hostEnd.ended || hostEnd.ended.winner !== 'red' || hostEnd.status.matchState !== 'WAITING') {
+      throw new Error('Host endMatch missing winner/WAITING: ' + JSON.stringify(hostEnd));
+    }
+    await watchPage.waitForFunction(() => {
+      return window.__lastMatchEnded && window.__lastMatchEnded.winner === 'red';
+    }, null, { timeout: 8000 });
+    const watchEnded = await watchPage.evaluate(() => window.__lobbyTest.lastEnded());
+    console.log('WATCH match-ended', watchEnded);
+    if (!watchEnded || watchEnded.winner !== 'red' || watchEnded.reason !== 'overflow') {
+      throw new Error('Spectator match-ended missing winner payload: ' + JSON.stringify(watchEnded));
+    }
+
     await watchPage.evaluate(() => window.__lobbyTest.leave());
     await hostPage.evaluate(() => window.__lobbyTest.leave());
-    console.log('PASS host↔mobile spectator PeerJS lobby + match-started PLAYING');
+    console.log('PASS host↔mobile spectator PeerJS lobby + match-started/ended with winner');
   } catch (e) {
     failed = e;
     console.error('FAIL', e && e.stack ? e.stack : e);

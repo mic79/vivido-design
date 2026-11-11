@@ -40,6 +40,20 @@
           window.startLobbyMatch();
           return window.__lobbyTest.status();
         },
+        endMatch: function (result) {
+          window.__lastMatchEnded = null;
+          if (!window.StacksLobby) throw new Error('StacksLobby missing');
+          window.StacksLobby.onMatchEnded = function (opts) {
+            window.__lastMatchEnded = opts || null;
+          };
+          if (!window.endLobbyMatch) throw new Error('endLobbyMatch missing');
+          window.endLobbyMatch(result || { cancelled: true });
+          return {
+            status: window.__lobbyTest.status(),
+            ended: window.__lastMatchEnded
+          };
+        },
+        lastEnded: function () { return window.__lastMatchEnded || null; },
         probeIce: async function () {
           // Mirror lobby getIceServers paths for the test assertion
           var remoteOk = false;
