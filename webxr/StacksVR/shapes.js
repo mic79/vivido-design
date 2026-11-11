@@ -4,9 +4,9 @@
 
   var CELL = 0.12;
   var HALF_PI = Math.PI / 2;
-  // BattleBlocks look: all pieces one dark solid — not tetromino rainbow
-  var BLOCK_COLOR = '#1c1e24';
-  var GARBAGE_COLOR = '#3a3d46';
+  // BattleBlocks look: white play blocks (dark debris is background only)
+  var BLOCK_COLOR = '#f2f4f8';
+  var GARBAGE_COLOR = '#c5c8d0';
 
   // Relative cell offsets for each shape (y-up). Default pose is flat on XZ.
   var DEFS = {
@@ -323,8 +323,8 @@
     } else {
       mat = new THREE.MeshStandardMaterial({
         color: color,
-        roughness: 0.48,
-        metalness: 0.18
+        roughness: 0.38,
+        metalness: 0.08
       });
     }
 
