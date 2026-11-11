@@ -12,6 +12,72 @@
     { x: 3.2, y: 0, z: -2.8, ry: 160 }
   ];
 
+  function lightenHex(hex, amount) {
+    amount = amount == null ? 0.35 : amount;
+    var h = String(hex || '#444').replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16);
+    if (isNaN(n)) return '#88aacc';
+    var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    r = Math.min(255, Math.round(r + (255 - r) * amount));
+    g = Math.min(255, Math.round(g + (255 - g) * amount));
+    b = Math.min(255, Math.round(b + (255 - b) * amount));
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+  }
+
+  function isEffectivelyVisible(el) {
+    var node = el;
+    while (node && node !== node.sceneEl) {
+      if (node.object3D && !node.object3D.visible) return false;
+      node = node.parentNode;
+    }
+    return true;
+  }
+
+  function getHandGamepad(handEl) {
+    if (!handEl || !handEl.components) return null;
+    var keys = [
+      'tracked-controls', 'tracked-controls-webxr',
+      'oculus-touch-controls', 'meta-touch-controls', 'vive-controls'
+    ];
+    for (var i = 0; i < keys.length; i++) {
+      var c = handEl.components[keys[i]];
+      if (c && c.controller && c.controller.gamepad) return c.controller.gamepad;
+    }
+    return null;
+  }
+
+  function pulseHaptic(handEl, intensity, durationMs) {
+    intensity = intensity == null ? 0.45 : intensity;
+    durationMs = durationMs == null ? 40 : durationMs;
+    var hands = handEl
+      ? [handEl]
+      : [document.getElementById('leftHand'), document.getElementById('rightHand')];
+    for (var i = 0; i < hands.length; i++) {
+      var hand = hands[i];
+      if (!hand) continue;
+      try {
+        var gp = getHandGamepad(hand);
+        var act = gp && gp.hapticActuators && gp.hapticActuators[0];
+        if (act && act.pulse) {
+          var p = act.pulse(intensity, durationMs);
+          if (p && p.catch) p.catch(function () {});
+          continue;
+        }
+        if (gp && gp.vibrationActuator && gp.vibrationActuator.playEffect) {
+          gp.vibrationActuator.playEffect('dual-rumble', {
+            startDelay: 0,
+            duration: durationMs,
+            weakMagnitude: intensity,
+            strongMagnitude: intensity
+          });
+        }
+      } catch (e) { /* no haptics */ }
+    }
+  }
+
+  window.StacksHaptics = { pulse: pulseHaptic, getGamepad: getHandGamepad };
+
   AFRAME.registerComponent('vr-menu', {
     init: function () {
       this.menuVisible = false;
@@ -23,6 +89,7 @@
       this._xWasDown = false;
       this._menuToggleAt = 0;
       this._poseKey = '';
+      this._hoveredBtn = null;
       var self = this;
 
       this.el.sceneEl.addEventListener('loaded', function () { self.cacheRefs(); });
@@ -90,7 +157,46 @@
       if (!this.menuVisible) {
         this._laserGuard = (this._laserGuard || 0) + 1;
         if (this._laserGuard % 20 === 0) this._forceHideLaserLines();
+        if (this._hoveredBtn) this._clearHover();
+      } else {
+        // Fallback hover sync from hand raycasters (in case mouseenter misses)
+        this._syncRayHover();
       }
+    },
+
+    _syncRayHover: function () {
+      var hit = null;
+      var hitHand = null;
+      var hands = [
+        this.leftHand || document.getElementById('leftHand'),
+        this.rightHand || document.getElementById('rightHand')
+      ];
+      for (var i = 0; i < hands.length; i++) {
+        var hand = hands[i];
+        var rc = hand && hand.components && hand.components.raycaster;
+        if (!rc || !rc.intersectedEls || !rc.intersectedEls.length) continue;
+        for (var j = 0; j < rc.intersectedEls.length; j++) {
+          var el = rc.intersectedEls[j];
+          if (el && el.classList && el.classList.contains('menu-btn') &&
+              isEffectivelyVisible(el)) {
+            hit = el;
+            hitHand = hand;
+            break;
+          }
+        }
+        if (hit) break;
+      }
+      if (hit === this._hoveredBtn) return;
+      if (!hit) {
+        this._clearHover();
+        return;
+      }
+      // Reuse bound handlers via synthetic path
+      if (this._hoveredBtn) this._clearHover();
+      this._hoveredBtn = hit;
+      hit.setAttribute('material', 'color', hit.dataset.hoverColor || lightenHex(hit.dataset.baseColor, 0.42));
+      hit.setAttribute('scale', '1.04 1.04 1.04');
+      pulseHaptic(hitHand, 0.35, 28);
     },
 
     _forceHideLaserLines: function () {
@@ -133,13 +239,58 @@
     _bindClicks: function () {
       var self = this;
       var root = document.getElementById('vr-menu-root');
-      if (!root) return;
+      if (!root || root.dataset.menuBound === '1') return;
+      root.dataset.menuBound = '1';
       root.querySelectorAll('.menu-btn').forEach(function (el) {
-        el.addEventListener('click', function () {
+        var mat = el.getAttribute('material') || {};
+        el.dataset.baseColor = mat.color || '#444444';
+        el.dataset.hoverColor = lightenHex(el.dataset.baseColor, 0.42);
+        el.classList.add('clickable');
+
+        function hoverOn(handEl) {
+          if (!isEffectivelyVisible(el)) return;
+          if (self._hoveredBtn === el) return;
+          self._clearHover();
+          self._hoveredBtn = el;
+          el.setAttribute('material', 'color', el.dataset.hoverColor);
+          el.setAttribute('scale', '1.04 1.04 1.04');
+          pulseHaptic(handEl || null, 0.35, 28);
+        }
+        function hoverOff() {
+          if (self._hoveredBtn !== el) return;
+          self._hoveredBtn = null;
+          el.setAttribute('material', 'color', el.dataset.baseColor);
+          el.setAttribute('scale', '1 1 1');
+        }
+
+        // laser-controls / cursor (same path DodgeVR menu-click uses)
+        el.addEventListener('mouseenter', function (evt) {
+          hoverOn(evt && evt.detail && evt.detail.cursorEl);
+        });
+        el.addEventListener('mouseleave', hoverOff);
+        // Direct raycaster events (A-Frame on the intersected entity)
+        el.addEventListener('raycaster-intersected', function (evt) {
+          var hand = evt.detail && evt.detail.el;
+          hoverOn(hand);
+        });
+        el.addEventListener('raycaster-intersected-cleared', hoverOff);
+
+        el.addEventListener('click', function (evt) {
+          if (!isEffectivelyVisible(el)) return;
+          var hand = (evt.detail && evt.detail.cursorEl) || null;
+          pulseHaptic(hand, 0.7, 55);
           var action = el.getAttribute('data-action');
           self.handleAction(action);
         });
       });
+    },
+
+    _clearHover: function () {
+      if (!this._hoveredBtn) return;
+      var el = this._hoveredBtn;
+      this._hoveredBtn = null;
+      el.setAttribute('material', 'color', el.dataset.baseColor || '#444');
+      el.setAttribute('scale', '1 1 1');
     },
 
     setRaycasters: function (enabled) {
@@ -183,7 +334,9 @@
           if (root.object3D) root.object3D.visible = true;
         }
         this.setRaycasters(true);
+        pulseHaptic(this.leftHand || document.getElementById('leftHand'), 0.4, 35);
       } else {
+        this._clearHover();
         if (root) {
           root.setAttribute('visible', false);
           if (root.object3D) root.object3D.visible = false;
@@ -194,6 +347,7 @@
 
     closeMenu: function () {
       this.menuVisible = false;
+      this._clearHover();
       var root = document.getElementById('vr-menu-root');
       if (root) {
         root.setAttribute('visible', false);

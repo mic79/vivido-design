@@ -676,17 +676,28 @@
 
     _pulseHaptic: function (handEl, intensity, durationMs) {
       if (!handEl) return;
+      // Prefer shared helper (covers oculus-touch / webxr / vive gamepads)
+      if (global.StacksHaptics && global.StacksHaptics.pulse) {
+        global.StacksHaptics.pulse(handEl, intensity || 0.4, durationMs || 40);
+        return;
+      }
       try {
-        var gp = handEl.components && handEl.components['tracked-controls'] &&
-          handEl.components['tracked-controls'].controller &&
-          handEl.components['tracked-controls'].controller.gamepad;
+        var comps = handEl.components || {};
+        var keys = [
+          'tracked-controls', 'tracked-controls-webxr',
+          'oculus-touch-controls', 'meta-touch-controls', 'vive-controls'
+        ];
+        var gp = null;
+        for (var i = 0; i < keys.length; i++) {
+          var c = comps[keys[i]];
+          if (c && c.controller && c.controller.gamepad) { gp = c.controller.gamepad; break; }
+        }
         var act = gp && gp.hapticActuators && gp.hapticActuators[0];
         if (act && act.pulse) {
           var p = act.pulse(intensity || 0.4, durationMs || 40);
           if (p && p.catch) p.catch(function () {});
           return;
         }
-        // WebXR haptic actuators (newer)
         var pads = gp && gp.vibrationActuator;
         if (pads && pads.playEffect) {
           pads.playEffect('dual-rumble', {
