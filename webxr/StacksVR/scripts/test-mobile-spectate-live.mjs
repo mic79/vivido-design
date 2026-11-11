@@ -134,6 +134,13 @@ async function main() {
       return ls && ls.matchState === 'PLAYING' && !/Waiting for match/i.test(status);
     }, null, { timeout: 15000 });
 
+    await watch.waitForFunction(() => {
+      const comp = document.querySelector('[stacks-game]').components['stacks-game'];
+      const cells = (comp.cups.blue.serialize().cells || []).length +
+        (comp.cups.red.serialize().cells || []).length;
+      return cells >= 3;
+    }, null, { timeout: 10000 });
+
     const hud = await watch.evaluate(() => {
       if (window.StacksMobileSpectator) {
         window.StacksMobileSpectator.updateMobileHudStatus();
@@ -159,11 +166,14 @@ async function main() {
     if (hud.cells < 3) throw new Error('cups not synced, cells=' + hud.cells);
     if (!hud.orbitReady) throw new Error('orbit camera not ready');
 
-    // Drive host poses + more cup updates while watching
+    // Drive host poses from a known head position + more cup updates
     await host.evaluate(() => {
       const comp = document.querySelector('[stacks-game]').components['stacks-game'];
-      // Force several pose sends
-      for (var i = 0; i < 5; i++) {
+      const cam = document.getElementById('camera');
+      // Place camera at a distinctive world pose so spectator body must leave origin
+      cam.object3D.position.set(0.4, 1.55, 1.1);
+      document.getElementById('player').object3D.position.set(0, 0, 0);
+      for (var i = 0; i < 8; i++) {
         comp._lastPoseSend = 0;
         comp._sendLocalPose();
       }
@@ -172,26 +182,54 @@ async function main() {
     });
 
     await watch.waitForFunction(() => {
-      const dbg = window.StacksMobileSpectator && window.StacksMobileSpectator.getDebug();
-      const comp = document.querySelector('[stacks-game]').components['stacks-game'];
-      const cells = (comp.cups.blue.serialize().cells || []).length +
-        (comp.cups.red.serialize().cells || []).length;
-      return dbg && dbg.poseCount > 0 && cells >= 4;
-    }, null, { timeout: 10000 });
+      const body = document.getElementById('spec-blue-body');
+      const mb = body && body.components && body.components['mixamo-body'];
+      const posed = body && body.dataset && body.dataset.posed === '1';
+      const hasRemote = !!(mb && mb.remoteHandData && mb.remoteHandData.head &&
+        typeof mb.remoteHandData.head.x === 'number');
+      const moved = body && body.object3D &&
+        (Math.abs(body.object3D.position.x) > 0.05 || Math.abs(body.object3D.position.z) > 0.05 ||
+          body.object3D.position.y > 0.2);
+      const cells = document.querySelector('[stacks-game]').components['stacks-game'].cups.blue.serialize().cells.length +
+        document.querySelector('[stacks-game]').components['stacks-game'].cups.red.serialize().cells.length;
+      return posed && hasRemote && cells >= 4;
+    }, null, { timeout: 12000 });
+
+    // Tick mixamo so IK moves the body from remoteHandData
+    await watch.evaluate(() => {
+      const body = document.getElementById('spec-blue-body');
+      const mb = body.components['mixamo-body'];
+      for (var i = 0; i < 10; i++) mb.tick(performance.now(), 16);
+    });
 
     const sync = await watch.evaluate(() => {
-      const mb = document.getElementById('spec-blue-body').components['mixamo-body'];
+      const body = document.getElementById('spec-blue-body');
+      const mb = body.components['mixamo-body'];
       return {
-        poseCount: window.StacksMobileSpectator.getDebug().poseCount,
-        cupEvents: window.StacksMobileSpectator.getDebug().cupEventCount,
+        poseRecv: document.querySelector('[stacks-game]').components['stacks-game']._poseRecvCount || 0,
         hasRemote: !!(mb && mb.remoteHandData && mb.remoteHandData.head),
+        headX: mb.remoteHandData.head.x,
+        headY: mb.remoteHandData.head.y,
+        headZ: mb.remoteHandData.head.z,
+        bodyX: body.object3D.position.x,
+        bodyY: body.object3D.position.y,
+        bodyZ: body.object3D.position.z,
+        visible: body.object3D.visible,
+        posed: body.dataset.posed,
         cells: document.querySelector('[stacks-game]').components['stacks-game'].cups.blue.serialize().cells.length +
           document.querySelector('[stacks-game]').components['stacks-game'].cups.red.serialize().cells.length
       };
     });
     console.log('SYNC', sync);
-    if (sync.poseCount < 1) throw new Error('no poses received');
+    if (sync.poseRecv < 1) throw new Error('no poses applied via stacks-game');
     if (!sync.hasRemote) throw new Error('spec-blue-body missing remoteHandData');
+    if (Math.abs(sync.headY - 1.55) > 0.3) throw new Error('head pose not synced: y=' + sync.headY);
+    if (Math.abs(sync.headX - 0.4) > 0.3) throw new Error('head pose not synced: x=' + sync.headX);
+    if (!sync.visible || sync.posed !== '1') throw new Error('body not visible/posed');
+    // Entity Y can be ~-0.1 (hips local offset); XZ must track the headset
+    if (Math.abs(sync.bodyX - 0.4) > 0.35 || Math.abs(sync.bodyZ - 1.1) > 0.5) {
+      throw new Error('body not tracking head xz: ' + sync.bodyX + ',' + sync.bodyZ);
+    }
     if (sync.cells < 4) throw new Error('red cup cell not synced');
 
     // Orbit: simulate drag

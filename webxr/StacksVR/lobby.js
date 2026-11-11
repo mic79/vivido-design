@@ -317,9 +317,14 @@
       } else if (data.type === 'player-pose') {
         for (var j = 0; j < Lobby.connections.length; j++) {
           var cj = Lobby.connections[j];
-          if (cj.id !== fromId && cj.conn.open) cj.conn.send(Object.assign({ from: fromId }, data));
+          if (cj.id !== fromId && cj.conn.open) {
+            cj.conn.send(Object.assign({}, data, { from: fromId, type: 'player-pose' }));
+          }
         }
         if (Lobby.onPlayerPose) Lobby.onPlayerPose(fromId, data);
+        if (typeof global.applyStacksRemotePose === 'function') {
+          global.applyStacksRemotePose(fromId, data);
+        }
       } else if (data.type === 'mobile-spectator') {
         var entryMs = Lobby.connections.find(function (x) { return x.id === fromId; });
         if (entryMs) entryMs.isMobileSpectator = true;
@@ -409,7 +414,12 @@
       if (Lobby.onCupEvent) Lobby.onCupEvent(data);
       if (data.type === 'cup-snapshot' && Lobby.onCupSnapshot) Lobby.onCupSnapshot(data);
     } else if (data.type === 'player-pose') {
-      if (Lobby.onPlayerPose) Lobby.onPlayerPose(data.from || fromId, data);
+      var poseFrom = data.from || fromId;
+      if (Lobby.onPlayerPose) Lobby.onPlayerPose(poseFrom, data);
+      // Direct apply — do not depend solely on mobile-spectator callback wrapping
+      if (typeof global.applyStacksRemotePose === 'function') {
+        global.applyStacksRemotePose(poseFrom, data);
+      }
     }
   }
 

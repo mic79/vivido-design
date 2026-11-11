@@ -77,10 +77,15 @@
         chain('onMatchEnded', self.onMatchEnded);
         chain('onCupEvent', self.onRemoteCupEvent);
         chain('onCupSnapshot', self.onRemoteSnapshot);
+        chain('onPlayerPose', self.onRemotePlayerPose);
         global.StacksLobby.onRequestSnapshot = function () {
           return self._buildSnapshot();
         };
       }
+      // Stable entry point so lobby.js can apply poses even if callbacks were rebound
+      global.applyStacksRemotePose = function (fromId, data) {
+        self.onRemotePlayerPose(fromId, data);
+      };
 
       this._bindInput();
     },
@@ -1097,11 +1102,100 @@
       this._updateDamageHUD();
     },
 
+    /**
+     * Apply networked head/hand pose to the correct remote body.
+     * Accepts nested {head,leftHand,rightHand} or DodgeVR flat {x,y,z,hqx,...,lhx,...}.
+     */
+    onRemotePlayerPose: function (fromId, data) {
+      if (!data) return;
+      var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+      if (fromId && myId && fromId === myId) return;
+
+      var rd = this._normalizeRemotePose(data);
+      if (!rd || !rd.head) return;
+
+      var mp = global.lobbyState && global.lobbyState.matchPlayers;
+      var body = null;
+      var isBot = fromId === '__BOT__' || (mp && fromId === mp.red && mp.red === '__BOT__');
+      if (isBot || (mp && fromId === mp.red)) {
+        body = document.getElementById('bot-body');
+      } else if (mp && fromId === mp.blue) {
+        body = document.getElementById('spec-blue-body');
+      } else if (fromId === '__BOT__') {
+        body = document.getElementById('bot-body');
+      } else {
+        // Host / unknown match player → blue spectator body
+        body = document.getElementById('spec-blue-body');
+      }
+      if (!body) return;
+
+      // Never drive the local VR player's own body with remote data
+      if (body.id === 'player-body') return;
+
+      body.setAttribute('visible', true);
+      if (body.object3D) body.object3D.visible = true;
+      body.dataset.posed = '1';
+
+      var mb = body.components && body.components['mixamo-body'];
+      if (!mb) {
+        // Component not ready — retry briefly
+        var self = this;
+        setTimeout(function () {
+          self.onRemotePlayerPose(fromId, data);
+        }, 100);
+        return;
+      }
+      mb.remoteHandData = rd;
+      this._poseRecvCount = (this._poseRecvCount || 0) + 1;
+    },
+
+    _normalizeRemotePose: function (data) {
+      // Nested StacksVR format
+      if (data.head && typeof data.head.x === 'number') {
+        return {
+          head: data.head,
+          leftHand: data.leftHand || null,
+          rightHand: data.rightHand || null
+        };
+      }
+      // DodgeVR flat format
+      if (typeof data.x === 'number' && typeof data.y === 'number') {
+        var rd = {
+          head: {
+            x: data.x, y: data.y, z: data.z,
+            qx: data.hqx, qy: data.hqy, qz: data.hqz, qw: data.hqw
+          },
+          leftHand: null,
+          rightHand: null
+        };
+        if (typeof data.lhx === 'number') {
+          rd.leftHand = {
+            x: data.lhx, y: data.lhy, z: data.lhz,
+            qx: data.lhqx, qy: data.lhqy, qz: data.lhqz, qw: data.lhqw
+          };
+        }
+        if (typeof data.rhx === 'number') {
+          rd.rightHand = {
+            x: data.rhx, y: data.rhy, z: data.rhz,
+            qx: data.rhqx, qy: data.rhqy, qz: data.rhqz, qw: data.rhqw
+          };
+        }
+        return rd;
+      }
+      return null;
+    },
+
     onMatchStarted: function (mp, startTime, isBotMatch) {
       this.matchActive = true;
       this.matchState = 'PLAYING';
-      this.cups.blue.clearAll();
-      this.cups.red.clearAll();
+      var spectating = !!(global.isMobileSpectator ||
+        (global.isSpectator && global.isMultiplayer &&
+          !(global.StacksLobby && global.StacksLobby.amMatchPlayer && global.StacksLobby.amMatchPlayer())));
+      // Spectators must NOT clear — late-join snapshot would be wiped by match-started
+      if (!spectating) {
+        this.cups.blue.clearAll();
+        this.cups.red.clearAll();
+      }
       if (this._sceneRoot) this._sceneRoot.visible = true;
       this.clearSys = new global.StacksClear();
       this.attackSys.reset();
@@ -1116,8 +1210,6 @@
       this._refreshPocketMesh();
       this._setRemoteHeld('blue', { holding: false });
       this._setRemoteHeld('red', { holding: false });
-      var spectating = !!(global.isMobileSpectator ||
-        (global.isSpectator && global.isMultiplayer && !global.StacksLobby.amMatchPlayer()));
       // Spectators mirror host board — no local spawn pad
       if (!spectating) this._spawnPadPiece();
       else if (this._pad) this._pad.visible = false;
@@ -1274,11 +1366,16 @@
     _sendLocalPose: function () {
       if (!global.isMultiplayer || !global.sendPlayerPose) return;
       if (global.isMobileSpectator) return;
+
       var host = global.StacksLobby && global.StacksLobby.isHost;
-      var seated = global.StacksLobby && global.StacksLobby.amMatchPlayer && global.StacksLobby.amMatchPlayer();
-      // Host always streams while a match is active (even before seating edge-cases)
+      var seated = global.StacksLobby && global.StacksLobby.amMatchPlayer &&
+        global.StacksLobby.amMatchPlayer();
+      var hasPeers = host
+        ? (global.StacksLobby.connections && global.StacksLobby.connections.length > 0)
+        : !!(global.StacksLobby.conn && global.StacksLobby.conn.open);
+      // DodgeVR: stream whenever multiplayer + peers exist (not only after matchActive)
+      if (!hasPeers) return;
       if (!host && !seated) return;
-      if (!this.matchActive && !(global.lobbyState && global.lobbyState.matchState === 'PLAYING')) return;
 
       var now = performance.now();
       if (now - this._lastPoseSend < 50) return;
@@ -1287,27 +1384,60 @@
       var cam = document.getElementById('camera');
       var lh = document.getElementById('leftHand');
       var rh = document.getElementById('rightHand');
-      if (cam) {
-        global.sendPlayerPose({
-          head: this._packEl(cam),
-          leftHand: this._packEl(lh),
-          rightHand: this._packEl(rh)
-        });
-      }
+      if (!cam) return;
 
-      // Stream red bot skeleton so mobile IK matches what host sees
+      var head = this._packEl(cam);
+      if (!head) return;
+      var left = this._packEl(lh);
+      var right = this._packEl(rh);
+      // Skip untracked controllers parked at origin (DodgeVR)
+      if (left && (left.x * left.x + left.y * left.y + left.z * left.z) < 0.001) left = null;
+      if (right && (right.x * right.x + right.y * right.y + right.z * right.z) < 0.001) right = null;
+
+      // Nested + flat fields so any consumer can read the pose
+      global.sendPlayerPose({
+        head: head,
+        leftHand: left,
+        rightHand: right,
+        x: head.x, y: head.y, z: head.z,
+        hqx: head.qx, hqy: head.qy, hqz: head.qz, hqw: head.qw,
+        lhx: left ? left.x : undefined,
+        lhy: left ? left.y : undefined,
+        lhz: left ? left.z : undefined,
+        lhqx: left ? left.qx : undefined,
+        lhqy: left ? left.qy : undefined,
+        lhqz: left ? left.qz : undefined,
+        lhqw: left ? left.qw : undefined,
+        rhx: right ? right.x : undefined,
+        rhy: right ? right.y : undefined,
+        rhz: right ? right.z : undefined,
+        rhqx: right ? right.qx : undefined,
+        rhqy: right ? right.qy : undefined,
+        rhqz: right ? right.qz : undefined,
+        rhqw: right ? right.qw : undefined
+      });
+      this._poseSendCount = (this._poseSendCount || 0) + 1;
+
+      // Stream red bot skeleton so spectators match host bot motion
       var redIsBot = global.isLobbyBotMatch ||
         (global.lobbyState && global.lobbyState.matchPlayers &&
           global.lobbyState.matchPlayers.red === '__BOT__');
-      if (host && redIsBot) {
+      if (host && redIsBot && this.matchActive) {
         var botBody = document.getElementById('bot-body');
         if (botBody) {
-          global.sendPlayerPose({
-            from: '__BOT__',
-            head: this._packMixamoBone(botBody, 'head') || this._packEl(botBody),
-            leftHand: this._packMixamoBone(botBody, 'leftHandBone') || null,
-            rightHand: this._packMixamoBone(botBody, 'rightHandBone') || null
-          });
+          var bh = this._packMixamoBone(botBody, 'head') || this._packEl(botBody);
+          var bl = this._packMixamoBone(botBody, 'leftHandBone');
+          var br = this._packMixamoBone(botBody, 'rightHandBone');
+          if (bh) {
+            global.sendPlayerPose({
+              from: '__BOT__',
+              head: bh,
+              leftHand: bl,
+              rightHand: br,
+              x: bh.x, y: bh.y, z: bh.z,
+              hqx: bh.qx, hqy: bh.qy, hqz: bh.qz, hqw: bh.qw
+            });
+          }
         }
       }
 

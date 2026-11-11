@@ -71,15 +71,24 @@
   }
 
   function activateSpectatorBodies() {
+    // Do NOT force-show bodies until a pose arrives — otherwise mobile sees a
+    // static T-pose at the origin while cups already sync.
     var blue = document.getElementById('spec-blue-body');
     var red = document.getElementById('bot-body');
-    if (blue) {
+    if (blue && blue.dataset.posed === '1') {
       blue.setAttribute('visible', true);
       if (blue.object3D) blue.object3D.visible = true;
+    } else if (blue) {
+      blue.setAttribute('visible', false);
+      if (blue.object3D) blue.object3D.visible = false;
     }
-    if (red) {
+    if (red && red.dataset.posed === '1') {
       red.setAttribute('visible', true);
       if (red.object3D) red.object3D.visible = true;
+    } else if (red && global.isMobileSpectator) {
+      // Hide idle T-pose bot until networked poses arrive
+      red.setAttribute('visible', false);
+      if (red.object3D) red.object3D.visible = false;
     }
     var gm = document.querySelector('[stacks-game]');
     var comp = gm && gm.components && gm.components['stacks-game'];
@@ -178,6 +187,11 @@
 
   function applyRemotePose(fromId, data) {
     _poseCount++;
+    if (typeof global.applyStacksRemotePose === 'function') {
+      global.applyStacksRemotePose(fromId, data);
+      return;
+    }
+    // Fallback if stacks-game not ready yet
     var mp = global.lobbyState && global.lobbyState.matchPlayers;
     var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
     if (fromId === myId) return;
@@ -191,13 +205,19 @@
     } else {
       body = document.getElementById('spec-blue-body');
     }
-    if (!body || !data || !data.head) return;
+    if (!body || !data) return;
+    var head = data.head || (typeof data.x === 'number' ? data : null);
+    if (!head || typeof (head.x != null ? head.x : head.x) === 'undefined') {
+      if (typeof data.x !== 'number') return;
+      head = { x: data.x, y: data.y, z: data.z, qx: data.hqx, qy: data.hqy, qz: data.hqz, qw: data.hqw };
+    }
     body.setAttribute('visible', true);
     if (body.object3D) body.object3D.visible = true;
+    body.dataset.posed = '1';
     var mb = body.components && body.components['mixamo-body'];
     if (mb) {
       mb.remoteHandData = {
-        head: data.head,
+        head: data.head || head,
         leftHand: data.leftHand || null,
         rightHand: data.rightHand || null
       };

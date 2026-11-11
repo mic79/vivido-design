@@ -614,6 +614,14 @@
           // --- Multiplayer: use real remote player tracking data ---
           if (this.remoteHandData) {
             const rd = this.remoteHandData;
+            if (!rd.head || typeof rd.head.x !== 'number') return;
+
+            // Ensure remote-driven bodies are visible once posed
+            if (this.el.object3D && !this.el.object3D.visible) {
+              this.el.object3D.visible = true;
+              this.el.setAttribute('visible', true);
+            }
+            if (this.el.dataset) this.el.dataset.posed = '1';
 
             const headPos = new THREE.Vector3(rd.head.x, rd.head.y, rd.head.z);
             const headQuat = (rd.head.qx !== undefined)
@@ -688,9 +696,11 @@
                 this.botRackets.right.quaternion.copy(this._tmpRacketQuat).multiply(this._racketRotOffset);
               }
 
+              // StacksVR has no DodgeVR racketMode — keep wireframe rackets hidden
               if (!window.replayActive) {
-                this.botRackets.left.visible = racketMode.player1.left;
-                this.botRackets.right.visible = racketMode.player1.right;
+                var rm = window.racketMode && window.racketMode.player1;
+                this.botRackets.left.visible = !!(rm && rm.left);
+                this.botRackets.right.visible = !!(rm && rm.right);
               }
             }
             return;
@@ -799,8 +809,9 @@
               this.botRackets.right.quaternion.copy(this._tmpRacketQuat).multiply(this._racketRotOffset);
 
               // Mirror the player's racket visibility (player2 state → bot rackets)
-              this.botRackets.left.visible = racketMode.player2.left;
-              this.botRackets.right.visible = racketMode.player2.right;
+              var rm2 = window.racketMode && window.racketMode.player2;
+              this.botRackets.left.visible = !!(rm2 && rm2.left);
+              this.botRackets.right.visible = !!(rm2 && rm2.right);
 
               // Swept collision detection for mirrored rackets vs player1's ball
               const mrNow = performance.now();
