@@ -498,9 +498,31 @@
         case 'replay-latest':
           this._playLatestReplay();
           break;
+        case 'toggle-music':
+          if (window.StacksAudio && typeof window.StacksAudio.toggleMusic === 'function') {
+            window.StacksAudio.toggleMusic();
+          } else {
+            window._musicEnabled = window._musicEnabled === false;
+          }
+          this._setMusicButton();
+          break;
         default:
           break;
       }
+    },
+
+    _setMusicButton: function () {
+      var btn = document.getElementById('menu-music-toggle');
+      var txt = document.getElementById('menu-music-text');
+      if (!btn) return;
+      var on = window.StacksAudio
+        ? window.StacksAudio.isMusicEnabled()
+        : window._musicEnabled !== false;
+      var color = on ? '#1f9d45' : '#555555';
+      btn.setAttribute('material', 'color', color);
+      btn.dataset.baseColor = color;
+      btn.dataset.hoverColor = lightenHex(color, 0.42);
+      if (txt) txt.setAttribute('value', on ? 'MUSIC' : 'MUTED');
     },
 
     _setLobbyLabel: function () {
@@ -566,6 +588,7 @@
       this._setTabColors();
       this._setLobbyLabel();
       this._setStartButton();
+      this._setMusicButton();
       if (stats) this._showStats();
 
       var status = document.getElementById('menu-lobby-status');

@@ -60,17 +60,71 @@
     }
   }
 
+  var STORAGE_KEY = 'stacksvr-music-enabled';
+
+  function loadMusicPref() {
+    try {
+      var v = localStorage.getItem(STORAGE_KEY);
+      if (v === '0' || v === 'false') return false;
+      if (v === '1' || v === 'true') return true;
+    } catch (e) { /* ignore */ }
+    return true;
+  }
+
+  function saveMusicPref(on) {
+    try { localStorage.setItem(STORAGE_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+  }
+
+  function stopAllMusic() {
+    ['sfx-bg-music', 'sfx-match-music'].forEach(function (id) {
+      if (_fadeTickers[id]) {
+        clearInterval(_fadeTickers[id]);
+        delete _fadeTickers[id];
+      }
+      var node = el(id);
+      var sc = soundComp(node);
+      if (sc) {
+        try { sc.stopSound(); } catch (e) { /* ignore */ }
+      }
+      setVolume(node, 0);
+    });
+  }
+
   var AudioApi = {
     bgVol: 0.28,
     matchVol: 0.32,
     sfxEnabled: true,
-    musicEnabled: true,
+    musicEnabled: loadMusicPref(),
+
+    isMusicEnabled: function () {
+      return AudioApi.musicEnabled !== false && global._musicEnabled !== false;
+    },
+
+    setMusicEnabled: function (on) {
+      on = !!on;
+      AudioApi.musicEnabled = on;
+      global._musicEnabled = on;
+      saveMusicPref(on);
+      if (!on) {
+        stopAllMusic();
+        return;
+      }
+      // Resume whichever bed fits current state
+      AudioApi.unlock();
+      if (global._stacksMatchMusic) AudioApi.toMatch();
+      else AudioApi.toIdle();
+    },
+
+    toggleMusic: function () {
+      AudioApi.setMusicEnabled(!AudioApi.isMusicEnabled());
+      return AudioApi.isMusicEnabled();
+    },
 
     unlock: function () {
       resumeCtx();
       if (_unlocked) return;
       _unlocked = true;
-      if (global._musicEnabled === false || AudioApi.musicEnabled === false) return;
+      if (!AudioApi.isMusicEnabled()) return;
       var bg = el('sfx-bg-music');
       if (bg && soundComp(bg) && !isPlaying(bg) && !global._stacksMatchMusic) {
         setVolume(bg, AudioApi.bgVol);
@@ -95,7 +149,7 @@
     },
 
     toMatch: function () {
-      if (global._musicEnabled === false || AudioApi.musicEnabled === false) return;
+      if (!AudioApi.isMusicEnabled()) return;
       AudioApi.unlock();
       global._stacksMatchMusic = true;
       var bg = el('sfx-bg-music');
@@ -111,7 +165,7 @@
     },
 
     toIdle: function () {
-      if (global._musicEnabled === false || AudioApi.musicEnabled === false) return;
+      if (!AudioApi.isMusicEnabled()) return;
       AudioApi.unlock();
       global._stacksMatchMusic = false;
       var bg = el('sfx-bg-music');
@@ -134,6 +188,7 @@
     }
   };
 
+  global._musicEnabled = AudioApi.musicEnabled;
   global.StacksAudio = AudioApi;
 
   // Unlock on first pointer / VR enter / key
