@@ -22,14 +22,14 @@
   <script src="cup.js?v=20"></script>
   <script src="clear.js?v=19"></script>
   <script src="attack.js?v=19"></script>
-  <script src="cup-bot.js?v=20"></script>
+  <script src="cup-bot.js?v=21"></script>
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=31"></script>
   <script src="match-replay.js?v=19"></script>
   <script src="game-menu.js?v=30"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=30"></script>
+  <script src="stacks-game.js?v=31"></script>
   <script src="mobile-spectator.js?v=33"></script>
 
   <style>
@@ -353,12 +353,20 @@
 
   <script>
     (function () {
-      function start() {
+      function startDualDemo() {
         var boot = document.getElementById('boot');
         if (boot) boot.classList.add('gone');
+        if (window.isMobileSpectator) return;
+        // Don't clobber a live lobby / hosted match with the local dual-bot demo
+        if (window.isMultiplayer || (window.StacksLobby && window.StacksLobby.isHost)) return;
+        var el = document.querySelector('[stacks-game]');
+        var g = el && el.components && el.components['stacks-game'];
+        if (g && !g.matchActive && typeof g.startOfflinePreviewMatch === 'function') {
+          g.startOfflinePreviewMatch();
+        }
       }
-      document.getElementById('boot-btn').addEventListener('click', start);
-      document.querySelector('a-scene').addEventListener('enter-vr', start);
+      document.getElementById('boot-btn').addEventListener('click', startDualDemo);
+      document.querySelector('a-scene').addEventListener('enter-vr', startDualDemo);
 
       // Mobile spectator UI/UX is handled by mobile-spectator.js (DodgeVR port).
       // Desktop / VR keyboard helpers only:
@@ -367,6 +375,7 @@
         if (e.key === 'b' || e.key === 'B') {
           var el = document.querySelector('[stacks-game]');
           var g = el && el.components && el.components['stacks-game'];
+          // B = human vs bot; dual demo is the default START experience
           if (g && !g.matchActive) g.startOfflineBotMatch();
         }
         if (e.key === 'm' || e.key === 'M') {

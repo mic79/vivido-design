@@ -9,7 +9,8 @@
     this.bag = opts.bag || new global.StacksShapes.ShapeBag();
     this.enabled = false;
     this.thinkIntervalMs = opts.thinkIntervalMs != null ? opts.thinkIntervalMs : 1200;
-    this.placeAnimMs = opts.placeAnimMs != null ? opts.placeAnimMs : 600;
+    // Long enough for move-above → orient → lower (3 readable phases)
+    this.placeAnimMs = opts.placeAnimMs != null ? opts.placeAnimMs : 1100;
     this._lastThink = 0;
     this.currentType = null;
     this.pocketType = null;
@@ -99,12 +100,13 @@
       return null;
     }
 
-    // Animate place
+    // Animate place: move above → orient → lower
     this.state = 'animating';
     this._anim = {
       type: plan.type,
       cells: plan.cells,
       score: plan.score,
+      quat: plan.quat || null,
       started: now,
       duration: this.placeAnimMs
     };
@@ -114,6 +116,7 @@
       holding: true,
       type: plan.type,
       cells: plan.cells,
+      quat: plan.quat || null,
       progress: 0
     });
     return null;
@@ -131,6 +134,7 @@
       holding: true,
       type: a.type,
       cells: a.cells,
+      quat: a.quat || null,
       progress: Math.min(1, t)
     });
     if (t < 1) return null;
@@ -170,11 +174,16 @@
         var key = cells.map(function (c) { return c.join(','); }).sort().join('|');
         if (seen[key]) continue;
         seen[key] = true;
-        out.push(cells);
+        out.push({ cells: cells, quat: quats[i] });
       }
     } else {
       for (var rot = 0; rot < 4; rot++) {
-        out.push(global.StacksShapes.normalizeXZ(global.StacksShapes.rotateY(def.cells, rot)));
+        var e = new THREE.Euler(0, rot * Math.PI / 2, 0, 'XYZ');
+        var q = new THREE.Quaternion().setFromEuler(e);
+        out.push({
+          cells: global.StacksShapes.normalizeXZ(global.StacksShapes.rotateY(def.cells, rot)),
+          quat: q
+        });
       }
     }
     return out;
@@ -208,7 +217,9 @@
     var best = null;
 
     for (var oi = 0; oi < orients.length; oi++) {
-      var local = orients[oi];
+      var orient = orients[oi];
+      var local = orient.cells || orient;
+      var quat = orient.quat || null;
       var maxX = 0, maxZ = 0, maxY = 0;
       for (var i = 0; i < local.length; i++) {
         if (local[i][0] > maxX) maxX = local[i][0];
@@ -223,7 +234,7 @@
           if (!dropped) continue;
           var score = this._scorePlacement(cup, dropped, type);
           if (!best || score > best.score) {
-            best = { type: type, cells: dropped, score: score };
+            best = { type: type, cells: dropped, score: score, quat: quat };
           }
         }
       }
@@ -254,7 +265,13 @@
       }
     }
 
-    return { action: 'place', type: cur.type, cells: cur.cells, score: cur.score };
+    return {
+      action: 'place',
+      type: cur.type,
+      cells: cur.cells,
+      score: cur.score,
+      quat: cur.quat || null
+    };
   };
 
   /** Occupancy clone — never touches live meshes (scoring must be cheap). */

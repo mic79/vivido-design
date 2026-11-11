@@ -338,52 +338,94 @@
         }
         var cup = this.cups[side];
         if (!cup || !evt.cells || !evt.cells.length) return;
-        var target = new THREE.Vector3();
-        var tmp = new THREE.Vector3();
+
+        // Placement centroid in cup-local space (blocksRoot / root coords)
+        var targetLocal = new THREE.Vector3();
         for (var ci = 0; ci < evt.cells.length; ci++) {
-          cup.cellCenterWorld(evt.cells[ci][0], evt.cells[ci][1], evt.cells[ci][2], tmp);
-          target.add(tmp);
+          targetLocal.add(cup.cellCenterLocal(
+            evt.cells[ci][0], evt.cells[ci][1], evt.cells[ci][2]
+          ));
         }
-        target.multiplyScalar(1 / evt.cells.length);
+        targetLocal.multiplyScalar(1 / evt.cells.length);
+        var hoverLocal = targetLocal.clone();
+        hoverLocal.y += 0.32; // slightly above destination
 
         if (!this._botHold[side]) {
           this._botHold[side] = global.StacksShapes.createShapeMesh(evt.type, {
             centerPivot: true, rotationY: 0
           });
-          this._sceneRoot.add(this._botHold[side]);
+          // Parent under cup.root so orientation matches placed blocks (no yaw snap)
+          cup.root.add(this._botHold[side]);
           if (side === 'red') this._botHoldMesh = this._botHold[side];
+          this._botHold[side].userData.botHoldStartQuat = new THREE.Quaternion();
+          this._botHold[side].quaternion.identity();
         }
+        var holdMesh = this._botHold[side];
+
+        var endQuat = new THREE.Quaternion();
+        if (evt.quat && typeof evt.quat.w === 'number') {
+          endQuat.set(evt.quat.x, evt.quat.y, evt.quat.z, evt.quat.w);
+        } else if (evt.quat && evt.quat.isQuaternion) {
+          endQuat.copy(evt.quat);
+        } else {
+          endQuat.identity();
+        }
+        if (global.StacksShapes.snapQuatToGrid) {
+          endQuat = global.StacksShapes.snapQuatToGrid(endQuat);
+        }
+        var startQuat = holdMesh.userData.botHoldStartQuat || new THREE.Quaternion();
+
+        // Phases: 0–0.40 move above · 0.40–0.68 orient · 0.68–1.0 lower
         var p = Math.max(0, Math.min(1, evt.progress != null ? evt.progress : 0));
-        var from = new THREE.Vector3();
+        var fromLocal = hoverLocal.clone();
         if (st.pad) {
+          // Pad world → cup.root local
           st.pad.updateWorldMatrix(true, false);
-          st.pad.getWorldPosition(from);
-          from.y += 0.12;
+          cup.root.updateWorldMatrix(true, false);
+          var padWorld = new THREE.Vector3();
+          st.pad.getWorldPosition(padWorld);
+          padWorld.y += 0.12;
+          fromLocal.copy(padWorld);
+          cup.root.worldToLocal(fromLocal);
         } else {
-          from.copy(target).add(new THREE.Vector3(0, 0.45, side === 'blue' ? 0.4 : -0.4));
+          fromLocal.copy(hoverLocal).add(new THREE.Vector3(0, 0.2, side === 'blue' ? 0.35 : -0.35));
         }
-        var mid = target.clone().add(new THREE.Vector3(0, 0.35, 0));
-        var pos;
-        if (p < 0.55) {
-          pos = from.clone().lerp(mid, p / 0.55);
+
+        var pos = new THREE.Vector3();
+        var q = new THREE.Quaternion();
+        if (p < 0.40) {
+          var u = p / 0.40;
+          pos.copy(fromLocal).lerp(hoverLocal, u);
+          q.copy(startQuat);
+        } else if (p < 0.68) {
+          var u2 = (p - 0.40) / 0.28;
+          pos.copy(hoverLocal);
+          q.copy(startQuat).slerp(endQuat, u2);
         } else {
-          pos = mid.clone().lerp(target, (p - 0.55) / 0.45);
+          var u3 = (p - 0.68) / 0.32;
+          pos.copy(hoverLocal).lerp(targetLocal, u3);
+          q.copy(endQuat);
         }
-        this._sceneRoot.updateWorldMatrix(true, false);
-        this._sceneRoot.worldToLocal(pos);
-        this._botHold[side].position.copy(pos);
+        holdMesh.position.copy(pos);
+        holdMesh.quaternion.copy(q);
 
         if (!this._dualBotPreview && global.sendCupEvent) {
           var now = performance.now();
           var key = '_lastBotHoldSend_' + side;
           if (!this[key] || now - this[key] > 80 || p < 0.02) {
             this[key] = now;
+            // Broadcast scene-root-local pose for remote spectators
+            var worldPos = new THREE.Vector3();
+            holdMesh.getWorldPosition(worldPos);
+            this._sceneRoot.updateWorldMatrix(true, false);
+            this._sceneRoot.worldToLocal(worldPos);
             global.sendCupEvent({
               kind: 'hold',
               side: side,
               holding: true,
               shapeType: evt.type,
-              pos: { x: pos.x, y: pos.y, z: pos.z }
+              pos: { x: worldPos.x, y: worldPos.y, z: worldPos.z },
+              quat: { x: q.x, y: q.y, z: q.z, w: q.w }
             });
           }
         }
@@ -1539,24 +1581,22 @@
         this.botBlue.enable(true);
       }
 
-      // Show both avatar bodies for atmosphere
-      var blueBody = document.getElementById('spec-blue-body');
-      var redBody = document.getElementById('bot-body');
-      if (blueBody) {
-        blueBody.setAttribute('visible', true);
-        if (blueBody.object3D) blueBody.object3D.visible = true;
-        blueBody.dataset.posed = '1';
-      }
-      if (redBody) {
-        redBody.setAttribute('visible', true);
-        if (redBody.object3D) redBody.object3D.visible = true;
-        redBody.dataset.posed = '1';
-      }
-      var pb = document.getElementById('player-body');
-      if (pb && pb.object3D) pb.object3D.visible = false;
+      // Hide avatar bodies until we can drive accurate place motions
+      this._hideBotBodies();
 
       this._updateHUD();
       console.log('[StacksGame] offline preview: blue bot vs red bot');
+    },
+
+    _hideBotBodies: function () {
+      var ids = ['bot-body', 'spec-blue-body', 'player-body'];
+      for (var i = 0; i < ids.length; i++) {
+        var el = document.getElementById(ids[i]);
+        if (!el) continue;
+        el.setAttribute('visible', false);
+        if (el.object3D) el.object3D.visible = false;
+        if (el.dataset) el.dataset.posed = '';
+      }
     },
 
     endMatch: function () {
@@ -1756,28 +1796,6 @@
       }
     },
 
-    _updatePreviewBotBodies: function () {
-      // Lightweight standing poses near each pad so preview isn't empty T-poses
-      function poseNear(padEl, bodyId, faceZ) {
-        var body = document.getElementById(bodyId);
-        if (!body || !body.components || !body.components['mixamo-body'] || !padEl) return;
-        padEl.updateWorldMatrix(true, false);
-        var p = new THREE.Vector3();
-        padEl.getWorldPosition(p);
-        var headY = 1.55;
-        var z = p.z + faceZ;
-        body.components['mixamo-body'].remoteHandData = {
-          head: { x: p.x, y: headY, z: z, qx: 0, qy: 0, qz: 0, qw: 1 },
-          leftHand: { x: p.x - 0.25, y: headY - 0.55, z: z + 0.1, qx: 0, qy: 0, qz: 0, qw: 1 },
-          rightHand: { x: p.x + 0.25, y: headY - 0.55, z: z + 0.1, qx: 0, qy: 0, qz: 0, qw: 1 }
-        };
-        body.setAttribute('visible', true);
-        if (body.object3D) body.object3D.visible = true;
-      }
-      poseNear(this._pad, 'spec-blue-body', -0.35);
-      poseNear(this._botPad, 'bot-body', 0.35);
-    },
-
     _heartbeatSpectatorSync: function () {
       if (!(global.StacksLobby && global.StacksLobby.isHost)) return;
       if (!this.matchActive) return;
@@ -1841,7 +1859,7 @@
         if (t && t.ended) this._endFromMode(t);
         if (this.bot && this.bot.enabled) this.bot.tick(performance.now());
         if (this.botBlue && this.botBlue.enabled) this.botBlue.tick(performance.now());
-        if (this._dualBotPreview) this._updatePreviewBotBodies();
+        if (this._dualBotPreview) this._hideBotBodies();
         this._heartbeatSpectatorSync();
       } else {
         if (this.cups.blue) this.cups.blue.setThreat(0);
