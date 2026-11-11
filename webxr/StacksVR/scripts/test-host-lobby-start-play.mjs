@@ -123,18 +123,18 @@ async function main() {
         isSpectator: !!window.isSpectator
       };
 
-      // Simulate grab + hold over cup → place must work
+      // Simulate grab + hold over cup → place must work on BLUE only
+      const localSide = comp._localCup() && comp._localCup().side;
       if (comp._padPiece) {
         const hand = document.getElementById('rightHand');
         comp._grab(hand);
       }
       const held = !!comp.held;
-      // Force ghost-valid place path
       let placed = false;
+      let blueCells = 0;
+      let redCellsBefore = comp.cups.red.serialize().cells.length;
       if (comp.held) {
         const cup = comp._localCup();
-        const cells = [[2, 0, 2], [2, 0, 3], [3, 0, 2], [3, 0, 3]]; // O-ish footprint; may fail shape
-        // Use actual held type cells dropped at origin
         const type = comp.held.type;
         const local = window.StacksShapes.cellsOriented(type, new THREE.Quaternion());
         const dropped = local.map((c) => [c[0] + 1, c[1], c[2] + 1]);
@@ -143,7 +143,8 @@ async function main() {
           comp.ghostValid = true;
           comp.ghostCells = grav;
           comp._place(grav);
-          placed = cup.serialize().cells.length > 0;
+          blueCells = comp.cups.blue.serialize().cells.length;
+          placed = blueCells > 0;
         }
       }
 
@@ -154,7 +155,10 @@ async function main() {
       }
       const redCells = comp.cups.red.serialize().cells.length;
 
-      return { afterPublish, afterStart, afterGo, held, placed, redCells };
+      return {
+        afterPublish, afterStart, afterGo, held, placed, redCells, blueCells,
+        localSide, redCellsBefore, mySide: Lobby.mySide && Lobby.mySide()
+      };
     });
 
     console.log('RESULT', JSON.stringify(out, null, 2));
@@ -169,6 +173,12 @@ async function main() {
     if (!out.afterGo.padPiece && !out.held) throw new Error('no human pad piece');
     if (!out.placed) throw new Error('host could not place a piece');
     if (!out.afterGo.isLobbyBotMatch) throw new Error('isLobbyBotMatch must be true for solo host');
+    if (out.localSide !== 'blue') throw new Error('localCup must be blue, got ' + out.localSide);
+    if (out.mySide !== 'blue') throw new Error('mySide must be blue, got ' + out.mySide);
+    if (!(out.blueCells > 0)) throw new Error('place must land on blue cup');
+    if (out.redCells <= out.redCellsBefore) {
+      // bot may not have placed yet — only require blue got the human piece
+    }
 
     console.log('PASS host lobby start → bot + place');
   } catch (e) {

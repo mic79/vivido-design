@@ -65,18 +65,23 @@
     }
   }
 
+  function seatOpen(id) {
+    return !id || id === '__BOT__';
+  }
+
   function tryAssignMatchPlayers() {
     if (!Lobby.lobbyState) return;
     if (Lobby.lobbyState.matchState === 'PLAYING') return;
     if (Lobby.lobbyState.queue.length === 0) return;
 
-    while (Lobby.lobbyState.queue.length > 0 &&
-      (!Lobby.lobbyState.matchPlayers.blue || !Lobby.lobbyState.matchPlayers.red)) {
+    var mp = Lobby.lobbyState.matchPlayers;
+    while (Lobby.lobbyState.queue.length > 0 && (seatOpen(mp.blue) || seatOpen(mp.red))) {
       var nextId = Lobby.lobbyState.queue.shift();
-      if (!Lobby.lobbyState.matchPlayers.blue) {
-        Lobby.lobbyState.matchPlayers.blue = nextId;
-      } else {
-        Lobby.lobbyState.matchPlayers.red = nextId;
+      // Prefer blue (human pad side). Never treat __BOT__ as an occupied human seat.
+      if (seatOpen(mp.blue)) {
+        mp.blue = nextId;
+      } else if (seatOpen(mp.red)) {
+        mp.red = nextId;
       }
       for (var s = 0; s < Lobby.lobbyState.spectatorSlots.length; s++) {
         if (Lobby.lobbyState.spectatorSlots[s] === nextId) {
@@ -113,21 +118,29 @@
     if (!Lobby.lobbyState) return;
     var mp = Lobby.lobbyState.matchPlayers;
     // Host can start without queue join — seat host as blue automatically (DodgeVR-style)
-    if (!mp.blue && Lobby.isHost && Lobby.myPlayerId) {
-      mp.blue = Lobby.myPlayerId;
-      for (var s = 0; s < Lobby.lobbyState.spectatorSlots.length; s++) {
-        if (Lobby.lobbyState.spectatorSlots[s] === Lobby.myPlayerId) {
-          Lobby.lobbyState.spectatorSlots[s] = null;
+    if (Lobby.isHost && Lobby.myPlayerId) {
+      // If host was wrongly parked on red, move them to blue (human pad side)
+      if (mp.red === Lobby.myPlayerId) mp.red = null;
+      if (seatOpen(mp.blue)) {
+        mp.blue = Lobby.myPlayerId;
+        for (var s = 0; s < Lobby.lobbyState.spectatorSlots.length; s++) {
+          if (Lobby.lobbyState.spectatorSlots[s] === Lobby.myPlayerId) {
+            Lobby.lobbyState.spectatorSlots[s] = null;
+          }
         }
       }
     }
-    if (!mp.blue) return;
+    if (!mp.blue || mp.blue === '__BOT__') return;
 
     // __BOT__ is a seat filler, not a human — treat as bot match.
-    // (Bug: `!mp.red` is false when red is already '__BOT__' from dual-idle publish.)
     var humanRed = !!(mp.red && mp.red !== '__BOT__');
-    var isBotMatch = !!mp.blue && !humanRed;
-    if (isBotMatch) mp.red = '__BOT__';
+    var humanBlue = !!(mp.blue && mp.blue !== '__BOT__');
+    var isBotMatch = humanBlue && !humanRed;
+    if (isBotMatch) {
+      // Solo / vs-bot: host (or blue human) always owns blue; bot always red
+      if (Lobby.isHost && Lobby.myPlayerId) mp.blue = Lobby.myPlayerId;
+      mp.red = '__BOT__';
+    }
     Lobby.isLobbyBotMatch = isBotMatch;
     global.isLobbyBotMatch = isBotMatch;
 
@@ -828,6 +841,8 @@
   function mySide() {
     if (!Lobby.lobbyState) return 'blue';
     var mp = Lobby.lobbyState.matchPlayers;
+    // Vs bot: local human is always blue (pad/station ownership)
+    if (Lobby.isLobbyBotMatch || (mp && mp.red === '__BOT__')) return 'blue';
     if (mp.red === Lobby.myPlayerId) return 'red';
     return 'blue';
   }

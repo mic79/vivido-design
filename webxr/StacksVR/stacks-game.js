@@ -844,6 +844,10 @@
     },
 
     _localCup: function () {
+      var mp = global.lobbyState && global.lobbyState.matchPlayers;
+      // Human vs bot: the grabbable pad is always the blue station — never project onto red.
+      var botMatch = !!(global.isLobbyBotMatch || (mp && mp.red === '__BOT__'));
+      if (botMatch) return this.cups.blue;
       if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.amMatchPlayer()) {
         return this.cups[global.StacksLobby.mySide()];
       }
@@ -1936,7 +1940,7 @@
       } else {
         this._countdownLastShown = 0;
         this._showMatchBanner('GO!');
-        this._sfx('boom');
+        this._sfx('ui');
         this._countdownGoAt = now + 450;
       }
     },
