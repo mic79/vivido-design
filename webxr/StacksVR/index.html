@@ -27,10 +27,10 @@
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=32"></script>
   <script src="match-replay.js?v=19"></script>
-  <script src="game-menu.js?v=34"></script>
+  <script src="game-menu.js?v=35"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=40"></script>
+  <script src="stacks-game.js?v=41"></script>
   <script src="mobile-spectator.js?v=35"></script>
 
   <style>
@@ -257,43 +257,136 @@
     <a-plane position="0 0 0" rotation="-90 0 0" width="12" height="12"
       material="color: #151a22; roughness: 0.92"></a-plane>
 
-    <a-entity id="score-display" position="0 2.25 0"
-      text="value: BLUE 0  |  RED 0; align: center; width: 2.0; color: #e8eef8"></a-entity>
-    <!-- Small local hint above blue pad — not arena-scale -->
-    <a-entity id="control-hint" position="-0.65 1.95 1.95"
-      text="value: Pad = grab · purple = pocket; align: center; width: 1.15; color: #7a9a88"></a-entity>
-    <!-- Incoming attack countdown (hidden at 0 via JS). H height folded into cup-stats. -->
+    <!-- DodgeVR-style overhead scoreboard -->
+    <a-entity id="version-display" position="0 2.55 0"
+      text="value: StacksVR; align: center; width: 1.4; color: #ffffff"></a-entity>
+    <a-entity id="score-display" position="0 2.3 0">
+      <a-entity id="blue-score" position="-0.28 0 0"
+        text="value: 0; align: center; width: 3.2; color: #0099ff"></a-entity>
+      <a-entity position="0 0 0"
+        text="value: -; align: center; width: 3.2; color: #ffffff"></a-entity>
+      <a-entity id="red-score" position="0.28 0 0"
+        text="value: 0; align: center; width: 3.2; color: #ff4444"></a-entity>
+    </a-entity>
+    <a-entity id="timer-display" position="0 2.05 0"
+      text="value: Time: 0:00; align: center; width: 1.6; color: #ffff00"></a-entity>
+    <a-entity id="control-hint" position="0 1.85 0"
+      text="value: ; align: center; width: 1.4; color: #aaaaaa"></a-entity>
     <a-entity id="damage-blue" position="-0.65 1.88 1.35" visible="false"
-      text="value: ; align: center; width: 0.7; color: #ff8866"></a-entity>
+      text="value: ; align: center; width: 0.55; color: #ff8866"></a-entity>
     <a-entity id="damage-red" position="0.65 1.88 -1.35" rotation="0 180 0" visible="false"
-      text="value: ; align: center; width: 0.7; color: #ff8866"></a-entity>
-    <!-- BattleBlocks floating card: Time / Attacks / Blocks (outside cups) -->
-    <a-entity id="stats-blue" position="-1.95 1.72 1.75"
-      text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min); align: left; width: 1.05; color: #8ec5ff; wrapCount: 26"></a-entity>
-    <a-entity id="stats-red" position="1.95 1.72 -1.75" rotation="0 180 0"
-      text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min); align: left; width: 1.05; color: #ffb0a4; wrapCount: 26"></a-entity>
-    <!-- BattleBlocks cup panel: Score / BPS / Attacks (+ Height) -->
-    <a-entity id="cup-stats-blue" position="-1.35 1.28 1.75"
-      text="value: Score: 0\nBPS: 0.000\nAttacks: 0\nHeight: 0; align: left; width: 0.85; color: #a8c8e8; wrapCount: 22"></a-entity>
-    <a-entity id="cup-stats-red" position="1.35 1.28 -1.75" rotation="0 180 0"
-      text="value: Score: 0\nBPS: 0.000\nAttacks: 0\nHeight: 0; align: left; width: 0.85; color: #e8b8b0; wrapCount: 22"></a-entity>
-    <a-entity id="version-display" position="-0.65 0.12 1.7"
-      text="value: StacksVR 1.0; align: center; width: 1.2; color: #556"></a-entity>
+      text="value: ; align: center; width: 0.55; color: #ff8866"></a-entity>
+    <!-- Keep ids for tests; hidden — live stats live on wrist panel -->
+    <a-entity id="stats-blue" visible="false"></a-entity>
+    <a-entity id="stats-red" visible="false"></a-entity>
+    <a-entity id="cup-stats-blue" visible="false"></a-entity>
+    <a-entity id="cup-stats-red" visible="false"></a-entity>
 
     <!-- Diagonal stagger, head-on facing: player behind blue looking -Z -->
     <a-entity id="player" position="-0.65 0 1.75" rotation="0 0 0" stick-locomotion>
       <a-entity id="rig">
-        <a-entity id="camera" camera look-controls="pointerLockEnabled: true" wasd-controls position="0 1.6 0"></a-entity>
+        <a-entity id="camera" camera look-controls="pointerLockEnabled: true" wasd-controls position="0 1.6 0">
+          <!-- DodgeVR-style camera-attached menu -->
+          <a-entity id="vr-menu-root" position="0 -0.05 -0.8" visible="false">
+            <a-plane width="0.72" height="0.54" color="#000000"
+              material="opacity: 0.92; transparent: true; shader: flat" position="0 0 -0.001"></a-plane>
+            <a-plane width="0.74" height="0.56" color="#4488ff"
+              material="opacity: 0.4; transparent: true; shader: flat" position="0 0 -0.002"></a-plane>
+
+            <a-text value="STACKS VR" position="0 0.22 0" align="center" width="0.8" color="#ffffff"></a-text>
+
+            <a-entity position="0 0.14 0">
+              <a-entity class="menu-btn clickable" data-action="mode-single" id="menu-single" position="-0.2 0 0"
+                geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
+                material="color: #4488ff; opacity: 0.9; shader: flat">
+                <a-text value="SINGLE" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
+              <a-entity class="menu-btn clickable" data-action="mode-multi" id="menu-multi" position="0 0 0"
+                geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
+                material="color: #333333; opacity: 0.9; shader: flat">
+                <a-text value="MULTI" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
+              <a-entity class="menu-btn clickable" data-action="stats" id="menu-stats" position="0.2 0 0"
+                geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
+                material="color: #333333; opacity: 0.9; shader: flat">
+                <a-text value="STATS" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
+            </a-entity>
+
+            <a-entity id="menu-single-section" position="0 0.02 0">
+              <a-text value="Bot Match:" position="-0.22 0.02 0" align="left" width="0.35" color="#cccccc"></a-text>
+              <a-text id="menu-single-hint" value="Pad grab · purple pocket" position="-0.22 -0.04 0"
+                align="left" width="0.32" color="#888888"></a-text>
+            </a-entity>
+
+            <a-entity id="menu-lobby-section" visible="false" position="0 0.02 0">
+              <a-text value="Lobby:" position="-0.22 0.04 0" align="left" width="0.35" color="#cccccc"></a-text>
+              <a-entity class="menu-btn clickable" data-action="lobby-minus" position="-0.02 0.04 0"
+                geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
+                material="color: #555555; shader: flat">
+                <a-text value="-" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
+              <a-text id="menu-lobby-num" value="1" position="0.06 0.04 0" align="center" width="0.4" color="#ffffff"></a-text>
+              <a-entity class="menu-btn clickable" data-action="lobby-plus" position="0.14 0.04 0"
+                geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
+                material="color: #555555; shader: flat">
+                <a-text value="+" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
+              <a-entity class="menu-btn clickable" data-action="join-lobby" id="menu-join" position="0.26 0.04 0"
+                geometry="primitive: box; width: 0.12; height: 0.05; depth: 0.005"
+                material="color: #22aa44; shader: flat">
+                <a-text id="menu-join-text" value="JOIN" align="center" width="0.35" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
+              <a-text id="menu-lobby-status" value="Not connected" position="-0.3 -0.06 0"
+                align="left" width="0.3" color="#aaaaaa"></a-text>
+            </a-entity>
+
+            <a-entity id="menu-queue-buttons" visible="false" position="0 -0.08 0">
+              <a-entity class="menu-btn clickable" data-action="join-queue" position="-0.1 0 0"
+                geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
+                material="color: #22aa44; shader: flat">
+                <a-text value="JOIN QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
+              <a-entity class="menu-btn clickable" data-action="leave-queue" position="0.1 0 0"
+                geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
+                material="color: #cc3333; shader: flat">
+                <a-text value="LEAVE QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
+            </a-entity>
+
+            <a-entity id="menu-stats-section" visible="false" position="0 -0.02 0">
+              <a-text id="menu-stats-text" value="No matches yet" position="-0.3 0.04 0"
+                align="left" width="0.3" color="#cccccc" baseline="top"></a-text>
+            </a-entity>
+
+            <a-entity class="menu-btn clickable" data-action="start-bot" id="menu-start-match" position="0 -0.19 0"
+              geometry="primitive: box; width: 0.28; height: 0.06; depth: 0.005"
+              material="color: #ff8800; shader: flat">
+              <a-text id="menu-start-match-text" value="START vs BOT" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
+            </a-entity>
+            <a-text value="X to close" position="0 -0.25 0" align="center" width="0.25" color="#666666"></a-text>
+          </a-entity>
+        </a-entity>
+
         <a-entity id="leftHand"
           hand-controls="hand: left; handModelStyle: lowPoly; color: #ffcccc"
           oculus-touch-controls="hand: left"
           laser-controls="hand: left"
-          raycaster="far: 4; showLine: false; enabled: false; lineOpacity: 0"></a-entity>
+          raycaster="objects: .clickable; far: 10; showLine: false; enabled: false; lineColor: #ffffff; lineOpacity: 0">
+          <!-- DodgeVR-style wrist stats -->
+          <a-entity id="arm-stats" position="0 0.1 0.05" rotation="-45 0 0">
+            <a-plane width="0.34" height="0.26" color="#000000"
+              material="opacity: 0.8; transparent: true" position="0 0 -0.001"></a-plane>
+            <a-text id="arm-stats-text"
+              value="Blue S:0 BPS:0.0 A:0&#10;Time 0:00  Atk 0  Blk 0&#10;Red  S:0 BPS:0.0 A:0&#10;Time 0:00  Atk 0  Blk 0"
+              position="0 0 0" align="center" width="0.28" color="#00ff00"></a-text>
+          </a-entity>
+        </a-entity>
         <a-entity id="rightHand"
           hand-controls="hand: right; handModelStyle: lowPoly; color: #ffcccc"
           oculus-touch-controls="hand: right"
           laser-controls="hand: right"
-          raycaster="far: 4; showLine: false; enabled: false; lineOpacity: 0"></a-entity>
+          raycaster="objects: .clickable; far: 10; showLine: false; enabled: false; lineColor: #ffffff; lineOpacity: 0"></a-entity>
       </a-entity>
     </a-entity>
 
@@ -306,59 +399,6 @@
       mixamo-body="mode: bot; color: #E25A4A; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
     <a-entity id="spec-blue-body" visible="false"
       mixamo-body="mode: bot; color: #4A90E2; modelPath: assets/YBot.fbx; botEntitySelector: #spec-blue-anchor"></a-entity>
-
-    <a-entity id="vr-menu-root" position="0 1.35 -0.9" visible="false">
-      <a-plane width="1.5" height="1.55" material="color: #111820; opacity: 0.92; transparent: true; side: double"></a-plane>
-      <a-entity position="0 0.62 0.01" text="value: STACKSVR; align: center; width: 2; color: #fff"></a-entity>
-      <a-entity class="menu-btn" data-action="start-bot" position="0 0.42 0.02"
-        geometry="primitive: plane; width: 1.2; height: 0.13"
-        material="color: #1f6b3a"
-        text="value: Play vs Bot; align: center; width: 2; color: #fff"></a-entity>
-      <a-entity class="menu-btn" data-action="end-match" position="0 0.26 0.02"
-        geometry="primitive: plane; width: 1.2; height: 0.11"
-        material="color: #5a2a2a"
-        text="value: End Match; align: center; width: 2; color: #fff"></a-entity>
-      <a-entity class="menu-btn" data-action="mode-multi" position="0 0.1 0.02"
-        geometry="primitive: plane; width: 1.2; height: 0.11"
-        material="color: #2a4a6a"
-        text="value: Multi Lobby; align: center; width: 2; color: #fff"></a-entity>
-
-      <a-entity id="menu-lobby-section" visible="false" position="0 -0.08 0">
-        <a-entity id="menu-lobby-num" position="0 0.14 0.02"
-          text="value: Lobby 1; align: center; width: 2; color: #9cf"></a-entity>
-        <a-entity class="menu-btn" data-action="lobby-minus" position="-0.35 0 0.02"
-          geometry="primitive: plane; width: 0.28; height: 0.1"
-          material="color: #333"
-          text="value: -; align: center; width: 1.5; color: #fff"></a-entity>
-        <a-entity class="menu-btn" data-action="lobby-plus" position="0.35 0 0.02"
-          geometry="primitive: plane; width: 0.28; height: 0.1"
-          material="color: #333"
-          text="value: +; align: center; width: 1.5; color: #fff"></a-entity>
-        <a-entity class="menu-btn" data-action="join-lobby" position="0 -0.14 0.02"
-          geometry="primitive: plane; width: 1.2; height: 0.11"
-          material="color: #2a5080"
-          text="value: Connect Lobby; align: center; width: 2; color: #fff"></a-entity>
-      </a-entity>
-
-      <a-entity id="menu-queue-buttons" visible="false" position="0 -0.48 0">
-        <a-entity class="menu-btn" data-action="join-queue" position="0 0.12 0.02"
-          geometry="primitive: plane; width: 1.2; height: 0.1"
-          material="color: #1f6b3a"
-          text="value: Join Queue; align: center; width: 2; color: #fff"></a-entity>
-        <a-entity class="menu-btn" data-action="leave-queue" position="0 0 0.02"
-          geometry="primitive: plane; width: 1.2; height: 0.1"
-          material="color: #5a2a2a"
-          text="value: Leave Queue; align: center; width: 2; color: #fff"></a-entity>
-        <a-entity class="menu-btn" data-action="start-match" position="0 -0.12 0.02"
-          geometry="primitive: plane; width: 1.2; height: 0.1"
-          material="color: #8a6a20"
-          text="value: Start Match; align: center; width: 2; color: #fff"></a-entity>
-      </a-entity>
-
-      <a-entity id="menu-lobby-status" position="0 -0.72 0.02"
-        text="value: ; align: center; width: 2.2; color: #889"></a-entity>
-      <a-entity id="menu-stats-text" visible="false"></a-entity>
-    </a-entity>
   </a-scene>
 
   <script>

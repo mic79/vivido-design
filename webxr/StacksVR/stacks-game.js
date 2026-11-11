@@ -1722,22 +1722,28 @@
     },
 
     _updateHUD: function () {
-      var scoreEl = document.getElementById('score-display');
-      if (scoreEl) {
-        scoreEl.setAttribute('text', 'value',
-          'BLUE ' + (this.modes.scores.blue | 0) + '  |  RED ' + (this.modes.scores.red | 0));
+      var blueScore = document.getElementById('blue-score');
+      var redScore = document.getElementById('red-score');
+      if (blueScore) blueScore.setAttribute('text', 'value', String(this.modes.scores.blue | 0));
+      if (redScore) redScore.setAttribute('text', 'value', String(this.modes.scores.red | 0));
+
+      var timerEl = document.getElementById('timer-display');
+      if (timerEl && this.matchStats) {
+        var t = this.matchStats.blue.formatTime(performance.now());
+        timerEl.setAttribute('text', 'value', 'Time: ' + t);
+      } else if (timerEl) {
+        timerEl.setAttribute('text', 'value', 'Time: 0:00');
       }
+
       this._updateCupStatsHUD();
       var hint = document.getElementById('control-hint');
       if (hint) {
-        var msg;
+        var msg = '';
         if (this._cupGrab) msg = 'Twist = yaw · raise/lower = height';
         else if (this.held) {
           msg = this.ghostValid
-            ? 'Release to place · pocket = stash'
-            : 'Over cup to snap · pocket = hold';
-        } else {
-          msg = 'Pad = grab · purple = pocket';
+            ? 'Release to place'
+            : 'Aim over cup to snap';
         }
         hint.setAttribute('text', 'value', msg);
       }
@@ -1746,16 +1752,36 @@
     _updateCupStatsHUD: function () {
       if (!this.matchStats) return;
       var now = performance.now();
-      var blueEl = document.getElementById('stats-blue');
-      var redEl = document.getElementById('stats-red');
-      if (blueEl) blueEl.setAttribute('text', 'value', this.matchStats.blue.cardText(now));
-      if (redEl) redEl.setAttribute('text', 'value', this.matchStats.red.cardText(now));
-      var blueCup = document.getElementById('cup-stats-blue');
-      var redCup = document.getElementById('cup-stats-red');
+      var blue = this.matchStats.blue;
+      var red = this.matchStats.red;
       var hBlue = this.cups.blue ? this.cups.blue.constructionHeight : 0;
       var hRed = this.cups.red ? this.cups.red.constructionHeight : 0;
-      if (blueCup) blueCup.setAttribute('text', 'value', this.matchStats.blue.cupText(now, hBlue));
-      if (redCup) redCup.setAttribute('text', 'value', this.matchStats.red.cupText(now, hRed));
+
+      // Hidden test mirrors (card / cup panels)
+      var blueEl = document.getElementById('stats-blue');
+      var redEl = document.getElementById('stats-red');
+      if (blueEl) blueEl.setAttribute('text', 'value', blue.cardText(now));
+      if (redEl) redEl.setAttribute('text', 'value', red.cardText(now));
+      var blueCup = document.getElementById('cup-stats-blue');
+      var redCup = document.getElementById('cup-stats-red');
+      if (blueCup) blueCup.setAttribute('text', 'value', blue.cupText(now, hBlue));
+      if (redCup) redCup.setAttribute('text', 'value', red.cupText(now, hRed));
+
+      // DodgeVR-style wrist readout (both sides)
+      var arm = document.getElementById('arm-stats-text');
+      if (arm) {
+        var line = function (tag, s, h) {
+          return tag + ' S:' + (s.score | 0) +
+            ' BPS:' + s.bps(now).toFixed(1) +
+            ' A:' + (s.attacks | 0) +
+            ' H:' + (h | 0) + '\n' +
+            '  ' + s.formatTime(now) +
+            '  Atk ' + (s.attacks | 0) +
+            '  Blk ' + (s.blocks | 0);
+        };
+        arm.setAttribute('value',
+          line('Blue', blue, hBlue) + '\n' + line('Red', red, hRed));
+      }
     },
 
     /** Bot pace tracks player (or rival bot) PPM with built-in wander. */

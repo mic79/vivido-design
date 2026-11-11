@@ -227,6 +227,8 @@
     cacheRefs: function () {
       this.menu = document.getElementById('vr-menu-root');
       this.lobbySection = document.getElementById('menu-lobby-section');
+      this.singleSection = document.getElementById('menu-single-section');
+      this.statsSection = document.getElementById('menu-stats-section');
       this.queueButtons = document.getElementById('menu-queue-buttons');
       this.leftHand = document.getElementById('leftHand');
       this.rightHand = document.getElementById('rightHand');
@@ -263,15 +265,12 @@
           el.setAttribute('scale', '1 1 1');
         }
 
-        // laser-controls / cursor (same path DodgeVR menu-click uses)
         el.addEventListener('mouseenter', function (evt) {
           hoverOn(evt && evt.detail && evt.detail.cursorEl);
         });
         el.addEventListener('mouseleave', hoverOff);
-        // Direct raycaster events (A-Frame on the intersected entity)
         el.addEventListener('raycaster-intersected', function (evt) {
-          var hand = evt.detail && evt.detail.el;
-          hoverOn(hand);
+          hoverOn(evt.detail && evt.detail.el);
         });
         el.addEventListener('raycaster-intersected-cleared', hoverOff);
 
@@ -301,14 +300,13 @@
     _setHandRaycaster: function (hand, enabled) {
       if (!hand) return;
       hand.setAttribute('raycaster', {
-        objects: enabled ? '.menu-btn' : '',
+        objects: enabled ? '.clickable' : '',
         showLine: enabled,
-        lineColor: '#9fe6b8',
+        lineColor: '#ffffff',
         lineOpacity: enabled ? 0.85 : 0,
-        far: 4,
+        far: 10,
         enabled: !!enabled
       });
-      // laser-controls keeps a Line child — force hide when menu closed
       setTimeout(function () {
         var rc = hand.components && hand.components.raycaster;
         if (rc && rc.data) {
@@ -326,13 +324,14 @@
       this.menuVisible = !this.menuVisible;
       var root = document.getElementById('vr-menu-root');
       if (this.menuVisible) {
-        // Original play-space spot (in front of table) — do not reparent or reproject
+        // Camera-local like DodgeVR (parented under #camera)
         if (root) {
-          root.setAttribute('position', '0 1.35 -0.9');
+          root.setAttribute('position', '0 -0.05 -0.8');
           root.setAttribute('rotation', '0 0 0');
           root.setAttribute('visible', true);
           if (root.object3D) root.object3D.visible = true;
         }
+        this.refreshLobbyUI();
         this.setRaycasters(true);
         pulseHaptic(this.leftHand || document.getElementById('leftHand'), 0.4, 35);
       } else {
@@ -356,9 +355,27 @@
       this.setRaycasters(false);
     },
 
+    _setTabColors: function () {
+      var tabs = {
+        single: document.getElementById('menu-single'),
+        multi: document.getElementById('menu-multi'),
+        stats: document.getElementById('menu-stats')
+      };
+      var active = this.menuMode === 'stats' ? 'stats' : this.menuMode;
+      Object.keys(tabs).forEach(function (key) {
+        var el = tabs[key];
+        if (!el) return;
+        var color = key === active ? '#4488ff' : '#333333';
+        el.setAttribute('material', 'color', color);
+        el.dataset.baseColor = color;
+        el.dataset.hoverColor = lightenHex(color, 0.42);
+      });
+    },
+
     handleAction: function (action) {
       var gm = document.querySelector('[stacks-game]');
       var comp = gm && gm.components['stacks-game'];
+      var playing = !!(comp && comp.modes && comp.modes.active);
       switch (action) {
         case 'mode-single':
           this.menuMode = 'single';
@@ -369,6 +386,18 @@
           this.refreshLobbyUI();
           break;
         case 'start-bot':
+          // Dual-purpose START / END like DodgeVR's orange button
+          if (playing) {
+            if (comp) comp.endMatch();
+            this.refreshLobbyUI();
+            break;
+          }
+          if (this.menuMode === 'multi') {
+            if (window.sendMatchAction) window.sendMatchAction('start');
+            else if (window.StacksLobby && window.StacksLobby.isHost) window.startLobbyMatch();
+            this.closeMenu();
+            break;
+          }
           // ALWAYS prefer lobby match when hosting — offline bot leaves spectators
           // stuck on WAITING with empty cups / no poses.
           if (window.StacksLobby && window.StacksLobby.isHost &&
@@ -383,6 +412,7 @@
           break;
         case 'end-match':
           if (comp) comp.endMatch();
+          this.refreshLobbyUI();
           break;
         case 'lobby-minus':
           this.lobbyNumber = Math.max(1, this.lobbyNumber - 1);
@@ -411,6 +441,8 @@
           else if (window.StacksLobby && window.StacksLobby.isHost) window.startLobbyMatch();
           break;
         case 'stats':
+          this.menuMode = 'stats';
+          this.refreshLobbyUI();
           this._showStats();
           break;
         case 'replay-latest':
@@ -423,39 +455,82 @@
 
     _setLobbyLabel: function () {
       var el = document.getElementById('menu-lobby-num');
-      if (el) el.setAttribute('text', 'value', 'Lobby ' + this.lobbyNumber);
-      var joinBtn = document.querySelector('[data-action="join-lobby"]');
+      if (el) el.setAttribute('value', String(this.lobbyNumber));
+      var joinBtn = document.getElementById('menu-join') ||
+        document.querySelector('[data-action="join-lobby"]');
+      var joinText = document.getElementById('menu-join-text');
       if (!joinBtn) return;
+      var label;
+      var color;
       if (window.connectionState === 'connecting') {
-        joinBtn.setAttribute('text', 'value', 'JOINING...');
-        joinBtn.setAttribute('material', 'color', '#cc8800');
+        label = 'JOINING...';
+        color = '#cc8800';
       } else if (window.isMultiplayer) {
-        joinBtn.setAttribute('text', 'value', window.isHost ? 'HOSTING — Leave' : 'JOINED — Leave');
-        joinBtn.setAttribute('material', 'color', '#cc3333');
+        label = window.isHost ? 'LEAVE' : 'LEAVE';
+        color = '#cc3333';
       } else {
-        joinBtn.setAttribute('text', 'value', 'Connect Lobby ' + this.lobbyNumber);
-        joinBtn.setAttribute('material', 'color', '#2a5080');
+        label = 'JOIN';
+        color = '#22aa44';
       }
+      if (joinText) joinText.setAttribute('value', label);
+      else joinBtn.setAttribute('text', 'value', label);
+      joinBtn.setAttribute('material', 'color', color);
+      joinBtn.dataset.baseColor = color;
+      joinBtn.dataset.hoverColor = lightenHex(color, 0.42);
+    },
+
+    _setStartButton: function () {
+      var btn = document.getElementById('menu-start-match');
+      var txt = document.getElementById('menu-start-match-text');
+      if (!btn) return;
+      var gm = document.querySelector('[stacks-game]');
+      var comp = gm && gm.components['stacks-game'];
+      var playing = !!(comp && comp.modes && comp.modes.active);
+      var label;
+      var color;
+      if (playing) {
+        label = 'END MATCH';
+        color = '#cc3333';
+      } else if (this.menuMode === 'multi') {
+        label = 'START MATCH';
+        color = '#ff8800';
+      } else {
+        label = 'START vs BOT';
+        color = '#ff8800';
+      }
+      if (txt) txt.setAttribute('value', label);
+      btn.setAttribute('material', 'color', color);
+      btn.dataset.baseColor = color;
+      btn.dataset.hoverColor = lightenHex(color, 0.42);
+      // Keep data-action as start-bot (handles end when playing)
+      btn.setAttribute('data-action', 'start-bot');
     },
 
     refreshLobbyUI: function () {
       var multi = this.menuMode === 'multi';
+      var stats = this.menuMode === 'stats';
+      if (this.singleSection) this.singleSection.setAttribute('visible', !multi && !stats);
       if (this.lobbySection) this.lobbySection.setAttribute('visible', multi);
+      if (this.statsSection) this.statsSection.setAttribute('visible', stats);
       if (this.queueButtons) {
         this.queueButtons.setAttribute('visible', multi && !!window.isMultiplayer);
       }
+      this._setTabColors();
       this._setLobbyLabel();
+      this._setStartButton();
+      if (stats) this._showStats();
 
       var status = document.getElementById('menu-lobby-status');
       if (status) {
         var live = window.StacksLobbyStatus || '';
         var ls = window.lobbyState;
+        var msg;
         if (window.connectionState === 'connecting' && live) {
-          status.setAttribute('text', 'value', live);
+          msg = live;
         } else if (!window.isMultiplayer) {
-          status.setAttribute('text', 'value', live || 'Not connected');
+          msg = live || 'Not connected';
         } else if (!ls) {
-          status.setAttribute('text', 'value', live || 'Connecting...');
+          msg = live || 'Connecting...';
         } else {
           var mp = ls.matchPlayers || {};
           var q = (ls.queue || []).length;
@@ -464,10 +539,10 @@
             ' | ' + (ls.matchState || 'WAITING') +
             ' | B:' + (mp.blue ? 'Y' : '-') +
             ' R:' + (mp.red ? (mp.red === '__BOT__' ? 'BOT' : 'Y') : '-') +
-            ' | Q:' + q +
-            ' Spec:' + (ls.spectatorSlots || []).filter(Boolean).length;
-          status.setAttribute('text', 'value', live ? (live + ' · ' + detail) : detail);
+            ' | Q:' + q;
+          msg = live ? (live + ' · ' + detail) : detail;
         }
+        status.setAttribute('value', msg);
       }
 
       this._applySeatPose();
@@ -529,7 +604,7 @@
       var panel = document.getElementById('menu-stats-text');
       if (!panel) return;
       if (!list.length) {
-        panel.setAttribute('text', 'value', 'No matches yet');
+        panel.setAttribute('value', 'No matches yet');
         return;
       }
       var start = this.statsPage * this.STATS_PER_PAGE;
@@ -540,7 +615,7 @@
           (m.bot ? 'BOT' : 'PvP') + ' ' + m.blue + '-' + m.red +
           (m.winner ? ' W:' + m.winner : '');
       });
-      panel.setAttribute('text', 'value', lines.join('\n'));
+      panel.setAttribute('value', lines.join('\n'));
     },
 
     _playLatestReplay: function () {
