@@ -557,7 +557,11 @@
     Lobby.lobbyNum = lobbyNum;
     Lobby.lobbyState = createLobbyState();
     Lobby.myPlayerId = 'stacksvr-host-' + lobbyNum;
-    Lobby.lobbyState.players.push({ id: Lobby.myPlayerId, nickname: 'Host', mobile: false });
+    Lobby.lobbyState.players.push({
+      id: Lobby.myPlayerId,
+      nickname: (global.playerNickname || 'Host').slice(0, 12),
+      mobile: false
+    });
     assignSpectatorSlot(Lobby.myPlayerId);
     Lobby.isHost = false; // set true only after peer open (DodgeVR)
     Lobby.isMultiplayer = false;
@@ -667,7 +671,10 @@
             Lobby.conn.send({ type: 'hello', nickname: 'Spectator' });
             setStatus('WATCHING Lobby ' + lobbyNum);
           } else {
-            Lobby.conn.send({ type: 'hello', nickname: 'Player' });
+            Lobby.conn.send({
+              type: 'hello',
+              nickname: (global.playerNickname || 'Player').slice(0, 12)
+            });
             setStatus('JOINED Lobby ' + lobbyNum);
           }
           ok();

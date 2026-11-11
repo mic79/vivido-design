@@ -352,8 +352,8 @@
 
     document.body.classList.add('mobile-spectator');
 
-    var boot = document.getElementById('boot');
-    if (boot) boot.classList.add('gone');
+    var preVr = document.getElementById('pre-vr-overlay');
+    if (preVr) preVr.classList.add('gone');
 
     var overlay = document.getElementById('mobile-spectator-overlay');
     if (overlay) overlay.classList.add('active');

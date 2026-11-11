@@ -25,28 +25,33 @@
   <script src="cup-bot.js?v=23"></script>
   <script src="stats.js?v=7"></script>
   <script src="modes.js?v=19"></script>
-  <script src="lobby.js?v=32"></script>
+  <script src="lobby.js?v=33"></script>
   <script src="match-replay.js?v=19"></script>
   <script src="game-menu.js?v=36"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
   <script src="stacks-game.js?v=64"></script>
-  <script src="mobile-spectator.js?v=35"></script>
+  <script src="mobile-spectator.js?v=36"></script>
 
     <style>
-    html, body { margin: 0; height: 100%; background: #0b0e14; font-family: 'Segoe UI', Arial, sans-serif; }
-    #boot {
-      position: fixed; inset: 0; z-index: 50;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      background: #0b0e14; color: #e8eef8; text-align: center; gap: 12px;
+    html, body { margin: 0; height: 100%; background: #111; font-family: sans-serif; }
+    #pre-vr-overlay {
+      position: fixed; inset: 0; z-index: 9999;
+      display: flex; align-items: center; justify-content: center;
+      background: #111; color: #fff; text-align: center;
     }
-    #boot.gone { display: none !important; }
-    body.mobile-spectator #boot { display: none !important; }
-    #boot button {
-      padding: 14px 32px; border: 0; border-radius: 10px;
-      background: #1f9d45; color: #fff; font-size: 1.15rem; font-weight: 700; cursor: pointer;
+    #pre-vr-overlay.gone { display: none !important; }
+    body.mobile-spectator #pre-vr-overlay { display: none !important; }
+    #pre-vr-overlay h1 {
+      font-size: 2.5em; margin: 0 0 0.2em; letter-spacing: 0.1em; font-weight: 700;
     }
-    #boot .keys { opacity: 0.75; font-size: 0.95rem; line-height: 1.45; max-width: 460px; }
+    #pre-vr-overlay .tagline { color: #888; margin: 0 0 1.5em; }
+    #pre-vr-overlay label { display: block; margin-bottom: 0.4em; font-size: 1.1em; }
+    #nickname-input {
+      font-size: 1.2em; padding: 0.4em 0.8em; width: 200px; text-align: center;
+      border: 2px solid #4488ff; border-radius: 6px; background: #222; color: #fff; outline: none;
+    }
+    #pre-vr-overlay .hint { font-size: 0.8em; color: #666; margin-top: 1.5em; }
 
     /* DodgeVR mobile spectator UI (ported) */
       #mobile-spectator-overlay {
@@ -189,16 +194,31 @@
     </style>
   </head>
   <body>
-  <div id="boot">
-    <h1 style="margin:0;letter-spacing:0.08em">STACKSVR</h1>
-    <div class="keys">
-      <b>Green pad</b> grab · <b>purple pocket</b> hold/swap (H)<br/>
-      Empty hand on <b>cup rim</b> = rotate + raise/lower<br/>
-      Ghost in-cup · release place · other hand can steal<br/>
-      Menu: left X (or M) · lasers only while menu open · Multi lobby for PvP
-      </div>
-    <button id="boot-btn" type="button">START</button>
+  <!-- Pre-VR nickname overlay (DodgeVR-style) -->
+  <div id="pre-vr-overlay">
+    <div>
+      <h1>STACKS VR</h1>
+      <p class="tagline">1v1 Block Stacking in Virtual Reality</p>
+      <label for="nickname-input">Nickname</label>
+      <input id="nickname-input" type="text" maxlength="12" placeholder="Player" autocomplete="username" />
+      <p class="hint">Press <b>Enter VR</b> below to start</p>
     </div>
+  </div>
+  <script>
+    (function () {
+      var input = document.getElementById('nickname-input');
+      if (!input) return;
+      var saved = localStorage.getItem('stacksvr-nickname');
+      if (saved) input.value = saved;
+      function syncNick() {
+        var v = (input.value || '').trim().slice(0, 12);
+        localStorage.setItem('stacksvr-nickname', v);
+        window.playerNickname = v || 'Player';
+      }
+      input.addEventListener('input', syncNick);
+      window.playerNickname = (saved && saved.trim()) ? saved.trim().slice(0, 12) : 'Player';
+    })();
+  </script>
 
   <!-- Mobile Spectator Overlay (DodgeVR UX) -->
     <div id="mobile-spectator-overlay">
@@ -411,24 +431,11 @@
 
   <script>
     (function () {
-      function hideBoot() {
-        var boot = document.getElementById('boot');
-        if (boot) boot.classList.add('gone');
+      function hidePreVr() {
+        var overlay = document.getElementById('pre-vr-overlay');
+        if (overlay) overlay.classList.add('gone');
       }
-      // Desktop/mobile preview only — entering VR must NOT auto-start dual-bot
-      // (that marked modes.active and turned START vs BOT into END MATCH).
-      function startDualDemo() {
-        hideBoot();
-        if (window.isMobileSpectator) return;
-        if (window.isMultiplayer || (window.StacksLobby && window.StacksLobby.isHost)) return;
-        var el = document.querySelector('[stacks-game]');
-        var g = el && el.components && el.components['stacks-game'];
-        if (g && !g.matchActive && typeof g.startOfflinePreviewMatch === 'function') {
-          g.startOfflinePreviewMatch();
-        }
-      }
-      document.getElementById('boot-btn').addEventListener('click', startDualDemo);
-      document.querySelector('a-scene').addEventListener('enter-vr', hideBoot);
+      document.querySelector('a-scene').addEventListener('enter-vr', hidePreVr);
 
       // Mobile spectator UI/UX is handled by mobile-spectator.js (DodgeVR port).
       // Desktop / VR keyboard helpers only:
@@ -437,7 +444,6 @@
         if (e.key === 'b' || e.key === 'B') {
           var el = document.querySelector('[stacks-game]');
           var g = el && el.components && el.components['stacks-game'];
-          // B = human vs bot; dual demo is the default START experience
           if (g && !g.matchActive) g.startOfflineBotMatch();
         }
         if (e.key === 'm' || e.key === 'M') {
