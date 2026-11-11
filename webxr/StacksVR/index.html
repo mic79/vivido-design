@@ -19,7 +19,7 @@
   </script>
 
   <script src="shapes.js?v=27"></script>
-  <script src="cup.js?v=31"></script>
+  <script src="cup.js?v=32"></script>
   <script src="clear.js?v=19"></script>
   <script src="attack.js?v=19"></script>
   <script src="cup-bot.js?v=23"></script>
@@ -33,7 +33,7 @@
   <script src="stacks-game.js?v=64"></script>
   <script src="mobile-spectator.js?v=35"></script>
 
-  <style>
+    <style>
     html, body { margin: 0; height: 100%; background: #0b0e14; font-family: 'Segoe UI', Arial, sans-serif; }
     #boot {
       position: fixed; inset: 0; z-index: 50;
@@ -49,113 +49,113 @@
     #boot .keys { opacity: 0.75; font-size: 0.95rem; line-height: 1.45; max-width: 460px; }
 
     /* DodgeVR mobile spectator UI (ported) */
-    #mobile-spectator-overlay {
-      display: none;
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      z-index: 9999;
-      pointer-events: none;
-    }
-    #mobile-spectator-overlay.active { display: block; }
+      #mobile-spectator-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 9999;
+        pointer-events: none;
+      }
+      #mobile-spectator-overlay.active { display: block; }
     /* Only the lobby picker captures input. Match HUD must NOT steal swipes. */
     #mobile-lobby-screen { pointer-events: auto; }
     #mobile-lobby-screen * { pointer-events: auto; }
 
-    #mobile-lobby-screen {
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.92);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      color: #fff;
-    }
-    #mobile-lobby-screen h1 {
-      font-size: 2em;
-      margin: 0 0 0.1em;
-      letter-spacing: 0.05em;
+      #mobile-lobby-screen {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.92);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+      }
+      #mobile-lobby-screen h1 {
+        font-size: 2em;
+        margin: 0 0 0.1em;
+        letter-spacing: 0.05em;
       color: #4A90E2;
-    }
-    #mobile-lobby-screen .subtitle {
-      font-size: 0.9em;
-      color: #999;
-      margin-bottom: 1.5em;
-    }
-    #mobile-lobby-screen .lobby-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 1em;
-    }
+      }
+      #mobile-lobby-screen .subtitle {
+        font-size: 0.9em;
+        color: #999;
+        margin-bottom: 1.5em;
+      }
+      #mobile-lobby-screen .lobby-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 1em;
+      }
     #mobile-lobby-screen .lobby-row label { font-size: 1.1em; color: #ccc; }
-    #mobile-lobby-screen .lobby-num-btn {
-      width: 44px; height: 44px;
+      #mobile-lobby-screen .lobby-num-btn {
+        width: 44px; height: 44px;
       border: none; border-radius: 8px;
       background: #333; color: #fff; font-size: 1.4em;
       cursor: pointer; touch-action: manipulation;
-    }
-    #mobile-lobby-screen .lobby-num-btn:active { background: #555; }
-    #mobile-lobby-screen .lobby-num {
+      }
+      #mobile-lobby-screen .lobby-num-btn:active { background: #555; }
+      #mobile-lobby-screen .lobby-num {
       font-size: 1.6em; min-width: 2em; text-align: center; color: #fff;
-    }
-    #mobile-lobby-screen .watch-btn {
-      padding: 14px 48px;
+      }
+      #mobile-lobby-screen .watch-btn {
+        padding: 14px 48px;
       border: none; border-radius: 10px;
       background: #22aa44; color: #fff;
       font-size: 1.2em; font-weight: bold;
       cursor: pointer; touch-action: manipulation; margin-top: 0.5em;
-    }
-    #mobile-lobby-screen .watch-btn:active { background: #1a8836; }
-    #mobile-lobby-screen .watch-btn:disabled { background: #555; color: #999; }
-    #mobile-lobby-screen .status-msg {
+      }
+      #mobile-lobby-screen .watch-btn:active { background: #1a8836; }
+      #mobile-lobby-screen .watch-btn:disabled { background: #555; color: #999; }
+      #mobile-lobby-screen .status-msg {
       margin-top: 1em; font-size: 0.95em; color: #ffcc00; min-height: 1.5em;
-    }
-    #mobile-lobby-screen .preview-btn {
-      padding: 10px 32px;
+      }
+      #mobile-lobby-screen .preview-btn {
+        padding: 10px 32px;
       border: 2px solid #555; border-radius: 10px;
       background: transparent; color: #999; font-size: 0.9em;
       cursor: pointer; touch-action: manipulation; margin-top: 1.2em;
-    }
-    #mobile-lobby-screen .preview-btn:active { background: rgba(255,255,255,0.08); }
+      }
+      #mobile-lobby-screen .preview-btn:active { background: rgba(255,255,255,0.08); }
 
-    #mobile-match-hud {
-      display: none;
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
+      #mobile-match-hud {
+        display: none;
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
       pointer-events: none !important;
-    }
-    #mobile-match-hud.active { display: block; }
+      }
+      #mobile-match-hud.active { display: block; }
     #mobile-match-hud * { pointer-events: none !important; }
-    #mobile-hud-top {
-      position: absolute;
-      top: 0; left: 0; right: 0;
+      #mobile-hud-top {
+        position: absolute;
+        top: 0; left: 0; right: 0;
       display: flex; justify-content: center; align-items: center;
-      padding: 8px 16px;
-      background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
-    }
-    #mobile-hud-scores {
+        padding: 8px 16px;
+        background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+      }
+      #mobile-hud-scores {
       display: flex; align-items: center; gap: 12px;
       font-size: 1.8em; font-weight: bold;
-    }
-    #mobile-hud-scores .blue-name,
-    #mobile-hud-scores .red-name {
+      }
+      #mobile-hud-scores .blue-name,
+      #mobile-hud-scores .red-name {
       font-size: 0.5em; font-weight: normal;
       max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
-    #mobile-hud-scores .blue-side { color: #4499ff; text-align: right; }
-    #mobile-hud-scores .red-side { color: #ff4444; text-align: left; }
-    #mobile-hud-scores .score-sep { color: #888; font-size: 0.8em; }
-    #mobile-hud-timer {
+      }
+      #mobile-hud-scores .blue-side { color: #4499ff; text-align: right; }
+      #mobile-hud-scores .red-side { color: #ff4444; text-align: left; }
+      #mobile-hud-scores .score-sep { color: #888; font-size: 0.8em; }
+      #mobile-hud-timer {
       position: absolute; top: 52px; left: 0; right: 0;
       text-align: center; font-size: 1em; color: #ffdd00;
-      text-shadow: 0 1px 4px rgba(0,0,0,0.8);
-    }
-    #mobile-hud-status {
+        text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+      }
+      #mobile-hud-status {
       position: absolute; bottom: 12px; left: 0; right: 0;
       text-align: center; font-size: 0.9em; color: #aaa;
-      text-shadow: 0 1px 4px rgba(0,0,0,0.8);
-    }
+        text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+      }
     #mobile-preview-exit {
       display: none;
       position: absolute; bottom: 12px; right: 16px;
@@ -165,28 +165,28 @@
     }
     body.offline-preview #mobile-preview-exit { display: block; }
 
-    #mobile-rotate-prompt {
-      display: none;
+      #mobile-rotate-prompt {
+        display: none;
       position: fixed; inset: 0; z-index: 99999;
       background: rgba(0,0,0,0.95); color: #fff;
       flex-direction: column; align-items: center; justify-content: center;
       font-size: 1.2em; text-align: center; padding: 20px;
-    }
-    #mobile-rotate-prompt .rotate-icon {
+      }
+      #mobile-rotate-prompt .rotate-icon {
       font-size: 3em; margin-bottom: 16px;
-      animation: rotateHint 2s ease-in-out infinite;
-    }
-    @keyframes rotateHint {
-      0%, 100% { transform: rotate(0deg); }
-      50% { transform: rotate(90deg); }
-    }
-    @media (orientation: portrait) {
-      body.mobile-spectator #mobile-rotate-prompt { display: flex; }
-    }
-    @media (orientation: landscape) {
-      body.mobile-spectator #mobile-rotate-prompt { display: none; }
-    }
-  </style>
+        animation: rotateHint 2s ease-in-out infinite;
+      }
+      @keyframes rotateHint {
+        0%, 100% { transform: rotate(0deg); }
+        50% { transform: rotate(90deg); }
+      }
+      @media (orientation: portrait) {
+        body.mobile-spectator #mobile-rotate-prompt { display: flex; }
+      }
+      @media (orientation: landscape) {
+        body.mobile-spectator #mobile-rotate-prompt { display: none; }
+      }
+    </style>
   </head>
   <body>
   <div id="boot">
@@ -196,49 +196,49 @@
       Empty hand on <b>cup rim</b> = rotate + raise/lower<br/>
       Ghost in-cup · release place · other hand can steal<br/>
       Menu: left X (or M) · lasers only while menu open · Multi lobby for PvP
-    </div>
+      </div>
     <button id="boot-btn" type="button">START</button>
-  </div>
+    </div>
 
   <!-- Mobile Spectator Overlay (DodgeVR UX) -->
-  <div id="mobile-spectator-overlay">
-    <div id="mobile-lobby-screen">
+    <div id="mobile-spectator-overlay">
+      <div id="mobile-lobby-screen">
       <h1>STACKS VR</h1>
-      <div class="subtitle">Mobile Spectator</div>
-      <div class="lobby-row">
-        <label>Lobby:</label>
+        <div class="subtitle">Mobile Spectator</div>
+        <div class="lobby-row">
+          <label>Lobby:</label>
         <button class="lobby-num-btn" id="mobile-lobby-minus" type="button">&minus;</button>
-        <span class="lobby-num" id="mobile-lobby-num">1</span>
+          <span class="lobby-num" id="mobile-lobby-num">1</span>
         <button class="lobby-num-btn" id="mobile-lobby-plus" type="button">+</button>
-      </div>
+        </div>
       <button class="watch-btn" id="mobile-watch-btn" type="button">WATCH</button>
       <button class="preview-btn" id="mobile-preview-btn" type="button">OFFLINE PREVIEW</button>
-      <div class="status-msg" id="mobile-status-msg"></div>
-    </div>
-    <div id="mobile-match-hud">
-      <div id="mobile-hud-top">
-        <div id="mobile-hud-scores">
-          <span class="red-side">
-            <span class="red-name" id="mobile-red-name">Red</span>
-            <span id="mobile-red-score">0</span>
-          </span>
-          <span class="score-sep">&ndash;</span>
-          <span class="blue-side">
-            <span id="mobile-blue-score">0</span>
-            <span class="blue-name" id="mobile-blue-name">Blue</span>
-          </span>
-        </div>
+        <div class="status-msg" id="mobile-status-msg"></div>
       </div>
-      <div id="mobile-hud-timer"></div>
-      <div id="mobile-hud-status">Waiting for match...</div>
+      <div id="mobile-match-hud">
+        <div id="mobile-hud-top">
+          <div id="mobile-hud-scores">
+            <span class="red-side">
+              <span class="red-name" id="mobile-red-name">Red</span>
+              <span id="mobile-red-score">0</span>
+            </span>
+            <span class="score-sep">&ndash;</span>
+            <span class="blue-side">
+              <span id="mobile-blue-score">0</span>
+              <span class="blue-name" id="mobile-blue-name">Blue</span>
+            </span>
+          </div>
+        </div>
+        <div id="mobile-hud-timer"></div>
+        <div id="mobile-hud-status">Waiting for match...</div>
       <button id="mobile-preview-exit" type="button">EXIT PREVIEW</button>
+      </div>
     </div>
-  </div>
 
-  <div id="mobile-rotate-prompt">
-    <div class="rotate-icon">&#x1F4F1;</div>
-    <div>Rotate your phone to landscape mode</div>
-  </div>
+    <div id="mobile-rotate-prompt">
+      <div class="rotate-icon">&#x1F4F1;</div>
+      <div>Rotate your phone to landscape mode</div>
+    </div>
 
   <a-scene
     stacks-game="mode: pvp"
@@ -269,7 +269,7 @@
         text="value: ·; align: center; width: 1.1; color: #667788"></a-entity>
       <a-entity id="red-score" position="0.16 0 0"
         text="value: 0; align: center; width: 1.35; color: #ff8866"></a-entity>
-    </a-entity>
+      </a-entity>
     <a-entity id="timer-display" visible="false"></a-entity>
     <a-entity id="control-hint" position="0 2.02 0"
       text="value: ; align: center; width: 1.0; color: #667788"></a-entity>
@@ -302,7 +302,7 @@
     <a-entity id="player" position="-0.65 0 1.75" rotation="0 0 0" stick-locomotion>
       <a-entity id="rig">
         <a-entity id="camera" camera look-controls="pointerLockEnabled: true" wasd-controls position="0 1.6 0">
-        </a-entity>
+      </a-entity>
 
         <a-entity id="leftHand"
           hand-controls="hand: left; handModelStyle: lowPoly; color: #ffcccc"
@@ -318,23 +318,23 @@
 
             <a-text value="STACKS VR" position="0 0.22 0" align="center" width="0.8" color="#ffffff"></a-text>
 
-            <a-entity position="0 0.14 0">
+              <a-entity position="0 0.14 0">
               <a-entity class="menu-btn clickable" data-action="mode-single" id="menu-single" position="-0.2 0 0"
-                geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
-                material="color: #4488ff; opacity: 0.9; shader: flat">
-                <a-text value="SINGLE" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
-              </a-entity>
+                          geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
+                          material="color: #4488ff; opacity: 0.9; shader: flat">
+                  <a-text value="SINGLE" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
               <a-entity class="menu-btn clickable" data-action="mode-multi" id="menu-multi" position="0 0 0"
-                geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
-                material="color: #333333; opacity: 0.9; shader: flat">
-                <a-text value="MULTI" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
-              </a-entity>
+                          geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
+                          material="color: #333333; opacity: 0.9; shader: flat">
+                  <a-text value="MULTI" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
               <a-entity class="menu-btn clickable" data-action="stats" id="menu-stats" position="0.2 0 0"
-                geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
-                material="color: #333333; opacity: 0.9; shader: flat">
-                <a-text value="STATS" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+                          geometry="primitive: box; width: 0.17; height: 0.06; depth: 0.005"
+                          material="color: #333333; opacity: 0.9; shader: flat">
+                  <a-text value="STATS" align="center" width="0.38" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
               </a-entity>
-            </a-entity>
 
             <a-entity id="menu-single-section" position="0 0.02 0">
               <a-text value="Bot Match:" position="-0.22 0.02 0" align="left" width="0.35" color="#cccccc"></a-text>
@@ -342,61 +342,61 @@
                 align="left" width="0.32" color="#888888"></a-text>
             </a-entity>
 
-            <a-entity id="menu-lobby-section" visible="false" position="0 0.02 0">
+              <a-entity id="menu-lobby-section" visible="false" position="0 0.02 0">
               <a-text value="Lobby:" position="-0.22 0.04 0" align="left" width="0.35" color="#cccccc"></a-text>
               <a-entity class="menu-btn clickable" data-action="lobby-minus" position="-0.02 0.04 0"
-                geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
-                material="color: #555555; shader: flat">
-                <a-text value="-" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-              </a-entity>
+                          geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
+                          material="color: #555555; shader: flat">
+                  <a-text value="-" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
               <a-text id="menu-lobby-num" value="1" position="0.06 0.04 0" align="center" width="0.4" color="#ffffff"></a-text>
               <a-entity class="menu-btn clickable" data-action="lobby-plus" position="0.14 0.04 0"
-                geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
-                material="color: #555555; shader: flat">
-                <a-text value="+" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-              </a-entity>
+                          geometry="primitive: box; width: 0.05; height: 0.05; depth: 0.005"
+                          material="color: #555555; shader: flat">
+                  <a-text value="+" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
               <a-entity class="menu-btn clickable" data-action="join-lobby" id="menu-join" position="0.26 0.04 0"
-                geometry="primitive: box; width: 0.12; height: 0.05; depth: 0.005"
-                material="color: #22aa44; shader: flat">
+                          geometry="primitive: box; width: 0.12; height: 0.05; depth: 0.005"
+                          material="color: #22aa44; shader: flat">
                 <a-text id="menu-join-text" value="JOIN" align="center" width="0.35" color="#ffffff" position="0 0 0.004"></a-text>
-              </a-entity>
+                </a-entity>
               <a-text id="menu-lobby-status" value="Not connected" position="-0.3 -0.06 0"
                 align="left" width="0.3" color="#aaaaaa"></a-text>
-            </a-entity>
+              </a-entity>
 
             <a-entity id="menu-queue-buttons" visible="false" position="0 -0.08 0">
               <a-entity class="menu-btn clickable" data-action="join-queue" position="-0.1 0 0"
-                geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
-                material="color: #22aa44; shader: flat">
-                <a-text value="JOIN QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
-              </a-entity>
+                          geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
+                          material="color: #22aa44; shader: flat">
+                  <a-text value="JOIN QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
               <a-entity class="menu-btn clickable" data-action="leave-queue" position="0.1 0 0"
-                geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
-                material="color: #cc3333; shader: flat">
-                <a-text value="LEAVE QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                          geometry="primitive: box; width: 0.18; height: 0.05; depth: 0.005"
+                          material="color: #cc3333; shader: flat">
+                  <a-text value="LEAVE QUEUE" align="center" width="0.3" color="#ffffff" position="0 0 0.004"></a-text>
+                </a-entity>
               </a-entity>
-            </a-entity>
 
-            <a-entity id="menu-stats-section" visible="false" position="0 -0.02 0">
+              <a-entity id="menu-stats-section" visible="false" position="0 -0.02 0">
               <a-text id="menu-stats-text" value="No matches yet" position="-0.3 0.04 0"
                 align="left" width="0.3" color="#cccccc" baseline="top"></a-text>
-            </a-entity>
+              </a-entity>
 
             <a-entity class="menu-btn clickable" data-action="start-bot" id="menu-start-match" position="0 -0.19 0"
-              geometry="primitive: box; width: 0.28; height: 0.06; depth: 0.005"
-              material="color: #ff8800; shader: flat">
+                        geometry="primitive: box; width: 0.28; height: 0.06; depth: 0.005"
+                        material="color: #ff8800; shader: flat">
               <a-text id="menu-start-match-text" value="START vs BOT" align="center" width="0.4" color="#ffffff" position="0 0 0.004"></a-text>
-            </a-entity>
+              </a-entity>
             <a-text value="X to close · right laser" position="0 -0.25 0" align="center" width="0.28" color="#666666"></a-text>
+            </a-entity>
           </a-entity>
-        </a-entity>
-        <a-entity id="rightHand"
+          <a-entity id="rightHand" 
           hand-controls="hand: right; handModelStyle: lowPoly; color: #ffcccc"
-          oculus-touch-controls="hand: right"
-          laser-controls="hand: right"
+                   oculus-touch-controls="hand: right"
+                   laser-controls="hand: right"
           raycaster="objects: .clickable; far: 10; showLine: false; enabled: false; lineColor: #ffffff; lineOpacity: 0"></a-entity>
+        </a-entity>
       </a-entity>
-    </a-entity>
 
     <a-entity id="player-body"
       mixamo-body="mode: player; color: #4A90E2; modelPath: assets/YBot.fbx"></a-entity>
@@ -407,7 +407,7 @@
       mixamo-body="mode: bot; color: #E25A4A; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
     <a-entity id="spec-blue-body" visible="false"
       mixamo-body="mode: bot; color: #4A90E2; modelPath: assets/YBot.fbx; botEntitySelector: #spec-blue-anchor"></a-entity>
-  </a-scene>
+    </a-scene>
 
   <script>
     (function () {
