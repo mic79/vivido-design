@@ -1811,17 +1811,19 @@
       } else if (this._pad) {
         this._pad.visible = false;
       }
+      var isBotSeat = !!isBotMatch || (mp && mp.red === '__BOT__');
       if (this.bot) {
         // reset() already applied seed in _applyMirroredBags
         this.bot.setCup(this.cups.red);
         // Only the host (or offline) runs the red bot AI; spectators receive poses
-        var isBotSeat = !!isBotMatch || (mp && mp.red === '__BOT__');
         var runBot = (!spectating) && isBotSeat;
         // Show red pad/pocket to everyone in a bot match (host animates; peers see platforms)
         this._setBotStationVisible(!!isBotSeat);
         this.bot.enable(runBot);
         if (runBot) this.bot.setTargetPpm(12);
       }
+      // Dual-preview had been force-hiding avatars every tick — restore for real play
+      this._showMatchBodies({ showBot: !!isBotSeat && !spectating });
       if (window.matchRecorder) window.matchRecorder.startRecording(startTime || Date.now());
       this._updateHUD();
       // Host pushes a clean board to everyone
@@ -2110,21 +2112,43 @@
         this.botBlue.enable(true);
       }
 
-      // Hide avatar bodies until we can drive accurate place motions
-      this._hideBotBodies();
+      // Dual preview: hide undriven bot avatars only — never the local player body
+      this._hidePreviewBotBodies();
 
       this._updateHUD();
       console.log('[StacksGame] offline preview: blue bot vs red bot seed=' + seed);
     },
 
-    _hideBotBodies: function () {
-      var ids = ['bot-body', 'spec-blue-body', 'player-body'];
+    _hidePreviewBotBodies: function () {
+      var ids = ['bot-body', 'spec-blue-body'];
       for (var i = 0; i < ids.length; i++) {
         var el = document.getElementById(ids[i]);
         if (!el) continue;
         el.setAttribute('visible', false);
         if (el.object3D) el.object3D.visible = false;
         if (el.dataset) el.dataset.posed = '';
+      }
+    },
+
+    /** Local player body always on; red bot avatar on for offline/bot matches. */
+    _showMatchBodies: function (opts) {
+      opts = opts || {};
+      var player = document.getElementById('player-body');
+      if (player) {
+        player.setAttribute('visible', true);
+        if (player.object3D) player.object3D.visible = true;
+      }
+      var bot = document.getElementById('bot-body');
+      if (bot) {
+        var showBot = !!opts.showBot;
+        bot.setAttribute('visible', showBot);
+        if (bot.object3D) bot.object3D.visible = showBot;
+        if (!showBot && bot.dataset) bot.dataset.posed = '';
+      }
+      var spec = document.getElementById('spec-blue-body');
+      if (spec && !global.isMultiplayer) {
+        spec.setAttribute('visible', false);
+        if (spec.object3D) spec.object3D.visible = false;
       }
     },
 
@@ -2752,7 +2776,7 @@
         this._updateBotPace();
         if (this.bot && this.bot.enabled) this.bot.tick(performance.now());
         if (this.botBlue && this.botBlue.enabled) this.botBlue.tick(performance.now());
-        if (this._dualBotPreview) this._hideBotBodies();
+        if (this._dualBotPreview) this._hidePreviewBotBodies();
         // Refresh PPM / timer on cup-side stats ~4Hz
         if (!this._lastStatsHud || performance.now() - this._lastStatsHud > 250) {
           this._lastStatsHud = performance.now();
