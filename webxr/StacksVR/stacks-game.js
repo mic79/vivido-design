@@ -156,13 +156,14 @@
       if (blue.pivot) { blue.pivot.rotation.y = blueYaw; blue.yaw = blueYaw; }
       if (red.pivot) { red.pivot.rotation.y = redYaw; red.yaw = redYaw; }
 
-      // BattleBlocks: NEXT column on playfield-right; pad+pocket diamonds at its feet
-      var blueNextPos = offsetBlue(-0.38, 0.78);
-      var bluePadPos = offsetBlue(-0.58, 0.60);
-      var bluePocketPos = offsetBlue(-0.58, 0.96);
-      var redNextPos = offsetRed(-0.38, 0.78);
-      var redPadPos = offsetRed(-0.58, 0.60);
-      var redPocketPos = offsetRed(-0.58, 0.96);
+      // BattleBlocks: NEXT on playfield-right; pad+pocket far enough apart that
+      // full tetromino footprints never collide (I-piece ~0.44m at scale 1).
+      var blueNextPos = offsetBlue(-0.38, 0.90);
+      var bluePadPos = offsetBlue(-0.58, 0.48);
+      var bluePocketPos = offsetBlue(-0.58, 1.28);
+      var redNextPos = offsetRed(-0.38, 0.90);
+      var redPadPos = offsetRed(-0.58, 0.48);
+      var redPocketPos = offsetRed(-0.58, 1.28);
 
       // Floor diamond outline (no fill) — BattleBlocks station marks
       function neonDiamond(half, color) {
@@ -233,13 +234,13 @@
       this._pad = new THREE.Group();
       this._pad.position.set(bluePadPos.x, bluePadPos.y, bluePadPos.z);
       this._sceneRoot.add(this._pad);
-      this._padMesh = neonDiamond(0.16, 0x33bbff);
+      this._padMesh = neonDiamond(0.18, 0x33bbff);
       this._pad.add(this._padMesh);
 
       this._pocket = new THREE.Group();
       this._pocket.position.set(bluePocketPos.x, bluePocketPos.y, bluePocketPos.z);
       this._sceneRoot.add(this._pocket);
-      this._pocket.add(neonDiamond(0.13, 0x33bbff));
+      this._pocket.add(neonDiamond(0.18, 0x33bbff));
       this._pocketType = null;
       this._pocketUsed = false;
 
@@ -249,13 +250,13 @@
       this._botPad = new THREE.Group();
       this._botPad.position.set(redPadPos.x, redPadPos.y, redPadPos.z);
       this._sceneRoot.add(this._botPad);
-      this._botPad.add(neonDiamond(0.16, 0xff6a3d));
+      this._botPad.add(neonDiamond(0.18, 0xff6a3d));
       this._botPadPiece = null;
 
       this._botPocket = new THREE.Group();
       this._botPocket.position.set(redPocketPos.x, redPocketPos.y, redPocketPos.z);
       this._sceneRoot.add(this._botPocket);
-      this._botPocket.add(neonDiamond(0.13, 0xff6a3d));
+      this._botPocket.add(neonDiamond(0.18, 0xff6a3d));
       this._botPocketMesh = null;
       this._botHoldMesh = null;
 
@@ -398,6 +399,7 @@
           mesh.userData.botPadPiece = true;
           mesh.userData.padPiece = true;
           mesh.position.set(0, 0.1, 0);
+          this._fitStationPiece(mesh, 0.30);
           st.pad.add(mesh);
           if (side === 'red') this._botPadPiece = mesh;
           else this._padPiece = mesh;
@@ -421,7 +423,7 @@
         pm.userData.botPocketPiece = true;
         pm.userData.pocketPiece = true;
         pm.position.set(0, 0.1, 0);
-        pm.scale.setScalar(0.85);
+        this._fitStationPiece(pm, 0.30);
         st.pocket.add(pm);
         if (side === 'red') this._botPocketMesh = pm;
         else this._pocketMesh = pm;
@@ -847,7 +849,7 @@
       });
       mesh.userData.pocketPiece = true;
       mesh.position.set(0, 0.1, 0);
-      mesh.scale.setScalar(0.85);
+      this._fitStationPiece(mesh, 0.30);
       this._pocket.add(mesh);
       this._pocketMesh = mesh;
     },
@@ -1113,6 +1115,23 @@
     // Vertical stack inside NEXT — small silhouettes with clear gaps
     _nextSlotY: function (i) { return 0.02 + i * 0.24; },
     _nextSlotScale: function (i) { return Math.max(0.09, 0.20 - i * 0.022); },
+
+    /** Scale pad/pocket pieces so longest tetromino fits inside its diamond. */
+    _fitStationPiece: function (mesh, maxSpan) {
+      if (!mesh) return;
+      maxSpan = maxSpan || 0.30;
+      var type = mesh.userData && mesh.userData.shapeType;
+      var span = CELL * 3;
+      if (type && global.StacksShapes && StacksShapes.shapeExtent) {
+        var e = StacksShapes.shapeExtent(type, 0);
+        var cells = Math.max(e.maxX, e.maxY, e.maxZ) + 1;
+        span = cells * CELL * 0.92;
+      }
+      var s = Math.min(0.82, maxSpan / Math.max(0.01, span));
+      mesh.scale.setScalar(s);
+      mesh.userData.stationScale = s;
+    },
+
     /** Stand pieces in XY so silhouettes read clearly in the NEXT frame. */
     _orientNextQueueMesh: function (mesh) {
       if (!mesh) return;
@@ -1141,6 +1160,7 @@
       });
       mesh.userData.padPiece = true;
       mesh.position.set(0, 0.1, 0);
+      this._fitStationPiece(mesh, 0.30);
       this._pad.add(mesh);
       this._padPiece = mesh;
       this._rebuildNextQueue('blue', this.bag, { dropIn: !!opts.dropIn });
@@ -1204,12 +1224,19 @@
       var toLocal = this._sceneRoot.worldToLocal(toWorld.clone());
       var now = performance.now();
       var flatQ = new THREE.Quaternion();
+      var self = this;
+      var fitScale = 0.82;
+      if (bottomMesh.userData && bottomMesh.userData.shapeType && global.StacksShapes) {
+        var ext = StacksShapes.shapeExtent(bottomMesh.userData.shapeType, 0);
+        var cells = Math.max(ext.maxX, ext.maxY, ext.maxZ) + 1;
+        fitScale = Math.min(0.82, 0.30 / Math.max(0.01, cells * CELL * 0.92));
+      }
       this._pieceAnims.push({
         mesh: bottomMesh,
         fromPos: bottomMesh.position.clone(),
         toPos: toLocal,
         fromScale: bottomMesh.scale.x,
-        toScale: 1,
+        toScale: fitScale,
         fromQuat: bottomMesh.quaternion.clone(),
         toQuat: flatQ,
         t0: now,
@@ -1217,8 +1244,8 @@
         onDone: function () {
           pad.attach(bottomMesh);
           bottomMesh.position.set(0, 0.1, 0);
-          bottomMesh.scale.setScalar(1);
           bottomMesh.quaternion.identity();
+          self._fitStationPiece(bottomMesh, 0.30);
           bottomMesh.userData.spawning = false;
         }
       });
