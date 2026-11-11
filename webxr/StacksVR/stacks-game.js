@@ -22,6 +22,9 @@
       this.clearSys = this.clearSysBlue; // back-compat
       this.attackSys = new global.StacksAttack();
       this.modes = new global.StacksModes.ModeController({ mode: this.data.mode });
+      this.matchStats = global.StacksStats
+        ? new global.StacksStats.MatchStats()
+        : null;
       this.bag = new global.StacksShapes.ShapeBag();
       this.bot = null;
 
@@ -1291,6 +1294,7 @@
       var cup = this.cups[side];
       var clearSys = side === 'red' ? this.clearSysRed : this.clearSysBlue;
       var clearResult = clearSys.resolveAfterPlace(cup, placed, type);
+      if (this.matchStats) this.matchStats.onPlace(side, clearResult, performance.now());
       if (clearResult.layersCleared > 0) {
         this.attackSys.onClear(side, clearResult, performance.now());
         if (this.matchActive) {
@@ -1474,6 +1478,7 @@
       this.attackSys.reset();
       this.modes.setMode(this.data.mode);
       this.modes.start(startTime || Date.now());
+      if (this.matchStats) this.matchStats.start(performance.now());
       this.playerScore = 0;
       this.botScore = 0;
       this.bag = new global.StacksShapes.ShapeBag();
@@ -1497,6 +1502,7 @@
         // Show red pad/pocket to everyone in a bot match (host animates; peers see platforms)
         this._setBotStationVisible(!!isBotSeat);
         this.bot.enable(runBot);
+        if (runBot) this.bot.setTargetPpm(12);
       }
       if (window.matchRecorder) window.matchRecorder.startRecording(startTime || Date.now());
       this._updateHUD();
@@ -1552,6 +1558,7 @@
       this.attackSys.reset();
       this.modes.setMode(this.data.mode);
       this.modes.start(Date.now());
+      if (this.matchStats) this.matchStats.start(performance.now());
       this.playerScore = 0;
       this.botScore = 0;
       this._cancelHold();
@@ -1572,12 +1579,14 @@
         this.bot.reset();
         this.bot.setCup(this.cups.red);
         this.bot._lastThink = performance.now() - 400;
+        this.bot.setTargetPpm(14);
         this.bot.enable(true);
       }
       if (this.botBlue) {
         this.botBlue.reset();
         this.botBlue.setCup(this.cups.blue);
         this.botBlue._lastThink = performance.now();
+        this.botBlue.setTargetPpm(13);
         this.botBlue.enable(true);
       }
 
@@ -1636,6 +1645,7 @@
       var hRed = document.getElementById('cup-height-red');
       if (hBlue && this.cups.blue) hBlue.setAttribute('text', 'value', 'H ' + this.cups.blue.constructionHeight);
       if (hRed && this.cups.red) hRed.setAttribute('text', 'value', 'H ' + this.cups.red.constructionHeight);
+      this._updateCupStatsHUD();
       var hint = document.getElementById('control-hint');
       if (hint) {
         var msg;
@@ -1648,6 +1658,42 @@
           msg = 'Pad = grab · purple = pocket · rim = move cup';
         }
         hint.setAttribute('text', 'value', msg);
+      }
+    },
+
+    _updateCupStatsHUD: function () {
+      if (!this.matchStats) return;
+      var now = performance.now();
+      var blueEl = document.getElementById('stats-blue');
+      var redEl = document.getElementById('stats-red');
+      if (blueEl) blueEl.setAttribute('text', 'value', this.matchStats.blue.hudText(now));
+      if (redEl) redEl.setAttribute('text', 'value', this.matchStats.red.hudText(now));
+    },
+
+    /** Bot pace tracks player (or rival bot) PPM with built-in wander. */
+    _updateBotPace: function () {
+      if (!this.matchStats) return;
+      var now = performance.now();
+      var blue = this.matchStats.blue;
+      var red = this.matchStats.red;
+
+      if (this.bot && this.bot.enabled) {
+        var targetPpm;
+        if (this._dualBotPreview) {
+          // Dual demo: each bot loosely tracks the other / shared mid pace
+          targetPpm = red.pieces >= 3 ? red.ppmRolling(now) : 14;
+          if (blue.pieces >= 3) targetPpm = 0.55 * targetPpm + 0.45 * blue.ppmRolling(now);
+        } else if (blue.pieces >= 3) {
+          targetPpm = blue.ppmRolling(now);
+        } else {
+          targetPpm = 12;
+        }
+        this.bot.setTargetPpm(targetPpm, now);
+      }
+      if (this.botBlue && this.botBlue.enabled) {
+        var blueTarget = red.pieces >= 3 ? red.ppmRolling(now) : 13;
+        if (blue.pieces >= 3) blueTarget = 0.5 * blueTarget + 0.5 * blue.ppmRolling(now);
+        this.botBlue.setTargetPpm(blueTarget, now);
       }
     },
 
@@ -1857,9 +1903,15 @@
         this._updateDamageHUD();
         var t = this.modes.tick(Date.now());
         if (t && t.ended) this._endFromMode(t);
+        this._updateBotPace();
         if (this.bot && this.bot.enabled) this.bot.tick(performance.now());
         if (this.botBlue && this.botBlue.enabled) this.botBlue.tick(performance.now());
         if (this._dualBotPreview) this._hideBotBodies();
+        // Refresh PPM / timer on cup-side stats ~4Hz
+        if (!this._lastStatsHud || performance.now() - this._lastStatsHud > 250) {
+          this._lastStatsHud = performance.now();
+          this._updateCupStatsHUD();
+        }
         this._heartbeatSpectatorSync();
       } else {
         if (this.cups.blue) this.cups.blue.setThreat(0);

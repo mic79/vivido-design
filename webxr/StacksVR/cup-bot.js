@@ -11,6 +11,13 @@
     this.thinkIntervalMs = opts.thinkIntervalMs != null ? opts.thinkIntervalMs : 1200;
     // Long enough for move-above → orient → lower (3 readable phases)
     this.placeAnimMs = opts.placeAnimMs != null ? opts.placeAnimMs : 1100;
+    this.baseThinkMs = this.thinkIntervalMs;
+    this.basePlaceAnimMs = this.placeAnimMs;
+    // Adaptive pacing: follow a target PPM with wandering variation
+    this.adaptPace = opts.adaptPace !== false;
+    this._paceMul = 1;
+    this._paceTargetMul = 1;
+    this._nextPaceJitterAt = 0;
     this._lastThink = 0;
     this.currentType = null;
     this.pocketType = null;
@@ -36,7 +43,44 @@
     this._busyUntil = 0;
     this.state = 'idle';
     this._anim = null;
+    this._paceMul = 1;
+    this._paceTargetMul = 1;
+    this._nextPaceJitterAt = 0;
+    this.thinkIntervalMs = this.baseThinkMs;
+    this.placeAnimMs = this.basePlaceAnimMs;
     this._emit({ kind: 'reset' });
+  };
+
+  /**
+   * Match a player's pieces-per-minute. Variation wanders ~±20% over time.
+   * cycleMs = think + anim + busy ≈ 60000/ppm.
+   */
+  CupBot.prototype.setTargetPpm = function (ppm, now) {
+    if (!this.adaptPace) return;
+    now = now || performance.now();
+    ppm = Math.max(4, Math.min(40, ppm || 12));
+    var cycleMs = 60000 / ppm;
+    // Split cycle: ~45% think/idle, ~45% place anim, ~10% post-busy
+    var think = Math.max(280, cycleMs * 0.42);
+    var anim = Math.max(450, Math.min(1600, cycleMs * 0.45));
+    this.baseThinkMs = think;
+    this.basePlaceAnimMs = anim;
+    this._applyPaceMul(now);
+  };
+
+  CupBot.prototype._applyPaceMul = function (now) {
+    now = now || performance.now();
+    if (now >= this._nextPaceJitterAt) {
+      // Wander target multiplier: sometimes faster, sometimes slower
+      this._paceTargetMul = 0.72 + Math.random() * 0.56; // 0.72–1.28
+      this._nextPaceJitterAt = now + 3500 + Math.random() * 6500;
+    }
+    // Ease current multiplier toward target
+    this._paceMul += (this._paceTargetMul - this._paceMul) * 0.12;
+    // Higher mul = faster = shorter intervals
+    var inv = 1 / Math.max(0.55, Math.min(1.6, this._paceMul));
+    this.thinkIntervalMs = Math.max(220, this.baseThinkMs * inv);
+    this.placeAnimMs = Math.max(400, Math.min(1800, this.basePlaceAnimMs * inv));
   };
 
   CupBot.prototype.enable = function (on) {
@@ -61,6 +105,7 @@
   CupBot.prototype.tick = function (now) {
     if (!this.enabled || !this.cup) return null;
     now = now || performance.now();
+    if (this.adaptPace) this._applyPaceMul(now);
 
     if (this.state === 'animating' && this._anim) {
       return this._tickAnim(now);
