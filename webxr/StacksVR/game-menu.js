@@ -214,7 +214,14 @@
           this.refreshLobbyUI();
           break;
         case 'start-bot':
-          if (comp) comp.startOfflineBotMatch();
+          // In a live lobby, bot match must go through startLobbyMatch so mobile
+          // spectators get match-started + PLAYING (offline path leaves them WAITING).
+          if (window.isMultiplayer && window.StacksLobby && window.StacksLobby.isHost &&
+              typeof window.startLobbyMatch === 'function') {
+            window.startLobbyMatch();
+          } else if (comp) {
+            comp.startOfflineBotMatch();
+          }
           this.closeMenu();
           break;
         case 'end-match':

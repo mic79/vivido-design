@@ -112,6 +112,15 @@
   function startLobbyMatch() {
     if (!Lobby.lobbyState) return;
     var mp = Lobby.lobbyState.matchPlayers;
+    // Host can start without queue join — seat host as blue automatically (DodgeVR-style)
+    if (!mp.blue && Lobby.isHost && Lobby.myPlayerId) {
+      mp.blue = Lobby.myPlayerId;
+      for (var s = 0; s < Lobby.lobbyState.spectatorSlots.length; s++) {
+        if (Lobby.lobbyState.spectatorSlots[s] === Lobby.myPlayerId) {
+          Lobby.lobbyState.spectatorSlots[s] = null;
+        }
+      }
+    }
     if (!mp.blue) return;
 
     var isBotMatch = mp.blue && !mp.red;
@@ -126,14 +135,22 @@
     Lobby.lobbyState.matchGameState = 'PLAYING';
     var startTime = Date.now();
     Lobby.lobbyState.matchStartTime = startTime;
+    Lobby.isSpectator = !(mp.blue === Lobby.myPlayerId || mp.red === Lobby.myPlayerId);
+    global.isSpectator = Lobby.isSpectator;
+    global.lobbyState = Lobby.lobbyState;
+    syncWindowState();
 
     for (var i = 0; i < Lobby.connections.length; i++) {
       if (Lobby.connections[i].conn.open) {
         Lobby.connections[i].conn.send({
           type: 'match-started',
-          matchPlayers: mp,
+          matchPlayers: {
+            blue: mp.blue,
+            red: mp.red
+          },
           startTime: startTime,
-          isBotMatch: isBotMatch
+          isBotMatch: isBotMatch,
+          state: Lobby.lobbyState
         });
       }
     }
@@ -179,12 +196,31 @@
   function handleMatchAction(playerId, action) {
     if (!Lobby.lobbyState) return;
     var mp = Lobby.lobbyState.matchPlayers;
-    if (playerId !== mp.blue && playerId !== mp.red) return;
+    // Host may start/end even before seating (startLobbyMatch auto-seats host as blue).
+    // Seated match players may also start/end.
+    var allowed = Lobby.isHost ||
+      playerId === mp.blue ||
+      playerId === mp.red;
+    if (!allowed) return;
     if (action === 'start' && Lobby.lobbyState.matchState !== 'PLAYING') {
       startLobbyMatch();
     } else if (action === 'end' && Lobby.lobbyState.matchState === 'PLAYING') {
       endLobbyMatch();
     }
+  }
+
+  function sendMatchStartedToConn(conn) {
+    if (!conn || !conn.open || !Lobby.lobbyState) return;
+    if (Lobby.lobbyState.matchState !== 'PLAYING') return;
+    var mp = Lobby.lobbyState.matchPlayers;
+    if (!mp || !mp.blue || !mp.red) return;
+    conn.send({
+      type: 'match-started',
+      matchPlayers: { blue: mp.blue, red: mp.red },
+      startTime: Lobby.lobbyState.matchStartTime,
+      isBotMatch: !!Lobby.isLobbyBotMatch || mp.red === '__BOT__',
+      state: Lobby.lobbyState
+    });
   }
 
   function removePlayer(peerId) {
@@ -231,22 +267,40 @@
           if (cj.id !== fromId && cj.conn.open) cj.conn.send(Object.assign({ from: fromId }, data));
         }
         if (Lobby.onPlayerPose) Lobby.onPlayerPose(fromId, data);
+      } else if (data.type === 'mobile-spectator') {
+        var entryMs = Lobby.connections.find(function (x) { return x.id === fromId; });
+        if (entryMs) entryMs.isMobileSpectator = true;
+        Lobby.lobbyState.mobileSpectatorCount = Lobby.connections.filter(function (c) {
+          return c.isMobileSpectator;
+        }).length;
+        broadcastLobbyState();
+        // DodgeVR: late mobile joiners must get match-started or HUD stays WAITING
+        if (entryMs && entryMs.conn) sendMatchStartedToConn(entryMs.conn);
+        if (Lobby.lobbyState.matchState === 'PLAYING' && Lobby.onRequestSnapshot) {
+          var snapMs = Lobby.onRequestSnapshot();
+          if (snapMs && entryMs && entryMs.conn && entryMs.conn.open) {
+            entryMs.conn.send({ type: 'cup-snapshot', snapshot: snapMs });
+          }
+        }
       } else if (data.type === 'hello') {
         var exists = Lobby.lobbyState.players.some(function (p) { return p.id === fromId; });
         if (!exists) {
           Lobby.lobbyState.players.push({ id: fromId, nickname: data.nickname || 'Player', mobile: !!isMobile });
         }
-        if (isMobile) Lobby.lobbyState.mobileSpectatorCount++;
+        if (isMobile) {
+          Lobby.lobbyState.mobileSpectatorCount = Lobby.connections.filter(function (c) {
+            return c.isMobileSpectator || c.id === fromId;
+          }).length;
+        }
         assignSpectatorSlot(fromId);
         broadcastLobbyState();
-        // Late join during a match — push current board
+        var entry = Lobby.connections.find(function (x) { return x.id === fromId; });
+        // Late join during a match — activate spectator match view + push board
+        if (entry && entry.conn) sendMatchStartedToConn(entry.conn);
         if (Lobby.lobbyState.matchState === 'PLAYING' && Lobby.onRequestSnapshot) {
           var snap = Lobby.onRequestSnapshot();
-          if (snap) {
-            var entry = Lobby.connections.find(function (x) { return x.id === fromId; });
-            if (entry && entry.conn && entry.conn.open) {
-              entry.conn.send({ type: 'cup-snapshot', snapshot: snap });
-            }
+          if (snap && entry && entry.conn && entry.conn.open) {
+            entry.conn.send({ type: 'cup-snapshot', snapshot: snap });
           }
         }
       }
@@ -260,15 +314,49 @@
       var mp = data.state.matchPlayers;
       Lobby.isSpectator = !(mp && (mp.blue === Lobby.myPlayerId || mp.red === Lobby.myPlayerId));
       global.isSpectator = Lobby.isSpectator;
+      syncWindowState();
       if (Lobby.onLobbyState) Lobby.onLobbyState(data.state);
       var scene = document.querySelector('a-scene');
       if (scene) scene.emit('lobby-state-updated');
     } else if (data.type === 'match-started') {
+      // MUST update local lobbyState here — do not wait for a later lobby-state
+      // (HUD / avatar routing key off matchState === PLAYING + matchPlayers)
       Lobby.isLobbyBotMatch = !!data.isBotMatch;
       global.isLobbyBotMatch = Lobby.isLobbyBotMatch;
-      if (Lobby.onMatchStarted) Lobby.onMatchStarted(data.matchPlayers, data.startTime, data.isBotMatch);
+      if (data.state) {
+        Lobby.lobbyState = data.state;
+      } else if (!Lobby.lobbyState) {
+        Lobby.lobbyState = createLobbyState();
+      }
+      if (data.matchPlayers) {
+        Lobby.lobbyState.matchPlayers = {
+          blue: data.matchPlayers.blue,
+          red: data.matchPlayers.red
+        };
+      }
+      Lobby.lobbyState.matchState = 'PLAYING';
+      Lobby.lobbyState.matchGameState = 'PLAYING';
+      Lobby.lobbyState.matchStartTime = data.startTime || Date.now();
+      global.lobbyState = Lobby.lobbyState;
+      Lobby.isSpectator = !(Lobby.lobbyState.matchPlayers &&
+        (Lobby.lobbyState.matchPlayers.blue === Lobby.myPlayerId ||
+          Lobby.lobbyState.matchPlayers.red === Lobby.myPlayerId));
+      global.isSpectator = Lobby.isSpectator;
+      syncWindowState();
+      if (Lobby.onMatchStarted) {
+        Lobby.onMatchStarted(Lobby.lobbyState.matchPlayers, data.startTime, data.isBotMatch);
+      }
+      var scene2 = document.querySelector('a-scene');
+      if (scene2) scene2.emit('lobby-state-updated');
     } else if (data.type === 'match-ended') {
+      if (Lobby.lobbyState) {
+        Lobby.lobbyState.matchState = 'WAITING';
+        Lobby.lobbyState.matchGameState = null;
+        global.lobbyState = Lobby.lobbyState;
+      }
       if (Lobby.onMatchEnded) Lobby.onMatchEnded();
+      var scene3 = document.querySelector('a-scene');
+      if (scene3) scene3.emit('lobby-state-updated');
     } else if (data.type === 'cup-event' || data.type === 'cup-snapshot') {
       if (Lobby.onCupEvent) Lobby.onCupEvent(data);
       if (data.type === 'cup-snapshot' && Lobby.onCupSnapshot) Lobby.onCupSnapshot(data);
@@ -608,10 +696,11 @@
   }
 
   function sendPlayerPose(pose) {
-    var msg = Object.assign({ type: 'player-pose' }, pose);
+    var fromId = (pose && pose.from) || Lobby.myPlayerId;
+    var msg = Object.assign({}, pose, { type: 'player-pose', from: fromId });
     if (Lobby.isHost) {
       for (var i = 0; i < Lobby.connections.length; i++) {
-        if (Lobby.connections[i].conn.open) Lobby.connections[i].conn.send(Object.assign({ from: Lobby.myPlayerId }, msg));
+        if (Lobby.connections[i].conn.open) Lobby.connections[i].conn.send(msg);
       }
     } else if (Lobby.conn && Lobby.conn.open) {
       Lobby.conn.send(msg);

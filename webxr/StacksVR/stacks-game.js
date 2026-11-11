@@ -1102,6 +1102,7 @@
       this.matchState = 'PLAYING';
       this.cups.blue.clearAll();
       this.cups.red.clearAll();
+      if (this._sceneRoot) this._sceneRoot.visible = true;
       this.clearSys = new global.StacksClear();
       this.attackSys.reset();
       this.modes.setMode(this.data.mode);
@@ -1113,13 +1114,19 @@
       this._pocketType = null;
       this._pocketUsed = false;
       this._refreshPocketMesh();
-      this._spawnPadPiece();
       this._setRemoteHeld('blue', { holding: false });
       this._setRemoteHeld('red', { holding: false });
+      var spectating = !!(global.isMobileSpectator ||
+        (global.isSpectator && global.isMultiplayer && !global.StacksLobby.amMatchPlayer()));
+      // Spectators mirror host board — no local spawn pad
+      if (!spectating) this._spawnPadPiece();
+      else if (this._pad) this._pad.visible = false;
       if (this.bot) {
         this.bot.reset();
         this.bot.setCup(this.cups.red);
-        this.bot.enable(!!isBotMatch || (mp && mp.red === '__BOT__'));
+        // Only the host (or offline) runs the red bot AI; spectators receive poses
+        var runBot = (!spectating) && (!!isBotMatch || (mp && mp.red === '__BOT__'));
+        this.bot.enable(runBot);
       }
       if (window.matchRecorder) window.matchRecorder.startRecording(startTime || Date.now());
       this._updateHUD();
@@ -1239,7 +1246,8 @@
 
     _sendLocalPose: function () {
       if (!global.isMultiplayer || !global.sendPlayerPose) return;
-      if (global.isSpectator && !global.isLobbyBotMatch) return;
+      if (global.isMobileSpectator) return;
+      if (global.isSpectator && !global.StacksLobby.amMatchPlayer() && !global.isLobbyBotMatch) return;
       var now = performance.now();
       if (now - this._lastPoseSend < 50) return;
       this._lastPoseSend = now;
@@ -1257,11 +1265,31 @@
         // Flat layout expected by mixamo-body remoteHandData
         return { x: p.x, y: p.y, z: p.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
       }
-      global.sendPlayerPose({
-        head: pack(cam),
-        leftHand: pack(lh),
-        rightHand: pack(rh)
-      });
+      // Host / match player: broadcast own headset
+      if (!global.isSpectator || global.StacksLobby.amMatchPlayer()) {
+        global.sendPlayerPose({
+          head: pack(cam),
+          leftHand: pack(lh),
+          rightHand: pack(rh)
+        });
+      }
+      // Host bot match: also stream red bot body so mobile sees the opponent
+      if (global.StacksLobby && global.StacksLobby.isHost &&
+          (global.isLobbyBotMatch ||
+            (global.lobbyState && global.lobbyState.matchPlayers &&
+              global.lobbyState.matchPlayers.red === '__BOT__'))) {
+        var botBody = document.getElementById('bot-body');
+        var cupBot = document.getElementById('cup-bot');
+        if (botBody) {
+          var headEl = cupBot || botBody;
+          global.sendPlayerPose({
+            from: '__BOT__',
+            head: pack(headEl),
+            leftHand: null,
+            rightHand: null
+          });
+        }
+      }
       if (this.held && now - (this._lastHoldSend || 0) > 100) {
         this._lastHoldSend = now;
         this._broadcastHold();

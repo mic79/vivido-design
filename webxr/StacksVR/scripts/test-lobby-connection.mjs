@@ -97,9 +97,53 @@ async function main() {
       throw new Error('Host lobbyState missing players');
     }
 
+    // Host starts match — spectator MUST flip to PLAYING (this was the stuck-WAITING bug)
+    const hostStart = await hostPage.evaluate(() => window.__lobbyTest.startMatch());
+    console.log('HOST startMatch', hostStart);
+    if (hostStart.matchState !== 'PLAYING' || !hostStart.matchBlue || !hostStart.matchRed) {
+      throw new Error('Host match did not enter PLAYING: ' + JSON.stringify(hostStart));
+    }
+
+    await watchPage.waitForFunction(() => {
+      return window.lobbyState &&
+        window.lobbyState.matchState === 'PLAYING' &&
+        window.lobbyState.matchPlayers &&
+        window.lobbyState.matchPlayers.blue &&
+        window.lobbyState.matchPlayers.red;
+    }, null, { timeout: 10000 });
+
+    const watchPlaying = await watchPage.evaluate(() => window.__lobbyTest.status());
+    console.log('WATCH during match', watchPlaying);
+    if (watchPlaying.matchState !== 'PLAYING') {
+      throw new Error('Spectator stuck WAITING during match: ' + JSON.stringify(watchPlaying));
+    }
+    if (!watchPlaying.matchBlue || !watchPlaying.matchRed) {
+      throw new Error('Spectator missing matchPlayers during match: ' + JSON.stringify(watchPlaying));
+    }
+
+    // Late-join path: second spectator connects while match already PLAYING
+    const lateCtx = await browser.newContext();
+    const latePage = await lateCtx.newPage();
+    latePage.on('console', (m) => console.log('[late]', m.text()));
+    await latePage.goto(base);
+    await waitReady(latePage);
+    const lateWatch = await latePage.evaluate(async (n) => window.__lobbyTest.watch(n), LOBBY);
+    console.log('LATE watch connect', lateWatch);
+    await latePage.waitForFunction(() => {
+      return window.lobbyState && window.lobbyState.matchState === 'PLAYING' &&
+        window.lobbyState.matchPlayers && window.lobbyState.matchPlayers.blue;
+    }, null, { timeout: 10000 });
+    const latePlaying = await latePage.evaluate(() => window.__lobbyTest.status());
+    console.log('LATE during match', latePlaying);
+    if (latePlaying.matchState !== 'PLAYING') {
+      throw new Error('Late spectator stuck WAITING: ' + JSON.stringify(latePlaying));
+    }
+    await latePage.evaluate(() => window.__lobbyTest.leave());
+    await lateCtx.close();
+
     await watchPage.evaluate(() => window.__lobbyTest.leave());
     await hostPage.evaluate(() => window.__lobbyTest.leave());
-    console.log('PASS host↔mobile spectator PeerJS lobby');
+    console.log('PASS host↔mobile spectator PeerJS lobby + match-started PLAYING');
   } catch (e) {
     failed = e;
     console.error('FAIL', e && e.stack ? e.stack : e);

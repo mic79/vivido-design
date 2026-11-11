@@ -43,6 +43,34 @@
     if (hudStatus && statusText != null) hudStatus.textContent = statusText;
   }
 
+  function isMatchPlaying(ls) {
+    if (!ls) return false;
+    var mp = ls.matchPlayers || {};
+    if (ls.matchState === 'PLAYING' && mp.blue && mp.red) return true;
+    var gm = document.querySelector('[stacks-game]');
+    var comp = gm && gm.components && gm.components['stacks-game'];
+    if (comp && comp.matchActive && mp.blue && mp.red) return true;
+    return false;
+  }
+
+  function activateSpectatorBodies() {
+    var blue = document.getElementById('spec-blue-body');
+    var red = document.getElementById('bot-body');
+    if (blue) {
+      blue.setAttribute('visible', true);
+      if (blue.object3D) blue.object3D.visible = true;
+    }
+    if (red) {
+      red.setAttribute('visible', true);
+      if (red.object3D) red.object3D.visible = true;
+    }
+    var gm = document.querySelector('[stacks-game]');
+    var comp = gm && gm.components && gm.components['stacks-game'];
+    if (comp && comp._sceneRoot) comp._sceneRoot.visible = true;
+    var scoreDisplay = document.getElementById('score-display');
+    if (scoreDisplay && scoreDisplay.object3D) scoreDisplay.object3D.visible = true;
+  }
+
   function updateMobileHudNames() {
     var ls = global.lobbyState;
     if (!ls || !ls.matchPlayers) return;
@@ -72,8 +100,8 @@
       statusEl.textContent = 'Connecting...';
       return;
     }
-    var mp = ls.matchPlayers || {};
-    if (ls.matchState === 'PLAYING' && mp.blue && mp.red) {
+    if (isMatchPlaying(ls)) {
+      activateSpectatorBodies();
       statusEl.textContent = 'Swipe to orbit · Watching lobby ' + (_lobbyNum || '');
     } else {
       var pc = ls.players ? ls.players.length : 0;
@@ -104,10 +132,17 @@
     if (bEl) bEl.textContent = String(blue);
     if (rEl) rEl.textContent = String(red);
 
-    // Keep in-scene score board in sync for atmosphere
     var scoreDisplay = document.getElementById('score-display');
     if (scoreDisplay) {
       scoreDisplay.setAttribute('text', 'value', 'BLUE ' + blue + '  |  RED ' + red);
+    }
+
+    var timerEl = document.getElementById('mobile-hud-timer');
+    if (timerEl && ls && ls.matchState === 'PLAYING' && ls.matchStartTime) {
+      var elapsed = Math.max(0, Math.floor((Date.now() - ls.matchStartTime) / 1000));
+      var min = Math.floor(elapsed / 60);
+      var sec = elapsed % 60;
+      timerEl.textContent = min + ':' + (sec < 10 ? '0' : '') + sec;
     }
   }
 
@@ -116,6 +151,32 @@
     updateMobileHudNames();
     updateMobileHudStatus();
     updateMobileHudScores();
+  }
+
+  function applyRemotePose(fromId, data) {
+    var mp = global.lobbyState && global.lobbyState.matchPlayers;
+    var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+    if (fromId === myId) return;
+    var body = null;
+    if (mp && (fromId === mp.red || (fromId === '__BOT__' && mp.red === '__BOT__'))) {
+      body = document.getElementById('bot-body');
+    } else if (mp && fromId === mp.blue) {
+      body = document.getElementById('spec-blue-body');
+    } else if (!mp || !mp.blue) {
+      // Host poses can arrive before matchPlayers is filled — show as blue
+      body = document.getElementById('spec-blue-body');
+    }
+    if (!body) return;
+    body.setAttribute('visible', true);
+    body.object3D.visible = true;
+    var mb = body.components && body.components['mixamo-body'];
+    if (mb && data && data.head) {
+      mb.remoteHandData = {
+        head: data.head,
+        leftHand: data.leftHand,
+        rightHand: data.rightHand
+      };
+    }
   }
 
   async function onWatchClick() {
@@ -140,14 +201,16 @@
     // DodgeVR UX: leave lobby picker, show match HUD over the live scene
     requestWakeLock();
     showMatchHud('Watching lobby ' + _lobbyNum);
-    var hudSt = document.getElementById('mobile-hud-status');
-    if (hudSt) hudSt.textContent = 'Watching lobby ' + _lobbyNum;
     updateMobileHudNames();
     updateMobileHudStatus();
     updateMobileHudScores();
+    activateSpectatorBodies();
 
     if (!_hudTimerIv) {
-      _hudTimerIv = setInterval(updateMobileHudScores, 500);
+      _hudTimerIv = setInterval(function () {
+        updateMobileHudStatus();
+        updateMobileHudScores();
+      }, 400);
     }
   }
 
@@ -160,6 +223,7 @@
     if (redName) redName.textContent = 'Red Bot';
     if (blueName) blueName.textContent = 'Blue';
     requestWakeLock();
+    activateSpectatorBodies();
 
     var gm = document.querySelector('[stacks-game]');
     var comp = gm && gm.components && gm.components['stacks-game'];
@@ -178,6 +242,31 @@
     }, 1000);
   }
 
+  function wireLobbyCallbacks() {
+    if (!global.StacksLobby) return;
+    var prevLobby = global.StacksLobby.onLobbyState;
+    global.StacksLobby.onLobbyState = function (state) {
+      if (typeof prevLobby === 'function') prevLobby(state);
+      onLobbyStateUpdated();
+    };
+    var prevMatch = global.StacksLobby.onMatchStarted;
+    global.StacksLobby.onMatchStarted = function () {
+      if (typeof prevMatch === 'function') {
+        prevMatch.apply(null, arguments);
+      }
+      showMatchHud('');
+      activateSpectatorBodies();
+      updateMobileHudNames();
+      updateMobileHudStatus();
+      updateMobileHudScores();
+    };
+    var prevPose = global.StacksLobby.onPlayerPose;
+    global.StacksLobby.onPlayerPose = function (fromId, data) {
+      if (typeof prevPose === 'function') prevPose(fromId, data);
+      applyRemotePose(fromId, data);
+    };
+  }
+
   function initMobileSpectatorUi() {
     var params = new URLSearchParams(location.search);
     var force = params.get('spectate') === '1';
@@ -185,6 +274,7 @@
     if (params.get('vr') === '1') return;
 
     global.isMobileSpectator = true;
+    global.isSpectator = true;
     document.body.classList.add('mobile-spectator');
 
     var boot = document.getElementById('boot');
@@ -230,56 +320,28 @@
       scene.addEventListener('loaded', function () {
         var vrBtn = document.querySelector('.a-enter-vr');
         if (vrBtn) vrBtn.style.display = 'none';
+        activateSpectatorBodies();
       });
     }
 
-    if (global.StacksLobby) {
-      var prevLobby = global.StacksLobby.onLobbyState;
-      global.StacksLobby.onLobbyState = function (state) {
-        if (typeof prevLobby === 'function') prevLobby(state);
-        onLobbyStateUpdated();
-      };
-      var prevMatch = global.StacksLobby.onMatchStarted;
-      global.StacksLobby.onMatchStarted = function () {
-        if (typeof prevMatch === 'function') {
-          prevMatch.apply(null, arguments);
-        }
-        showMatchHud('');
-        updateMobileHudNames();
-        updateMobileHudStatus();
-        updateMobileHudScores();
-      };
-      var prevPose = global.StacksLobby.onPlayerPose;
-      global.StacksLobby.onPlayerPose = function (fromId, data) {
-        if (typeof prevPose === 'function') prevPose(fromId, data);
-        var mp = global.lobbyState && global.lobbyState.matchPlayers;
-        var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
-        if (fromId === myId) return;
-        var body = null;
-        if (mp && fromId === mp.red) body = document.getElementById('bot-body');
-        else if (mp && fromId === mp.blue) body = document.getElementById('spec-blue-body');
-        if (!body) return;
-        body.object3D.visible = true;
-        var mb = body.components && body.components['mixamo-body'];
-        if (mb) {
-          mb.remoteHandData = {
-            head: data.head,
-            leftHand: data.leftHand,
-            rightHand: data.rightHand
-          };
-        }
-      };
+    wireLobbyCallbacks();
+    // stacks-game chains callbacks in init — re-wire after scene components load
+    setTimeout(wireLobbyCallbacks, 0);
+    if (scene) {
+      scene.addEventListener('loaded', function () {
+        setTimeout(wireLobbyCallbacks, 0);
+      });
     }
   }
 
-  // Orbit camera — DodgeVR mobile-spectator-cam adapted to StacksVR table scale
+  // Orbit camera — DodgeVR pattern: move player to orbit height, yaw the rig at table
   if (typeof AFRAME !== 'undefined') {
     AFRAME.registerComponent('mobile-spectator-cam', {
       init: function () {
         if (!global.isMobileSpectator) return;
         var self = this;
-        this._orbitRadius = 3.2;
-        this._orbitHeight = 2.0;
+        this._orbitRadius = 3.4;
+        this._orbitHeight = 2.05;
         this._orbitAngle = Math.PI / 2;
         this._orbitTargetAngle = Math.PI / 2;
         this._orbitMinAngle = 0;
@@ -288,7 +350,8 @@
         this._touchStartAngle = 0;
         this._isTouching = false;
         this._orbitReady = false;
-        this._lookAt = new THREE.Vector3(0.1, 1.1, 0.2);
+        // Table / cup mid-point (StacksVR cups ~ y 0.9, x -0.4 / 0.55)
+        this._lookTargetY = 1.05;
 
         if (this.el.hasLoaded) self.setupMobileCamera();
         this.el.addEventListener('loaded', function () { self.setupMobileCamera(); });
@@ -302,21 +365,27 @@
         if (cam) {
           cam.removeAttribute('look-controls');
           cam.removeAttribute('wasd-controls');
-          cam.setAttribute('camera', 'fov', 55);
+          cam.setAttribute('camera', 'fov', 50);
+          // Camera sits at player origin; height comes from player Y (DodgeVR)
+          cam.object3D.position.set(0, 0, 0);
+          cam.object3D.rotation.set(0, 0, 0);
         }
 
         this._playerEl = document.getElementById('player');
         this._rigEl = document.getElementById('rig');
+        if (this._playerEl) this._playerEl.removeAttribute('stick-locomotion');
 
         if (this._playerEl) {
           this._playerEl.object3D.position.set(
             this._orbitRadius * Math.sin(this._orbitAngle),
-            0,
+            this._orbitHeight,
             this._orbitRadius * Math.cos(this._orbitAngle)
           );
         }
-        var camEl = document.getElementById('camera');
-        if (camEl) camEl.object3D.position.set(0, this._orbitHeight, 0);
+        if (this._rigEl) {
+          // Face arena center; slight downward pitch toward cups
+          this._rigEl.object3D.rotation.set(-0.28, this._orbitAngle, 0);
+        }
 
         var lh = document.getElementById('leftHand');
         var rh = document.getElementById('rightHand');
@@ -327,6 +396,7 @@
         var pb = document.getElementById('player-body');
         if (pb) pb.object3D.visible = false;
 
+        activateSpectatorBodies();
         this.setupOrbitControls();
         this._orbitReady = true;
       },
@@ -355,19 +425,37 @@
         document.addEventListener('touchend', function () {
           self._isTouching = false;
         }, { passive: true });
+
+        // Desktop drag for ?spectate=1 testing
+        document.addEventListener('mousedown', function (e) {
+          if (!global.isMobileSpectator) return;
+          if (e.target.tagName === 'BUTTON' || e.target.closest('#mobile-lobby-screen')) return;
+          self._touchStartX = e.clientX;
+          self._touchStartAngle = self._orbitTargetAngle;
+          self._isTouching = true;
+        });
+        document.addEventListener('mousemove', function (e) {
+          if (!self._isTouching || !e.buttons) return;
+          var deltaX = e.clientX - self._touchStartX;
+          var newAngle = self._touchStartAngle - deltaX * sensitivity;
+          self._orbitTargetAngle = Math.max(self._orbitMinAngle, Math.min(self._orbitMaxAngle, newAngle));
+        });
+        document.addEventListener('mouseup', function () {
+          self._isTouching = false;
+        });
       },
 
       tick: function () {
         if (!global.isMobileSpectator || !this._orbitReady || !this._playerEl) return;
         this._orbitAngle += (this._orbitTargetAngle - this._orbitAngle) * 0.18;
-        this._playerEl.object3D.position.x = this._orbitRadius * Math.sin(this._orbitAngle);
-        this._playerEl.object3D.position.z = this._orbitRadius * Math.cos(this._orbitAngle);
-        var camEl = document.getElementById('camera');
-        if (camEl) {
-          camEl.object3D.position.y = this._orbitHeight;
-          camEl.object3D.lookAt(this._lookAt);
+        this._playerEl.object3D.position.set(
+          this._orbitRadius * Math.sin(this._orbitAngle),
+          this._orbitHeight,
+          this._orbitRadius * Math.cos(this._orbitAngle)
+        );
+        if (this._rigEl) {
+          this._rigEl.object3D.rotation.set(-0.28, this._orbitAngle, 0);
         }
-        updateMobileHudScores();
       }
     });
   }
@@ -383,6 +471,8 @@
     updateMobileHudNames: updateMobileHudNames,
     updateMobileHudStatus: updateMobileHudStatus,
     updateMobileHudScores: updateMobileHudScores,
+    activateSpectatorBodies: activateSpectatorBodies,
+    isMatchPlaying: isMatchPlaying,
     requestWakeLock: requestWakeLock
   };
 })(window);

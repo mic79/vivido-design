@@ -18,6 +18,8 @@
       window.__lobbyTest = {
         log: log,
         status: function () {
+          var ls = window.lobbyState;
+          var mp = ls && ls.matchPlayers;
           return {
             connectionState: window.connectionState || (window.StacksLobby && window.StacksLobby.connectionState),
             isMultiplayer: !!window.isMultiplayer,
@@ -25,10 +27,18 @@
             isMobileSpectator: !!window.isMobileSpectator,
             myPlayerId: window.myPlayerId || null,
             lobbyStatus: window.StacksLobbyStatus || '',
-            players: (window.lobbyState && window.lobbyState.players) ? window.lobbyState.players.length : 0,
-            matchState: window.lobbyState && window.lobbyState.matchState,
+            players: (ls && ls.players) ? ls.players.length : 0,
+            matchState: ls && ls.matchState,
+            matchBlue: mp && mp.blue,
+            matchRed: mp && mp.red,
+            isLobbyBotMatch: !!window.isLobbyBotMatch,
             hasTurn: !!window.__ICE_HAS_TURN__
           };
+        },
+        startMatch: function () {
+          if (!window.startLobbyMatch) throw new Error('startLobbyMatch missing');
+          window.startLobbyMatch();
+          return window.__lobbyTest.status();
         },
         probeIce: async function () {
           // Mirror lobby getIceServers paths for the test assertion
