@@ -498,6 +498,27 @@
     holeCount = holeCount == null ? 1 : holeCount;
     var results = [];
     for (var n = 0; n < count; n++) {
+      // Dispose top-row meshes that will be pushed out of the cup
+      var topY = this.height - 1;
+      for (var zt = 0; zt < this.depth; zt++) {
+        for (var xt = 0; xt < this.width; xt++) {
+          var top = this.grid[topY][zt][xt];
+          if (top && top.mesh) {
+            if (top.mesh.parent) top.mesh.parent.remove(top.mesh);
+            if (top.mesh.geometry) top.mesh.geometry.dispose();
+            if (top.mesh.material) {
+              if (Array.isArray(top.mesh.material)) {
+                for (var mi = 0; mi < top.mesh.material.length; mi++) {
+                  if (top.mesh.material[mi] && top.mesh.material[mi].dispose) top.mesh.material[mi].dispose();
+                }
+              } else if (top.mesh.material.dispose) {
+                top.mesh.material.dispose();
+              }
+            }
+          }
+          this.grid[topY][zt][xt] = null;
+        }
+      }
       // Shift everything up by 1
       for (var y = this.height - 1; y >= 1; y--) {
         for (var z = 0; z < this.depth; z++) {
@@ -528,7 +549,7 @@
             this.grid[0][z2][x2] = null;
             continue;
           }
-          var gCol = (global.StacksShapes && StacksShapes.GARBAGE_COLOR) || '#e8e8ee';
+          var gCol = (global.StacksShapes && global.StacksShapes.GARBAGE_COLOR) || '#e8e8ee';
           var mesh = this._makeBlockMesh(gCol);
           mesh.position.copy(this.cellCenterLocal(x2, 0, z2));
           this.blocksRoot.add(mesh);

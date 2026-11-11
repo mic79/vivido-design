@@ -1767,6 +1767,9 @@
     },
 
     onMatchStarted: function (mp, startTime, isBotMatch, bagSeed) {
+      if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
+      this._clearVictory();
+      this._endingMatch = false;
       // Leave dual-preview ownership BEFORE bag reset / bot disable so blue
       // pad visuals cannot wipe the human spawn below.
       this._dualBotPreview = false;
@@ -1827,7 +1830,8 @@
       }
     },
 
-    onMatchEnded: function () {
+    onMatchEnded: function (opts) {
+      opts = opts || {};
       this.matchActive = false;
       this.matchState = 'WAITING';
       this._dualBotPreview = false;
@@ -1840,21 +1844,204 @@
       this._clearBotStationPieces('red');
       this._nextType = null;
       this._padPiece = null;
+      this._pieceAnims = [];
       this._cancelHold();
-      if (window.matchRecorder && window.matchRecorder.isRecording) {
-        var replay = window.matchRecorder.stopRecording();
-        if (replay && window.matchReplayStorage) window.matchReplayStorage.save(replay);
-      }
-      this._saveMatchHistory();
+      try {
+        if (window.matchRecorder && window.matchRecorder.isRecording) {
+          var replay = window.matchRecorder.stopRecording();
+          if (replay && window.matchReplayStorage) window.matchReplayStorage.save(replay);
+        }
+      } catch (e) { console.warn('[StacksGame] replay save failed', e); }
+      try { this._saveMatchHistory(); } catch (e2) { console.warn('[StacksGame] history save failed', e2); }
       this._updateHUD();
-      // Resume dual-bot idle when offline (not in a lobby)
-      if (!global.isMultiplayer && !global.isMobileSpectator &&
-          typeof this.startOfflinePreviewMatch === 'function') {
-        var self = this;
-        setTimeout(function () {
-          if (!self.matchActive && !global.isMultiplayer) self.startOfflinePreviewMatch();
-        }, 120);
+
+      var festive = !opts.cancelled && !!(this.modes && this.modes.winner);
+      if (festive) {
+        this._playVictory({
+          winner: this.modes.winner,
+          reason: this.modes.reason || (opts && opts.reason)
+        });
+        this._scheduleDualIdle(3800);
+      } else {
+        this._clearVictory();
+        this._scheduleDualIdle(350);
       }
+      this._endingMatch = false;
+    },
+
+    _scheduleDualIdle: function (delayMs) {
+      if (global.isMultiplayer || global.isMobileSpectator) return;
+      if (typeof this.startOfflinePreviewMatch !== 'function') return;
+      var self = this;
+      if (this._dualIdleTimer) clearTimeout(this._dualIdleTimer);
+      this._dualIdleTimer = setTimeout(function () {
+        self._dualIdleTimer = null;
+        if (self.matchActive || global.isMultiplayer) return;
+        self._clearVictory();
+        self.startOfflinePreviewMatch();
+      }, delayMs == null ? 400 : delayMs);
+    },
+
+    /** Festive win banner + confetti burst (keeps board visible for a beat). */
+    _playVictory: function (info) {
+      info = info || {};
+      this._clearVictory();
+      if (!this._sceneRoot || !THREE) return;
+
+      var winner = info.winner || (this.modes && this.modes.winner) || 'draw';
+      var youAreBlue = !(global.isMultiplayer && global.StacksLobby &&
+        global.StacksLobby.mySide && global.StacksLobby.mySide() === 'red');
+      var title;
+      if (winner === 'draw') title = 'DRAW!';
+      else if (winner === 'blue') title = youAreBlue ? 'YOU WIN!' : 'BLUE WINS!';
+      else if (winner === 'red') title = youAreBlue ? 'BOT WINS!' : 'YOU WIN!';
+      else title = String(winner).toUpperCase();
+
+      var accent = winner === 'red' ? 0xff6a3d : (winner === 'blue' ? 0x33bbff : 0xffd56a);
+      var root = new THREE.Group();
+      root.name = 'stacks-victory';
+      root.position.set(0, 1.55, 0);
+      this._sceneRoot.add(root);
+      this._victory = { root: root, bits: [], t0: performance.now(), accent: accent };
+
+      // Soft glow plate behind text
+      var plate = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.6, 0.55),
+        new THREE.MeshBasicMaterial({
+          color: 0x05070c, transparent: true, opacity: 0.72, depthWrite: false, side: THREE.DoubleSide
+        })
+      );
+      plate.position.z = -0.02;
+      root.add(plate);
+
+      var rim = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.68, 0.62),
+        new THREE.MeshBasicMaterial({
+          color: accent, transparent: true, opacity: 0.55, depthWrite: false,
+          side: THREE.DoubleSide, toneMapped: false
+        })
+      );
+      rim.position.z = -0.03;
+      root.add(rim);
+      this._victory.rim = rim;
+
+      // Canvas title
+      var canvas = document.createElement('canvas');
+      canvas.width = 1024;
+      canvas.height = 256;
+      var ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 120px Arial, Helvetica, sans-serif';
+      ctx.shadowColor = '#' + ('000000' + accent.toString(16)).slice(-6);
+      ctx.shadowBlur = 28;
+      ctx.fillText(title, 512, 110);
+      ctx.shadowBlur = 0;
+      ctx.font = '600 42px Arial, Helvetica, sans-serif';
+      ctx.fillStyle = '#c8d6e6';
+      var sub = info.reason === 'overflow' ? 'Top-out!' :
+        (info.reason === 'target-layers' ? 'Layer goal!' :
+          (info.reason === 'time' ? 'Time!' : 'Match over'));
+      ctx.fillText(sub, 512, 190);
+      var tex = new THREE.CanvasTexture(canvas);
+      tex.needsUpdate = true;
+      var titleMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.45, 0.36),
+        new THREE.MeshBasicMaterial({
+          map: tex, transparent: true, depthWrite: false, toneMapped: false, side: THREE.DoubleSide
+        })
+      );
+      root.add(titleMesh);
+      this._victory.titleMesh = titleMesh;
+      this._victory.titleTex = tex;
+
+      // Confetti cubes
+      var colors = [accent, 0xffffff, 0xffe27a, 0x66ffcc, 0xff66aa, 0x88aaff];
+      var geo = new THREE.BoxGeometry(0.04, 0.04, 0.04);
+      for (var i = 0; i < 64; i++) {
+        var mat = new THREE.MeshBasicMaterial({
+          color: colors[i % colors.length],
+          transparent: true,
+          opacity: 0.95,
+          toneMapped: false
+        });
+        var bit = new THREE.Mesh(geo, mat);
+        bit.position.set(
+          (Math.random() - 0.5) * 0.4,
+          (Math.random() - 0.2) * 0.2,
+          (Math.random() - 0.5) * 0.3
+        );
+        root.add(bit);
+        this._victory.bits.push({
+          mesh: bit,
+          vx: (Math.random() - 0.5) * 1.6,
+          vy: 1.2 + Math.random() * 1.8,
+          vz: (Math.random() - 0.5) * 1.6,
+          spin: (Math.random() - 0.5) * 8
+        });
+      }
+      this._victory.sharedGeo = geo;
+
+      // Face the local player
+      var player = document.getElementById('player');
+      if (player && player.object3D) {
+        var look = new THREE.Vector3();
+        player.object3D.getWorldPosition(look);
+        look.y = root.position.y;
+        root.lookAt(look);
+      }
+
+      var hand = document.getElementById('rightHand') || document.getElementById('leftHand');
+      this._pulseHaptic(hand, 0.95, 160);
+      setTimeout(function () {
+        this._pulseHaptic(hand, 0.7, 90);
+      }.bind(this), 180);
+    },
+
+    _clearVictory: function () {
+      var v = this._victory;
+      if (!v) return;
+      if (v.root && v.root.parent) v.root.parent.remove(v.root);
+      if (v.titleTex) v.titleTex.dispose();
+      if (v.titleMesh && v.titleMesh.material) v.titleMesh.material.dispose();
+      if (v.sharedGeo) v.sharedGeo.dispose();
+      if (v.bits) {
+        for (var i = 0; i < v.bits.length; i++) {
+          if (v.bits[i].mesh && v.bits[i].mesh.material) v.bits[i].mesh.material.dispose();
+        }
+      }
+      this._victory = null;
+    },
+
+    _tickVictory: function (now) {
+      var v = this._victory;
+      if (!v || !v.root) return;
+      now = now || performance.now();
+      var t = (now - v.t0) / 1000;
+      var dt = Math.min(0.05, (this._lastVictoryTick ? (now - this._lastVictoryTick) / 1000 : 0.016));
+      this._lastVictoryTick = now;
+
+      if (v.titleMesh) {
+        v.titleMesh.scale.setScalar(1 + 0.06 * Math.sin(t * 6));
+      }
+      if (v.rim && v.rim.material) {
+        v.rim.material.opacity = 0.35 + 0.35 * (0.5 + 0.5 * Math.sin(t * 5));
+      }
+      for (var i = 0; i < v.bits.length; i++) {
+        var b = v.bits[i];
+        b.vy -= 3.2 * dt;
+        b.mesh.position.x += b.vx * dt;
+        b.mesh.position.y += b.vy * dt;
+        b.mesh.position.z += b.vz * dt;
+        b.mesh.rotation.x += b.spin * dt;
+        b.mesh.rotation.z += b.spin * 0.7 * dt;
+        if (b.mesh.material) {
+          b.mesh.material.opacity = Math.max(0, 0.95 - t * 0.28);
+        }
+      }
+      if (t > 3.6) this._clearVictory();
     },
 
     startOfflineBotMatch: function () {
@@ -1875,6 +2062,9 @@
      * No network, orbit camera watches blue pad vs red pad.
      */
     startOfflinePreviewMatch: function () {
+      if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
+      this._clearVictory();
+      this._endingMatch = false;
       global.offlinePreview = true;
       global.isLobbyBotMatch = true;
       this._dualBotPreview = true;
@@ -1939,29 +2129,52 @@
     },
 
     endMatch: function () {
+      if (this._endingMatch) return;
+      this._endingMatch = true;
+      if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
       if (global.isMultiplayer && global.sendMatchAction) global.sendMatchAction('end');
-      else this.onMatchEnded();
+      else this.onMatchEnded({ cancelled: true });
     },
 
     _endFromMode: function (info) {
-      if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.isHost) global.endLobbyMatch();
-      else if (!global.isMultiplayer) this.onMatchEnded();
-      else if (global.sendMatchAction) global.sendMatchAction('end');
+      if (this._endingMatch || !this.matchActive) return;
+      this._endingMatch = true;
+      // Freeze sim immediately so bots / garbage can't keep mutating during victory
+      this.matchActive = false;
+      if (this.modes && this.modes.stop) this.modes.stop();
+      if (this.bot) this.bot.enable(false);
+      if (this.botBlue) this.botBlue.enable(false);
+      if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
+
+      if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.isHost) {
+        global.endLobbyMatch();
+      } else if (!global.isMultiplayer) {
+        this.onMatchEnded({ victory: true, winner: info && info.winner, reason: info && info.reason });
+      } else if (global.sendMatchAction) {
+        global.sendMatchAction('end');
+        this._endingMatch = false;
+      }
     },
 
     _saveMatchHistory: function () {
       var KEY = 'stacksvr-match-history';
       var list = [];
       try { list = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { list = []; }
+      var modeId = (this.modes && this.modes.mode && this.modes.mode.id) || 'pvp';
+      var scores = (this.modes && this.modes.scores) || { blue: 0, red: 0 };
       list.unshift({
-        ts: Date.now(), mode: this.modes.mode.id,
-        blue: this.modes.scores.blue, red: this.modes.scores.red,
-        winner: this.modes.winner, reason: this.modes.reason, bot: !!global.isLobbyBotMatch
+        ts: Date.now(), mode: modeId,
+        blue: scores.blue | 0, red: scores.red | 0,
+        winner: this.modes ? this.modes.winner : null,
+        reason: this.modes ? this.modes.reason : null,
+        bot: !!global.isLobbyBotMatch
       });
       if (list.length > 50) list = list.slice(0, 50);
       try { localStorage.setItem(KEY, JSON.stringify(list)); } catch (e) {}
-      if (window.matchReplayStorage) {
-        window.matchReplayStorage.pruneOld(list.map(function (m) { return m.ts; }));
+      if (window.matchReplayStorage && window.matchReplayStorage.pruneOld) {
+        try {
+          window.matchReplayStorage.pruneOld(list.map(function (m) { return m.ts; }));
+        } catch (e2) {}
       }
     },
 
@@ -2497,6 +2710,7 @@
       if (!this._sceneRoot) return;
       if (this._poseDesktop) this._poseDesktop();
       this._tickPieceAnims();
+      this._tickVictory();
       this._prepareMatchHud();
       this._placeMatchHud();
 
@@ -2509,7 +2723,7 @@
         this._pad.visible = true;
       }
 
-      if (this.matchActive) {
+      if (this.matchActive && !this._endingMatch) {
         // In multiplayer, only host (or offline/bot) advances attack timers —
         // peers receive board via state/place snapshots (avoids RNG garbage desync).
         var mp = !!global.isMultiplayer;
