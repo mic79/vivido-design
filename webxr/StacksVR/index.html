@@ -23,14 +23,14 @@
   <script src="clear.js?v=19"></script>
   <script src="attack.js?v=19"></script>
   <script src="cup-bot.js?v=22"></script>
-  <script src="stats.js?v=1"></script>
+  <script src="stats.js?v=2"></script>
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=31"></script>
   <script src="match-replay.js?v=19"></script>
   <script src="game-menu.js?v=30"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=32"></script>
+  <script src="stacks-game.js?v=33"></script>
   <script src="mobile-spectator.js?v=33"></script>
 
   <style>
@@ -269,11 +269,11 @@
       text="value: DMG 0; align: center; width: 1.1; color: #aaa"></a-entity>
     <a-entity id="damage-red" position="0.55 1.82 -0.15"
       text="value: DMG 0; align: center; width: 1.1; color: #aaa"></a-entity>
-    <!-- BattleBlocks-style cup-side realtime stats -->
-    <a-entity id="stats-blue" position="-0.95 1.55 0.15"
-      text="value: SCR 0\nLAY 0\nPCS 0\nPPM 0.0\nCMB 0\nPC 0  TS 0\n0:00; align: left; width: 1.35; color: #8ec5ff; wrapCount: 22"></a-entity>
-    <a-entity id="stats-red" position="1.05 1.55 0.15"
-      text="value: SCR 0\nLAY 0\nPCS 0\nPPM 0.0\nCMB 0\nPC 0  TS 0\n0:00; align: left; width: 1.35; color: #ffb0a4; wrapCount: 22"></a-entity>
+    <!-- BattleBlocks HUD: Time / Attacks / Blocks + Score / BPS / Attacks -->
+    <a-entity id="stats-blue" position="-1.05 1.62 0.2"
+      text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min)\nScore: 0\nBPS: 0.000\nAttacks: 0; align: left; width: 1.55; color: #8ec5ff; wrapCount: 28"></a-entity>
+    <a-entity id="stats-red" position="1.15 1.62 0.2"
+      text="value: Time: 0:00.00\nAttacks: 0 (0.0/min)\nBlocks: 0 (0.0/min)\nScore: 0\nBPS: 0.000\nAttacks: 0; align: left; width: 1.55; color: #ffb0a4; wrapCount: 28"></a-entity>
     <a-entity id="version-display" position="0 0.12 0.9"
       text="value: StacksVR 1.0; align: center; width: 2; color: #556"></a-entity>
 

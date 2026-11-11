@@ -1296,7 +1296,10 @@
       var clearResult = clearSys.resolveAfterPlace(cup, placed, type);
       if (this.matchStats) this.matchStats.onPlace(side, clearResult, performance.now());
       if (clearResult.layersCleared > 0) {
-        this.attackSys.onClear(side, clearResult, performance.now());
+        var atk = this.attackSys.onClear(side, clearResult, performance.now());
+        if (this.matchStats && atk && atk.sent > 0) {
+          this.matchStats.onAttack(side, atk.sent, performance.now());
+        }
         if (this.matchActive) {
           var endInfo = this.modes.addClear(side, clearResult);
           this.playerScore = this.modes.scores.blue;
