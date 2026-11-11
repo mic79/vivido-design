@@ -1813,6 +1813,31 @@
       if (redCup) redCup.setAttribute('text', 'value', red.cupText(now));
     },
 
+    /** Keep match HUD front-facing (no mirrored back faces like side:double). */
+    _faceMatchHudToCamera: function () {
+      var cam = document.getElementById('camera');
+      if (!cam || !cam.object3D) return;
+      if (!this._hudBillboard) {
+        this._hudBillboard = {
+          cam: new THREE.Vector3(),
+          pos: new THREE.Vector3(),
+          ids: ['hud-card-blue', 'hud-cup-blue', 'hud-card-red', 'hud-cup-red']
+        };
+      }
+      var b = this._hudBillboard;
+      cam.object3D.getWorldPosition(b.cam);
+      for (var i = 0; i < b.ids.length; i++) {
+        var el = document.getElementById(b.ids[i]);
+        if (!el || !el.object3D) continue;
+        el.object3D.getWorldPosition(b.pos);
+        // Yaw-only billboard so panels stay upright
+        b.cam.y = b.pos.y;
+        el.object3D.lookAt(b.cam);
+        // lookAt aims -Z; a-text faces +Z
+        el.object3D.rotateY(Math.PI);
+      }
+    },
+
     /** Bot pace tracks player (or rival bot) PPM with built-in wander. */
     _updateBotPace: function () {
       if (!this.matchStats) return;
@@ -2016,6 +2041,7 @@
     tick: function () {
       if (!this._sceneRoot) return;
       if (this._poseDesktop) this._poseDesktop();
+      this._faceMatchHudToCamera();
 
       this._updateCupGrab();
 
