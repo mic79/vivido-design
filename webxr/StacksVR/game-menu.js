@@ -214,11 +214,13 @@
           this.refreshLobbyUI();
           break;
         case 'start-bot':
-          // In a live lobby, bot match must go through startLobbyMatch so mobile
-          // spectators get match-started + PLAYING (offline path leaves them WAITING).
-          if (window.isMultiplayer && window.StacksLobby && window.StacksLobby.isHost &&
+          // ALWAYS prefer lobby match when hosting — offline bot leaves spectators
+          // stuck on WAITING with empty cups / no poses.
+          if (window.StacksLobby && window.StacksLobby.isHost &&
               typeof window.startLobbyMatch === 'function') {
             window.startLobbyMatch();
+          } else if (window.isMultiplayer && typeof window.sendMatchAction === 'function') {
+            window.sendMatchAction('start');
           } else if (comp) {
             comp.startOfflineBotMatch();
           }

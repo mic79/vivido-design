@@ -1149,6 +1149,11 @@
     },
 
     startOfflineBotMatch: function () {
+      // If hosting a lobby, never stay offline-only — spectators need match-started.
+      if (global.StacksLobby && global.StacksLobby.isHost && global.startLobbyMatch) {
+        global.startLobbyMatch();
+        return;
+      }
       global.isLobbyBotMatch = true;
       this.onMatchStarted({ blue: 'local', red: '__BOT__' }, Date.now(), true);
     },
@@ -1244,55 +1249,93 @@
       }
     },
 
+    _packWorld: function (obj3d) {
+      if (!obj3d) return null;
+      obj3d.updateWorldMatrix(true, false);
+      var p = new THREE.Vector3();
+      var q = new THREE.Quaternion();
+      obj3d.getWorldPosition(p);
+      obj3d.getWorldQuaternion(q);
+      return { x: p.x, y: p.y, z: p.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
+    },
+
+    _packEl: function (el) {
+      return el ? this._packWorld(el.object3D) : null;
+    },
+
+    _packMixamoBone: function (bodyEl, boneKey) {
+      var mb = bodyEl && bodyEl.components && bodyEl.components['mixamo-body'];
+      if (mb && mb.bones && mb.bones[boneKey]) {
+        return this._packWorld(mb.bones[boneKey]);
+      }
+      return bodyEl ? this._packWorld(bodyEl.object3D) : null;
+    },
+
     _sendLocalPose: function () {
       if (!global.isMultiplayer || !global.sendPlayerPose) return;
       if (global.isMobileSpectator) return;
-      if (global.isSpectator && !global.StacksLobby.amMatchPlayer() && !global.isLobbyBotMatch) return;
+      var host = global.StacksLobby && global.StacksLobby.isHost;
+      var seated = global.StacksLobby && global.StacksLobby.amMatchPlayer && global.StacksLobby.amMatchPlayer();
+      // Host always streams while a match is active (even before seating edge-cases)
+      if (!host && !seated) return;
+      if (!this.matchActive && !(global.lobbyState && global.lobbyState.matchState === 'PLAYING')) return;
+
       var now = performance.now();
       if (now - this._lastPoseSend < 50) return;
       this._lastPoseSend = now;
+
       var cam = document.getElementById('camera');
       var lh = document.getElementById('leftHand');
       var rh = document.getElementById('rightHand');
-      if (!cam) return;
-      function pack(el) {
-        if (!el) return null;
-        el.object3D.updateWorldMatrix(true, false);
-        var p = new THREE.Vector3();
-        var q = new THREE.Quaternion();
-        el.object3D.getWorldPosition(p);
-        el.object3D.getWorldQuaternion(q);
-        // Flat layout expected by mixamo-body remoteHandData
-        return { x: p.x, y: p.y, z: p.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
-      }
-      // Host / match player: broadcast own headset
-      if (!global.isSpectator || global.StacksLobby.amMatchPlayer()) {
+      if (cam) {
         global.sendPlayerPose({
-          head: pack(cam),
-          leftHand: pack(lh),
-          rightHand: pack(rh)
+          head: this._packEl(cam),
+          leftHand: this._packEl(lh),
+          rightHand: this._packEl(rh)
         });
       }
-      // Host bot match: also stream red bot body so mobile sees the opponent
-      if (global.StacksLobby && global.StacksLobby.isHost &&
-          (global.isLobbyBotMatch ||
-            (global.lobbyState && global.lobbyState.matchPlayers &&
-              global.lobbyState.matchPlayers.red === '__BOT__'))) {
+
+      // Stream red bot skeleton so mobile IK matches what host sees
+      var redIsBot = global.isLobbyBotMatch ||
+        (global.lobbyState && global.lobbyState.matchPlayers &&
+          global.lobbyState.matchPlayers.red === '__BOT__');
+      if (host && redIsBot) {
         var botBody = document.getElementById('bot-body');
-        var cupBot = document.getElementById('cup-bot');
         if (botBody) {
-          var headEl = cupBot || botBody;
           global.sendPlayerPose({
             from: '__BOT__',
-            head: pack(headEl),
-            leftHand: null,
-            rightHand: null
+            head: this._packMixamoBone(botBody, 'head') || this._packEl(botBody),
+            leftHand: this._packMixamoBone(botBody, 'leftHandBone') || null,
+            rightHand: this._packMixamoBone(botBody, 'rightHandBone') || null
           });
         }
       }
+
       if (this.held && now - (this._lastHoldSend || 0) > 100) {
         this._lastHoldSend = now;
         this._broadcastHold();
+      }
+    },
+
+    _heartbeatSpectatorSync: function () {
+      if (!(global.StacksLobby && global.StacksLobby.isHost)) return;
+      if (!this.matchActive) return;
+      if (!global.StacksLobby.connections || !global.StacksLobby.connections.length) return;
+      var now = performance.now();
+      if (now - (this._lastSpecSync || 0) < 750) return;
+      this._lastSpecSync = now;
+      // Keep lobby PLAYING published if host started offline then got spectators
+      if (typeof global.ensureLobbyMatchPublished === 'function') {
+        global.ensureLobbyMatchPublished();
+      }
+      if (global.lobbyState && global.lobbyState.matchScore && this.modes && this.modes.scores) {
+        global.lobbyState.matchScore.blue = this.modes.scores.blue;
+        global.lobbyState.matchScore.red = this.modes.scores.red;
+      }
+      if (typeof global.sendCupSnapshot === 'function') {
+        global.sendCupSnapshot(this._buildSnapshot());
+      } else {
+        this._broadcastState('heartbeat');
       }
     },
 
@@ -1301,7 +1344,6 @@
       if (this._poseDesktop) this._poseDesktop();
 
       this._updateCupGrab();
-      this._sendLocalPose();
 
       if (this.held) {
         this._updateGhost();
@@ -1337,10 +1379,14 @@
         var t = this.modes.tick(Date.now());
         if (t && t.ended) this._endFromMode(t);
         if (this.bot && this.bot.enabled) this.bot.tick(performance.now());
+        this._heartbeatSpectatorSync();
       } else {
         if (this.cups.blue) this.cups.blue.setThreat(0);
         if (this.cups.red) this.cups.red.setThreat(0);
       }
+
+      // After bot/player sim so bone packs match what host renders
+      this._sendLocalPose();
 
       if (window.matchRecorder && window.matchRecorder.tick) window.matchRecorder.tick();
     }

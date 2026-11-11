@@ -223,6 +223,59 @@
     });
   }
 
+  function sendSnapshotToConn(conn) {
+    if (!conn || !conn.open) return;
+    if (!Lobby.onRequestSnapshot) return;
+    var snap = Lobby.onRequestSnapshot();
+    if (snap) conn.send({ type: 'cup-snapshot', snapshot: snap });
+  }
+
+  /**
+   * If the host already started an offline/local bot match, promote it into lobby
+   * PLAYING so mobile spectators receive match-started + board + poses.
+   * Does NOT clear cups (preserves in-progress board).
+   */
+  function ensureLobbyMatchPublished() {
+    if (!Lobby.isHost || !Lobby.lobbyState) return false;
+    var gm = document.querySelector('[stacks-game]');
+    var comp = gm && gm.components && gm.components['stacks-game'];
+    var localPlaying = !!(comp && (comp.matchActive || comp.matchState === 'PLAYING'));
+    if (Lobby.lobbyState.matchState === 'PLAYING' &&
+        Lobby.lobbyState.matchPlayers.blue && Lobby.lobbyState.matchPlayers.red) {
+      return true;
+    }
+    if (!localPlaying) return false;
+
+    var mp = Lobby.lobbyState.matchPlayers;
+    if (!mp.blue) mp.blue = Lobby.myPlayerId;
+    if (!mp.red) mp.red = '__BOT__';
+    Lobby.isLobbyBotMatch = mp.red === '__BOT__';
+    global.isLobbyBotMatch = Lobby.isLobbyBotMatch;
+    Lobby.lobbyState.matchState = 'PLAYING';
+    Lobby.lobbyState.matchGameState = 'PLAYING';
+    if (!Lobby.lobbyState.matchStartTime) {
+      Lobby.lobbyState.matchStartTime = (comp && comp.modes && comp.modes.startTime) || Date.now();
+    }
+    if (comp && comp.modes && comp.modes.scores) {
+      Lobby.lobbyState.matchScore = {
+        blue: comp.modes.scores.blue || 0,
+        red: comp.modes.scores.red || 0
+      };
+    }
+    Lobby.isSpectator = !(mp.blue === Lobby.myPlayerId || mp.red === Lobby.myPlayerId);
+    global.isSpectator = Lobby.isSpectator;
+    global.lobbyState = Lobby.lobbyState;
+    syncWindowState();
+    broadcastLobbyState();
+    for (var i = 0; i < Lobby.connections.length; i++) {
+      if (Lobby.connections[i].conn.open) {
+        sendMatchStartedToConn(Lobby.connections[i].conn);
+        sendSnapshotToConn(Lobby.connections[i].conn);
+      }
+    }
+    return true;
+  }
+
   function removePlayer(peerId) {
     if (!Lobby.lobbyState) return;
     Lobby.lobbyState.players = Lobby.lobbyState.players.filter(function (p) { return p.id !== peerId; });
@@ -273,14 +326,12 @@
         Lobby.lobbyState.mobileSpectatorCount = Lobby.connections.filter(function (c) {
           return c.isMobileSpectator;
         }).length;
+        // Promote offline-in-progress host match so phone leaves WAITING
+        ensureLobbyMatchPublished();
         broadcastLobbyState();
-        // DodgeVR: late mobile joiners must get match-started or HUD stays WAITING
-        if (entryMs && entryMs.conn) sendMatchStartedToConn(entryMs.conn);
-        if (Lobby.lobbyState.matchState === 'PLAYING' && Lobby.onRequestSnapshot) {
-          var snapMs = Lobby.onRequestSnapshot();
-          if (snapMs && entryMs && entryMs.conn && entryMs.conn.open) {
-            entryMs.conn.send({ type: 'cup-snapshot', snapshot: snapMs });
-          }
+        if (entryMs && entryMs.conn) {
+          sendMatchStartedToConn(entryMs.conn);
+          sendSnapshotToConn(entryMs.conn);
         }
       } else if (data.type === 'hello') {
         var exists = Lobby.lobbyState.players.some(function (p) { return p.id === fromId; });
@@ -293,15 +344,12 @@
           }).length;
         }
         assignSpectatorSlot(fromId);
+        ensureLobbyMatchPublished();
         broadcastLobbyState();
         var entry = Lobby.connections.find(function (x) { return x.id === fromId; });
-        // Late join during a match — activate spectator match view + push board
-        if (entry && entry.conn) sendMatchStartedToConn(entry.conn);
-        if (Lobby.lobbyState.matchState === 'PLAYING' && Lobby.onRequestSnapshot) {
-          var snap = Lobby.onRequestSnapshot();
-          if (snap && entry && entry.conn && entry.conn.open) {
-            entry.conn.send({ type: 'cup-snapshot', snapshot: snap });
-          }
+        if (entry && entry.conn) {
+          sendMatchStartedToConn(entry.conn);
+          sendSnapshotToConn(entry.conn);
         }
       }
       return;
@@ -735,6 +783,10 @@
   global.startLobbyMatch = startLobbyMatch;
   global.endLobbyMatch = endLobbyMatch;
   global.broadcastLobbyState = broadcastLobbyState;
+  global.ensureLobbyMatchPublished = ensureLobbyMatchPublished;
+  Lobby.ensureLobbyMatchPublished = ensureLobbyMatchPublished;
+  Lobby.sendMatchStartedToConn = sendMatchStartedToConn;
+  Lobby.sendSnapshotToConn = sendSnapshotToConn;
   Lobby.sendQueueAction = sendQueueAction;
   Lobby.sendMatchAction = sendMatchAction;
   Lobby.sendCupEvent = sendCupEvent;
