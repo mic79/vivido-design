@@ -183,7 +183,7 @@
         root.position.set(pos.x, pos.y, pos.z);
         root.rotation.y = yaw;
         // Vertical rounded neon frame (local XY, faces seat after yaw)
-        var fw = 0.34, fh = 1.05, r = 0.06, tube = 0.01;
+        var fw = 0.30, fh = 1.35, r = 0.055, tube = 0.01;
         var path = new THREE.CurvePath();
         function L(a, b) { path.add(new THREE.LineCurve3(a, b)); }
         function C(a, ctrl, b) { path.add(new THREE.QuadraticBezierCurve3(a, ctrl, b)); }
@@ -200,7 +200,7 @@
           new THREE.TubeGeometry(path, 72, tube, 5, true),
           new THREE.MeshBasicMaterial({ color: color, toneMapped: false })
         );
-        frame.position.y = 0.62;
+        frame.position.y = 0.78;
         root.add(frame);
         // "NEXT" label
         var canvas = document.createElement('canvas');
@@ -219,11 +219,11 @@
             transparent: true, depthWrite: false, toneMapped: false
           })
         );
-        label.position.set(0, 1.12, 0.02);
+        label.position.set(0, 1.42, 0.02);
         root.add(label);
         var slots = new THREE.Group();
         slots.name = 'nextSlots';
-        slots.position.set(0, 0.22, 0);
+        slots.position.set(0, 0.16, 0);
         root.add(slots);
         this._sceneRoot.add(root);
         return { root: root, slots: slots };
@@ -1109,9 +1109,10 @@
       this._updateHUD();
     },
 
-    // Vertical stack: farther slots smaller; spawn pad is full-size (1)
-    _nextSlotY: function (i) { return 0.10 + i * 0.22; },
-    _nextSlotScale: function (i) { return Math.max(0.30, 0.82 - i * 0.12); },
+    // Vertical stack: compact silhouettes, clear gaps; spawn pad is full-size (1)
+    // I-piece ~0.44m tall at scale 1 → keep queue scales small enough not to overlap
+    _nextSlotY: function (i) { return 0.06 + i * 0.28; },
+    _nextSlotScale: function (i) { return Math.max(0.16, 0.38 - i * 0.045); },
     /** Stand pieces in XY so silhouettes read clearly in the NEXT frame. */
     _orientNextQueueMesh: function (mesh) {
       if (!mesh) return;
