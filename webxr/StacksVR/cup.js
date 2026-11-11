@@ -144,28 +144,38 @@
       this.root.add(post);
     }
 
-    // Top neon rim (grab) — emissive tube frame feel
+    // Top neon rim — OPEN edge frame only (not a lid over the cup)
     var rimMat = new THREE.MeshStandardMaterial({
       color: neon,
       emissive: new THREE.Color(neon),
-      emissiveIntensity: 0.85,
+      emissiveIntensity: 0.9,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.9,
       roughness: 0.25,
-      metalness: 0.6,
+      metalness: 0.55,
       depthWrite: false,
-      side: THREE.DoubleSide,
       toneMapped: false
     });
     this._shellMats.push(rimMat);
     this._rimMat = rimMat;
-    var rim = tagGrab(new THREE.Mesh(
-      new THREE.BoxGeometry(w + 0.04, 0.018, d + 0.04),
-      rimMat
-    ));
-    rim.position.set(w / 2, h, d / 2);
-    this.root.add(rim);
-    this._rim = rim;
+    var rimGroup = new THREE.Group();
+    rimGroup.position.set(0, h, 0);
+    var rt = 0.016;
+    function rimBar(len, px, pz, alongZ) {
+      var geo = alongZ
+        ? new THREE.BoxGeometry(rt, rt, len)
+        : new THREE.BoxGeometry(len, rt, rt);
+      var m = tagGrab(new THREE.Mesh(geo, rimMat));
+      m.position.set(px, 0, pz);
+      rimGroup.add(m);
+      return m;
+    }
+    rimBar(w + rt, w / 2, -rt / 2, false);
+    rimBar(w + rt, w / 2, d + rt / 2, false);
+    rimBar(d + rt, -rt / 2, d / 2, true);
+    rimBar(d + rt, w + rt / 2, d / 2, true);
+    this.root.add(rimGroup);
+    this._rim = rimGroup;
 
     // Bright cell grid on floor
     var lineMat = new THREE.LineBasicMaterial({
@@ -186,23 +196,33 @@
       this.root.add(new THREE.Line(g2, lineMat));
     }
 
+    // Highest-layer highlight — OUTER line only (no filled platform)
     var hiMat = new THREE.MeshBasicMaterial({
       color: neon,
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.85,
       depthWrite: false,
-      side: THREE.DoubleSide,
       toneMapped: false
     });
     this._highLineMat = hiMat;
-    var hi = new THREE.Mesh(
-      new THREE.BoxGeometry(w + 0.02, 0.014, d + 0.02),
-      hiMat
-    );
-    hi.position.set(w / 2, 0, d / 2);
-    hi.visible = false;
-    this.root.add(hi);
-    this._highLine = hi;
+    var hiGroup = new THREE.Group();
+    hiGroup.visible = false;
+    var ht = 0.012;
+    function hiBar(len, px, pz, alongZ) {
+      var geo = alongZ
+        ? new THREE.BoxGeometry(ht, ht, len)
+        : new THREE.BoxGeometry(len, ht, ht);
+      var m = new THREE.Mesh(geo, hiMat);
+      m.position.set(px, 0, pz);
+      hiGroup.add(m);
+      return m;
+    }
+    hiBar(w + ht, w / 2, -ht / 2, false);
+    hiBar(w + ht, w / 2, d + ht / 2, false);
+    hiBar(d + ht, -ht / 2, d / 2, true);
+    hiBar(d + ht, w + ht / 2, d / 2, true);
+    this.root.add(hiGroup);
+    this._highLine = hiGroup;
   };
 
   Cup.prototype.setYaw = function (yaw) {
@@ -429,11 +449,11 @@
     this._highLine.visible = true;
   };
 
-  /** Soft pulse on the highest-line band (call from match tick). */
+  /** Soft pulse on the highest-line frame (call from match tick). */
   Cup.prototype.tickHighLine = function (now) {
     if (!this._highLine || !this._highLine.visible || !this._highLineMat) return;
     now = now || performance.now();
-    this._highLineMat.opacity = 0.38 + 0.32 * (0.5 + 0.5 * Math.sin(now * 0.008));
+    this._highLineMat.opacity = 0.55 + 0.35 * (0.5 + 0.5 * Math.sin(now * 0.008));
   };
 
   Cup.prototype.isToppedOut = function () {
