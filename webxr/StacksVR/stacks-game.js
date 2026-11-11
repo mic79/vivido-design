@@ -1826,8 +1826,12 @@
         sceneEl.object3D.fog = new THREE.FogExp2(0x09060c, 0.012);
         sceneEl.setAttribute('background', 'color', '#06040a');
       }
+      if (sceneEl && sceneEl.renderer) {
+        sceneEl.renderer.shadowMap.enabled = true;
+        sceneEl.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      }
 
-      // Dark reflective ground disc under play
+      // Dark reflective ground disc under play (receives block shadows)
       var ground = new THREE.Mesh(
         new THREE.CircleGeometry(7.5, 64),
         new THREE.MeshStandardMaterial({
@@ -1838,6 +1842,7 @@
       );
       ground.rotation.x = -Math.PI / 2;
       ground.position.y = 0.001;
+      ground.receiveShadow = true;
       root.add(ground);
 
       // Soft radial neon under-glow
@@ -1869,6 +1874,7 @@
           })
         );
         plate.rotation.x = -Math.PI / 2;
+        plate.receiveShadow = true;
         g.add(plate);
         var edge = new THREE.Mesh(
           new THREE.RingGeometry(0.72, 0.76, 4),

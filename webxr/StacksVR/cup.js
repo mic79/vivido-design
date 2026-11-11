@@ -57,6 +57,35 @@
     this.constructionHeight = 0;
   };
 
+  /** BattleBlocks-style rounded rectangular tube frame (no fill, no verticals). */
+  Cup.prototype._addRoundedFrame = function (parent, w, d, y, tube, mat, grab) {
+    var group = new THREE.Group();
+    group.position.y = y;
+    var r = Math.min(0.09, w * 0.16, d * 0.16);
+    var path = new THREE.CurvePath();
+    function L(a, b) { path.add(new THREE.LineCurve3(a, b)); }
+    function C(a, ctrl, b) { path.add(new THREE.QuadraticBezierCurve3(a, ctrl, b)); }
+    var p = function (x, z) { return new THREE.Vector3(x, 0, z); };
+    // CCW: bottom → right → top → left, rounded corners
+    L(p(r, 0), p(w - r, 0));
+    C(p(w - r, 0), p(w, 0), p(w, r));
+    L(p(w, r), p(w, d - r));
+    C(p(w, d - r), p(w, d), p(w - r, d));
+    L(p(w - r, d), p(r, d));
+    C(p(r, d), p(0, d), p(0, d - r));
+    L(p(0, d - r), p(0, r));
+    C(p(0, r), p(0, 0), p(r, 0));
+    var geo = new THREE.TubeGeometry(path, 96, tube, 6, true);
+    var mesh = new THREE.Mesh(geo, mat);
+    if (grab) {
+      mesh.userData.cupGrab = true;
+      mesh.userData.cupId = this.id;
+    }
+    group.add(mesh);
+    parent.add(group);
+    return group;
+  };
+
   Cup.prototype._buildShell = function () {
     var w = this.width * this.cellSize;
     var d = this.depth * this.cellSize;
@@ -64,14 +93,11 @@
     var neon = this.side === 'blue' ? 0x33bbff : 0xff6a3d;
     var neonDim = this.side === 'blue' ? 0x1a4a6e : 0x6e2a1a;
 
-    // Dark glass floor with neon edge
+    // Dark floor plate (receives block shadows)
     var floorMat = new THREE.MeshStandardMaterial({
       color: 0x0a0c12,
-      transparent: true,
-      opacity: 0.55,
-      roughness: 0.35,
-      metalness: 0.55,
-      depthWrite: false
+      roughness: 0.55,
+      metalness: 0.35
     });
     this._shellMats.push(floorMat);
     var floor = new THREE.Mesh(
@@ -79,37 +105,27 @@
       floorMat
     );
     floor.position.set(w / 2, -0.01, d / 2);
+    floor.receiveShadow = true;
     this.root.add(floor);
     this._floor = floor;
 
-    // Neon floor frame (BattleBlocks station outline)
+    // Base neon frame — rounded corners, no verticals
     var frameMat = new THREE.MeshBasicMaterial({
       color: neon, transparent: true, opacity: 0.95, toneMapped: false
     });
     this._shellMats.push(frameMat);
-    function frameBar(len, thick, px, py, pz, rotY) {
-      var m = new THREE.Mesh(new THREE.BoxGeometry(len, thick, thick), frameMat);
-      m.position.set(px, py, pz);
-      if (rotY) m.rotation.y = rotY;
-      return m;
-    }
-    var ft = 0.012;
-    this.root.add(frameBar(w + ft * 2, ft, w / 2, 0.002, -ft / 2));
-    this.root.add(frameBar(w + ft * 2, ft, w / 2, 0.002, d + ft / 2));
-    this.root.add(frameBar(d + ft * 2, ft, -ft / 2, 0.002, d / 2, Math.PI / 2));
-    this.root.add(frameBar(d + ft * 2, ft, w + ft / 2, 0.002, d / 2, Math.PI / 2));
+    this._addRoundedFrame(this.root, w, d, 0.004, 0.011, frameMat, false);
 
-    // Glass-tint walls (standard only — Physical/transmission is heavy on Quest)
+    // Faint glass walls only (no neon vertical posts)
     var wallMat = new THREE.MeshStandardMaterial({
       color: neonDim,
       transparent: true,
-      opacity: 0.15,
-      roughness: 0.18,
-      metalness: 0.12,
+      opacity: 0.10,
+      roughness: 0.2,
+      metalness: 0.1,
       side: THREE.DoubleSide,
       depthWrite: false
     });
-
     var self = this;
     function tagGrab(m) {
       m.userData.cupGrab = true;
@@ -123,83 +139,48 @@
       m.position.set(px, py, pz);
       return m;
     }
+    this.root.add(wall(new THREE.BoxGeometry(0.01, h, d), -0.005, h / 2, d / 2));
+    this.root.add(wall(new THREE.BoxGeometry(0.01, h, d), w + 0.005, h / 2, d / 2));
+    this.root.add(wall(new THREE.BoxGeometry(w, h, 0.01), w / 2, h / 2, -0.005));
+    this.root.add(wall(new THREE.BoxGeometry(w, h, 0.01), w / 2, h / 2, d + 0.005));
 
-    this.root.add(wall(new THREE.BoxGeometry(0.012, h, d), -0.006, h / 2, d / 2));
-    this.root.add(wall(new THREE.BoxGeometry(0.012, h, d), w + 0.006, h / 2, d / 2));
-    this.root.add(wall(new THREE.BoxGeometry(w, h, 0.012), w / 2, h / 2, -0.006));
-    this.root.add(wall(new THREE.BoxGeometry(w, h, 0.012), w / 2, h / 2, d + 0.006));
-
-    // Vertical neon corner posts
-    var postMat = new THREE.MeshBasicMaterial({
-      color: neon, transparent: true, opacity: 0.85, toneMapped: false
-    });
-    this._shellMats.push(postMat);
-    var corners = [[0, 0], [w, 0], [0, d], [w, d]];
-    for (var ci = 0; ci < corners.length; ci++) {
-      var post = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.008, 0.008, h, 8),
-        postMat
-      );
-      post.position.set(corners[ci][0], h / 2, corners[ci][1]);
-      this.root.add(post);
-    }
-
-    // Top neon rim — OPEN edge frame only (not a lid over the cup)
+    // Top neon rim — rounded open frame (grab)
     var rimMat = new THREE.MeshStandardMaterial({
       color: neon,
       emissive: new THREE.Color(neon),
-      emissiveIntensity: 0.9,
+      emissiveIntensity: 0.85,
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.92,
       roughness: 0.25,
-      metalness: 0.55,
+      metalness: 0.5,
       depthWrite: false,
       toneMapped: false
     });
     this._shellMats.push(rimMat);
     this._rimMat = rimMat;
-    var rimGroup = new THREE.Group();
-    rimGroup.position.set(0, h, 0);
-    var rt = 0.016;
-    function rimBar(len, px, pz, alongZ) {
-      var geo = alongZ
-        ? new THREE.BoxGeometry(rt, rt, len)
-        : new THREE.BoxGeometry(len, rt, rt);
-      var m = tagGrab(new THREE.Mesh(geo, rimMat));
-      m.position.set(px, 0, pz);
-      rimGroup.add(m);
-      return m;
-    }
-    rimBar(w + rt, w / 2, -rt / 2, false);
-    rimBar(w + rt, w / 2, d + rt / 2, false);
-    rimBar(d + rt, -rt / 2, d / 2, true);
-    rimBar(d + rt, w + rt / 2, d / 2, true);
-    this.root.add(rimGroup);
-    this._rim = rimGroup;
+    this._rim = this._addRoundedFrame(this.root, w, d, h, 0.014, rimMat, true);
 
-    // Floor cell markers — "+" at each grid intersection (no full lines)
+    // Floor cell markers — "+" at each grid intersection
     var plusMat = new THREE.LineBasicMaterial({
-      color: neon, transparent: true, opacity: 0.7, toneMapped: false
+      color: neon, transparent: true, opacity: 0.65, toneMapped: false
     });
     var plusArm = this.cellSize * 0.16;
     for (var gx = 0; gx <= this.width; gx++) {
       for (var gz = 0; gz <= this.depth; gz++) {
         var px = gx * this.cellSize;
         var pz = gz * this.cellSize;
-        var hSeg = new THREE.BufferGeometry().setFromPoints([
+        this.root.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
           new THREE.Vector3(px - plusArm, 0.003, pz),
           new THREE.Vector3(px + plusArm, 0.003, pz)
-        ]);
-        var vSeg = new THREE.BufferGeometry().setFromPoints([
+        ]), plusMat));
+        this.root.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
           new THREE.Vector3(px, 0.003, pz - plusArm),
           new THREE.Vector3(px, 0.003, pz + plusArm)
-        ]);
-        this.root.add(new THREE.Line(hSeg, plusMat));
-        this.root.add(new THREE.Line(vSeg, plusMat));
+        ]), plusMat));
       }
     }
 
-    // Highest-layer highlight — OUTER line only (no filled platform)
+    // Highest-layer highlight — rounded outer frame only
     var hiMat = new THREE.MeshBasicMaterial({
       color: neon,
       transparent: true,
@@ -208,24 +189,8 @@
       toneMapped: false
     });
     this._highLineMat = hiMat;
-    var hiGroup = new THREE.Group();
-    hiGroup.visible = false;
-    var ht = 0.012;
-    function hiBar(len, px, pz, alongZ) {
-      var geo = alongZ
-        ? new THREE.BoxGeometry(ht, ht, len)
-        : new THREE.BoxGeometry(len, ht, ht);
-      var m = new THREE.Mesh(geo, hiMat);
-      m.position.set(px, 0, pz);
-      hiGroup.add(m);
-      return m;
-    }
-    hiBar(w + ht, w / 2, -ht / 2, false);
-    hiBar(w + ht, w / 2, d + ht / 2, false);
-    hiBar(d + ht, -ht / 2, d / 2, true);
-    hiBar(d + ht, w + ht / 2, d / 2, true);
-    this.root.add(hiGroup);
-    this._highLine = hiGroup;
+    this._highLine = this._addRoundedFrame(this.root, w, d, 0, 0.011, hiMat, false);
+    this._highLine.visible = false;
   };
 
   Cup.prototype.setYaw = function (yaw) {
@@ -323,15 +288,18 @@
   };
 
   Cup.prototype._makeBlockMesh = function (color) {
-    var geo = new THREE.BoxGeometry(this.cellSize * 0.92, this.cellSize * 0.92, this.cellSize * 0.92);
+    var geo = (global.StacksShapes && StacksShapes.roundedBlockGeo)
+      ? StacksShapes.roundedBlockGeo()
+      : new THREE.BoxGeometry(this.cellSize * 0.92, this.cellSize * 0.92, this.cellSize * 0.92);
     var mat = new THREE.MeshStandardMaterial({
       color: color,
-      roughness: 0.32,
-      metalness: 0.28,
-      emissive: new THREE.Color(color),
-      emissiveIntensity: 0.28
+      roughness: 0.42,
+      metalness: 0.12
     });
-    return new THREE.Mesh(geo, mat);
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
   };
 
   Cup.prototype.placeCells = function (cells, meta) {
@@ -441,13 +409,11 @@
       this._highLine.visible = false;
       return;
     }
-    var w = this.width * this.cellSize;
-    var d = this.depth * this.cellSize;
-    // Sit on top face of the highest cell layer
+    // Sit on top face of the highest cell layer (frame already spans 0..w / 0..d)
     this._highLine.position.set(
-      w / 2,
+      0,
       (maxOccupiedY + 1) * this.cellSize + 0.004,
-      d / 2
+      0
     );
     this._highLine.visible = true;
   };

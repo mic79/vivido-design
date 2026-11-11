@@ -23,6 +23,43 @@
   var _q = null;
   var _m = null;
   var _cubeQuats = null;
+  var _roundedBlockGeo = null;
+
+  /** Shared bevelled cell cube — solid one-color blocks with soft corners. */
+  function roundedBlockGeo() {
+    if (_roundedBlockGeo) return _roundedBlockGeo;
+    if (typeof THREE === 'undefined') return null;
+    var s = CELL * 0.92;
+    var r = Math.min(0.02, s * 0.2);
+    var h = s / 2;
+    var shape = new THREE.Shape();
+    shape.moveTo(-h + r, -h);
+    shape.lineTo(h - r, -h);
+    shape.quadraticCurveTo(h, -h, h, -h + r);
+    shape.lineTo(h, h - r);
+    shape.quadraticCurveTo(h, h, h - r, h);
+    shape.lineTo(-h + r, h);
+    shape.quadraticCurveTo(-h, h, -h, h - r);
+    shape.lineTo(-h, -h + r);
+    shape.quadraticCurveTo(-h, -h, -h + r, -h);
+    var geo = new THREE.ExtrudeGeometry(shape, {
+      depth: s - r,
+      bevelEnabled: true,
+      bevelThickness: r * 0.55,
+      bevelSize: r * 0.45,
+      bevelSegments: 2,
+      curveSegments: 4
+    });
+    geo.computeBoundingBox();
+    var bb = geo.boundingBox;
+    geo.translate(
+      -(bb.min.x + bb.max.x) * 0.5,
+      -(bb.min.y + bb.max.y) * 0.5,
+      -(bb.min.z + bb.max.z) * 0.5
+    );
+    _roundedBlockGeo = geo;
+    return geo;
+  }
 
   function _tmp() {
     if (typeof THREE === 'undefined') return;
@@ -269,7 +306,7 @@
     group.userData.isGhost = !!opts.ghost;
 
     var color = opts.garbage ? '#9E9E9E' : (opts.color || def.color);
-    var geo = new THREE.BoxGeometry(CELL * 0.92, CELL * 0.92, CELL * 0.92);
+    var geo = roundedBlockGeo() || new THREE.BoxGeometry(CELL * 0.92, CELL * 0.92, CELL * 0.92);
     var mat;
     if (opts.ghost) {
       var ghostCol = opts.valid === false ? '#E53935' : '#69F0AE';
@@ -283,10 +320,8 @@
     } else {
       mat = new THREE.MeshStandardMaterial({
         color: color,
-        roughness: 0.45,
-        metalness: 0.15,
-        emissive: new THREE.Color(color),
-        emissiveIntensity: 0.12
+        roughness: 0.42,
+        metalness: 0.12
       });
     }
 
@@ -297,7 +332,12 @@
         (cells[i][1] + 0.5) * CELL,
         (cells[i][2] + 0.5) * CELL
       );
-      if (opts.ghost) mesh.renderOrder = 2;
+      if (opts.ghost) {
+        mesh.renderOrder = 2;
+      } else {
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+      }
       group.add(mesh);
     }
 
@@ -327,6 +367,7 @@
     BAG_ORDER: BAG_ORDER,
     ShapeBag: ShapeBag,
     newBagSeed: newBagSeed,
+    roundedBlockGeo: roundedBlockGeo,
     createShapeMesh: createShapeMesh,
     shapeExtent: shapeExtent,
     extentOfCells: extentOfCells,
