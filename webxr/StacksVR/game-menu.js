@@ -2,13 +2,14 @@
 (function () {
   'use strict';
 
-  var PLAY_POSITION = { x: 0, y: 0, z: 1.65, ry: 0 };
+  // Diagonal BB layout: blue (-0.7,0.7), player behind facing red
+  var PLAY_POSITION = { x: -1.37, y: 0, z: 1.37, ry: -45 };
 
   var SPECTATOR_POSITIONS = [
-    { x: -3.5, y: 0, z: 2.5, ry: -40 },
-    { x: 3.5, y: 0, z: 2.5, ry: 40 },
-    { x: -3.5, y: 0, z: -2.0, ry: -140 },
-    { x: 3.5, y: 0, z: -2.0, ry: 140 }
+    { x: -3.2, y: 0, z: 3.2, ry: -45 },
+    { x: 3.2, y: 0, z: 3.2, ry: 45 },
+    { x: -3.2, y: 0, z: -3.2, ry: -135 },
+    { x: 3.2, y: 0, z: -3.2, ry: 135 }
   ];
 
   AFRAME.registerComponent('vr-menu', {

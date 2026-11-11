@@ -102,41 +102,62 @@
       this._sceneRoot.name = 'stacks-arena';
       scene.add(this._sceneRoot);
 
-      // Layout from BattleBlocks screenshot (face-to-face cups, neon floor
-      // footprints, spawn+storage floating beside each cup at reach height).
-      // Scale cue: avatar ~1.7m; cup footprints ~0.72m (6×0.12); centers ~1.7m apart.
+      // Layout from BattleBlocks screenshot: cups on a DIAGONAL, facing each other.
+      // Blue = left-near floor square; red/orange = right-far. Avatar stands between.
+      // Scale: cup footprint ~0.72m; diagonal center distance ~2.0m.
       var CUP_Y = 0.92;
       var CUP_HALF = (6 * CELL) / 2; // 0.36
-      var BLUE_CZ = 0.85;
-      var RED_CZ = -0.85;
       var PAD_Y = 1.12;
-      var PAD_LAT = 0.52;   // lateral offset from midline
-      var PAD_Z_NEAR = 1.30; // toward blue player
-      var PAD_Z_FAR = -1.30; // toward red player
+      var DIAG = 0.70; // |x|=|z| offset from origin → ~1.98m apart
+      var blueC = { x: -DIAG, z: DIAG };
+      var redC = { x: DIAG, z: -DIAG };
+      // THREE forward after yaw Y = (-sin y, -cos y); aim each cup at the other
+      var blueYaw = -Math.PI / 4;      // faces toward red (+X, -Z)
+      var redYaw = (3 * Math.PI) / 4;  // faces toward blue (-X, +Z)
+
+      function cornerFromCenter(c) {
+        return { x: c.x - CUP_HALF, y: CUP_Y, z: c.z - CUP_HALF };
+      }
+      function basis(yaw) {
+        return {
+          fx: -Math.sin(yaw), fz: -Math.cos(yaw),
+          rx: Math.cos(yaw), rz: -Math.sin(yaw)
+        };
+      }
+      function offset(c, yaw, alongFwd, alongRight) {
+        var b = basis(yaw);
+        return {
+          x: c.x + b.fx * alongFwd + b.rx * alongRight,
+          y: PAD_Y,
+          z: c.z + b.fz * alongFwd + b.rz * alongRight
+        };
+      }
 
       var blue = new global.StacksCup({
         id: 'blue', side: 'blue',
         width: 6, depth: 6, height: 12,
-        position: { x: -CUP_HALF, y: CUP_Y, z: BLUE_CZ - CUP_HALF }
+        position: cornerFromCenter(blueC)
       });
       var red = new global.StacksCup({
         id: 'red', side: 'red',
         width: 6, depth: 6, height: 12,
-        position: { x: -CUP_HALF, y: CUP_Y, z: RED_CZ - CUP_HALF }
+        position: cornerFromCenter(redC)
       });
       this.cups.blue = blue;
       this.cups.red = red;
       this._sceneRoot.add(blue.pivot || blue.root);
       this._sceneRoot.add(red.pivot || red.root);
-      // Face red cup toward the far player (mirrors BB opposing stations)
-      if (red.pivot) {
-        red.pivot.rotation.y = Math.PI;
-        red.yaw = Math.PI;
-      }
+      if (blue.pivot) { blue.pivot.rotation.y = blueYaw; blue.yaw = blueYaw; }
+      if (red.pivot) { red.pivot.rotation.y = redYaw; red.yaw = redYaw; }
 
-      // Blue spawn pad (right) + storage pocket (left) — near player side
+      // Spawn (right) + storage (left), slightly toward each player from cup
+      var bluePadPos = offset(blueC, blueYaw, -0.28, 0.55);
+      var bluePocketPos = offset(blueC, blueYaw, -0.28, -0.55);
+      var redPadPos = offset(redC, redYaw, -0.28, 0.55);
+      var redPocketPos = offset(redC, redYaw, -0.28, -0.55);
+
       this._pad = new THREE.Group();
-      this._pad.position.set(PAD_LAT, PAD_Y, PAD_Z_NEAR);
+      this._pad.position.set(bluePadPos.x, bluePadPos.y, bluePadPos.z);
       this._sceneRoot.add(this._pad);
       this._padMesh = new THREE.Mesh(
         new THREE.BoxGeometry(0.40, 0.04, 0.40),
@@ -152,7 +173,7 @@
       this._pad.add(ring);
 
       this._pocket = new THREE.Group();
-      this._pocket.position.set(-PAD_LAT, PAD_Y, PAD_Z_NEAR);
+      this._pocket.position.set(bluePocketPos.x, bluePocketPos.y, bluePocketPos.z);
       this._sceneRoot.add(this._pocket);
       var pocketBase = new THREE.Mesh(
         new THREE.BoxGeometry(0.34, 0.04, 0.34),
@@ -169,9 +190,8 @@
       this._pocketType = null;
       this._pocketUsed = false;
 
-      // Red spawn + storage — mirrored on the far station
       this._botPad = new THREE.Group();
-      this._botPad.position.set(PAD_LAT, PAD_Y, PAD_Z_FAR);
+      this._botPad.position.set(redPadPos.x, redPadPos.y, redPadPos.z);
       this._sceneRoot.add(this._botPad);
       this._botPad.add(new THREE.Mesh(
         new THREE.BoxGeometry(0.40, 0.04, 0.40),
@@ -187,7 +207,7 @@
       this._botPadPiece = null;
 
       this._botPocket = new THREE.Group();
-      this._botPocket.position.set(-PAD_LAT, PAD_Y, PAD_Z_FAR);
+      this._botPocket.position.set(redPocketPos.x, redPocketPos.y, redPocketPos.z);
       this._sceneRoot.add(this._botPocket);
       this._botPocket.add(new THREE.Mesh(
         new THREE.BoxGeometry(0.34, 0.04, 0.34),
@@ -202,6 +222,18 @@
       this._botPocket.add(botPocketRing);
       this._botPocketMesh = null;
       this._botHoldMesh = null;
+
+      // Expose for HUD / player spawn alignment (floor Y = 0)
+      var playerPos = offset(blueC, blueYaw, -0.95, 0);
+      var oppPos = offset(redC, redYaw, -0.95, 0);
+      playerPos.y = 0;
+      oppPos.y = 0;
+      this._layout = {
+        blueC: blueC, redC: redC,
+        blueYaw: blueYaw, redYaw: redYaw,
+        player: playerPos,
+        opponent: oppPos
+      };
 
       var self = this;
       this._dualBotPreview = false;
