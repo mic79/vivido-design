@@ -513,28 +513,18 @@
         case 'toggle-board':
           this._toggleBoardSize();
           break;
+        case 'board-4':
+          this._setBoardSizeChoice(4);
+          break;
+        case 'board-6':
+          this._setBoardSizeChoice(6);
+          break;
         default:
           break;
       }
     },
 
-    _toggleBoardSize: function () {
-      var cur = (window.getBoardSize && window.getBoardSize()) || 6;
-      var next = cur === 4 ? 6 : 4;
-      if (window.requestBoardSize) window.requestBoardSize(next);
-      else if (window.setBoardSize) window.setBoardSize(next);
-      else {
-        var scene = this.el.sceneEl;
-        if (scene) scene.emit('board-size-changed', { boardSize: next });
-      }
-      this._setBoardButton();
-      pulseHaptic(this._leftHandEl || document.getElementById('leftHand'), 0.4, 35);
-    },
-
-    _setBoardButton: function () {
-      var btn = document.getElementById('menu-board-toggle');
-      var txt = document.getElementById('menu-board-text');
-      if (!btn) return;
+    _currentBoardSize: function () {
       var size = (window.getBoardSize && window.getBoardSize()) || 6;
       var gm = document.querySelector('[stacks-game]');
       var comp = gm && gm.components && gm.components['stacks-game'];
@@ -542,15 +532,56 @@
       if (window.lobbyState && window.lobbyState.boardSize) {
         size = window.lobbyState.boardSize === 4 ? 4 : 6;
       }
-      var label = size === 4 ? '4×4' : '6×6';
-      var color = size === 4 ? '#c45a12' : '#1e6ad4';
-      // Non-host peers can still request; host/offline apply immediately
-      var canEdit = !window.isMultiplayer || !!window.isHost ||
-        !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
-      btn.setAttribute('material', 'color', canEdit ? color : '#444444');
-      btn.dataset.baseColor = canEdit ? color : '#444444';
-      btn.dataset.hoverColor = lightenHex(canEdit ? color : '#444444', 0.42);
-      if (txt) txt.setAttribute('value', label);
+      return size === 4 ? 4 : 6;
+    },
+
+    _toggleBoardSize: function () {
+      this._setBoardSizeChoice(this._currentBoardSize() === 4 ? 6 : 4);
+    },
+
+    _setBoardSizeChoice: function (size) {
+      size = size === 4 ? 4 : 6;
+      if (window.requestBoardSize) window.requestBoardSize(size);
+      else if (window.setBoardSize) window.setBoardSize(size);
+      else {
+        var scene = this.el.sceneEl;
+        if (scene) scene.emit('board-size-changed', { boardSize: size });
+      }
+      this._setBoardButton();
+      pulseHaptic(this._leftHandEl || document.getElementById('leftHand'), 0.4, 35);
+    },
+
+    _setBoardButton: function () {
+      var root = document.getElementById('menu-board-toggle');
+      var slider = document.getElementById('menu-board-slider');
+      var t4 = document.getElementById('menu-board-4-text');
+      var t6 = document.getElementById('menu-board-6-text');
+      if (!root) return;
+      var size = this._currentBoardSize();
+      var is4 = size === 4;
+      // Active pill slides left (4x4) or right (6x6); ascii "x" so Roboto glyph exists
+      if (slider) {
+        slider.setAttribute('position', (is4 ? -0.052 : 0.052) + ' 0 0.003');
+        var accent = is4 ? '#c45a12' : '#1e6ad4';
+        var canEdit = !window.isMultiplayer || !!window.isHost ||
+          !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
+        slider.setAttribute('material', 'color', canEdit ? accent : '#555555');
+      }
+      if (t4) {
+        t4.setAttribute('value', '4x4');
+        t4.setAttribute('color', is4 ? '#ffffff' : '#8a9bb0');
+      }
+      if (t6) {
+        t6.setAttribute('value', '6x6');
+        t6.setAttribute('color', !is4 ? '#ffffff' : '#8a9bb0');
+      }
+      // Keep hit targets hoverable without fighting the slider color
+      ['menu-board-4', 'menu-board-6'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.dataset.baseColor = '#152032';
+        el.dataset.hoverColor = lightenHex('#1e6ad4', 0.35);
+      });
     },
 
     _setMusicButton: function () {

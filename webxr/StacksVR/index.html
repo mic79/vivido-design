@@ -28,7 +28,7 @@
   <script src="lobby.js?v=41"></script>
   <script src="match-replay.js?v=19"></script>
   <script src="stacks-audio.js?v=3"></script>
-  <script src="game-menu.js?v=44"></script>
+  <script src="game-menu.js?v=45"></script>
   <script src="mixamo-body.js?v=21"></script>
   <script src="locomotion.js?v=19"></script>
   <script src="stacks-game.js?v=76"></script>
@@ -344,11 +344,24 @@
             <a-plane width="0.20" height="0.006" color="#33bbff"
               material="opacity: 0.95; transparent: true; shader: flat; toneMapped: false" position="0 0.20 0.001"></a-plane>
 
-            <a-text value="STACKS VR" position="0 0.235 0.002" align="center" width="0.55" color="#e8f4ff"></a-text>
-            <a-entity class="menu-btn clickable" data-action="toggle-board" id="menu-board-toggle" position="-0.28 0.235 0.002"
-              geometry="primitive: box; width: 0.14; height: 0.045; depth: 0.008"
-              material="color: #1e6ad4; shader: flat">
-              <a-text id="menu-board-text" value="6×6" align="center" width="0.32" color="#ffffff" position="0 0 0.006"></a-text>
+            <a-text value="STACKS VR" position="0.02 0.235 0.002" align="center" width="0.48" color="#e8f4ff"></a-text>
+            <!-- Board size sliding toggle: 4x4 | 6x6 (ascii x — A-Frame font has no ×) -->
+            <a-entity id="menu-board-toggle" position="-0.26 0.235 0.002">
+              <a-entity geometry="primitive: box; width: 0.22; height: 0.048; depth: 0.006"
+                material="color: #152032; shader: flat"></a-entity>
+              <a-entity id="menu-board-slider" position="0.052 0 0.003"
+                geometry="primitive: box; width: 0.104; height: 0.040; depth: 0.008"
+                material="color: #1e6ad4; shader: flat"></a-entity>
+              <a-entity class="menu-btn clickable" data-action="board-4" id="menu-board-4" position="-0.052 0 0.005"
+                geometry="primitive: box; width: 0.104; height: 0.040; depth: 0.002"
+                material="color: #152032; opacity: 0.01; transparent: true; shader: flat">
+                <a-text id="menu-board-4-text" value="4x4" align="center" width="0.28" color="#8a9bb0" position="0 0 0.004"></a-text>
+              </a-entity>
+              <a-entity class="menu-btn clickable" data-action="board-6" id="menu-board-6" position="0.052 0 0.005"
+                geometry="primitive: box; width: 0.104; height: 0.040; depth: 0.002"
+                material="color: #152032; opacity: 0.01; transparent: true; shader: flat">
+                <a-text id="menu-board-6-text" value="6x6" align="center" width="0.28" color="#ffffff" position="0 0 0.004"></a-text>
+              </a-entity>
             </a-entity>
             <a-entity class="menu-btn clickable" data-action="toggle-music" id="menu-music-toggle" position="0.28 0.235 0.002"
               geometry="primitive: box; width: 0.14; height: 0.045; depth: 0.008"
