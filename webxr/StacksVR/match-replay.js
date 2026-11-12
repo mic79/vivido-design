@@ -120,6 +120,9 @@
 
     tick: function () {
       if (!this.isRecording) return;
+      // Multiplayer: events-only — full cup snapshots every 100ms made match-end
+      // IndexedDB saves freeze the Quest for >1s.
+      if (window.isMultiplayer) return;
       var now = performance.now();
       var elapsed = now - this._startTime;
       if (elapsed - this._lastSampleTime < SAMPLE_INTERVAL) return;

@@ -897,9 +897,11 @@
       if (global.isMobileSpectator) return false;
       var ls = global.lobbyState;
       var Lobby = global.StacksLobby;
-      var seated = !!(Lobby && Lobby.amMatchPlayer && Lobby.amMatchPlayer());
-      var botSeat = !!(global.isLobbyBotMatch ||
-        (ls && ls.matchPlayers && ls.matchPlayers.red === '__BOT__'));
+      var myId = global.myPlayerId || (Lobby && Lobby.myPlayerId);
+      var mp = ls && ls.matchPlayers;
+      var seated = !!(mp && myId &&
+        (mp.blue === myId || (mp.red === myId && mp.red !== '__BOT__')));
+      var botSeat = !!(mp && mp.red === '__BOT__') || !!global.isLobbyBotMatch;
       // Seated match player always controls (ignore stale isSpectator)
       if (global.isMultiplayer && ls && ls.matchState === 'PLAYING') {
         if (seated) return true;
@@ -1365,30 +1367,47 @@
       if (cups.red) this.cups.red.applySnapshot(cups.red);
     },
 
-    /** True when this client owns gameplay for `side` (must not accept remote overwrites). */
+    /**
+     * True when this client owns gameplay for `side`.
+     * Seat id is source of truth — NEVER trust stale isSpectator / canControl alone
+     * (that let peer place/state wipe the host cup + pad).
+     */
     _isLocalAuthoritySide: function (side) {
       if (!side) return false;
-      if (global.isSpectator || global.isMobileSpectator) return false;
-      if (!(this._canControl && this._canControl())) return false;
+      if (global.isMobileSpectator) return false;
+      var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+      var mp = global.lobbyState && global.lobbyState.matchPlayers;
+      if (global.isMultiplayer && mp && myId) {
+        if (mp[side] === myId) return true;
+        // Human vs bot: seated/host human owns blue (never steal if another human is blue)
+        if (side === 'blue' && mp.red === '__BOT__') {
+          if (mp.blue === myId) return true;
+          if (global.StacksLobby && global.StacksLobby.isHost && !mp.blue) return true;
+        }
+        return false;
+      }
+      // Offline / preview: player owns blue only
+      if (!global.isMultiplayer) return side === 'blue';
       return side === this._localSide();
     },
 
     /**
-     * Merge networked cups without clobbering the cup we are actively playing.
-     * Peer place payloads include BOTH cups — the remote's copy of OUR cup is often
-     * stale and was wiping just-placed blocks / swapping shapes (host bug).
+     * Merge networked cups without clobbering the cup we own.
+     * Always gate per-seat — never "force both" just because canControl flickered.
      */
     _applyNetworkCups: function (cups, opts) {
       opts = opts || {};
       if (!cups) return;
-      if (opts.forceAll || global.isSpectator || global.isMobileSpectator ||
-          !(this._canControl && this._canControl())) {
+      if (opts.forceAll || global.isMobileSpectator) {
         this._applyRemoteCups(cups);
         return;
       }
-      var local = this._localSide();
-      if (local !== 'blue' && cups.blue) this.cups.blue.applySnapshot(cups.blue);
-      if (local !== 'red' && cups.red) this.cups.red.applySnapshot(cups.red);
+      if (cups.blue && !this._isLocalAuthoritySide('blue')) {
+        this.cups.blue.applySnapshot(cups.blue);
+      }
+      if (cups.red && !this._isLocalAuthoritySide('red')) {
+        this.cups.red.applySnapshot(cups.red);
+      }
     },
 
     _applyNetworkStation: function (data) {
@@ -1511,11 +1530,16 @@
       var col = side === 'red' ? this._nextRed : this._nextBlue;
       var bottom = col && col.slots && col.slots.children[0];
       if (opts.animate && bottom) {
+        var animBefore = (this._pieceAnims && this._pieceAnims.length) || 0;
         this._animateQueueAdvance(side, bag, bottom);
-        if (opts.broadcast !== false && this.matchActive && !this._dualBotPreview) {
-          this._broadcastStation(side);
+        // If animate bailed (missing pad/root), fall through to instant mesh
+        if (((this._pieceAnims && this._pieceAnims.length) || 0) > animBefore ||
+            this._sidePadPiece(side)) {
+          if (opts.broadcast !== false && this.matchActive && !this._dualBotPreview) {
+            this._broadcastStation(side);
+          }
+          return;
         }
-        return;
       }
 
       var mesh = global.StacksShapes.createShapeMesh(nextType, {
@@ -1592,7 +1616,7 @@
     /** Slide queue[0] onto the pad; shift others down; drop a new piece in at the top. */
     _animateQueueAdvance: function (side, bag, bottomMesh) {
       var col = side === 'red' ? this._nextRed : this._nextBlue;
-      var pad = side === 'red' ? this._botPad : this._pad;
+      var pad = this._sidePad(side);
       if (!col || !pad || !bottomMesh || !this._sceneRoot) return;
 
       pad.updateWorldMatrix(true, false);
@@ -1994,16 +2018,15 @@
         window.matchRecorder.recordEvent('place', { side: side, type: type, cells: cells });
       }
       if (broadcast && global.sendCupEvent) {
+        // ONLY the placing seat — never both cups/stations (peer's copy of our
+        // board is stale and previously wiped host blocks / empty pads).
+        var cupsMsg = {};
+        cupsMsg[side] = this.cups[side].serialize();
         global.sendCupEvent({
           kind: 'place', side: side, shapeType: type, cells: cells, clear: clearResult,
           scores: { blue: this.modes.scores.blue, red: this.modes.scores.red },
-          cups: { blue: this.cups.blue.serialize(), red: this.cups.red.serialize() },
-          attack: this.attackSys.serialize(),
-          station: this._serializeStation(side),
-          stations: {
-            blue: this._serializeStation('blue'),
-            red: this._serializeStation('red')
-          }
+          cups: cupsMsg,
+          station: this._serializeStation(side)
         });
       }
       if (cup.isToppedOut()) {
@@ -2618,23 +2641,28 @@
         if (this.modes.stop) this.modes.stop();
       }
 
+      // NEVER block the frame on IndexedDB / giant JSON — that froze Quest >1s on win/loss
+      var selfEnd = this;
+      var replayPending = null;
       try {
         if (window.matchRecorder && window.matchRecorder.isRecording) {
-          var replay = window.matchRecorder.stopRecording();
-          if (replay && window.matchReplayStorage) window.matchReplayStorage.save(replay);
+          replayPending = window.matchRecorder.stopRecording();
         }
-      } catch (e) { console.warn('[StacksGame] replay save failed', e); }
-      try { this._saveMatchHistory(); } catch (e2) { console.warn('[StacksGame] history save failed', e2); }
+      } catch (e) { console.warn('[StacksGame] replay stop failed', e); }
+
       this._updateHUD();
 
       var winner = (opts && opts.winner) || (this.modes && this.modes.winner);
       var festive = !opts.cancelled && !!winner;
       this._musicIdle();
       if (festive) {
-        this._playVictory({
-          winner: winner,
-          reason: (opts && opts.reason) || (this.modes && this.modes.reason)
-        });
+        // Defer heavy canvas/confetti one frame so the last place still paints
+        setTimeout(function () {
+          selfEnd._playVictory({
+            winner: winner,
+            reason: (opts && opts.reason) || (selfEnd.modes && selfEnd.modes.reason)
+          });
+        }, 0);
         this._scheduleDualIdle(3800);
       } else {
         this._clearVictory();
@@ -2644,6 +2672,21 @@
       // Keep VR menu START/END label in sync after lobby/local ends
       var scene = this.el && this.el.sceneEl;
       if (scene) scene.emit('lobby-state-updated');
+
+      setTimeout(function () {
+        try { selfEnd._saveMatchHistory(); } catch (e2) {
+          console.warn('[StacksGame] history save failed', e2);
+        }
+        if (replayPending && window.matchReplayStorage) {
+          try {
+            var p = window.matchReplayStorage.save(replayPending);
+            if (p && typeof p.then === 'function') p.catch(function (err) {
+              console.warn('[StacksGame] replay save failed', err);
+            });
+          } catch (e3) { console.warn('[StacksGame] replay save failed', e3); }
+        }
+        replayPending = null;
+      }, 0);
     },
 
     /**
@@ -2745,10 +2788,10 @@
       this._victory.titleMesh = titleMesh;
       this._victory.titleTex = tex;
 
-      // Confetti cubes
+      // Confetti cubes (keep count modest — 64 mats hitch mid/low-end GPUs)
       var colors = [accent, 0xffffff, 0xffe27a, 0x66ffcc, 0xff66aa, 0x88aaff];
       var geo = new THREE.BoxGeometry(0.04, 0.04, 0.04);
-      for (var i = 0; i < 64; i++) {
+      for (var i = 0; i < 24; i++) {
         var mat = new THREE.MeshBasicMaterial({
           color: colors[i % colors.length],
           transparent: true,
