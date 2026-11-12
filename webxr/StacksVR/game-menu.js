@@ -864,7 +864,7 @@
       var status = document.getElementById('menu-lobby-status');
       if (status) {
         var live = window.StacksLobbyStatus || '';
-      var ls = window.lobbyState;
+        var ls = window.lobbyState;
         var msg;
         if (window.connectionState === 'connecting' && live) {
           msg = live;
@@ -874,14 +874,42 @@
           msg = live || 'Connecting...';
         } else {
           var mp = ls.matchPlayers || {};
-          var q = (ls.queue || []).length;
+          var myId = window.myPlayerId ||
+            (window.StacksLobby && window.StacksLobby.myPlayerId);
+          function nickFor(id) {
+            if (!id) return '-';
+            if (id === '__BOT__') return 'Bot';
+            var players = ls.players || [];
+            for (var i = 0; i < players.length; i++) {
+              if (players[i].id === id) {
+                return (players[i].nickname || 'Player').slice(0, 12);
+              }
+            }
+            return '?';
+          }
+          var roster = [];
+          var plist = ls.players || [];
+          for (var pi = 0; pi < plist.length; pi++) {
+            var p = plist[pi];
+            if (p.mobile) continue;
+            var n = (p.nickname || 'Player').slice(0, 12);
+            roster.push(n + (p.id === myId ? '*' : ''));
+          }
           var role = window.isHost ? 'HOST' : (window.isMobileSpectator ? 'WATCH' : 'JOINED');
-          var detail = role + ' L' + (window.StacksLobby && window.StacksLobby.lobbyNum ? window.StacksLobby.lobbyNum : '?') +
-            ' | ' + (ls.matchState || 'WAITING') +
-            ' | B:' + (mp.blue ? 'Y' : '-') +
-            ' R:' + (mp.red ? (mp.red === '__BOT__' ? 'BOT' : 'Y') : '-') +
-            ' | Q:' + q;
-          msg = live ? (live + ' · ' + detail) : detail;
+          var lines = [
+            role + ' · ' + (roster.length ? roster.join(', ') : 'alone')
+          ];
+          if (mp.blue || mp.red) {
+            lines.push(nickFor(mp.blue) + ' vs ' + nickFor(mp.red));
+          } else if ((ls.queue || []).length) {
+            var qn = [];
+            for (var qi = 0; qi < ls.queue.length; qi++) qn.push(nickFor(ls.queue[qi]));
+            lines.push('Queue: ' + qn.join(', '));
+          } else {
+            lines.push(ls.matchState || 'WAITING');
+          }
+          if (live) lines.unshift(live);
+          msg = lines.join('\n');
         }
         status.setAttribute('value', msg);
       }

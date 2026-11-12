@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below). -->
-  <meta name="stacks-version" content="0.2.4" />
+  <meta name="stacks-version" content="0.2.5" />
   <title>StacksVR</title>
   <script>
     (function () {
@@ -36,10 +36,10 @@
   <script src="lobby.js?v=49"></script>
   <script src="match-replay.js?v=20"></script>
   <script src="stacks-audio.js?v=4"></script>
-  <script src="game-menu.js?v=53"></script>
+  <script src="game-menu.js?v=54"></script>
   <script src="mixamo-body.js?v=22"></script>
   <script src="locomotion.js?v=21"></script>
-  <script src="stacks-game.js?v=86"></script>
+  <script src="stacks-game.js?v=87"></script>
   <script src="mobile-spectator.js?v=41"></script>
 
     <style>
@@ -304,7 +304,7 @@
 
     <!-- Discreet build stamp (DodgeVR-style) — kept in sync from STACKS_VERSION -->
     <a-entity id="version-display" position="0 2.42 0"
-      text="value: v0.2.4; align: center; width: 0.85; color: #5a6878"></a-entity>
+      text="value: v0.2.5; align: center; width: 0.85; color: #5a6878"></a-entity>
     <a-entity id="score-display" position="0 2.2 0">
       <a-entity id="blue-score" position="-0.16 0 0"
         text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>
@@ -326,8 +326,11 @@
     <a-entity id="hud-cup-blue" visible="false"></a-entity>
     <a-entity id="hud-card-red" visible="false"></a-entity>
     <a-entity id="hud-cup-red" visible="false"></a-entity>
-    <a-entity id="hud-name-blue" visible="false"></a-entity>
-    <a-entity id="hud-name-red" visible="false"></a-entity>
+    <!-- Player nicknames above each cup (DodgeVR-style) -->
+    <a-entity id="hud-name-blue" visible="false" position="-0.65 2.08 1.25"
+      text="value: ; align: center; width: 1.6; color: #66ccff; side: double"></a-entity>
+    <a-entity id="hud-name-red" visible="false" position="0.65 2.08 -1.25" rotation="0 180 0"
+      text="value: ; align: center; width: 1.6; color: #ff8866; side: double"></a-entity>
     <a-entity id="hud-time-blue" visible="false"></a-entity>
     <a-entity id="hud-time-red" visible="false"></a-entity>
     <a-entity id="hud-atk-blue" visible="false"></a-entity>

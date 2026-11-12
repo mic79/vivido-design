@@ -80,6 +80,7 @@
       if (this.el.sceneEl.hasLoaded) this._boot();
       this.el.sceneEl.addEventListener('lobby-state-updated', function () {
         self._pruneRemoteAvatarsToLobby();
+        self._updateNameLabels();
       });
 
       if (global.StacksLobby) {
@@ -338,7 +339,9 @@
       });
       this.el.sceneEl.addEventListener('lobby-state-updated', function () {
         if (global.getBoardSize) selfBoot.applyBoardSize(global.getBoardSize());
+        selfBoot._updateNameLabels();
       });
+      this._updateNameLabels();
       console.log('[StacksGame] ready board=' + this.boardSize + 'x' + this.boardSize);
     },
 
@@ -3086,6 +3089,7 @@
       if (blueScore) blueScore.setAttribute('text', 'value', String(this.modes.scores.blue | 0));
       if (redScore) redScore.setAttribute('text', 'value', String(this.modes.scores.red | 0));
 
+      this._updateNameLabels();
       this._updateCupStatsHUD();
       this._refreshVersionDisplay(
         global.isMultiplayer
@@ -3148,33 +3152,97 @@
       return card;
     },
 
+    _sideNickname: function (side) {
+      var ls = global.lobbyState;
+      var mp = ls && ls.matchPlayers;
+      if (mp && mp[side]) {
+        var id = mp[side];
+        if (id === '__BOT__') return 'Bot';
+        var players = ls.players || [];
+        for (var i = 0; i < players.length; i++) {
+          if (players[i].id === id) {
+            return String(players[i].nickname || 'Player').slice(0, 12);
+          }
+        }
+        return side === 'blue' ? 'Blue' : 'Red';
+      }
+      // Offline / preview fallbacks
+      if (side === 'blue') return String(global.playerNickname || 'Player').slice(0, 12);
+      if (this._dualBotPreview) return 'Bot';
+      if (global.isLobbyBotMatch || (this.bot && this.bot.enabled)) return 'Bot';
+      return 'Red';
+    },
+
+    _setNameLabel: function (side, name, visible) {
+      var el = document.getElementById(side === 'red' ? 'hud-name-red' : 'hud-name-blue');
+      if (!el) return;
+      var layout = this._layout;
+      if (layout) {
+        var c = side === 'red' ? layout.redC : layout.blueC;
+        // Above cup, facing that side's player
+        var zOff = side === 'red' ? -0.15 : 0.15;
+        el.setAttribute('position', c.x + ' 2.08 ' + (c.z + zOff));
+        el.setAttribute('rotation', side === 'red' ? '0 180 0' : '0 0 0');
+      }
+      el.setAttribute('text', 'value', name || '');
+      el.setAttribute('visible', !!visible && !!name);
+      if (el.object3D) el.object3D.visible = !!visible && !!name;
+    },
+
+    _updateNameLabels: function () {
+      var multi = !!global.isMultiplayer;
+      var playing = !!this.matchActive && !this._dualBotPreview;
+      var preview = !!this._dualBotPreview;
+      if (!multi && !playing && !preview) {
+        this._setNameLabel('blue', '', false);
+        this._setNameLabel('red', '', false);
+        return;
+      }
+      // Preview: show bot labels; live/offline match or lobby seats: real nicknames
+      if (preview) {
+        this._setNameLabel('blue', 'Blue Bot', true);
+        this._setNameLabel('red', 'Red Bot', true);
+        return;
+      }
+      var show = multi || playing;
+      this._setNameLabel('blue', this._sideNickname('blue'), show);
+      this._setNameLabel('red', this._sideNickname('red'), show);
+    },
+
     _drawStationCard: function (side, stats, now) {
       var card = this._ensureStationCard(side);
       if (!card || !stats) return;
       var f = stats.cardFields(now);
+      var nick = this._sideNickname(side);
       var ctx = card.canvas.getContext('2d');
       var W = card.canvas.width;
       var H = card.canvas.height;
       ctx.clearRect(0, 0, W, H);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
-      ctx.fillStyle = '#ffffff';
 
       var left = 8;
       var rateX = 300;
-      var y = 48;
+      var y = 42;
+
+      // Nickname header (chosen name — was missing vs DodgeVR)
+      ctx.fillStyle = side === 'red' ? '#ff8866' : '#66ccff';
+      ctx.font = 'italic 700 44px Arial, Helvetica, sans-serif';
+      ctx.fillText(String(nick || ''), left, y);
+      y += 52;
+      ctx.fillStyle = '#ffffff';
 
       function block(label, main, rate) {
-        ctx.font = 'italic 600 40px Arial, Helvetica, sans-serif';
+        ctx.font = 'italic 600 36px Arial, Helvetica, sans-serif';
         ctx.fillText(label, left, y);
-        y += 58;
-        ctx.font = 'italic 700 78px Arial, Helvetica, sans-serif';
+        y += 52;
+        ctx.font = 'italic 700 72px Arial, Helvetica, sans-serif';
         ctx.fillText(String(main), left, y);
         if (rate != null && rate !== '') {
-          ctx.font = 'italic 600 48px Arial, Helvetica, sans-serif';
+          ctx.font = 'italic 600 44px Arial, Helvetica, sans-serif';
           ctx.fillText(String(rate) + '/min', rateX, y);
         }
-        y += 88;
+        y += 78;
       }
 
       block('Blocks', f.blocks, f.blockRate);
@@ -3345,10 +3413,10 @@
     },
 
     _prepareMatchHud: function () {
-      // Legacy a-text cards stay hidden; canvas station cards are the HUD
+      // Legacy a-text cards stay hidden; canvas station cards are the HUD.
+      // Name labels are driven separately by _updateNameLabels.
       var hideIds = [
-        'hud-card-blue', 'hud-card-red', 'hud-cup-blue', 'hud-cup-red',
-        'hud-name-blue', 'hud-name-red'
+        'hud-card-blue', 'hud-card-red', 'hud-cup-blue', 'hud-cup-red'
       ];
       for (var h = 0; h < hideIds.length; h++) {
         var hide = document.getElementById(hideIds[h]);
@@ -3357,6 +3425,7 @@
         if (hide.object3D) hide.object3D.visible = false;
       }
       this._hudPrepared = true;
+      this._updateNameLabels();
     },
 
     _placeMatchHud: function () {
