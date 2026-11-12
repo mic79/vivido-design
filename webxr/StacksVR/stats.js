@@ -27,6 +27,7 @@
     this.maxCombo = 0;
     this.perfectClears = 0;
     this.tStacks = 0;
+    this.peakBpm = 0;
     this.placeTimes = [];
     this.attackTimes = [];
     this._startMs = 0;
@@ -52,6 +53,8 @@
     this.pieces = this.blocks;
     this.placeTimes.push(now);
     this._prunePlaceTimes(now);
+    var roll = this.ppmRolling(now);
+    if (roll > this.peakBpm) this.peakBpm = roll;
     if (clearResult) {
       if (clearResult.layersCleared > 0) {
         this.layers += clearResult.layersCleared | 0;
@@ -64,6 +67,22 @@
         this.combo = 0;
       }
     }
+  };
+
+  /** Compact snapshot for match history / all-time bests. */
+  SideStats.prototype.snapshot = function (now) {
+    now = now || performance.now();
+    return {
+      blocks: this.blocks | 0,
+      attacks: this.attacks | 0,
+      score: this.score | 0,
+      layers: this.layers | 0,
+      maxCombo: this.maxCombo | 0,
+      perfectClears: this.perfectClears | 0,
+      bpm: Math.round(this.bps(now) * 10) / 10,
+      peakBpm: Math.round((this.peakBpm || 0) * 10) / 10,
+      durationMs: this.elapsedMs(now) | 0
+    };
   };
 
   SideStats.prototype.onAttack = function (amount, now) {
@@ -214,5 +233,161 @@
     s.onAttack(amount, now || performance.now());
   };
 
-  global.StacksStats = { SideStats: SideStats, MatchStats: MatchStats };
+  // ── Persistent history + all-time bests (DodgeVR-style progression) ──
+  var HISTORY_KEY = 'stacksvr-match-history-v2';
+  var HISTORY_LEGACY_KEY = 'stacksvr-match-history';
+  var HISTORY_MAX = 50;
+
+  function emptyBests(nickname) {
+    return {
+      nickname: nickname || 'Player',
+      bestBpm: 0,
+      peakBpm: 0,
+      bestBlocks: 0,
+      bestAttacks: 0,
+      bestLayers: 0,
+      bestScore: 0,
+      bestMaxCombo: 0,
+      longestMs: 0,
+      wins: 0,
+      losses: 0,
+      matches: 0,
+      winStreak: 0,
+      bestWinStreak: 0
+    };
+  }
+
+  function loadHistoryRaw() {
+    try {
+      var raw = localStorage.getItem(HISTORY_KEY);
+      if (raw) {
+        var data = JSON.parse(raw);
+        return {
+          single: Array.isArray(data.single) ? data.single : [],
+          multi: Array.isArray(data.multi) ? data.multi : [],
+          bests: data.bests && typeof data.bests === 'object' ? data.bests : {}
+        };
+      }
+    } catch (e) { /* ignore */ }
+
+    // Migrate flat v1 list once
+    try {
+      var legacy = JSON.parse(localStorage.getItem(HISTORY_LEGACY_KEY) || '[]');
+      if (Array.isArray(legacy) && legacy.length) {
+        var migrated = { single: [], multi: [], bests: {} };
+        for (var i = 0; i < legacy.length; i++) {
+          var m = legacy[i];
+          if (!m) continue;
+          var rec = {
+            timestamp: m.ts || m.timestamp || Date.now(),
+            mode: m.bot ? 'single' : (m.mode === 'pvp' ? 'multi' : (m.bot === false ? 'multi' : 'single')),
+            result: m.winner === 'blue' ? 'WIN' : (m.winner === 'red' ? 'LOSS' : (m.winner || null)),
+            playerScore: m.blue | 0,
+            opponentScore: m.red | 0,
+            bot: !!m.bot,
+            reason: m.reason || null,
+            player: null,
+            opponentName: m.bot ? 'Bot' : null
+          };
+          if (m.bot || rec.mode === 'single') migrated.single.push(rec);
+          else migrated.multi.push(rec);
+        }
+        try { localStorage.setItem(HISTORY_KEY, JSON.stringify(migrated)); } catch (e2) {}
+        return migrated;
+      }
+    } catch (e3) { /* ignore */ }
+    return { single: [], multi: [], bests: {} };
+  }
+
+  function saveHistoryRaw(data) {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(data));
+    } catch (e) { console.warn('[StacksStats] history save failed', e); }
+  }
+
+  function bestsKey(nickname) {
+    var n = String(nickname || 'Player').trim().slice(0, 12) || 'Player';
+    return n.toLowerCase();
+  }
+
+  function applyBests(bestsMap, nickname, snap, won) {
+    var key = bestsKey(nickname);
+    var b = bestsMap[key] || emptyBests(nickname);
+    b.nickname = String(nickname || b.nickname || 'Player').slice(0, 12);
+    if (snap) {
+      if ((snap.bpm || 0) > (b.bestBpm || 0)) b.bestBpm = snap.bpm;
+      if ((snap.peakBpm || 0) > (b.peakBpm || 0)) b.peakBpm = snap.peakBpm;
+      if ((snap.blocks | 0) > (b.bestBlocks | 0)) b.bestBlocks = snap.blocks | 0;
+      if ((snap.attacks | 0) > (b.bestAttacks | 0)) b.bestAttacks = snap.attacks | 0;
+      if ((snap.layers | 0) > (b.bestLayers | 0)) b.bestLayers = snap.layers | 0;
+      if ((snap.score | 0) > (b.bestScore | 0)) b.bestScore = snap.score | 0;
+      if ((snap.maxCombo | 0) > (b.bestMaxCombo | 0)) b.bestMaxCombo = snap.maxCombo | 0;
+      if ((snap.durationMs | 0) > (b.longestMs | 0)) b.longestMs = snap.durationMs | 0;
+    }
+    b.matches = (b.matches | 0) + 1;
+    if (won) {
+      b.wins = (b.wins | 0) + 1;
+      b.winStreak = (b.winStreak | 0) + 1;
+      if (b.winStreak > (b.bestWinStreak | 0)) b.bestWinStreak = b.winStreak;
+    } else {
+      b.losses = (b.losses | 0) + 1;
+      b.winStreak = 0;
+    }
+    bestsMap[key] = b;
+    return b;
+  }
+
+  function saveMatchRecord(record) {
+    if (!record) return null;
+    var hist = loadHistoryRaw();
+    var list = record.mode === 'multi' ? hist.multi : hist.single;
+    list.unshift(record);
+    if (list.length > HISTORY_MAX) list.length = HISTORY_MAX;
+    if (record.player && record.nickname) {
+      applyBests(hist.bests, record.nickname, record.player, record.result === 'WIN');
+    }
+    saveHistoryRaw(hist);
+    return hist;
+  }
+
+  function clearHistory(mode) {
+    var hist = loadHistoryRaw();
+    if (mode === 'multi') hist.multi = [];
+    else if (mode === 'single') hist.single = [];
+    else {
+      hist.single = [];
+      hist.multi = [];
+      hist.bests = {};
+    }
+    saveHistoryRaw(hist);
+    return hist;
+  }
+
+  function getBests(nickname) {
+    var hist = loadHistoryRaw();
+    var key = bestsKey(nickname);
+    return hist.bests[key] || emptyBests(nickname);
+  }
+
+  function formatDuration(ms) {
+    ms = ms | 0;
+    var sec = Math.floor(ms / 1000);
+    var mm = Math.floor(sec / 60);
+    var ss = sec % 60;
+    return mm + ':' + (ss < 10 ? '0' : '') + ss;
+  }
+
+  global.StacksStats = {
+    SideStats: SideStats,
+    MatchStats: MatchStats,
+    HISTORY_KEY: HISTORY_KEY,
+    loadHistory: loadHistoryRaw,
+    saveMatch: saveMatchRecord,
+    clearHistory: clearHistory,
+    getBests: getBests,
+    formatDuration: formatDuration,
+    emptyBests: emptyBests
+  };
+  global.loadStacksMatchHistory = loadHistoryRaw;
+  global.clearStacksMatchHistory = clearHistory;
 })(window);

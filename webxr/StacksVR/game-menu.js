@@ -144,7 +144,8 @@
       this.lobbyNumber = 1;
       this.botTargetBpm = loadBotBpm();
       this.statsPage = 0;
-      this.STATS_PER_PAGE = 4;
+      this.statsSubTab = 'single';
+      this.STATS_PER_PAGE = 3;
       this._refsReady = false;
       this._xWasDown = false;
       this._menuToggleAt = 0;
@@ -609,7 +610,35 @@
           break;
         case 'stats':
           this.menuMode = 'stats';
+          this.statsPage = 0;
           this.refreshLobbyUI();
+          this._showStats();
+          break;
+        case 'stats-sp':
+          this.statsSubTab = 'single';
+          this.statsPage = 0;
+          this._showStats();
+          break;
+        case 'stats-mp':
+          this.statsSubTab = 'multi';
+          this.statsPage = 0;
+          this._showStats();
+          break;
+        case 'stats-prev':
+          if (this.statsPage > 0) this.statsPage--;
+          this._showStats();
+          break;
+        case 'stats-next':
+          this.statsPage++;
+          this._showStats();
+          break;
+        case 'stats-clear':
+          if (window.clearStacksMatchHistory) {
+            window.clearStacksMatchHistory(this.statsSubTab);
+          } else if (window.StacksStats && window.StacksStats.clearHistory) {
+            window.StacksStats.clearHistory(this.statsSubTab);
+          }
+          this.statsPage = 0;
           this._showStats();
           break;
         case 'replay-latest':
@@ -853,6 +882,8 @@
       if (this.queueButtons) {
         this.queueButtons.setAttribute('visible', multi && !!window.isMultiplayer);
       }
+      var startBtn = document.getElementById('menu-start-match');
+      if (startBtn) startBtn.setAttribute('visible', !stats);
       this._setTabColors();
       this._setLobbyLabel();
       this._setStartButton();
@@ -1022,25 +1053,114 @@
       }
     },
 
+    _setStatsTabColors: function () {
+      var sp = document.getElementById('menu-stats-sp');
+      var mp = document.getElementById('menu-stats-mp');
+      if (sp) {
+        var c = this.statsSubTab === 'single' ? '#4488ff' : '#243044';
+        sp.setAttribute('material', 'color', c);
+        sp.dataset.baseColor = c;
+      }
+      if (mp) {
+        var c2 = this.statsSubTab === 'multi' ? '#4488ff' : '#243044';
+        mp.setAttribute('material', 'color', c2);
+        mp.dataset.baseColor = c2;
+      }
+    },
+
     _showStats: function () {
-      var KEY = 'stacksvr-match-history';
-      var list = [];
-      try { list = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { list = []; }
+      this._setStatsTabColors();
+      var hist = (window.StacksStats && window.StacksStats.loadHistory)
+        ? window.StacksStats.loadHistory()
+        : { single: [], multi: [], bests: {} };
+      var list = this.statsSubTab === 'multi' ? (hist.multi || []) : (hist.single || []);
+      var nick = (window.playerNickname || 'Player').slice(0, 12);
+      var bests = (window.StacksStats && window.StacksStats.getBests)
+        ? window.StacksStats.getBests(nick)
+        : null;
+      var fmt = (window.StacksStats && window.StacksStats.formatDuration)
+        ? window.StacksStats.formatDuration
+        : function (ms) {
+          var s = Math.floor((ms || 0) / 1000);
+          return Math.floor(s / 60) + ':' + ((s % 60) < 10 ? '0' : '') + (s % 60);
+        };
+
+      var summary = document.getElementById('menu-stats-summary');
       var panel = document.getElementById('menu-stats-text');
+      var pageEl = document.getElementById('menu-stats-page');
       if (!panel) return;
+
+      var wins = 0;
+      var losses = 0;
+      for (var wi = 0; wi < list.length; wi++) {
+        if (list[wi].result === 'WIN') wins++;
+        else if (list[wi].result === 'LOSS') losses++;
+      }
+
+      var sumLines = [];
+      if (bests && (bests.matches | 0) > 0) {
+        sumLines.push(nick + '  ' + (bests.wins | 0) + 'W-' + (bests.losses | 0) + 'L');
+        sumLines.push('Best BPM ' + (bests.bestBpm || 0).toFixed(1) +
+          '  Peak ' + (bests.peakBpm || 0).toFixed(1));
+        sumLines.push('Best Blk ' + (bests.bestBlocks | 0) +
+          '  Atk ' + (bests.bestAttacks | 0) +
+          '  Lay ' + (bests.bestLayers | 0));
+        sumLines.push('Combo ' + (bests.bestMaxCombo | 0) +
+          '  Long ' + fmt(bests.longestMs) +
+          '  Streak ' + (bests.bestWinStreak | 0));
+      } else if (list.length) {
+        sumLines.push((this.statsSubTab === 'multi' ? 'PvP' : 'vs Bot') +
+          '  ' + wins + 'W-' + losses + 'L');
+      } else {
+        sumLines.push('No ' + (this.statsSubTab === 'multi' ? 'PvP' : 'bot') + ' matches yet');
+      }
+      if (summary) summary.setAttribute('value', sumLines.join('\n'));
+
       if (!list.length) {
-        panel.setAttribute('value', 'No matches yet');
+        panel.setAttribute('value', 'Play a match to track\nprogression & bests.');
+        if (pageEl) pageEl.setAttribute('value', '');
         return;
       }
+
+      var totalPages = Math.max(1, Math.ceil(list.length / this.STATS_PER_PAGE));
+      if (this.statsPage >= totalPages) this.statsPage = totalPages - 1;
+      if (this.statsPage < 0) this.statsPage = 0;
       var start = this.statsPage * this.STATS_PER_PAGE;
-      var slice = list.slice(start, start + this.STATS_PER_PAGE);
-      var lines = slice.map(function (m, i) {
-        var d = new Date(m.ts);
-        return (start + i + 1) + '. ' + d.toLocaleDateString() + ' ' +
-          (m.bot ? 'BOT' : 'PvP') + ' ' + m.blue + '-' + m.red +
-          (m.winner ? ' W:' + m.winner : '');
-      });
+      var end = Math.min(start + this.STATS_PER_PAGE, list.length);
+      var lines = [];
+      var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+      for (var j = start; j < end; j++) {
+        var m = list[j];
+        var res = m.result || '?';
+        var header = '#' + (j + 1) + ' ' + res + '  ' +
+          (m.playerScore | 0) + '-' + (m.opponentScore | 0);
+        if (m.opponentName) header += ' vs ' + m.opponentName;
+        else if (m.bot) header += ' vs Bot';
+        lines.push(header);
+        var p = m.player || {};
+        if (p.blocks != null) {
+          lines.push('  Blk ' + (p.blocks | 0) + ' @' + (p.bpm || 0) +
+            '/m  Atk ' + (p.attacks | 0) +
+            '  Lay ' + (p.layers | 0));
+          lines.push('  Peak ' + (p.peakBpm || 0) +
+            '/m  Combo ' + (p.maxCombo | 0) +
+            '  ' + fmt(p.durationMs));
+        }
+        if (m.timestamp) {
+          var d = new Date(m.timestamp);
+          lines.push('  ' + months[d.getMonth()] + ' ' + d.getDate() +
+            ' ' + d.getHours() + ':' +
+            (d.getMinutes() < 10 ? '0' : '') + d.getMinutes());
+        }
+        lines.push('');
+      }
       panel.setAttribute('value', lines.join('\n'));
+      if (pageEl) {
+        pageEl.setAttribute('value',
+          totalPages > 1 ? (this.statsPage + 1) + ' / ' + totalPages : '');
+      }
     },
 
     _playLatestReplay: function () {

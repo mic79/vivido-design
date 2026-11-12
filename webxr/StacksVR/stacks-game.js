@@ -2674,7 +2674,9 @@
       if (scene) scene.emit('lobby-state-updated');
 
       setTimeout(function () {
-        try { selfEnd._saveMatchHistory(); } catch (e2) {
+        try {
+          if (!opts.cancelled && !opts.hostLeft) selfEnd._saveMatchHistory(opts);
+        } catch (e2) {
           console.warn('[StacksGame] history save failed', e2);
         }
         if (replayPending && window.matchReplayStorage) {
@@ -3068,24 +3070,65 @@
       }
     },
 
-    _saveMatchHistory: function () {
-      var KEY = 'stacksvr-match-history';
-      var list = [];
-      try { list = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { list = []; }
-      var modeId = (this.modes && this.modes.mode && this.modes.mode.id) || 'pvp';
+    _saveMatchHistory: function (opts) {
+      opts = opts || {};
+      if (global.isMobileSpectator || global.isSpectator) return;
+      if (this._dualBotPreview) return;
+      if (!global.StacksStats || typeof global.StacksStats.saveMatch !== 'function') return;
+
+      var side = this._localSide ? this._localSide() : 'blue';
+      var statsSide = this.matchStats && (side === 'red' ? this.matchStats.red : this.matchStats.blue);
+      var snap = statsSide && statsSide.snapshot
+        ? statsSide.snapshot(performance.now())
+        : null;
       var scores = (this.modes && this.modes.scores) || { blue: 0, red: 0 };
-      list.unshift({
-        ts: Date.now(), mode: modeId,
-        blue: scores.blue | 0, red: scores.red | 0,
-        winner: this.modes ? this.modes.winner : null,
-        reason: this.modes ? this.modes.reason : null,
-        bot: !!global.isLobbyBotMatch
-      });
-      if (list.length > 50) list = list.slice(0, 50);
-      try { localStorage.setItem(KEY, JSON.stringify(list)); } catch (e) {}
+      var winner = (opts && opts.winner) || (this.modes && this.modes.winner) || null;
+      var bot = !!(global.isLobbyBotMatch ||
+        (global.lobbyState && global.lobbyState.matchPlayers &&
+          global.lobbyState.matchPlayers.red === '__BOT__'));
+      var multi = !!global.isMultiplayer && !bot;
+      var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+      var nick = (global.playerNickname || 'Player').slice(0, 12);
+      var oppName = bot ? 'Bot' : null;
+      if (multi && global.lobbyState) {
+        var mp = global.lobbyState.matchPlayers || {};
+        var oppId = mp.blue === myId ? mp.red : mp.blue;
+        var players = global.lobbyState.players || [];
+        for (var i = 0; i < players.length; i++) {
+          if (players[i].id === oppId) {
+            oppName = (players[i].nickname || 'Player').slice(0, 12);
+            break;
+          }
+        }
+      }
+      var result = null;
+      if (winner === side) result = 'WIN';
+      else if (winner && winner !== 'draw') result = 'LOSS';
+      else if (winner === 'draw') result = 'DRAW';
+
+      var record = {
+        timestamp: Date.now(),
+        mode: multi ? 'multi' : 'single',
+        result: result,
+        playerScore: scores[side] | 0,
+        opponentScore: scores[side === 'red' ? 'blue' : 'red'] | 0,
+        bot: bot,
+        reason: (opts && opts.reason) || (this.modes && this.modes.reason) || null,
+        nickname: nick,
+        opponentName: oppName,
+        side: side,
+        player: snap,
+        boardSize: this.boardSize || 6
+      };
+      global.StacksStats.saveMatch(record);
+
       if (window.matchReplayStorage && window.matchReplayStorage.pruneOld) {
         try {
-          window.matchReplayStorage.pruneOld(list.map(function (m) { return m.ts; }));
+          var hist = global.StacksStats.loadHistory();
+          var keep = (hist.single || []).concat(hist.multi || []).map(function (m) {
+            return m.timestamp;
+          });
+          window.matchReplayStorage.pruneOld(keep);
         } catch (e2) {}
       }
     },
