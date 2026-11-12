@@ -26,6 +26,8 @@
   if (!_forceVr && (_forceSpectate || isMobileDevice())) {
     global.isMobileSpectator = true;
     global.isSpectator = true;
+    // Sticky across lobby sync / failed Watch → Preview (see lobby syncWindowState)
+    global._stacksDeviceMobileSpectator = true;
   }
 
   function requestWakeLock() {
@@ -241,6 +243,9 @@
     }
 
     var res = await global.connectAsMobileSpectator(_lobbyNum);
+    // Failed Watch sync used to clear isMobileSpectator — keep device mode sticky
+    global._stacksDeviceMobileSpectator = true;
+    global.isMobileSpectator = true;
     if (!res || !res.ok) {
       if (statusEl) statusEl.textContent = (res && res.error) || 'Failed';
       if (watchBtn) watchBtn.disabled = false;
@@ -270,8 +275,14 @@
   }
 
   function onPreviewClick() {
+    // Restore spectator flags in case a failed Watch synced them off
+    global._stacksDeviceMobileSpectator = true;
+    global.isMobileSpectator = true;
+    global.isSpectator = true;
     global.offlinePreview = true;
+    if (global.StacksLobby) global.StacksLobby.isMobileSpectator = true;
     document.body.classList.add('offline-preview');
+    document.body.classList.add('mobile-spectator');
     showMatchHud('Offline Preview — swipe to orbit camera');
     var redName = document.getElementById('mobile-red-name');
     var blueName = document.getElementById('mobile-blue-name');
@@ -303,6 +314,8 @@
     var scene = document.querySelector('a-scene');
     var camComp = scene && scene.components && scene.components['mobile-spectator-cam'];
     if (camComp && typeof camComp.setupMobileCamera === 'function') {
+      // Force re-bind path: allow setup even if a prior failed Watch cleared flags mid-init
+      camComp._orbitReady = false;
       camComp.setupMobileCamera();
     }
   }

@@ -528,7 +528,9 @@
     global.isMultiplayer = Lobby.isMultiplayer;
     global.isHost = Lobby.isHost;
     global.isSpectator = Lobby.isSpectator;
-    global.isMobileSpectator = Lobby.isMobileSpectator;
+    // Sticky device/URL spectator mode — failed Watch must NOT clear this or
+    // offline Preview orbit swipe dies (tick/onStart early-out on false).
+    global.isMobileSpectator = !!(Lobby.isMobileSpectator || global._stacksDeviceMobileSpectator);
     global.isLobbyBotMatch = Lobby.isLobbyBotMatch;
     global.lobbyState = Lobby.lobbyState;
     global.myPlayerId = Lobby.myPlayerId;
