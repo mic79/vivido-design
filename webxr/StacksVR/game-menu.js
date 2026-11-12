@@ -8,11 +8,19 @@
   // Back-compat alias
   var PLAY_POSITION = PLAY_POSITION_BLUE;
 
+  // Far corners while a match is live (non-players)
   var SPECTATOR_POSITIONS = [
     { x: -3.2, y: 0, z: 2.8, ry: -20 },
     { x: 3.2, y: 0, z: 2.8, ry: 20 },
     { x: -3.2, y: 0, z: -2.8, ry: -160 },
     { x: 3.2, y: 0, z: -2.8, ry: 160 }
+  ];
+  // Closer ring while lobby is WAITING — unique slots so joiners don't stack on blue
+  var LOBBY_WAIT_POSITIONS = [
+    { x: -2.0, y: 0, z: 2.5, ry: -18 },
+    { x: 2.0, y: 0, z: -2.5, ry: 162 },
+    { x: 2.4, y: 0, z: 1.8, ry: 55 },
+    { x: -2.4, y: 0, z: -1.8, ry: -125 }
   ];
 
   function lightenHex(hex, amount) {
@@ -1071,6 +1079,19 @@
       this._resetRigLocal();
     },
 
+    /** Stable 0..3 index when spectatorSlots hasn't listed us yet. */
+    _lobbySlotFallbackIndex: function (ls, myId) {
+      var plist = (ls && ls.players) || [];
+      var n = 0;
+      for (var i = 0; i < plist.length; i++) {
+        var p = plist[i];
+        if (!p || !p.id || p.mobile) continue;
+        if (p.id === myId) return n % 4;
+        n++;
+      }
+      return 0;
+    },
+
     _applySeatPose: function () {
       if (!window.isMultiplayer || !window.lobbyState) return;
       var myId = window.myPlayerId || (window.StacksLobby && window.StacksLobby.myPlayerId);
@@ -1080,24 +1101,31 @@
       var mp = ls.matchPlayers || {};
       var isBlue = mp.blue === myId;
       var isRed = mp.red === myId && mp.red !== '__BOT__';
-      var isMatchPlayer = isBlue || isRed;
-      var inQueue = (ls.queue || []).indexOf(myId) >= 0;
+      // Queued humans are pre-seated blue/red in WAITING — stand at that cup.
+      // Anyone else needs a UNIQUE lobby/spectator slot (never pile onto blue).
+      var usePlaySeat = isBlue || isRed;
       var slots = ls.spectatorSlots || [];
       var specIdx = slots.indexOf(myId);
+      if (specIdx < 0 && !usePlaySeat) {
+        specIdx = this._lobbySlotFallbackIndex(ls, myId);
+      }
+      var playing = ls.matchState === 'PLAYING';
+      var ring = playing ? SPECTATOR_POSITIONS : LOBBY_WAIT_POSITIONS;
+      var ringIdx = ((specIdx % ring.length) + ring.length) % ring.length;
 
-      // Only park in spectator corners while a match is on and you're not playing.
-      // Joining/hosting a lobby must NOT yank the player off the table.
-      var useSpectator = !isMatchPlayer && !inQueue &&
-        ls.matchState === 'PLAYING' && specIdx >= 0;
+      var key = usePlaySeat
+        ? ('play:' + (isRed ? 'red' : 'blue'))
+        : ((playing ? 'spec:' : 'wait:') + ringIdx);
 
-      var playSide = isRed ? 'red' : 'blue';
-      var key = useSpectator
-        ? ('spec:' + (specIdx % SPECTATOR_POSITIONS.length))
-        : ('play:' + playSide);
+      // Force a snap when a match just started so queued players land on cups
+      // even if they already previewed the same play:* seat while WAITING.
+      if (playing && this._poseMatchState !== 'PLAYING') {
+        this._poseKey = '';
+      }
+      this._poseMatchState = ls.matchState || 'WAITING';
 
-      // Always sync spectator flag — early pose-key return used to leave a stale
-      // isSpectator=true that blocked place/cup-grab after host vs-bot start.
-      if (useSpectator) {
+      // Spectator gameplay flag only while a live match is on and you're not seated
+      if (!usePlaySeat && playing) {
         window.isSpectator = true;
         if (window.StacksLobby) window.StacksLobby.isSpectator = true;
       } else {
@@ -1105,19 +1133,18 @@
         if (window.StacksLobby) window.StacksLobby.isSpectator = false;
       }
 
-      // Always refresh local body color to match seat (blue / red)
+      // Body tint: cup seat color, else default blue for lobby wait
       this._setLocalBodyColor(isRed ? '#E25A4A' : '#4A90E2');
 
       if (key === this._poseKey) return;
       this._poseKey = key;
 
-      if (useSpectator) {
-        var p = SPECTATOR_POSITIONS[specIdx % SPECTATOR_POSITIONS.length];
-        this._movePlayerTo(p);
-      } else if (isRed) {
+      if (usePlaySeat && isRed) {
         this._movePlayerTo(PLAY_POSITION_RED);
-      } else {
+      } else if (usePlaySeat) {
         this._movePlayerTo(PLAY_POSITION_BLUE);
+      } else {
+        this._movePlayerTo(ring[ringIdx]);
       }
     },
 

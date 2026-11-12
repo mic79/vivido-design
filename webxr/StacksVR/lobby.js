@@ -172,6 +172,7 @@
   function broadcastLobbyState() {
     if (!Lobby.isHost || !Lobby.lobbyState) return;
     pruneDisconnectedPlayers();
+    reconcileSpectatorSlots();
     global.lobbyState = Lobby.lobbyState;
     for (var i = 0; i < Lobby.connections.length; i++) {
       var c = Lobby.connections[i];
@@ -185,7 +186,7 @@
   }
 
   function assignSpectatorSlot(playerId) {
-    if (!Lobby.lobbyState) return;
+    if (!Lobby.lobbyState || !playerId || playerId === '__BOT__') return;
     for (var s = 0; s < Lobby.lobbyState.spectatorSlots.length; s++) {
       if (Lobby.lobbyState.spectatorSlots[s] === playerId) return;
     }
@@ -194,6 +195,47 @@
         Lobby.lobbyState.spectatorSlots[i] = playerId;
         return;
       }
+    }
+  }
+
+  /**
+   * Every non-cup VR player gets a unique spectatorSlots index.
+   * Cup-seated (blue/red humans) must not also occupy a spectator slot —
+   * otherwise clients teleport everyone to the same fallback / blue spawn.
+   */
+  function reconcileSpectatorSlots() {
+    if (!Lobby.lobbyState) return;
+    var mp = Lobby.lobbyState.matchPlayers || {};
+    var seated = {};
+    if (mp.blue && mp.blue !== '__BOT__') seated[mp.blue] = true;
+    if (mp.red && mp.red !== '__BOT__') seated[mp.red] = true;
+
+    var slots = Lobby.lobbyState.spectatorSlots;
+    if (!slots || slots.length < 4) {
+      Lobby.lobbyState.spectatorSlots = [null, null, null, null];
+      slots = Lobby.lobbyState.spectatorSlots;
+    }
+
+    // Drop cup-seated / missing / duplicate entries
+    var seen = {};
+    for (var s = 0; s < slots.length; s++) {
+      var sid = slots[s];
+      if (!sid || seated[sid] || seen[sid]) {
+        slots[s] = null;
+        continue;
+      }
+      seen[sid] = true;
+    }
+
+    var players = Lobby.lobbyState.players || [];
+    for (var pi = 0; pi < players.length; pi++) {
+      var p = players[pi];
+      if (!p || !p.id || p.mobile) continue;
+      if (seated[p.id]) {
+        clearSpectatorSlot(p.id);
+        continue;
+      }
+      assignSpectatorSlot(p.id);
     }
   }
 
