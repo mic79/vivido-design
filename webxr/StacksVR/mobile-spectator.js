@@ -8,6 +8,8 @@
   var _hudTimerIv = null;
   var _poseCount = 0;
   var _cupEventCount = 0;
+  var _uiReady = false;
+  var _desktopSpectate = false;
 
   function isMobileDevice() {
     var ua = navigator.userAgent || '';
@@ -20,6 +22,8 @@
   // CRITICAL (DodgeVR): set flag BEFORE a-scene upgrades components.
   // If this waits for DOMContentLoaded, mobile-spectator-cam init returns early
   // and orbit/swipe never binds.
+  // Desktop is NOT auto-forced — flatscreen keeps Enter VR / host play, and
+  // opts into the same Watch UI via Spectate button or ?spectate=1.
   var _paramsEarly = new URLSearchParams(location.search);
   var _forceSpectate = _paramsEarly.get('spectate') === '1';
   var _forceVr = _paramsEarly.get('vr') === '1';
@@ -28,6 +32,7 @@
     global.isSpectator = true;
     // Sticky across lobby sync / failed Watch → Preview (see lobby syncWindowState)
     global._stacksDeviceMobileSpectator = true;
+    if (_forceSpectate && !isMobileDevice()) _desktopSpectate = true;
   }
 
   function requestWakeLock() {
@@ -286,7 +291,9 @@
     if (global.StacksLobby) global.StacksLobby.isMobileSpectator = true;
     document.body.classList.add('offline-preview');
     document.body.classList.add('mobile-spectator');
-    showMatchHud('Offline Preview — swipe to orbit camera');
+    showMatchHud(_desktopSpectate || !isMobileDevice()
+      ? 'Offline Preview — drag to orbit'
+      : 'Offline Preview — swipe to orbit camera');
     var redName = document.getElementById('mobile-red-name');
     var blueName = document.getElementById('mobile-blue-name');
     if (redName) redName.textContent = 'Red Bot';
@@ -471,13 +478,42 @@
     };
   }
 
+  /**
+   * Enter the shared spectator shell (Watch + Offline Preview).
+   * Used by phones automatically, and by flatscreen via Spectate / ?spectate=1.
+   */
+  function activateSpectatorMode(opts) {
+    opts = opts || {};
+    if (opts.fromDesktop) _desktopSpectate = true;
+    global.isMobileSpectator = true;
+    global.isSpectator = true;
+    global._stacksDeviceMobileSpectator = true;
+    if (global.StacksLobby) global.StacksLobby.isMobileSpectator = true;
+    initMobileSpectatorUi();
+    var scene = document.querySelector('a-scene');
+    var camComp = scene && scene.components && scene.components['mobile-spectator-cam'];
+    if (camComp && typeof camComp.setupMobileCamera === 'function') {
+      camComp.setupMobileCamera();
+    }
+  }
+
   function initMobileSpectatorUi() {
     if (!global.isMobileSpectator) return;
 
     document.body.classList.add('mobile-spectator');
+    if (_desktopSpectate || !isMobileDevice()) {
+      document.body.classList.add('desktop-spectator');
+    }
+
     var ver = 'v' + (global.STACKS_VERSION || '0.0.0');
     var mobVer = document.getElementById('mobile-version-label');
     if (mobVer) mobVer.textContent = ver;
+    var modeLabel = document.getElementById('mobile-spectate-label');
+    if (modeLabel) {
+      modeLabel.textContent = (_desktopSpectate || !isMobileDevice())
+        ? 'Flatscreen Spectator'
+        : 'Mobile Spectator';
+    }
     var chip = document.getElementById('app-version-chip');
     if (chip) chip.textContent = ver;
 
@@ -487,9 +523,15 @@
     var overlay = document.getElementById('mobile-spectator-overlay');
     if (overlay) overlay.classList.add('active');
 
-    if (screen.orientation && screen.orientation.lock) {
+    if (!_desktopSpectate && isMobileDevice() && screen.orientation && screen.orientation.lock) {
       screen.orientation.lock('landscape').catch(function () {});
     }
+
+    if (_uiReady) {
+      wireLobbyCallbacks();
+      return;
+    }
+    _uiReady = true;
 
     var numEl = document.getElementById('mobile-lobby-num');
     var minus = document.getElementById('mobile-lobby-minus');
@@ -536,6 +578,15 @@
     wireLobbyCallbacks();
     setTimeout(wireLobbyCallbacks, 0);
     setTimeout(wireLobbyCallbacks, 500);
+  }
+
+  function wireDesktopSpectateButton() {
+    var btn = document.getElementById('pre-vr-spectate-btn');
+    if (!btn || btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', function () {
+      activateSpectatorMode({ fromDesktop: true });
+    });
   }
 
   // Orbit camera — DodgeVR pattern (player at orbit height, yaw the rig)
@@ -681,10 +732,15 @@
     });
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initMobileSpectatorUi);
-  } else {
+  function bootSpectatorUi() {
+    wireDesktopSpectateButton();
     initMobileSpectatorUi();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootSpectatorUi);
+  } else {
+    bootSpectatorUi();
   }
 
   global.StacksMobileSpectator = {
@@ -693,6 +749,7 @@
     updateMobileHudStatus: updateMobileHudStatus,
     updateMobileHudScores: updateMobileHudScores,
     activateSpectatorBodies: activateSpectatorBodies,
+    activateSpectatorMode: activateSpectatorMode,
     isMatchPlaying: isMatchPlaying,
     requestWakeLock: requestWakeLock,
     getDebug: function () {
@@ -701,7 +758,8 @@
         cupEventCount: _cupEventCount,
         lobbyNum: _lobbyNum,
         matchPlaying: isMatchPlaying(global.lobbyState),
-        matchState: global.lobbyState && global.lobbyState.matchState
+        matchState: global.lobbyState && global.lobbyState.matchState,
+        desktopSpectate: _desktopSpectate
       };
     }
   };

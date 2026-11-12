@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below). -->
-  <meta name="stacks-version" content="0.2.10" />
+  <meta name="stacks-version" content="0.2.11" />
   <title>StacksVR</title>
   <script>
     (function () {
@@ -40,7 +40,7 @@
   <script src="mixamo-body.js?v=22"></script>
   <script src="locomotion.js?v=21"></script>
   <script src="stacks-game.js?v=90"></script>
-  <script src="mobile-spectator.js?v=41"></script>
+  <script src="mobile-spectator.js?v=42"></script>
 
     <style>
     html, body { margin: 0; height: 100%; background: #111; font-family: sans-serif; }
@@ -61,6 +61,20 @@
       border: 2px solid #4488ff; border-radius: 6px; background: #222; color: #fff; outline: none;
     }
     #pre-vr-overlay .hint { font-size: 0.8em; color: #666; margin-top: 1.5em; }
+    #pre-vr-overlay .pre-vr-actions {
+      display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 1.2em;
+    }
+    #pre-vr-spectate-btn {
+      padding: 12px 36px; border: none; border-radius: 10px;
+      background: #1f9d45; color: #fff; font-size: 1.05em; font-weight: 700;
+      cursor: pointer;
+    }
+    #pre-vr-spectate-btn:hover { background: #188a3a; }
+    #pre-vr-overlay .spectate-hint {
+      font-size: 0.78em; color: #778899; max-width: 280px; line-height: 1.35; margin: 0;
+    }
+    /* Desktop spectate: never show phone rotate gate */
+    body.desktop-spectator #mobile-rotate-prompt { display: none !important; }
     #app-version-chip {
       position: fixed; left: 10px; bottom: 8px; z-index: 10000;
       font-size: 11px; letter-spacing: 0.04em; color: rgba(170, 180, 190, 0.55);
@@ -217,7 +231,11 @@
       <p class="tagline">1v1 Block Stacking in Virtual Reality</p>
       <label for="nickname-input">Nickname</label>
       <input id="nickname-input" type="text" maxlength="12" placeholder="Player" autocomplete="username" />
-      <p class="hint">Press <b>Enter VR</b> below to start</p>
+      <div class="pre-vr-actions">
+        <button type="button" id="pre-vr-spectate-btn">Spectate (flatscreen)</button>
+        <p class="spectate-hint">Same Watch / Offline Preview as mobile — orbit with mouse drag. VR play still uses Enter VR below.</p>
+      </div>
+      <p class="hint">Headset ready? Press <b>Enter VR</b> below to play</p>
     </div>
   </div>
   <div id="app-version-chip" aria-hidden="true"></div>
@@ -247,7 +265,7 @@
     <div id="mobile-spectator-overlay">
       <div id="mobile-lobby-screen">
       <h1>STACKS VR</h1>
-        <div class="subtitle">Mobile Spectator · <span id="mobile-version-label"></span></div>
+        <div class="subtitle"><span id="mobile-spectate-label">Spectator</span> · <span id="mobile-version-label"></span></div>
         <div class="lobby-row">
           <label>Lobby:</label>
         <button class="lobby-num-btn" id="mobile-lobby-minus" type="button">&minus;</button>
@@ -304,7 +322,7 @@
 
     <!-- Discreet build stamp (DodgeVR-style) — kept in sync from STACKS_VERSION -->
     <a-entity id="version-display" position="0 2.42 0"
-      text="value: v0.2.10; align: center; width: 0.85; color: #5a6878"></a-entity>
+      text="value: v0.2.11; align: center; width: 0.85; color: #5a6878"></a-entity>
     <a-entity id="score-display" position="0 2.2 0">
       <a-entity id="blue-score" position="-0.16 0 0"
         text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>
