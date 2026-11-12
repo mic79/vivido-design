@@ -81,11 +81,66 @@
 
   window.StacksHaptics = { pulse: pulseHaptic, getGamepad: getHandGamepad };
 
+  // Bot speed scale — same envelope as MotionGuidanceVR5 (50%–300%)
+  var BOT_SPEED_KEY = 'stacksvr.botSpeedScale.v1';
+  var BOT_SPEED_MIN = 0.5;
+  var BOT_SPEED_MAX = 3;
+  var BOT_SPEED_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+
+  function clampBotSpeed(v) {
+    v = Number(v);
+    if (!isFinite(v) || v <= 0) return 1;
+    return Math.min(BOT_SPEED_MAX, Math.max(BOT_SPEED_MIN, v));
+  }
+
+  function loadBotSpeedScale() {
+    try {
+      var raw = localStorage.getItem(BOT_SPEED_KEY);
+      if (raw == null || raw === '') return 1;
+      return clampBotSpeed(raw);
+    } catch (e) { return 1; }
+  }
+
+  function saveBotSpeedScale(v) {
+    v = clampBotSpeed(v);
+    try { localStorage.setItem(BOT_SPEED_KEY, String(v)); } catch (e) { /* */ }
+    return v;
+  }
+
+  function nearestBotSpeedStep(v) {
+    v = clampBotSpeed(v);
+    var best = BOT_SPEED_STEPS[0];
+    var bestD = Math.abs(best - v);
+    for (var i = 1; i < BOT_SPEED_STEPS.length; i++) {
+      var d = Math.abs(BOT_SPEED_STEPS[i] - v);
+      if (d < bestD) { best = BOT_SPEED_STEPS[i]; bestD = d; }
+    }
+    return best;
+  }
+
+  function stepBotSpeed(cur, dir) {
+    cur = nearestBotSpeedStep(cur);
+    var idx = BOT_SPEED_STEPS.indexOf(cur);
+    if (idx < 0) idx = BOT_SPEED_STEPS.indexOf(1);
+    idx = Math.max(0, Math.min(BOT_SPEED_STEPS.length - 1, idx + (dir < 0 ? -1 : 1)));
+    return BOT_SPEED_STEPS[idx];
+  }
+
+  window.StacksBotSpeed = {
+    load: loadBotSpeedScale,
+    save: saveBotSpeedScale,
+    clamp: clampBotSpeed,
+    steps: BOT_SPEED_STEPS,
+    min: BOT_SPEED_MIN,
+    max: BOT_SPEED_MAX
+  };
+
   AFRAME.registerComponent('vr-menu', {
     init: function () {
       this.menuVisible = false;
       this.menuMode = 'single';
       this.lobbyNumber = 1;
+      this.botSpeedScale = loadBotSpeedScale();
       this.statsPage = 0;
       this.STATS_PER_PAGE = 4;
       this._refsReady = false;
@@ -257,7 +312,9 @@
       this._attachMenuToLeftHand();
       this._bindClicks();
       this.setRaycasters(false);
+      this.botSpeedScale = loadBotSpeedScale();
       this.refreshLobbyUI();
+      this._applyBotSpeedToGame();
     },
 
     /** Real human/bot/multi match — dual-bot desktop preview does not count. */
@@ -519,9 +576,66 @@
         case 'board-6':
           this._setBoardSizeChoice(6);
           break;
+        case 'bot-speed-minus':
+          this._nudgeBotSpeed(-1);
+          break;
+        case 'bot-speed-plus':
+          this._nudgeBotSpeed(1);
+          break;
+        case 'bot-speed-track':
+          this._nudgeBotSpeed(1); // coarse bump; − for fine control
+          break;
         default:
           break;
       }
+    },
+
+    _nudgeBotSpeed: function (dir) {
+      this.botSpeedScale = saveBotSpeedScale(stepBotSpeed(this.botSpeedScale || 1, dir));
+      this._applyBotSpeedToGame();
+      this._setBotSpeedUI();
+      pulseHaptic(this._leftHandEl || document.getElementById('leftHand'), 0.35, 30);
+    },
+
+    _applyBotSpeedToGame: function () {
+      var scale = clampBotSpeed(this.botSpeedScale || loadBotSpeedScale());
+      this.botSpeedScale = scale;
+      window._botSpeedScale = scale;
+      var gm = document.querySelector('[stacks-game]');
+      var comp = gm && gm.components && gm.components['stacks-game'];
+      if (comp && typeof comp.setBotSpeedScale === 'function') {
+        comp.setBotSpeedScale(scale);
+      }
+    },
+
+    _setBotSpeedUI: function () {
+      var scale = clampBotSpeed(this.botSpeedScale || loadBotSpeedScale());
+      this.botSpeedScale = scale;
+      var txt = document.getElementById('menu-bot-speed-text');
+      if (txt) txt.setAttribute('value', Math.round(scale * 100) + '%');
+
+      // Track width 0.34, local x from -0.17..+0.17 maps 50%→300%
+      var t = (scale - BOT_SPEED_MIN) / (BOT_SPEED_MAX - BOT_SPEED_MIN);
+      t = Math.max(0, Math.min(1, t));
+      var trackHalf = 0.17;
+      var x = -trackHalf + t * trackHalf * 2;
+      var fill = document.getElementById('menu-bot-speed-fill');
+      var knob = document.getElementById('menu-bot-speed-knob');
+      if (knob) knob.setAttribute('position', x + ' 0 0.004');
+      if (fill) {
+        var fillW = Math.max(0.02, (x + trackHalf));
+        fill.setAttribute('geometry', 'width', fillW);
+        // Box is centered — shift so left edge stays at track start
+        fill.setAttribute('position', (-trackHalf + fillW / 2) + ' 0 0.002');
+        var accent = scale < 0.9 ? '#3d8f5a' : (scale > 1.4 ? '#c45a12' : '#1e6ad4');
+        fill.setAttribute('material', 'color', accent);
+      }
+      ['menu-bot-speed-minus', 'menu-bot-speed-plus', 'menu-bot-speed-hit'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.dataset.baseColor = el.id === 'menu-bot-speed-hit' ? '#152032' : '#243044';
+        el.dataset.hoverColor = lightenHex('#1e6ad4', 0.4);
+      });
     },
 
     _currentBoardSize: function () {
@@ -663,6 +777,7 @@
       this._setStartButton();
       this._setMusicButton();
       this._setBoardButton();
+      this._setBotSpeedUI();
       if (stats) this._showStats();
 
       var status = document.getElementById('menu-lobby-status');

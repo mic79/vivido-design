@@ -30,6 +30,9 @@
       this.bot = null;
       this._remoteBodyMap = {}; // playerId -> element id
       this._nextTypeBySide = { blue: null, red: null };
+      this.botSpeedScale = (global.StacksBotSpeed && global.StacksBotSpeed.load)
+        ? global.StacksBotSpeed.load()
+        : (global._botSpeedScale || 1);
 
       this.held = null; // { mesh, type, rot, handEl }
       this.ghostMesh = null;
@@ -306,6 +309,8 @@
           self._onBotVisual('blue', evt);
         }
       });
+      if (this.bot && this.bot.setSpeedScale) this.bot.setSpeedScale(this.botSpeedScale || 1);
+      if (this.botBlue && this.botBlue.setSpeedScale) this.botBlue.setSpeedScale(this.botSpeedScale || 1);
       this._setBotStationVisible(false);
 
       // No human pad piece until a real match — idle uses dual-bot preview
@@ -2146,7 +2151,10 @@
         this.bot.setCup(this.cups.red);
         var runBot = (!spectating) && isBotSeat;
         this.bot.enable(runBot);
-        if (runBot) this.bot.setTargetPpm(10);
+        if (runBot) {
+          if (this.bot.setSpeedScale) this.bot.setSpeedScale(this.botSpeedScale || 1);
+          this.bot.setTargetPpm(10);
+        }
       }
       if (this.botBlue) this.botBlue.enable(false);
       this._showMatchBodies({ showBot: !!isBotSeat && !spectating });
@@ -2940,12 +2948,38 @@
       card.mesh.visible = true;
     },
 
-    /** Bot pace tracks player (or rival bot) PPM with built-in wander. */
+    /** Apply MotionGuidance-style speed scale (0.5–3) to live bots. */
+    setBotSpeedScale: function (scale) {
+      if (global.StacksBotSpeed) scale = global.StacksBotSpeed.clamp(scale);
+      else {
+        scale = Number(scale);
+        if (!isFinite(scale) || scale <= 0) scale = 1;
+        scale = Math.max(0.5, Math.min(3, scale));
+      }
+      this.botSpeedScale = scale;
+      global._botSpeedScale = scale;
+      if (this.bot && this.bot.setSpeedScale) this.bot.setSpeedScale(scale);
+      if (this.botBlue && this.botBlue.setSpeedScale) this.botBlue.setSpeedScale(scale);
+      // Force an immediate retarget so the change is felt on the next place
+      this._updateBotPace();
+      return scale;
+    },
+
+    /** Bot pace tracks player (or rival bot) PPM × botSpeedScale, with wander. */
     _updateBotPace: function () {
       if (!this.matchStats) return;
       var now = performance.now();
       var blue = this.matchStats.blue;
       var red = this.matchStats.red;
+      var scale = this.botSpeedScale;
+      if (scale == null && global.StacksBotSpeed) scale = global.StacksBotSpeed.load();
+      if (scale == null) scale = 1;
+      if (this.bot && this.bot.speedScale !== scale && this.bot.setSpeedScale) {
+        this.bot.setSpeedScale(scale);
+      }
+      if (this.botBlue && this.botBlue.speedScale !== scale && this.botBlue.setSpeedScale) {
+        this.botBlue.setSpeedScale(scale);
+      }
 
       function paceFrom(sideStats, fallback) {
         if (!sideStats) return fallback;

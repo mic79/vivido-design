@@ -16,6 +16,8 @@
     this.basePlaceAnimMs = this.placeAnimMs;
     // Adaptive pacing: follow a target PPM with wandering variation
     this.adaptPace = opts.adaptPace !== false;
+    // Manual scale on top of adaptive PPM (0.5–3, like MotionGuidanceVR5)
+    this.speedScale = opts.speedScale != null ? opts.speedScale : 1;
     this._paceMul = 1;
     this._paceTargetMul = 1;
     this._nextPaceJitterAt = 0;
@@ -58,14 +60,25 @@
     this._emit({ kind: 'reset' });
   };
 
+  CupBot.prototype.setSpeedScale = function (scale) {
+    scale = Number(scale);
+    if (!isFinite(scale) || scale <= 0) scale = 1;
+    this.speedScale = Math.max(0.5, Math.min(3, scale));
+    // Re-apply current base so the next think uses the new scale immediately
+    if (this.baseThinkMs > 0) this._applyPaceMul(performance.now());
+    return this.speedScale;
+  };
+
   /**
    * Match a player's pieces-per-minute. Variation wanders ~±20% over time.
    * cycleMs = think + anim + busy ≈ 60000/ppm.
+   * speedScale (0.5–3) multiplies the target — 50% chill / 300% aggressive.
    */
   CupBot.prototype.setTargetPpm = function (ppm, now) {
     if (!this.adaptPace) return;
     now = now || performance.now();
-    ppm = Math.max(4, Math.min(40, ppm || 12));
+    var scale = this.speedScale != null ? this.speedScale : 1;
+    ppm = Math.max(4, Math.min(48, (ppm || 12) * scale));
     var cycleMs = 60000 / ppm;
     // Split cycle: ~45% think/idle, ~45% place anim, ~10% post-busy
     var think = Math.max(280, cycleMs * 0.42);
