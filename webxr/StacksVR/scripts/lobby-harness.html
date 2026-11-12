@@ -102,6 +102,40 @@
         },
         leave: function () {
           if (window.endMultiplayer) window.endMultiplayer();
+        },
+        armDisconnectWatch: function () {
+          window.__lastDisconnected = null;
+          window.__lastMatchEnded = null;
+          if (!window.StacksLobby) throw new Error('StacksLobby missing');
+          var prevDisc = window.StacksLobby.onDisconnected;
+          window.StacksLobby.onDisconnected = function (opts) {
+            window.__lastDisconnected = opts || { reason: 'unknown' };
+            if (typeof prevDisc === 'function') prevDisc(opts);
+          };
+          var prevEnd = window.StacksLobby.onMatchEnded;
+          window.StacksLobby.onMatchEnded = function (opts) {
+            window.__lastMatchEnded = opts || null;
+            if (typeof prevEnd === 'function') prevEnd(opts);
+          };
+          return true;
+        },
+        lastDisconnected: function () { return window.__lastDisconnected || null; },
+        joinAsPeer: async function (n) {
+          log('join peer lobby ' + n);
+          await window.connectToLobby(n);
+          var t0 = Date.now();
+          while (Date.now() - t0 < 20000) {
+            if (window.isMultiplayer && !window.isHost && window.connectionState === 'connected') {
+              log('peer ready');
+              return window.__lobbyTest.status();
+            }
+            await new Promise(function (r) { setTimeout(r, 100); });
+          }
+          throw new Error('peer not ready: ' + JSON.stringify(window.__lobbyTest.status()));
+        },
+        queueJoin: function () {
+          if (window.sendQueueAction) window.sendQueueAction('join');
+          return window.__lobbyTest.status();
         }
       };
       window.__HARNESS_READY__ = true;

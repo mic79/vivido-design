@@ -1080,13 +1080,26 @@
         removePlayer(peerId);
         setStatus('HOSTING Lobby ' + lobbyNum + ' — ' + Lobby.connections.length + ' connected');
       });
+      // DodgeVR: data-channel error ≡ disconnect — don't leave ghosts in queue/seats
+      newConn.on('error', function () {
+        Lobby.connections = Lobby.connections.filter(function (c) { return c.id !== peerId; });
+        removePlayer(peerId);
+        setStatus('HOSTING Lobby ' + lobbyNum + ' — ' + Lobby.connections.length + ' connected');
+      });
     });
 
     Lobby.peer.on('error', function (err) {
+      // DodgeVR: host PeerJS error ⇒ full endMultiplayer so peers are not stuck
       console.warn('[StacksLobby] host error', err);
       setStatus('Host error: ' + (err && err.type ? err.type : 'unknown'));
-      Lobby.connectionState = 'idle';
-      syncWindowState();
+      if (Lobby.isMultiplayer || Lobby.isHost) {
+        try { endMultiplayer(); } catch (e) {
+          try { cleanupMultiplayer(); } catch (e2) { /* ignore */ }
+        }
+      } else {
+        Lobby.connectionState = 'idle';
+        syncWindowState();
+      }
     });
   }
 
@@ -1154,7 +1167,12 @@
         Lobby.conn.on('data', function (data) { handleData(hostId, data, false); });
         Lobby.conn.on('error', function () {
           clearTimeout(timer);
-          fail('Connection failed to lobby ' + lobbyNum);
+          if (!settled) {
+            fail('Connection failed to lobby ' + lobbyNum);
+            return;
+          }
+          // Post-connect channel error — same as close (DodgeVR endMultiplayer)
+          handleHostGone('host-left');
         });
         Lobby.conn.on('close', function () {
           // DodgeVR: close ⇒ full teardown. Never leave peers/spectators on a stale match.
@@ -1163,7 +1181,13 @@
       });
       Lobby.peer.on('error', function (err) {
         clearTimeout(timer);
-        fail('Peer error: ' + (err && err.type ? err.type : 'unknown'));
+        if (!settled) {
+          fail('Peer error: ' + (err && err.type ? err.type : 'unknown'));
+          return;
+        }
+        // Post-connect PeerJS error must tear down (DodgeVR always endMultiplayer)
+        console.warn('[StacksLobby] peer error', err);
+        handleHostGone('host-left');
       });
     });
   }
