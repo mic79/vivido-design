@@ -150,6 +150,8 @@
       this._menuToggleAt = 0;
       this._poseKey = '';
       this._hoveredBtn = null;
+      this._lastActionAt = 0;
+      this._lastActionName = '';
       var self = this;
 
       this.el.sceneEl.addEventListener('loaded', function () { self.cacheRefs(); });
@@ -170,12 +172,15 @@
         }
         if (rightHand && !rightHand.dataset.menuTriggerBound) {
           rightHand.dataset.menuTriggerBound = '1';
-          // Fallback select when laser-controls click doesn't fire
+          // Fallback ONLY when laser-controls did not emit click on this press.
+          // Same trigger often fires both → lobby +/- was jumping 2+ steps.
           rightHand.addEventListener('triggerdown', function () {
             if (!self.menuVisible || !self._hoveredBtn) return;
             var el = self._hoveredBtn;
             if (!isEffectivelyVisible(el)) return;
+            if (self._lastActionAt && (performance.now() - self._lastActionAt) < 320) return;
             pulseHaptic(rightHand, 0.7, 55);
+            if (window.StacksAudio) window.StacksAudio.sfx('ui');
             self.handleAction(el.getAttribute('data-action'));
           });
         }
@@ -486,6 +491,14 @@
     },
 
     handleAction: function (action) {
+      if (!action || action === 'noop') return;
+      // One physical trigger must equal one action. laser-controls `click` + our
+      // triggerdown fallback (and occasional double-click) used to step lobby ±2+.
+      var now = performance.now();
+      if (this._lastActionAt && (now - this._lastActionAt) < 320) return;
+      this._lastActionAt = now;
+      this._lastActionName = action;
+
       var gm = document.querySelector('[stacks-game]');
       var comp = gm && gm.components['stacks-game'];
       var playing = this._isRealMatchPlaying();
