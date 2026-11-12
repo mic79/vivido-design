@@ -3172,7 +3172,7 @@
         ctx.fillText(String(main), left, y);
         if (rate != null && rate !== '') {
           ctx.font = 'italic 600 48px Arial, Helvetica, sans-serif';
-          ctx.fillText(String(rate), rateX, y);
+          ctx.fillText(String(rate) + '/min', rateX, y);
         }
         y += 88;
       }

@@ -2,6 +2,9 @@
 (function (global) {
   'use strict';
 
+  /** Station card rates use a rolling window (live pace). Overall BPS kept for cup panel. */
+  var RATE_WINDOW_MS = 30000;
+
   /**
    * BattleBlocks floating player card:
    *   Time: MM:SS.cc
@@ -9,7 +12,7 @@
    *   Blocks: N (X.X/min)
    * Cup-side panel:
    *   Score / BPS / Attacks
-   * BPS in BB equals overall blocks/min (292 blocks / 15:58.32 → 18.282).
+   * Card /min = recent pace (last ~30s). Cup BPS = overall match average.
    */
   function SideStats() {
     this.reset();
@@ -48,10 +51,7 @@
     this.blocks += 1;
     this.pieces = this.blocks;
     this.placeTimes.push(now);
-    var cutoff = now - 45000;
-    while (this.placeTimes.length && this.placeTimes[0] < cutoff) {
-      this.placeTimes.shift();
-    }
+    this._prunePlaceTimes(now);
     if (clearResult) {
       if (clearResult.layersCleared > 0) {
         this.layers += clearResult.layersCleared | 0;
@@ -70,11 +70,32 @@
     now = now || performance.now();
     if (!amount || amount <= 0) return;
     this.attacks += amount | 0;
-    this.attackTimes.push(now);
-    var cutoff = now - 45000;
+    // One stamp per attack line-sent so multi-line clears weight the rolling rate
+    var n = amount | 0;
+    for (var i = 0; i < n; i++) this.attackTimes.push(now);
+    this._pruneAttackTimes(now);
+  };
+
+  SideStats.prototype._prunePlaceTimes = function (now) {
+    var cutoff = now - RATE_WINDOW_MS;
+    while (this.placeTimes.length && this.placeTimes[0] < cutoff) {
+      this.placeTimes.shift();
+    }
+  };
+
+  SideStats.prototype._pruneAttackTimes = function (now) {
+    var cutoff = now - RATE_WINDOW_MS;
     while (this.attackTimes.length && this.attackTimes[0] < cutoff) {
       this.attackTimes.shift();
     }
+  };
+
+  SideStats.prototype._rollingPerMin = function (times, now) {
+    now = now || performance.now();
+    var elapsed = this.elapsedMs(now);
+    if (elapsed <= 0) return 0;
+    var denomMs = Math.min(RATE_WINDOW_MS, Math.max(1000, elapsed));
+    return (times.length / denomMs) * 60000;
   };
 
   SideStats.prototype._ratePerMin = function (count, now) {
@@ -87,17 +108,23 @@
     return this._ratePerMin(this.blocks, now);
   };
 
-  SideStats.prototype.attacksPerMin = function (now) {
+  /** Overall attacks/min (match average). */
+  SideStats.prototype.attacksPerMinOverall = function (now) {
     return this._ratePerMin(this.attacks, now);
   };
 
-  /** Rolling blocks/min for bot pacing (recent window). */
+  /** Live attacks/min (last ~30s) — what the station card shows. */
+  SideStats.prototype.attacksPerMin = function (now) {
+    now = now || performance.now();
+    this._pruneAttackTimes(now);
+    return this._rollingPerMin(this.attackTimes, now);
+  };
+
+  /** Live blocks/min (last ~30s) — station card + bot pacing. */
   SideStats.prototype.ppmRolling = function (now) {
     now = now || performance.now();
-    var times = this.placeTimes;
-    if (times.length < 2) return this.bps(now);
-    var spanMs = Math.max(1000, now - times[0]);
-    return (times.length / spanMs) * 60000;
+    this._prunePlaceTimes(now);
+    return this._rollingPerMin(this.placeTimes, now);
   };
 
   SideStats.prototype.ppmOverall = function (now) {
@@ -123,11 +150,11 @@
       (cc < 10 ? '0' : '') + cc;
   };
 
-  /** Floating card: Time / Attacks / Blocks — matches BattleBlocks screenshot. */
+  /** Floating card: Time / Attacks / Blocks — rates are live (rolling ~30s). */
   SideStats.prototype.cardText = function (now) {
     now = now || performance.now();
     var apm = this.attacksPerMin(now);
-    var bpm = this.bps(now);
+    var bpm = this.ppmRolling(now);
     return 'Time\n' + this.formatTime(now) + '\n' +
       'Attacks\n' + (this.attacks | 0) + '   ' + apm.toFixed(1) + '/min\n' +
       'Blocks\n' + (this.blocks | 0) + '   ' + bpm.toFixed(1) + '/min';
@@ -138,9 +165,9 @@
     return {
       time: this.formatTime(now),
       attacks: String(this.attacks | 0),
-      attackRate: this.attacksPerMin(now).toFixed(2),
+      attackRate: this.attacksPerMin(now).toFixed(1),
       blocks: String(this.blocks | 0),
-      blockRate: this.bps(now).toFixed(1)
+      blockRate: this.ppmRolling(now).toFixed(1)
     };
   };
 
