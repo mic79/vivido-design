@@ -22,16 +22,16 @@
   <script src="cup.js?v=34"></script>
   <script src="clear.js?v=19"></script>
   <script src="attack.js?v=19"></script>
-  <script src="cup-bot.js?v=24"></script>
+  <script src="cup-bot.js?v=25"></script>
   <script src="stats.js?v=7"></script>
   <script src="modes.js?v=19"></script>
   <script src="lobby.js?v=41"></script>
   <script src="match-replay.js?v=19"></script>
   <script src="stacks-audio.js?v=3"></script>
-  <script src="game-menu.js?v=46"></script>
+  <script src="game-menu.js?v=47"></script>
   <script src="mixamo-body.js?v=21"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=77"></script>
+  <script src="stacks-game.js?v=78"></script>
   <script src="mobile-spectator.js?v=37"></script>
 
     <style>
@@ -391,10 +391,10 @@
               <a-text value="SOLO" position="-0.28 0.055 0" align="left" width="0.28" color="#33bbff"></a-text>
               <a-text value="You vs bot · grab pad pieces" position="-0.28 0.01 0"
                 align="left" width="0.42" color="#8a9bb0"></a-text>
-              <!-- Bot speed scale (MotionGuidanceVR5-style 50%–300%) -->
+              <!-- Bot target blocks/min (0 = frozen) -->
               <a-entity id="menu-bot-speed" position="0 -0.045 0">
-                <a-text value="BOT SPEED" position="-0.28 0.012 0" align="left" width="0.30" color="#8a9bb0"></a-text>
-                <a-text id="menu-bot-speed-text" value="100%" position="0.28 0.012 0" align="right" width="0.28" color="#e8f4ff"></a-text>
+                <a-text value="BOT BPM" position="-0.28 0.012 0" align="left" width="0.30" color="#8a9bb0"></a-text>
+                <a-text id="menu-bot-speed-text" value="12/min" position="0.28 0.012 0" align="right" width="0.32" color="#e8f4ff"></a-text>
                 <a-entity class="menu-btn clickable" data-action="bot-speed-minus" id="menu-bot-speed-minus" position="-0.22 -0.028 0"
                   geometry="primitive: box; width: 0.05; height: 0.04; depth: 0.008"
                   material="color: #243044; shader: flat">

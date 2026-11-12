@@ -14,10 +14,9 @@
     this.placeAnimMs = opts.placeAnimMs != null ? opts.placeAnimMs : 1100;
     this.baseThinkMs = this.thinkIntervalMs;
     this.basePlaceAnimMs = this.placeAnimMs;
-    // Adaptive pacing: follow a target PPM with wandering variation
+    // Absolute target blocks/min (0 = frozen / no new moves). Light wander around it.
     this.adaptPace = opts.adaptPace !== false;
-    // Manual scale on top of adaptive PPM (0.5–3, like MotionGuidanceVR5)
-    this.speedScale = opts.speedScale != null ? opts.speedScale : 1;
+    this.targetBpm = opts.targetBpm != null ? opts.targetBpm : 12;
     this._paceMul = 1;
     this._paceTargetMul = 1;
     this._nextPaceJitterAt = 0;
@@ -60,29 +59,43 @@
     this._emit({ kind: 'reset' });
   };
 
+  /**
+   * Set absolute average blocks/min. 0 = bot makes no new moves (can finish an in-flight place).
+   */
+  CupBot.prototype.setTargetBpm = function (bpm, now) {
+    bpm = Number(bpm);
+    if (!isFinite(bpm) || bpm < 0) bpm = 0;
+    this.targetBpm = Math.max(0, Math.min(40, bpm));
+    if (this.targetBpm <= 0) return this.targetBpm;
+    this.setTargetPpm(this.targetBpm, now);
+    return this.targetBpm;
+  };
+
+  // Back-compat alias
   CupBot.prototype.setSpeedScale = function (scale) {
+    // Old % API → map roughly onto BPM around a 12/min baseline
     scale = Number(scale);
-    if (!isFinite(scale) || scale <= 0) scale = 1;
-    this.speedScale = Math.max(0.5, Math.min(3, scale));
-    // Re-apply current base so the next think uses the new scale immediately
-    if (this.baseThinkMs > 0) this._applyPaceMul(performance.now());
-    return this.speedScale;
+    if (!isFinite(scale) || scale < 0) scale = 1;
+    return this.setTargetBpm(scale <= 0 ? 0 : 12 * scale);
   };
 
   /**
-   * Match a player's pieces-per-minute. Variation wanders ~±20% over time.
-   * cycleMs = think + anim + busy ≈ 60000/ppm.
-   * speedScale (0.5–3) multiplies the target — 50% chill / 300% aggressive.
+   * Drive think/anim timing from blocks-per-minute.
+   * cycleMs = think + anim + busy ≈ 60000/ppm. Wander ±~20% around the average.
    */
   CupBot.prototype.setTargetPpm = function (ppm, now) {
     if (!this.adaptPace) return;
     now = now || performance.now();
-    var scale = this.speedScale != null ? this.speedScale : 1;
-    ppm = Math.max(4, Math.min(48, (ppm || 12) * scale));
-    var cycleMs = 60000 / ppm;
-    // Split cycle: ~45% think/idle, ~45% place anim, ~10% post-busy
-    var think = Math.max(280, cycleMs * 0.42);
-    var anim = Math.max(450, Math.min(1600, cycleMs * 0.45));
+    ppm = Number(ppm);
+    if (!isFinite(ppm) || ppm <= 0) {
+      this.targetBpm = 0;
+      return;
+    }
+    this.targetBpm = Math.max(0.5, Math.min(40, ppm));
+    var cycleMs = 60000 / this.targetBpm;
+    // Split cycle: ~42% think/idle, ~45% place anim, rest post-busy
+    var think = Math.max(200, cycleMs * 0.42);
+    var anim = Math.max(350, Math.min(1800, cycleMs * 0.45));
     this.baseThinkMs = think;
     this.basePlaceAnimMs = anim;
     this._applyPaceMul(now);
@@ -125,11 +138,16 @@
   CupBot.prototype.tick = function (now) {
     if (!this.enabled || !this.cup) return null;
     now = now || performance.now();
-    if (this.adaptPace) this._applyPaceMul(now);
 
+    // Always allow an in-flight place anim to finish, even at 0 BPM
     if (this.state === 'animating' && this._anim) {
       return this._tickAnim(now);
     }
+
+    // 0 BPM = frozen — no new thinks / places
+    if (this.targetBpm != null && this.targetBpm <= 0) return null;
+
+    if (this.adaptPace) this._applyPaceMul(now);
 
     if (now < this._busyUntil) return null;
     if (now - this._lastThink < this.thinkIntervalMs) return null;

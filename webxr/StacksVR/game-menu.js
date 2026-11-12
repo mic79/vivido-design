@@ -81,66 +81,68 @@
 
   window.StacksHaptics = { pulse: pulseHaptic, getGamepad: getHandGamepad };
 
-  // Bot speed scale — same envelope as MotionGuidanceVR5 (50%–300%)
-  var BOT_SPEED_KEY = 'stacksvr.botSpeedScale.v1';
-  var BOT_SPEED_MIN = 0.5;
-  var BOT_SPEED_MAX = 3;
-  var BOT_SPEED_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+  // Bot target blocks/min (0 = frozen, up to 40)
+  var BOT_BPM_KEY = 'stacksvr.botTargetBpm.v1';
+  var BOT_BPM_MIN = 0;
+  var BOT_BPM_MAX = 40;
+  var BOT_BPM_STEPS = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40];
 
-  function clampBotSpeed(v) {
+  function clampBotBpm(v) {
     v = Number(v);
-    if (!isFinite(v) || v <= 0) return 1;
-    return Math.min(BOT_SPEED_MAX, Math.max(BOT_SPEED_MIN, v));
+    if (!isFinite(v) || v < 0) return 12;
+    return Math.min(BOT_BPM_MAX, Math.max(BOT_BPM_MIN, Math.round(v)));
   }
 
-  function loadBotSpeedScale() {
+  function loadBotBpm() {
     try {
-      var raw = localStorage.getItem(BOT_SPEED_KEY);
-      if (raw == null || raw === '') return 1;
-      return clampBotSpeed(raw);
-    } catch (e) { return 1; }
+      var raw = localStorage.getItem(BOT_BPM_KEY);
+      if (raw == null || raw === '') return 12;
+      return clampBotBpm(raw);
+    } catch (e) { return 12; }
   }
 
-  function saveBotSpeedScale(v) {
-    v = clampBotSpeed(v);
-    try { localStorage.setItem(BOT_SPEED_KEY, String(v)); } catch (e) { /* */ }
+  function saveBotBpm(v) {
+    v = clampBotBpm(v);
+    try { localStorage.setItem(BOT_BPM_KEY, String(v)); } catch (e) { /* */ }
     return v;
   }
 
-  function nearestBotSpeedStep(v) {
-    v = clampBotSpeed(v);
-    var best = BOT_SPEED_STEPS[0];
+  function nearestBotBpmStep(v) {
+    v = clampBotBpm(v);
+    var best = BOT_BPM_STEPS[0];
     var bestD = Math.abs(best - v);
-    for (var i = 1; i < BOT_SPEED_STEPS.length; i++) {
-      var d = Math.abs(BOT_SPEED_STEPS[i] - v);
-      if (d < bestD) { best = BOT_SPEED_STEPS[i]; bestD = d; }
+    for (var i = 1; i < BOT_BPM_STEPS.length; i++) {
+      var d = Math.abs(BOT_BPM_STEPS[i] - v);
+      if (d < bestD) { best = BOT_BPM_STEPS[i]; bestD = d; }
     }
     return best;
   }
 
-  function stepBotSpeed(cur, dir) {
-    cur = nearestBotSpeedStep(cur);
-    var idx = BOT_SPEED_STEPS.indexOf(cur);
-    if (idx < 0) idx = BOT_SPEED_STEPS.indexOf(1);
-    idx = Math.max(0, Math.min(BOT_SPEED_STEPS.length - 1, idx + (dir < 0 ? -1 : 1)));
-    return BOT_SPEED_STEPS[idx];
+  function stepBotBpm(cur, dir) {
+    cur = nearestBotBpmStep(cur);
+    var idx = BOT_BPM_STEPS.indexOf(cur);
+    if (idx < 0) idx = BOT_BPM_STEPS.indexOf(12);
+    idx = Math.max(0, Math.min(BOT_BPM_STEPS.length - 1, idx + (dir < 0 ? -1 : 1)));
+    return BOT_BPM_STEPS[idx];
   }
 
-  window.StacksBotSpeed = {
-    load: loadBotSpeedScale,
-    save: saveBotSpeedScale,
-    clamp: clampBotSpeed,
-    steps: BOT_SPEED_STEPS,
-    min: BOT_SPEED_MIN,
-    max: BOT_SPEED_MAX
+  window.StacksBotBpm = {
+    load: loadBotBpm,
+    save: saveBotBpm,
+    clamp: clampBotBpm,
+    steps: BOT_BPM_STEPS,
+    min: BOT_BPM_MIN,
+    max: BOT_BPM_MAX
   };
+  // Back-compat name used by older stacks-game hooks
+  window.StacksBotSpeed = window.StacksBotBpm;
 
   AFRAME.registerComponent('vr-menu', {
     init: function () {
       this.menuVisible = false;
       this.menuMode = 'single';
       this.lobbyNumber = 1;
-      this.botSpeedScale = loadBotSpeedScale();
+      this.botTargetBpm = loadBotBpm();
       this.statsPage = 0;
       this.STATS_PER_PAGE = 4;
       this._refsReady = false;
@@ -312,9 +314,9 @@
       this._attachMenuToLeftHand();
       this._bindClicks();
       this.setRaycasters(false);
-      this.botSpeedScale = loadBotSpeedScale();
+      this.botTargetBpm = loadBotBpm();
       this.refreshLobbyUI();
-      this._applyBotSpeedToGame();
+      this._applyBotBpmToGame();
     },
 
     /** Real human/bot/multi match — dual-bot desktop preview does not count. */
@@ -577,45 +579,51 @@
           this._setBoardSizeChoice(6);
           break;
         case 'bot-speed-minus':
-          this._nudgeBotSpeed(-1);
+          this._nudgeBotBpm(-1);
           break;
         case 'bot-speed-plus':
-          this._nudgeBotSpeed(1);
+          this._nudgeBotBpm(1);
           break;
         case 'bot-speed-track':
-          this._nudgeBotSpeed(1); // coarse bump; − for fine control
+          this._nudgeBotBpm(1);
           break;
         default:
           break;
       }
     },
 
-    _nudgeBotSpeed: function (dir) {
-      this.botSpeedScale = saveBotSpeedScale(stepBotSpeed(this.botSpeedScale || 1, dir));
-      this._applyBotSpeedToGame();
+    _nudgeBotBpm: function (dir) {
+      this.botTargetBpm = saveBotBpm(stepBotBpm(this.botTargetBpm != null ? this.botTargetBpm : 12, dir));
+      this._applyBotBpmToGame();
       this._setBotSpeedUI();
       pulseHaptic(this._leftHandEl || document.getElementById('leftHand'), 0.35, 30);
     },
 
-    _applyBotSpeedToGame: function () {
-      var scale = clampBotSpeed(this.botSpeedScale || loadBotSpeedScale());
-      this.botSpeedScale = scale;
-      window._botSpeedScale = scale;
+    _applyBotBpmToGame: function () {
+      var bpm = clampBotBpm(this.botTargetBpm != null ? this.botTargetBpm : loadBotBpm());
+      this.botTargetBpm = bpm;
+      window._botTargetBpm = bpm;
       var gm = document.querySelector('[stacks-game]');
       var comp = gm && gm.components && gm.components['stacks-game'];
-      if (comp && typeof comp.setBotSpeedScale === 'function') {
-        comp.setBotSpeedScale(scale);
+      if (comp && typeof comp.setBotTargetBpm === 'function') {
+        comp.setBotTargetBpm(bpm);
+      } else if (comp && typeof comp.setBotSpeedScale === 'function') {
+        // legacy hook
+        comp.setBotSpeedScale(bpm);
       }
     },
 
     _setBotSpeedUI: function () {
-      var scale = clampBotSpeed(this.botSpeedScale || loadBotSpeedScale());
-      this.botSpeedScale = scale;
+      var bpm = clampBotBpm(this.botTargetBpm != null ? this.botTargetBpm : loadBotBpm());
+      this.botTargetBpm = bpm;
       var txt = document.getElementById('menu-bot-speed-text');
-      if (txt) txt.setAttribute('value', Math.round(scale * 100) + '%');
+      if (txt) {
+        txt.setAttribute('value', bpm <= 0 ? '0 (off)' : (bpm + '/min'));
+        txt.setAttribute('color', bpm <= 0 ? '#ff8866' : '#e8f4ff');
+      }
 
-      // Track width 0.34, local x from -0.17..+0.17 maps 50%→300%
-      var t = (scale - BOT_SPEED_MIN) / (BOT_SPEED_MAX - BOT_SPEED_MIN);
+      // Track: 0 → 40 BPM maps across full width
+      var t = (bpm - BOT_BPM_MIN) / (BOT_BPM_MAX - BOT_BPM_MIN);
       t = Math.max(0, Math.min(1, t));
       var trackHalf = 0.17;
       var x = -trackHalf + t * trackHalf * 2;
@@ -625,9 +633,8 @@
       if (fill) {
         var fillW = Math.max(0.02, (x + trackHalf));
         fill.setAttribute('geometry', 'width', fillW);
-        // Box is centered — shift so left edge stays at track start
         fill.setAttribute('position', (-trackHalf + fillW / 2) + ' 0 0.002');
-        var accent = scale < 0.9 ? '#3d8f5a' : (scale > 1.4 ? '#c45a12' : '#1e6ad4');
+        var accent = bpm <= 0 ? '#555555' : (bpm < 10 ? '#3d8f5a' : (bpm > 20 ? '#c45a12' : '#1e6ad4'));
         fill.setAttribute('material', 'color', accent);
       }
       ['menu-bot-speed-minus', 'menu-bot-speed-plus', 'menu-bot-speed-hit'].forEach(function (id) {

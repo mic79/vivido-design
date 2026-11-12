@@ -30,9 +30,9 @@
       this.bot = null;
       this._remoteBodyMap = {}; // playerId -> element id
       this._nextTypeBySide = { blue: null, red: null };
-      this.botSpeedScale = (global.StacksBotSpeed && global.StacksBotSpeed.load)
-        ? global.StacksBotSpeed.load()
-        : (global._botSpeedScale || 1);
+      this.botTargetBpm = (global.StacksBotBpm && global.StacksBotBpm.load)
+        ? global.StacksBotBpm.load()
+        : (global._botTargetBpm != null ? global._botTargetBpm : 12);
 
       this.held = null; // { mesh, type, rot, handEl }
       this.ghostMesh = null;
@@ -309,8 +309,8 @@
           self._onBotVisual('blue', evt);
         }
       });
-      if (this.bot && this.bot.setSpeedScale) this.bot.setSpeedScale(this.botSpeedScale || 1);
-      if (this.botBlue && this.botBlue.setSpeedScale) this.botBlue.setSpeedScale(this.botSpeedScale || 1);
+      if (this.bot && this.bot.setTargetBpm) this.bot.setTargetBpm(this.botTargetBpm);
+      if (this.botBlue && this.botBlue.setTargetBpm) this.botBlue.setTargetBpm(this.botTargetBpm);
       this._setBotStationVisible(false);
 
       // No human pad piece until a real match — idle uses dual-bot preview
@@ -2151,9 +2151,8 @@
         this.bot.setCup(this.cups.red);
         var runBot = (!spectating) && isBotSeat;
         this.bot.enable(runBot);
-        if (runBot) {
-          if (this.bot.setSpeedScale) this.bot.setSpeedScale(this.botSpeedScale || 1);
-          this.bot.setTargetPpm(10);
+        if (runBot && this.bot.setTargetBpm) {
+          this.bot.setTargetBpm(this.botTargetBpm != null ? this.botTargetBpm : 12);
         }
       }
       if (this.botBlue) this.botBlue.enable(false);
@@ -2503,16 +2502,17 @@
       if (this._pocket) this._pocket.visible = true;
       this._setBotStationVisible(true);
 
+      var bpm = this.botTargetBpm != null ? this.botTargetBpm : 12;
       if (this.bot) {
         this.bot.setCup(this.cups.red);
         this.bot._lastThink = performance.now() - 400;
-        this.bot.setTargetPpm(14);
+        if (this.bot.setTargetBpm) this.bot.setTargetBpm(bpm);
         this.bot.enable(true);
       }
       if (this.botBlue) {
         this.botBlue.setCup(this.cups.blue);
         this.botBlue._lastThink = performance.now();
-        this.botBlue.setTargetPpm(13);
+        if (this.botBlue.setTargetBpm) this.botBlue.setTargetBpm(bpm);
         this.botBlue.enable(true);
       }
 
@@ -2948,65 +2948,39 @@
       card.mesh.visible = true;
     },
 
-    /** Apply MotionGuidance-style speed scale (0.5–3) to live bots. */
-    setBotSpeedScale: function (scale) {
-      if (global.StacksBotSpeed) scale = global.StacksBotSpeed.clamp(scale);
+    /** Absolute bot blocks/min. 0 = frozen (no new moves). */
+    setBotTargetBpm: function (bpm) {
+      if (global.StacksBotBpm) bpm = global.StacksBotBpm.clamp(bpm);
       else {
-        scale = Number(scale);
-        if (!isFinite(scale) || scale <= 0) scale = 1;
-        scale = Math.max(0.5, Math.min(3, scale));
+        bpm = Number(bpm);
+        if (!isFinite(bpm) || bpm < 0) bpm = 12;
+        bpm = Math.max(0, Math.min(40, Math.round(bpm)));
       }
-      this.botSpeedScale = scale;
-      global._botSpeedScale = scale;
-      if (this.bot && this.bot.setSpeedScale) this.bot.setSpeedScale(scale);
-      if (this.botBlue && this.botBlue.setSpeedScale) this.botBlue.setSpeedScale(scale);
-      // Force an immediate retarget so the change is felt on the next place
+      this.botTargetBpm = bpm;
+      global._botTargetBpm = bpm;
+      if (this.bot && this.bot.setTargetBpm) this.bot.setTargetBpm(bpm);
+      if (this.botBlue && this.botBlue.setTargetBpm) this.botBlue.setTargetBpm(bpm);
       this._updateBotPace();
-      return scale;
+      return bpm;
     },
 
-    /** Bot pace tracks player (or rival bot) PPM × botSpeedScale, with wander. */
+    // Back-compat for older menu hooks
+    setBotSpeedScale: function (v) {
+      return this.setBotTargetBpm(v);
+    },
+
+    /** Drive bots toward the configured average BPM (light wander stays inside CupBot). */
     _updateBotPace: function () {
-      if (!this.matchStats) return;
       var now = performance.now();
-      var blue = this.matchStats.blue;
-      var red = this.matchStats.red;
-      var scale = this.botSpeedScale;
-      if (scale == null && global.StacksBotSpeed) scale = global.StacksBotSpeed.load();
-      if (scale == null) scale = 1;
-      if (this.bot && this.bot.speedScale !== scale && this.bot.setSpeedScale) {
-        this.bot.setSpeedScale(scale);
-      }
-      if (this.botBlue && this.botBlue.speedScale !== scale && this.botBlue.setSpeedScale) {
-        this.botBlue.setSpeedScale(scale);
-      }
+      var bpm = this.botTargetBpm;
+      if (bpm == null && global.StacksBotBpm) bpm = global.StacksBotBpm.load();
+      if (bpm == null) bpm = 12;
 
-      function paceFrom(sideStats, fallback) {
-        if (!sideStats) return fallback;
-        // Adapt from the first place — don't wait for 3 pieces
-        if (sideStats.pieces >= 1) {
-          var gap = sideStats.meanPlaceGapMs && sideStats.meanPlaceGapMs();
-          if (gap && gap > 200) return Math.max(4, Math.min(40, 60000 / gap));
-          return Math.max(4, Math.min(40, sideStats.ppmRolling(now) || sideStats.bps(now) || fallback));
-        }
-        return fallback;
+      if (this.bot && this.bot.enabled && this.bot.setTargetBpm) {
+        this.bot.setTargetBpm(bpm, now);
       }
-
-      if (this.bot && this.bot.enabled) {
-        var targetPpm;
-        if (this._dualBotPreview) {
-          targetPpm = paceFrom(red, 14);
-          if (blue.pieces >= 1) targetPpm = 0.55 * targetPpm + 0.45 * paceFrom(blue, targetPpm);
-        } else {
-          // Vs human: track blue player pace immediately
-          targetPpm = paceFrom(blue, 10);
-        }
-        this.bot.setTargetPpm(targetPpm, now);
-      }
-      if (this.botBlue && this.botBlue.enabled) {
-        var blueTarget = paceFrom(red, 13);
-        if (blue.pieces >= 1) blueTarget = 0.5 * blueTarget + 0.5 * paceFrom(blue, blueTarget);
-        this.botBlue.setTargetPpm(blueTarget, now);
+      if (this.botBlue && this.botBlue.enabled && this.botBlue.setTargetBpm) {
+        this.botBlue.setTargetBpm(bpm, now);
       }
     },
 
