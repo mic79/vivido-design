@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below). -->
-  <meta name="stacks-version" content="0.2.8" />
+  <meta name="stacks-version" content="0.2.9" />
   <title>StacksVR</title>
   <script>
     (function () {
@@ -36,7 +36,7 @@
   <script src="lobby.js?v=50"></script>
   <script src="match-replay.js?v=21"></script>
   <script src="stacks-audio.js?v=4"></script>
-  <script src="game-menu.js?v=56"></script>
+  <script src="game-menu.js?v=57"></script>
   <script src="mixamo-body.js?v=22"></script>
   <script src="locomotion.js?v=21"></script>
   <script src="stacks-game.js?v=90"></script>
@@ -304,7 +304,7 @@
 
     <!-- Discreet build stamp (DodgeVR-style) — kept in sync from STACKS_VERSION -->
     <a-entity id="version-display" position="0 2.42 0"
-      text="value: v0.2.8; align: center; width: 0.85; color: #5a6878"></a-entity>
+      text="value: v0.2.9; align: center; width: 0.85; color: #5a6878"></a-entity>
     <a-entity id="score-display" position="0 2.2 0">
       <a-entity id="blue-score" position="-0.16 0 0"
         text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>
@@ -357,21 +357,21 @@
           raycaster="objects: .clickable; far: 10; showLine: false; enabled: false; lineColor: #ffffff; lineOpacity: 0">
           <!-- Palm / wrist menu — right hand laser selects -->
           <a-entity id="vr-menu-root" position="0.02 0.12 -0.04" rotation="-68 14 0" scale="0.62 0.62 0.62" visible="false">
-            <!-- Layered panel: glow → frame → body → header strip -->
-            <a-plane width="0.78" height="0.60" color="#33bbff"
-              material="opacity: 0.18; transparent: true; shader: flat" position="0 0 -0.004"></a-plane>
-            <a-plane width="0.74" height="0.56" color="#1a3048"
-              material="opacity: 0.98; transparent: true; shader: flat" position="0 0 -0.002"></a-plane>
-            <a-plane width="0.72" height="0.54" color="#0a1018"
-              material="opacity: 0.96; transparent: true; shader: flat" position="0 0 -0.001"></a-plane>
+            <!-- Layered panel: glow → frame → body → header strip (taller for queue slots) -->
+            <a-plane width="0.78" height="0.72" color="#33bbff"
+              material="opacity: 0.18; transparent: true; shader: flat" position="0 -0.04 -0.004"></a-plane>
+            <a-plane width="0.74" height="0.68" color="#1a3048"
+              material="opacity: 0.98; transparent: true; shader: flat" position="0 -0.04 -0.002"></a-plane>
+            <a-plane width="0.72" height="0.66" color="#0a1018"
+              material="opacity: 0.96; transparent: true; shader: flat" position="0 -0.04 -0.001"></a-plane>
             <a-plane width="0.72" height="0.07" color="#102038"
-              material="opacity: 0.95; transparent: true; shader: flat" position="0 0.235 0"></a-plane>
+              material="opacity: 0.95; transparent: true; shader: flat" position="0 0.255 0"></a-plane>
             <a-plane width="0.20" height="0.006" color="#33bbff"
-              material="opacity: 0.95; transparent: true; shader: flat; toneMapped: false" position="0 0.20 0.001"></a-plane>
+              material="opacity: 0.95; transparent: true; shader: flat; toneMapped: false" position="0 0.22 0.001"></a-plane>
 
-            <a-text value="STACKS VR" position="0.02 0.235 0.002" align="center" width="0.48" color="#e8f4ff"></a-text>
+            <a-text value="STACKS VR" position="0.02 0.255 0.002" align="center" width="0.48" color="#e8f4ff"></a-text>
             <!-- Board size sliding toggle: 4x4 | 6x6 (ascii x — A-Frame font has no ×) -->
-            <a-entity id="menu-board-toggle" position="-0.26 0.235 0.002">
+            <a-entity id="menu-board-toggle" position="-0.26 0.255 0.002">
               <a-entity geometry="primitive: box; width: 0.22; height: 0.048; depth: 0.006"
                 material="color: #152032; shader: flat"></a-entity>
               <a-entity id="menu-board-slider" position="0.052 0 0.003"
@@ -388,13 +388,13 @@
                 <a-text id="menu-board-6-text" value="6x6" align="center" width="0.28" color="#ffffff" position="0 0 0.004"></a-text>
               </a-entity>
             </a-entity>
-            <a-entity class="menu-btn clickable" data-action="toggle-music" id="menu-music-toggle" position="0.28 0.235 0.002"
+            <a-entity class="menu-btn clickable" data-action="toggle-music" id="menu-music-toggle" position="0.28 0.255 0.002"
               geometry="primitive: box; width: 0.14; height: 0.045; depth: 0.008"
               material="color: #1f9d45; shader: flat">
               <a-text id="menu-music-text" value="MUSIC" align="center" width="0.32" color="#ffffff" position="0 0 0.006"></a-text>
             </a-entity>
 
-            <a-entity position="0 0.145 0.002">
+            <a-entity position="0 0.165 0.002">
               <a-entity class="menu-btn clickable" data-action="mode-single" id="menu-single" position="-0.21 0 0"
                 geometry="primitive: box; width: 0.18; height: 0.055; depth: 0.008"
                 material="color: #1e6ad4; opacity: 1; shader: flat">
@@ -447,38 +447,72 @@
               </a-entity>
             </a-entity>
 
-            <a-entity id="menu-lobby-section" visible="false" position="0 0.02 0.002">
-              <a-text value="LOBBY" position="-0.28 0.05 0" align="left" width="0.28" color="#33bbff"></a-text>
+            <a-entity id="menu-lobby-section" visible="false" position="0 0.05 0.002">
+              <a-text value="LOBBY" position="-0.28 0.048 0" align="left" width="0.28" color="#33bbff"></a-text>
               <a-entity class="menu-btn clickable" data-action="lobby-minus" position="-0.02 0.01 0"
-                geometry="primitive: box; width: 0.055; height: 0.055; depth: 0.008"
+                geometry="primitive: box; width: 0.055; height: 0.05; depth: 0.008"
                 material="color: #243044; shader: flat">
                 <a-text value="-" align="center" width="0.4" color="#ffffff" position="0 0 0.006"></a-text>
               </a-entity>
               <a-text id="menu-lobby-num" value="1" position="0.06 0.01 0" align="center" width="0.45" color="#ffffff"></a-text>
               <a-entity class="menu-btn clickable" data-action="lobby-plus" position="0.14 0.01 0"
-                geometry="primitive: box; width: 0.055; height: 0.055; depth: 0.008"
+                geometry="primitive: box; width: 0.055; height: 0.05; depth: 0.008"
                 material="color: #243044; shader: flat">
                 <a-text value="+" align="center" width="0.4" color="#ffffff" position="0 0 0.006"></a-text>
               </a-entity>
               <a-entity class="menu-btn clickable" data-action="join-lobby" id="menu-join" position="0.28 0.01 0"
-                geometry="primitive: box; width: 0.13; height: 0.055; depth: 0.008"
+                geometry="primitive: box; width: 0.13; height: 0.05; depth: 0.008"
                 material="color: #1f9d45; shader: flat">
                 <a-text id="menu-join-text" value="JOIN" align="center" width="0.35" color="#ffffff" position="0 0 0.006"></a-text>
               </a-entity>
-              <a-text id="menu-lobby-status" value="Not connected" position="-0.28 -0.055 0"
-                align="left" width="0.42" color="#7a8a9a"></a-text>
+              <!-- Single-line status only — roster lives in queue slots below -->
+              <a-text id="menu-lobby-status" value="Not connected" position="-0.28 -0.035 0"
+                align="left" width="0.55" color="#7a8a9a"></a-text>
             </a-entity>
 
-            <a-entity id="menu-queue-buttons" visible="false" position="0 -0.07 0.002">
-              <a-entity class="menu-btn clickable" data-action="join-queue" position="-0.11 0 0"
-                geometry="primitive: box; width: 0.20; height: 0.05; depth: 0.008"
-                material="color: #1f9d45; shader: flat">
-                <a-text value="JOIN QUEUE" align="center" width="0.32" color="#ffffff" position="0 0 0.006"></a-text>
+            <!-- Queue roster: two named slots + join/leave (no overlap with status) -->
+            <a-entity id="menu-queue-panel" visible="false" position="0 -0.06 0.002">
+              <a-text id="menu-queue-title" value="QUEUE" position="-0.28 0.072 0"
+                align="left" width="0.28" color="#33bbff"></a-text>
+              <a-text id="menu-queue-hint" value="Join to play · host starts" position="0.28 0.072 0"
+                align="right" width="0.38" color="#667788"></a-text>
+
+              <a-entity id="menu-q-slot-0" position="-0.15 0.02 0">
+                <a-entity id="menu-q-slot-0-bg"
+                  geometry="primitive: box; width: 0.28; height: 0.058; depth: 0.006"
+                  material="color: #152032; shader: flat"></a-entity>
+                <a-entity id="menu-q-slot-0-accent" position="-0.125 0 0.004"
+                  geometry="primitive: box; width: 0.018; height: 0.058; depth: 0.004"
+                  material="color: #334455; shader: flat"></a-entity>
+                <a-text id="menu-q-slot-0-num" value="1" position="-0.095 0 0.005"
+                  align="center" width="0.28" color="#667788"></a-text>
+                <a-text id="menu-q-slot-0-name" value="Open" position="0.02 0 0.005"
+                  align="center" width="0.32" color="#556677"></a-text>
               </a-entity>
-              <a-entity class="menu-btn clickable" data-action="leave-queue" position="0.11 0 0"
-                geometry="primitive: box; width: 0.20; height: 0.05; depth: 0.008"
-                material="color: #b83333; shader: flat">
-                <a-text value="LEAVE QUEUE" align="center" width="0.32" color="#ffffff" position="0 0 0.006"></a-text>
+              <a-entity id="menu-q-slot-1" position="0.15 0.02 0">
+                <a-entity id="menu-q-slot-1-bg"
+                  geometry="primitive: box; width: 0.28; height: 0.058; depth: 0.006"
+                  material="color: #152032; shader: flat"></a-entity>
+                <a-entity id="menu-q-slot-1-accent" position="-0.125 0 0.004"
+                  geometry="primitive: box; width: 0.018; height: 0.058; depth: 0.004"
+                  material="color: #334455; shader: flat"></a-entity>
+                <a-text id="menu-q-slot-1-num" value="2" position="-0.095 0 0.005"
+                  align="center" width="0.28" color="#667788"></a-text>
+                <a-text id="menu-q-slot-1-name" value="Open" position="0.02 0 0.005"
+                  align="center" width="0.32" color="#556677"></a-text>
+              </a-entity>
+
+              <a-entity id="menu-queue-buttons" position="0 -0.05 0">
+                <a-entity class="menu-btn clickable" data-action="join-queue" id="menu-join-queue" position="-0.11 0 0"
+                  geometry="primitive: box; width: 0.20; height: 0.045; depth: 0.008"
+                  material="color: #1f9d45; shader: flat">
+                  <a-text id="menu-join-queue-text" value="JOIN QUEUE" align="center" width="0.32" color="#ffffff" position="0 0 0.006"></a-text>
+                </a-entity>
+                <a-entity class="menu-btn clickable" data-action="leave-queue" id="menu-leave-queue" position="0.11 0 0"
+                  geometry="primitive: box; width: 0.20; height: 0.045; depth: 0.008"
+                  material="color: #552222; shader: flat">
+                  <a-text id="menu-leave-queue-text" value="LEAVE" align="center" width="0.32" color="#ccaaaa" position="0 0 0.006"></a-text>
+                </a-entity>
               </a-entity>
             </a-entity>
 
@@ -519,16 +553,16 @@
               </a-entity>
             </a-entity>
 
-            <!-- Primary CTA with glow rim -->
+            <!-- Primary CTA with glow rim — below queue panel -->
             <a-plane width="0.36" height="0.085" color="#ffaa44"
               material="opacity: 0.35; transparent: true; shader: flat; toneMapped: false"
-              position="0 -0.175 -0.001"></a-plane>
-            <a-entity class="menu-btn clickable" data-action="start-bot" id="menu-start-match" position="0 -0.175 0.002"
+              position="0 -0.22 -0.001"></a-plane>
+            <a-entity class="menu-btn clickable" data-action="start-bot" id="menu-start-match" position="0 -0.22 0.002"
               geometry="primitive: box; width: 0.32; height: 0.07; depth: 0.01"
               material="color: #ff8a1a; shader: flat">
               <a-text id="menu-start-match-text" value="START vs BOT" align="center" width="0.48" color="#ffffff" position="0 0 0.007"></a-text>
             </a-entity>
-            <a-text value="X close  ·  right laser select" position="0 -0.245 0.002" align="center" width="0.42" color="#4a5a6a"></a-text>
+            <a-text value="X close  ·  right laser select" position="0 -0.29 0.002" align="center" width="0.42" color="#4a5a6a"></a-text>
           </a-entity>
           </a-entity>
           <a-entity id="rightHand" 

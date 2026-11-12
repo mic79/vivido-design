@@ -314,6 +314,7 @@
       this.lobbySection = document.getElementById('menu-lobby-section');
       this.singleSection = document.getElementById('menu-single-section');
       this.statsSection = document.getElementById('menu-stats-section');
+      this.queuePanel = document.getElementById('menu-queue-panel');
       this.queueButtons = document.getElementById('menu-queue-buttons');
       this.leftHand = document.getElementById('leftHand');
       this.rightHand = document.getElementById('rightHand');
@@ -879,15 +880,129 @@
       btn.setAttribute('data-action', action);
     },
 
+    _nickForLobby: function (ls, id) {
+      if (!id) return '-';
+      if (id === '__BOT__') return 'Bot';
+      var players = (ls && ls.players) || [];
+      for (var i = 0; i < players.length; i++) {
+        if (players[i].id === id) {
+          return (players[i].nickname || 'Player').slice(0, 10);
+        }
+      }
+      return '?';
+    },
+
+    _setQueueSlot: function (idx, opts) {
+      var nameEl = document.getElementById('menu-q-slot-' + idx + '-name');
+      var numEl = document.getElementById('menu-q-slot-' + idx + '-num');
+      var bg = document.getElementById('menu-q-slot-' + idx + '-bg');
+      var accent = document.getElementById('menu-q-slot-' + idx + '-accent');
+      if (!nameEl || !bg) return;
+      var filled = !!opts.filled;
+      var isYou = !!opts.isYou;
+      var label = opts.label || 'Open';
+      var badge = opts.badge || String(idx + 1);
+      nameEl.setAttribute('value', label);
+      nameEl.setAttribute('color', filled ? (isYou ? '#ffffff' : '#d8e8f8') : '#556677');
+      if (numEl) {
+        numEl.setAttribute('value', badge);
+        numEl.setAttribute('color', filled ? (isYou ? '#ffe08a' : '#a8c8e8') : '#667788');
+      }
+      var bgColor = !filled ? '#152032' : (isYou ? '#1e4a2a' : '#1a3048');
+      var accentColor = !filled ? '#334455' : (isYou ? '#44cc66' : (opts.accent || '#4488cc'));
+      bg.setAttribute('material', 'color', bgColor);
+      if (accent) accent.setAttribute('material', 'color', accentColor);
+    },
+
+    _refreshQueuePanel: function () {
+      var panel = this.queuePanel || document.getElementById('menu-queue-panel');
+      if (!panel) return;
+      var multi = this.menuMode === 'multi';
+      var connected = !!window.isMultiplayer;
+      panel.setAttribute('visible', multi && connected);
+
+      if (!multi || !connected) return;
+
+      var ls = window.lobbyState;
+      var myId = window.myPlayerId ||
+        (window.StacksLobby && window.StacksLobby.myPlayerId);
+      var title = document.getElementById('menu-queue-title');
+      var hint = document.getElementById('menu-queue-hint');
+      var playing = !!(ls && ls.matchState === 'PLAYING');
+      var mp = (ls && ls.matchPlayers) || {};
+
+      if (playing && (mp.blue || mp.red)) {
+        if (title) title.setAttribute('value', 'MATCH');
+        if (hint) hint.setAttribute('value', 'In progress');
+        this._setQueueSlot(0, {
+          filled: !!mp.blue,
+          isYou: mp.blue === myId,
+          label: this._nickForLobby(ls, mp.blue),
+          badge: 'B',
+          accent: '#4488ff'
+        });
+        this._setQueueSlot(1, {
+          filled: !!mp.red,
+          isYou: mp.red === myId && mp.red !== '__BOT__',
+          label: this._nickForLobby(ls, mp.red),
+          badge: 'R',
+          accent: '#e25a4a'
+        });
+      } else {
+        var q = (ls && ls.queue) || [];
+        var qLen = q.length;
+        if (title) title.setAttribute('value', 'QUEUE  ' + qLen + '/2');
+        if (hint) {
+          hint.setAttribute('value',
+            qLen >= 2 ? 'Ready · host starts' :
+            (qLen === 1 ? '1 more or vs bot' : 'Join to play'));
+        }
+        for (var i = 0; i < 2; i++) {
+          var id = q[i];
+          this._setQueueSlot(i, {
+            filled: !!id,
+            isYou: id && id === myId,
+            label: id ? this._nickForLobby(ls, id) : 'Open',
+            badge: String(i + 1),
+            accent: i === 0 ? '#4488ff' : '#e25a4a'
+          });
+        }
+      }
+
+      var inQ = !!(ls && myId && (ls.queue || []).indexOf(myId) >= 0);
+      var joinBtn = document.getElementById('menu-join-queue');
+      var leaveBtn = document.getElementById('menu-leave-queue');
+      var joinTxt = document.getElementById('menu-join-queue-text');
+      var leaveTxt = document.getElementById('menu-leave-queue-text');
+      if (joinBtn) {
+        var jc = inQ ? '#1a3a28' : '#1f9d45';
+        joinBtn.setAttribute('material', 'color', jc);
+        joinBtn.dataset.baseColor = jc;
+        joinBtn.dataset.hoverColor = lightenHex(jc, 0.42);
+        if (joinTxt) {
+          joinTxt.setAttribute('value', inQ ? 'QUEUED' : 'JOIN QUEUE');
+          joinTxt.setAttribute('color', inQ ? '#88aa88' : '#ffffff');
+        }
+      }
+      if (leaveBtn) {
+        var lc = inQ ? '#b83333' : '#3a2222';
+        leaveBtn.setAttribute('material', 'color', lc);
+        leaveBtn.dataset.baseColor = lc;
+        leaveBtn.dataset.hoverColor = lightenHex(lc, 0.42);
+        if (leaveTxt) {
+          leaveTxt.setAttribute('value', 'LEAVE');
+          leaveTxt.setAttribute('color', inQ ? '#ffffff' : '#886666');
+        }
+      }
+    },
+
     refreshLobbyUI: function () {
       var multi = this.menuMode === 'multi';
       var stats = this.menuMode === 'stats';
       if (this.singleSection) this.singleSection.setAttribute('visible', !multi && !stats);
       if (this.lobbySection) this.lobbySection.setAttribute('visible', multi);
       if (this.statsSection) this.statsSection.setAttribute('visible', stats);
-      if (this.queueButtons) {
-        this.queueButtons.setAttribute('visible', multi && !!window.isMultiplayer);
-      }
+      this._refreshQueuePanel();
       var startBtn = document.getElementById('menu-start-match');
       if (startBtn) startBtn.setAttribute('visible', !stats);
       this._setTabColors();
@@ -906,47 +1021,19 @@
         if (window.connectionState === 'connecting' && live) {
           msg = live;
         } else if (!window.isMultiplayer) {
-          msg = live || 'Not connected';
+          msg = live || 'Not connected — pick lobby & JOIN';
         } else if (!ls) {
           msg = live || 'Connecting...';
         } else {
-          var mp = ls.matchPlayers || {};
-          var myId = window.myPlayerId ||
-            (window.StacksLobby && window.StacksLobby.myPlayerId);
-          function nickFor(id) {
-            if (!id) return '-';
-            if (id === '__BOT__') return 'Bot';
-            var players = ls.players || [];
-            for (var i = 0; i < players.length; i++) {
-              if (players[i].id === id) {
-                return (players[i].nickname || 'Player').slice(0, 12);
-              }
-            }
-            return '?';
-          }
-          var roster = [];
+          var vrCount = 0;
           var plist = ls.players || [];
           for (var pi = 0; pi < plist.length; pi++) {
-            var p = plist[pi];
-            if (p.mobile) continue;
-            var n = (p.nickname || 'Player').slice(0, 12);
-            roster.push(n + (p.id === myId ? '*' : ''));
+            if (plist[pi] && !plist[pi].mobile) vrCount++;
           }
           var role = window.isHost ? 'HOST' : (window.isMobileSpectator ? 'WATCH' : 'JOINED');
-          var lines = [
-            role + ' · ' + (roster.length ? roster.join(', ') : 'alone')
-          ];
-          if (mp.blue || mp.red) {
-            lines.push(nickFor(mp.blue) + ' vs ' + nickFor(mp.red));
-          } else if ((ls.queue || []).length) {
-            var qn = [];
-            for (var qi = 0; qi < ls.queue.length; qi++) qn.push(nickFor(ls.queue[qi]));
-            lines.push('Queue: ' + qn.join(', '));
-          } else {
-            lines.push(ls.matchState || 'WAITING');
-          }
-          if (live) lines.unshift(live);
-          msg = lines.join('\n');
+          // One line only — queue names live in the slots below
+          msg = role + ' · ' + vrCount + ' in lobby';
+          if (live && live.indexOf(role) < 0) msg = live + ' · ' + msg;
         }
         status.setAttribute('value', msg);
       }
