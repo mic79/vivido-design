@@ -30,6 +30,7 @@
       this.bot = null;
       this._remoteBodyMap = {}; // playerId -> element id
       this._nextTypeBySide = { blue: null, red: null };
+      this._pocketTypeBySide = { blue: null, red: null };
       this.botTargetBpm = (global.StacksBotBpm && global.StacksBotBpm.load)
         ? global.StacksBotBpm.load()
         : (global._botTargetBpm != null ? global._botTargetBpm : 12);
@@ -55,7 +56,7 @@
       this._pieceAnims = [];
       this._pocket = null;
       this._pocketMesh = null;
-      this._pocketType = null; // stashed shape type or null
+      this._pocketType = null; // stashed shape type or null (local side)
       this._pocketUsed = false; // tetris-style: one swap until next place
       this._pocketLockUntil = 0; // ignore pocket actions briefly after take/deposit
       this._cupGrab = null; // { handEl, cup, startHandAngle, startYaw }
@@ -440,8 +441,11 @@
       this._cancelHold();
       this._pocketType = null;
       this._pocketUsed = false;
-      this._refreshPocketMesh();
+      this._pocketTypeBySide = { blue: null, red: null };
+      this._applyPocketVisual('blue', null);
+      this._applyPocketVisual('red', null);
       this._nextType = null;
+      this._nextTypeBySide = { blue: null, red: null };
       this._padPiece = null;
     },
 
@@ -497,6 +501,7 @@
           else this._padPiece = mesh;
           if (bot && bot.bag) this._rebuildNextQueue(side, bot.bag, { dropIn: true });
         }
+        if (!this._dualBotPreview) this._broadcastStation(side);
         return;
       }
       if (evt.kind === 'pocket') {
@@ -508,7 +513,11 @@
             }
           }
         }
-        if (!evt.type || !st.pocket) return;
+        if (!evt.type || !st.pocket) {
+          this._applyPocketVisual(side, null);
+          if (!this._dualBotPreview) this._broadcastStation(side);
+          return;
+        }
         var pm = global.StacksShapes.createShapeMesh(evt.type, {
           centerPivot: true, rotationY: 0
         });
@@ -519,6 +528,8 @@
         st.pocket.add(pm);
         if (side === 'red') this._botPocketMesh = pm;
         else this._pocketMesh = pm;
+        this._applyPocketVisual(side, evt.type);
+        if (!this._dualBotPreview) this._broadcastStation(side);
         return;
       }
       if (evt.kind === 'hold') {
@@ -999,22 +1010,114 @@
     },
 
     _refreshPocketMesh: function () {
-      var pocket = this._sidePocket(this._localSide()) || this._pocket;
+      var side = this._localSide();
+      this._applyPocketVisual(side, this._pocketType);
+    },
+
+    _applyPocketVisual: function (side, type) {
+      side = side === 'red' ? 'red' : 'blue';
+      if (!this._pocketTypeBySide) this._pocketTypeBySide = { blue: null, red: null };
+      this._pocketTypeBySide[side] = type || null;
+      if (side === this._localSide()) this._pocketType = type || null;
+      var pocket = this._sidePocket(side);
       if (!pocket) return;
       for (var i = pocket.children.length - 1; i >= 0; i--) {
         var ch = pocket.children[i];
-        if (ch.userData && ch.userData.pocketPiece) pocket.remove(ch);
+        if (ch.userData && (ch.userData.pocketPiece || ch.userData.botPocketPiece)) {
+          pocket.remove(ch);
+        }
       }
-      this._pocketMesh = null;
-      if (!this._pocketType) return;
-      var mesh = global.StacksShapes.createShapeMesh(this._pocketType, {
+      if (side === 'red') this._botPocketMesh = null;
+      else this._pocketMesh = null;
+      if (!type) return;
+      var mesh = global.StacksShapes.createShapeMesh(type, {
         centerPivot: true, rotationY: 0
       });
       mesh.userData.pocketPiece = true;
+      if (side === 'red') mesh.userData.botPocketPiece = true;
       mesh.position.set(0, 0.1, 0);
       this._fitStationPiece(mesh, 0.30);
       pocket.add(mesh);
-      this._pocketMesh = mesh;
+      if (side === 'red') this._botPocketMesh = mesh;
+      else this._pocketMesh = mesh;
+    },
+
+    /** Absolute pad + NEXT + pocket visuals for one side (no bag.advance). */
+    _serializeStation: function (side) {
+      side = side === 'red' ? 'red' : 'blue';
+      var padType = (this._nextTypeBySide && this._nextTypeBySide[side]) || null;
+      var next = [];
+      var bag = this._sideBag(side);
+      if (bag && bag.peek) next = bag.peek(this._nextQueueCount || 3);
+      var pocketType = (this._pocketTypeBySide && this._pocketTypeBySide[side]) || null;
+      if (side === this._localSide() && this._pocketType) pocketType = this._pocketType;
+      return {
+        side: side,
+        padType: padType,
+        next: next.slice(),
+        pocketType: pocketType
+      };
+    },
+
+    _applyStationVisual: function (data) {
+      if (!data || !data.side) return;
+      var side = data.side === 'red' ? 'red' : 'blue';
+      var pad = this._sidePad(side);
+      if (pad) {
+        for (var i = pad.children.length - 1; i >= 0; i--) {
+          var ch = pad.children[i];
+          if (this._isPieceUserData(ch.userData)) pad.remove(ch);
+        }
+      }
+      this._setSidePadPiece(side, null);
+      if (!this._nextTypeBySide) this._nextTypeBySide = { blue: null, red: null };
+      this._nextTypeBySide[side] = data.padType || null;
+      if (side === this._localSide()) this._nextType = data.padType || null;
+
+      if (data.padType && pad) {
+        var mesh = global.StacksShapes.createShapeMesh(data.padType, {
+          centerPivot: true, rotationY: 0
+        });
+        mesh.userData.padPiece = true;
+        if (side === 'red') mesh.userData.botPadPiece = true;
+        mesh.position.set(0, 0.1, 0);
+        this._fitStationPiece(mesh, 0.30);
+        pad.add(mesh);
+        this._setSidePadPiece(side, mesh);
+      }
+
+      // NEXT column from absolute list (not bag.peek — avoids desync)
+      var col = side === 'red' ? this._nextRed : this._nextBlue;
+      if (col && col.slots) {
+        while (col.slots.children.length) col.slots.remove(col.slots.children[0]);
+        var peek = data.next || [];
+        for (var n = 0; n < peek.length; n++) {
+          var nm = global.StacksShapes.createShapeMesh(peek[n], {
+            centerPivot: true, rotationY: 0
+          });
+          nm.userData.nextPreview = true;
+          this._orientNextQueueMesh(nm);
+          nm.position.set(0, this._nextSlotY(n), 0);
+          nm.scale.setScalar(this._nextSlotScale(n));
+          col.slots.add(nm);
+        }
+      }
+
+      this._applyPocketVisual(side, data.pocketType || null);
+    },
+
+    _broadcastStation: function (side) {
+      if (!global.isMultiplayer || !global.sendCupEvent) return;
+      if (this._dualBotPreview) return;
+      side = side || this._localSide();
+      var st = this._serializeStation(side);
+      global.sendCupEvent({
+        kind: 'station',
+        side: st.side,
+        padType: st.padType,
+        next: st.next,
+        pocketType: st.pocketType
+      });
     },
 
     /** Deposit held → pocket, or swap / take from pocket.
@@ -1024,6 +1127,7 @@
       if (!this._canControl()) return;
       if (!this.matchActive || this._dualBotPreview || this.matchState === 'COUNTDOWN') return;
       if (performance.now() < (this._pocketLockUntil || 0)) return;
+      var side = this._localSide();
       if (this.held) {
         var incoming = this.held.type;
         var outgoing = this._pocketType;
@@ -1036,7 +1140,7 @@
         this.held = null;
         this._clearGhost();
         this._pocketType = incoming;
-        this._refreshPocketMesh();
+        this._applyPocketVisual(side, incoming);
         if (outgoing) {
           this._pocketUsed = true;
           this._spawnHeldType(handEl, outgoing);
@@ -1044,18 +1148,20 @@
         this._pocketLockUntil = performance.now() + 350;
         this._pulseHaptic(handEl, 0.5, 50);
         this._broadcastHold();
+        this._broadcastStation(side);
         this._updateHUD();
         return;
       }
       if (this._pocketType) {
         var take = this._pocketType;
         this._pocketType = null;
-        this._refreshPocketMesh();
+        this._applyPocketVisual(side, null);
         this._spawnHeldType(handEl, take);
         // Lock briefly so trigger-up / bounce cannot immediately re-deposit
         this._pocketLockUntil = performance.now() + 350;
         this._pulseHaptic(handEl, 0.5, 50);
         this._broadcastHold();
+        this._broadcastStation(side);
         this._updateHUD();
       }
     },
@@ -1183,21 +1289,45 @@
         this.held.mesh.updateWorldMatrix(true, false);
         this.held.mesh.getWorldPosition(this._tmp);
         this.held.mesh.getWorldQuaternion(this._tmpQ);
+        // Scene-root local — remotes parent under _sceneRoot
+        if (this._sceneRoot) {
+          this._sceneRoot.updateWorldMatrix(true, false);
+          this._sceneRoot.worldToLocal(this._tmp);
+        }
         payload.holding = true;
         payload.shapeType = this.held.type;
         payload.pos = { x: this._tmp.x, y: this._tmp.y, z: this._tmp.z };
         payload.quat = { x: this._tmpQ.x, y: this._tmpQ.y, z: this._tmpQ.z, w: this._tmpQ.w };
       }
       payload.pocketType = this._pocketType;
+      payload.station = this._serializeStation(side);
       global.sendCupEvent(payload);
     },
 
     _buildSnapshot: function () {
+      var held = { blue: null, red: null };
+      var localSide = this._localSide();
+      if (this.held && this.held.type) {
+        held[localSide] = { holding: true, shapeType: this.held.type };
+      }
+      if (this._remoteHeld) {
+        if (this._remoteHeld.blue && this._remoteHeld.blue.type) {
+          held.blue = { holding: true, shapeType: this._remoteHeld.blue.type };
+        }
+        if (this._remoteHeld.red && this._remoteHeld.red.type) {
+          held.red = { holding: true, shapeType: this._remoteHeld.red.type };
+        }
+      }
       return {
         blue: this.cups.blue.serialize(),
         red: this.cups.red.serialize(),
         scores: { blue: this.modes.scores.blue, red: this.modes.scores.red },
-        attack: this.attackSys.serialize()
+        attack: this.attackSys.serialize(),
+        stations: {
+          blue: this._serializeStation('blue'),
+          red: this._serializeStation('red')
+        },
+        held: held
       };
     },
 
@@ -1208,7 +1338,11 @@
         reason: reason || 'sync',
         scores: { blue: this.modes.scores.blue, red: this.modes.scores.red },
         cups: { blue: this.cups.blue.serialize(), red: this.cups.red.serialize() },
-        attack: this.attackSys.serialize()
+        attack: this.attackSys.serialize(),
+        stations: {
+          blue: this._serializeStation('blue'),
+          red: this._serializeStation('red')
+        }
       });
     },
 
@@ -1327,6 +1461,9 @@
       var bottom = col && col.slots && col.slots.children[0];
       if (opts.animate && bottom) {
         this._animateQueueAdvance(side, bag, bottom);
+        if (opts.broadcast !== false && this.matchActive && !this._dualBotPreview) {
+          this._broadcastStation(side);
+        }
         return;
       }
 
@@ -1341,6 +1478,9 @@
       pad.add(mesh);
       this._setSidePadPiece(side, mesh);
       this._rebuildNextQueue(side, bag, { dropIn: !!opts.dropIn });
+      if (opts.broadcast !== false && this.matchActive && !this._dualBotPreview) {
+        this._broadcastStation(side);
+      }
     },
 
     _spawnPadPiece: function (opts) {
@@ -1351,8 +1491,13 @@
     /** PvP: both stations get a first piece from mirrored bags. */
     _spawnBothPads: function (opts) {
       opts = opts || {};
+      opts = Object.assign({}, opts, { broadcast: false });
       this._spawnSidePadPiece('blue', opts);
       this._spawnSidePadPiece('red', opts);
+      if (this.matchActive && !this._dualBotPreview) {
+        this._broadcastStation('blue');
+        this._broadcastStation('red');
+      }
     },
 
     /** Instant or drop-in fill of the NEXT column from bag.peek. */
@@ -1564,6 +1709,7 @@
       this._sfx('grab');
       this._pulseHaptic(hand, 0.55, 55);
       this._broadcastHold();
+      this._broadcastStation(side);
       this._updateGhost();
       this._updateHUD();
     },
@@ -1801,7 +1947,12 @@
           kind: 'place', side: side, shapeType: type, cells: cells, clear: clearResult,
           scores: { blue: this.modes.scores.blue, red: this.modes.scores.red },
           cups: { blue: this.cups.blue.serialize(), red: this.cups.red.serialize() },
-          attack: this.attackSys.serialize()
+          attack: this.attackSys.serialize(),
+          station: this._serializeStation(side),
+          stations: {
+            blue: this._serializeStation('blue'),
+            red: this._serializeStation('red')
+          }
         });
       }
       if (cup.isToppedOut()) {
@@ -1821,8 +1972,23 @@
         this.cups[evt.side].applyTransform({ yaw: evt.yaw, heightY: evt.heightY });
         return;
       }
+      if (evt.kind === 'station') {
+        // Never overwrite the local player's live station from a remote echo
+        if (evt.side === this._localSide() && this._canControl() && !global.isSpectator) return;
+        this._applyStationVisual(evt);
+        return;
+      }
       if (evt.kind === 'hold') {
         this._setRemoteHeld(evt.side, evt);
+        if (evt.station) {
+          if (!(evt.side === this._localSide() && this._canControl() && !global.isSpectator)) {
+            this._applyStationVisual(evt.station);
+          }
+        } else if (evt.pocketType !== undefined && evt.side) {
+          if (!(evt.side === this._localSide() && this._canControl() && !global.isSpectator)) {
+            this._applyPocketVisual(evt.side, evt.pocketType || null);
+          }
+        }
         return;
       }
       if (evt.kind === 'place' || evt.kind === 'state') {
@@ -1838,13 +2004,20 @@
         if (evt.attack) this.attackSys.applySerialized(evt.attack);
         if (evt.kind === 'place' && evt.side) {
           this._setRemoteHeld(evt.side, { holding: false });
-          // Placer already advanced their bag on grab; we advance here to keep pads in sync
-          if (evt.side !== this._localSide() || !this._canControl()) {
-            this._spawnSidePadPiece(evt.side, { dropIn: false });
-          }
           if (this.matchStats && evt.side) {
             this.matchStats.onPlace(evt.side, evt.clear || null, performance.now());
           }
+        }
+        // Authoritative station visuals (pad / NEXT / pocket) — prefer payload over bag guess
+        if (evt.stations) {
+          if (evt.stations.blue) this._applyStationVisual(evt.stations.blue);
+          if (evt.stations.red) this._applyStationVisual(evt.stations.red);
+        } else if (evt.station) {
+          this._applyStationVisual(evt.station);
+        } else if (evt.kind === 'place' && evt.side &&
+            (evt.side !== this._localSide() || !this._canControl())) {
+          // Legacy fallback: advance bag for that side only if no station payload
+          this._spawnSidePadPiece(evt.side, { dropIn: false });
         }
         this._updateHUD();
         this._updateDamageHUD();
@@ -1853,12 +2026,25 @@
 
     onRemoteSnapshot: function (data) {
       if (!data || !data.snapshot) return;
-      this._applyRemoteCups(data.snapshot);
-      if (data.snapshot.scores) {
-        this.modes.scores.blue = data.snapshot.scores.blue;
-        this.modes.scores.red = data.snapshot.scores.red;
+      var snap = data.snapshot;
+      this._applyRemoteCups(snap);
+      if (snap.scores) {
+        this.modes.scores.blue = snap.scores.blue;
+        this.modes.scores.red = snap.scores.red;
       }
-      if (data.snapshot.attack) this.attackSys.applySerialized(data.snapshot.attack);
+      if (snap.attack) this.attackSys.applySerialized(snap.attack);
+      if (snap.stations) {
+        if (snap.stations.blue) this._applyStationVisual(snap.stations.blue);
+        if (snap.stations.red) this._applyStationVisual(snap.stations.red);
+      }
+      if (snap.held) {
+        if (snap.held.blue && snap.held.blue.holding) {
+          this._setRemoteHeld('blue', snap.held.blue);
+        }
+        if (snap.held.red && snap.held.red.holding) {
+          this._setRemoteHeld('red', snap.held.red);
+        }
+      }
       this._updateHUD();
       this._updateDamageHUD();
     },
