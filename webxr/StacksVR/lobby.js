@@ -179,28 +179,63 @@
   function startLobbyMatch() {
     if (!Lobby.lobbyState) return;
     var mp = Lobby.lobbyState.matchPlayers;
-    // Host can start without queue join — seat host as blue automatically (DodgeVR-style)
-    if (Lobby.isHost && Lobby.myPlayerId) {
-      // If host was wrongly parked on red, move them to blue (human pad side)
-      if (mp.red === Lobby.myPlayerId) mp.red = null;
-      if (seatOpen(mp.blue)) {
-        mp.blue = Lobby.myPlayerId;
-        for (var s = 0; s < Lobby.lobbyState.spectatorSlots.length; s++) {
-          if (Lobby.lobbyState.spectatorSlots[s] === Lobby.myPlayerId) {
-            Lobby.lobbyState.spectatorSlots[s] = null;
-          }
+    var hostId = Lobby.myPlayerId;
+
+    // 1) Seat everyone already in the queue into open slots (client-first stays blue)
+    tryAssignMatchPlayers();
+
+    // 2) If host started without joining queue, give them the first open seat
+    //    (blue preferred). NEVER kick a human already on blue/red.
+    if (Lobby.isHost && hostId) {
+      var hostSeated = mp.blue === hostId || (mp.red === hostId && mp.red !== '__BOT__');
+      if (!hostSeated) {
+        if (seatOpen(mp.blue)) {
+          mp.blue = hostId;
+          clearSpectatorSlot(hostId);
+        } else if (seatOpen(mp.red)) {
+          mp.red = hostId;
+          clearSpectatorSlot(hostId);
         }
+      } else if (mp.red === hostId && seatOpen(mp.blue)) {
+        // Solo host was on red with blue empty — move to blue for vs-bot pad ownership.
+        // Do NOT do this when blue already has another human (that was the PvP bug).
+        mp.red = null;
+        mp.blue = hostId;
+        clearSpectatorSlot(hostId);
       }
     }
-    if (!mp.blue || mp.blue === '__BOT__') return;
 
-    // __BOT__ is a seat filler, not a human — treat as bot match.
-    var humanRed = !!(mp.red && mp.red !== '__BOT__');
+    // 3) Re-run assign in case queue still has a second human for red
+    tryAssignMatchPlayers();
+
+    if (!mp.blue || mp.blue === '__BOT__') {
+      if (Lobby.isHost && hostId && seatOpen(mp.blue)) {
+        mp.blue = hostId;
+        clearSpectatorSlot(hostId);
+      } else {
+        return;
+      }
+    }
+
     var humanBlue = !!(mp.blue && mp.blue !== '__BOT__');
+    var humanRed = !!(mp.red && mp.red !== '__BOT__');
+
+    // 4) Last chance: any other queued human who isn't blue → take red
+    if (!humanRed) {
+      var q = Lobby.lobbyState.queue || [];
+      for (var qi = 0; qi < q.length; qi++) {
+        var qid = q[qi];
+        if (!qid || qid === '__BOT__' || qid === mp.blue) continue;
+        mp.red = qid;
+        clearSpectatorSlot(qid);
+        humanRed = true;
+        break;
+      }
+    }
+
+    // 5) Bot fill ONLY when there is no second human. Never steal blue from a peer.
     var isBotMatch = humanBlue && !humanRed;
     if (isBotMatch) {
-      // Solo / vs-bot: host (or blue human) always owns blue; bot always red
-      if (Lobby.isHost && Lobby.myPlayerId) mp.blue = Lobby.myPlayerId;
       mp.red = '__BOT__';
     }
     Lobby.isLobbyBotMatch = isBotMatch;
