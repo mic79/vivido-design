@@ -1028,6 +1028,12 @@
         });
       } catch (e4) { /* ignore */ }
     }
+    // Belt-and-suspenders: clear remotes even if onDisconnected wasn't wired yet
+    try {
+      if (typeof global.clearStacksRemoteAvatars === 'function') {
+        global.clearStacksRemoteAvatars();
+      }
+    } catch (e5) { /* ignore */ }
 
     setTimeout(function () {
       if (epoch !== leaveEpoch) return; // superseded by a newer cleanup/rejoin

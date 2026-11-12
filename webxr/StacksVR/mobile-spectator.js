@@ -337,6 +337,10 @@
   }
 
   function hideStaleSpectatorBodies() {
+    if (typeof global.clearStacksRemoteAvatars === 'function') {
+      global.clearStacksRemoteAvatars();
+      return;
+    }
     var ids = ['spec-blue-body', 'bot-body', 'remote-body-0', 'remote-body-1',
       'remote-body-2', 'remote-body-3'];
     for (var i = 0; i < ids.length; i++) {
@@ -345,6 +349,8 @@
       el.setAttribute('visible', false);
       if (el.object3D) el.object3D.visible = false;
       if (el.dataset) delete el.dataset.posed;
+      var mb = el.components && el.components['mixamo-body'];
+      if (mb) mb.remoteHandData = null;
     }
   }
 

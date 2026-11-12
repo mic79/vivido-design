@@ -78,6 +78,9 @@
       var self = this;
       this.el.sceneEl.addEventListener('loaded', function () { self._boot(); });
       if (this.el.sceneEl.hasLoaded) this._boot();
+      this.el.sceneEl.addEventListener('lobby-state-updated', function () {
+        self._pruneRemoteAvatarsToLobby();
+      });
 
       if (global.StacksLobby) {
         function chain(key, fn) {
@@ -100,6 +103,9 @@
       // Stable entry point so lobby.js can apply poses even if callbacks were rebound
       global.applyStacksRemotePose = function (fromId, data) {
         self.onRemotePlayerPose(fromId, data);
+      };
+      global.clearStacksRemoteAvatars = function () {
+        self._clearAllRemoteAvatars();
       };
 
       this._bindInput();
@@ -2415,26 +2421,91 @@
     },
 
     /**
-     * Host left / connection dropped — clear remotes. Match end is usually already
-     * fired by handleHostGone; this is the safety net if only onDisconnected ran.
+     * Strip networked avatar state. Critical: mixamo-body re-shows any entity that
+     * still has remoteHandData each frame — hide alone is not enough (DodgeVR clears it).
      */
-    onHostDisconnected: function (opts) {
-      opts = opts || {};
+    _clearRemoteAvatarEl: function (el) {
+      if (!el) return;
+      el.setAttribute('visible', false);
+      if (el.object3D) el.object3D.visible = false;
+      if (el.dataset) {
+        delete el.dataset.posed;
+        el.dataset.posed = '';
+      }
+      var mb = el.components && el.components['mixamo-body'];
+      if (mb) mb.remoteHandData = null;
+    },
+
+    _clearAllRemoteAvatars: function () {
+      var ids = ['spec-blue-body', 'bot-body', 'remote-body-0', 'remote-body-1',
+        'remote-body-2', 'remote-body-3'];
+      for (var i = 0; i < ids.length; i++) {
+        this._clearRemoteAvatarEl(document.getElementById(ids[i]));
+      }
+      this._remoteBodyMap = {};
       this._setRemoteHeld('blue', { holding: false });
       this._setRemoteHeld('red', { holding: false });
       this._clearBotHoldMesh('blue');
       this._clearBotHoldMesh('red');
-      // Hide networked avatars that would otherwise freeze in last pose
-      var hideIds = ['spec-blue-body', 'bot-body', 'remote-body-0', 'remote-body-1',
-        'remote-body-2', 'remote-body-3'];
-      for (var i = 0; i < hideIds.length; i++) {
-        var el = document.getElementById(hideIds[i]);
-        if (el) {
-          el.setAttribute('visible', false);
-          if (el.object3D) el.object3D.visible = false;
-          if (el.dataset) delete el.dataset.posed;
+    },
+
+    /** Drop avatars for peer ids no longer in the lobby (opponent left, you stayed). */
+    _pruneRemoteAvatarsToLobby: function () {
+      if (!global.isMultiplayer || !global.lobbyState) {
+        this._clearAllRemoteAvatars();
+        return;
+      }
+      var live = {};
+      var players = global.lobbyState.players || [];
+      for (var i = 0; i < players.length; i++) {
+        if (players[i] && players[i].id) live[players[i].id] = true;
+      }
+      var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+      if (myId) live[myId] = true;
+      live['__BOT__'] = true;
+
+      if (!this._remoteBodyMap) this._remoteBodyMap = {};
+      var nextMap = {};
+      var stillUsed = {};
+      for (var pid in this._remoteBodyMap) {
+        if (!Object.prototype.hasOwnProperty.call(this._remoteBodyMap, pid)) continue;
+        var bid = this._remoteBodyMap[pid];
+        if (live[pid]) {
+          nextMap[pid] = bid;
+          stillUsed[bid] = true;
+        } else {
+          this._clearRemoteAvatarEl(document.getElementById(bid));
         }
       }
+      this._remoteBodyMap = nextMap;
+
+      // Seat bodies (bot/spec-blue) — clear if that seat's human is gone
+      var mp = global.lobbyState.matchPlayers || {};
+      var playing = global.lobbyState.matchState === 'PLAYING';
+      if (!playing || !mp.blue || !live[mp.blue]) {
+        this._clearRemoteAvatarEl(document.getElementById('spec-blue-body'));
+      }
+      if (!playing || !mp.red || mp.red === '__BOT__' || !live[mp.red]) {
+        // Keep bot-body for vs-bot matches; otherwise clear stale human pose
+        if (!(playing && mp.red === '__BOT__')) {
+          this._clearRemoteAvatarEl(document.getElementById('bot-body'));
+        }
+      }
+
+      // Free unused remote-body slots
+      for (var r = 0; r < 4; r++) {
+        var rid = 'remote-body-' + r;
+        if (!stillUsed[rid]) this._clearRemoteAvatarEl(document.getElementById(rid));
+      }
+    },
+
+    /**
+     * Host left / connection dropped / voluntary leave — clear remotes.
+     * Match end is usually already fired by handleHostGone; this is the safety net.
+     */
+    onHostDisconnected: function (opts) {
+      opts = opts || {};
+      this._clearAllRemoteAvatars();
       if (this.matchActive) {
         this.onMatchEnded({
           cancelled: true,
@@ -2774,14 +2845,13 @@
     _hidePreviewBotBodies: function () {
       // In multiplayer, remotes own bot-body / spec-blue / remote-body-* — never hide them
       if (global.isMultiplayer) return;
-      var ids = ['bot-body', 'spec-blue-body'];
-      for (var i = 0; i < ids.length; i++) {
-        var el = document.getElementById(ids[i]);
-        if (!el) continue;
-        el.setAttribute('visible', false);
-        if (el.object3D) el.object3D.visible = false;
-        if (el.dataset) el.dataset.posed = '';
+      // Must null remoteHandData or mixamo-body will force-visible the last lobby pose
+      this._clearRemoteAvatarEl(document.getElementById('bot-body'));
+      this._clearRemoteAvatarEl(document.getElementById('spec-blue-body'));
+      for (var i = 0; i < 4; i++) {
+        this._clearRemoteAvatarEl(document.getElementById('remote-body-' + i));
       }
+      this._remoteBodyMap = {};
     },
 
     /**
