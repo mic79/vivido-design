@@ -840,6 +840,8 @@
   var leaveEpoch = 0;
   var pendingLeavePeer = null;
   var pendingLeaveConn = null;
+  /** Set by voluntary endMultiplayer — conn.close must not look like "host dropped us" */
+  var voluntaryLeave = false;
 
   function destroyPeerNow(peer, conn) {
     try { if (conn) conn.close(); } catch (e) {}
@@ -887,6 +889,19 @@
   function handleHostGone(reason) {
     if (_hostGoneLock) return;
     _hostGoneLock = true;
+    // Voluntary Leave already cleaned up + notified with voluntary:true.
+    // The delayed conn.close must NOT re-fire as host-left (that triggered
+    // mobile auto-reconnect / felt like "Leave reconnects me").
+    if (voluntaryLeave) {
+      voluntaryLeave = false;
+      var vp = Lobby.peer;
+      var vc = Lobby.conn;
+      Lobby.conn = null;
+      Lobby.peer = null;
+      destroyPeerNow(vp, vc);
+      setTimeout(function () { _hostGoneLock = false; }, 50);
+      return;
+    }
     var why = reason || 'host-left';
     var wasPlaying = !!(Lobby.lobbyState && Lobby.lobbyState.matchState === 'PLAYING');
     var wasMp = Lobby.isMultiplayer;
@@ -957,6 +972,8 @@
     var leavingConn = Lobby.conn;
     var leavingPeer = Lobby.peer;
     var leavingConns = Lobby.connections.slice();
+    // Mark BEFORE teardown so the eventual conn.close ≠ unexpected host drop
+    voluntaryLeave = true;
 
     // Host: warn peers BEFORE teardown so they don't sit on a stale match.
     // Peer: goodbye so host prunes queue immediately.
@@ -1194,6 +1211,7 @@
 
   async function connectToLobby(lobbyNum) {
     if (Lobby.isMultiplayer || Lobby.connectionState === 'connecting') return;
+    voluntaryLeave = false; // explicit join clears leave suppression
     Lobby.connectionState = 'connecting';
     global.connectionState = 'connecting';
     setStatus('Connecting to lobby ' + lobbyNum + '...');
@@ -1215,6 +1233,7 @@
     if (Lobby.isMultiplayer || Lobby.connectionState === 'connecting') {
       return { ok: false, error: 'Already connecting.' };
     }
+    voluntaryLeave = false; // explicit Watch clears leave suppression
     Lobby.connectionState = 'connecting';
     global.connectionState = 'connecting';
     setStatus('Looking for lobby ' + lobbyNum + '...');

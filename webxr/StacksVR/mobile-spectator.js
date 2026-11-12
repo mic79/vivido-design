@@ -235,6 +235,9 @@
     var watchBtn = document.getElementById('mobile-watch-btn');
     if (statusEl) statusEl.textContent = 'Connecting to lobby ' + _lobbyNum + '...';
     if (watchBtn) watchBtn.disabled = true;
+    // Explicit Watch — allow connection; cancel any leftover auto-retry
+    _suppressAutoReconnect = false;
+    cancelMobileReconnect();
 
     if (typeof global.connectAsMobileSpectator !== 'function') {
       if (statusEl) statusEl.textContent = 'Lobby system not loaded.';
@@ -322,6 +325,16 @@
 
   var _reconnectTimer = null;
   var _reconnectAttempts = 0;
+  /** User left / is idle on lobby screen — never auto-Watch until they tap WATCH */
+  var _suppressAutoReconnect = false;
+
+  function cancelMobileReconnect() {
+    if (_reconnectTimer) {
+      clearTimeout(_reconnectTimer);
+      _reconnectTimer = null;
+    }
+    _reconnectAttempts = 0;
+  }
 
   function hideStaleSpectatorBodies() {
     var ids = ['spec-blue-body', 'bot-body', 'remote-body-0', 'remote-body-1',
@@ -336,9 +349,12 @@
   }
 
   function scheduleMobileReconnect() {
+    if (_suppressAutoReconnect) return;
     if (!global._stacksDeviceMobileSpectator && !global.isMobileSpectator) return;
     if (_reconnectTimer) return;
     if (_reconnectAttempts >= 5) {
+      _suppressAutoReconnect = true;
+      cancelMobileReconnect();
       var hudDone = document.getElementById('mobile-hud-status');
       if (hudDone) hudDone.textContent = 'Host left — lobby closed';
       var lobbyScreen = document.getElementById('mobile-lobby-screen');
@@ -357,9 +373,11 @@
     }
     _reconnectTimer = setTimeout(function () {
       _reconnectTimer = null;
+      if (_suppressAutoReconnect) return;
       if (global.isMultiplayer) return;
       if (typeof global.connectAsMobileSpectator !== 'function') return;
       global.connectAsMobileSpectator(_lobbyNum || 1).then(function (res) {
+        if (_suppressAutoReconnect) return;
         if (res && res.ok) {
           _reconnectAttempts = 0;
           showMatchHud('Watching lobby ' + (_lobbyNum || 1));
@@ -384,10 +402,19 @@
     global.isSpectator = true;
     var hudStatus = document.getElementById('mobile-hud-status');
     if (opts.voluntary) {
+      // User chose Leave / stopped watching — NEVER auto-rejoin
+      _suppressAutoReconnect = true;
+      cancelMobileReconnect();
       if (hudStatus) hudStatus.textContent = 'Disconnected';
+      var lobbyScreen = document.getElementById('mobile-lobby-screen');
+      var matchHud = document.getElementById('mobile-match-hud');
+      if (matchHud) matchHud.classList.remove('active');
+      if (lobbyScreen) lobbyScreen.style.display = '';
+      var watchBtn = document.getElementById('mobile-watch-btn');
+      if (watchBtn) watchBtn.disabled = false;
       return;
     }
-    // DodgeVR: try reconnect a few times; if host is gone, surface that clearly
+    // Unexpected drop only — try a few reconnects (DodgeVR), then stop
     scheduleMobileReconnect();
   }
 

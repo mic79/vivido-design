@@ -152,6 +152,7 @@
       this._hoveredBtn = null;
       this._lastActionAt = 0;
       this._lastActionName = '';
+      this._joinCooldownUntil = 0;
       var self = this;
 
       this.el.sceneEl.addEventListener('loaded', function () { self.cacheRefs(); });
@@ -568,12 +569,19 @@
           this._setLobbyLabel();
           break;
         case 'join-lobby':
-      if (window.isMultiplayer) {
+          // Same button toggles JOIN ↔ LEAVE. A held/repeated trigger must NOT
+          // leave then immediately rejoin the same lobby number.
+          if (window.isMultiplayer) {
             if (window.endMultiplayer) window.endMultiplayer();
+            this._joinCooldownUntil = performance.now() + 1500;
             this.refreshLobbyUI();
           } else if (window.connectToLobby) {
-          window.connectToLobby(this.lobbyNumber);
-        }
+            if (this._joinCooldownUntil && performance.now() < this._joinCooldownUntil) {
+              break;
+            }
+            this._joinCooldownUntil = 0;
+            window.connectToLobby(this.lobbyNumber);
+          }
           break;
         case 'join-queue':
           if (window.sendQueueAction) window.sendQueueAction('join');
