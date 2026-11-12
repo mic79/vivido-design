@@ -863,6 +863,20 @@
         status.setAttribute('value', msg);
       }
 
+      // Keep wrist/world version stamp current when lobby role changes
+      var verEl = document.getElementById('version-display');
+      if (verEl) {
+        var ver = 'v' + (window.STACKS_VERSION || '0.0.0');
+        var fpsMatch = (verEl.getAttribute('text') && verEl.getAttribute('text').value || '')
+          .match(/(\d+)\s*FPS/);
+        var bits = [ver];
+        if (fpsMatch) bits.push(fpsMatch[1] + ' FPS');
+        if (window.isMultiplayer) {
+          bits.push(window.isHost ? 'HOST' : (window.isMobileSpectator ? 'WATCH' : 'JOINED'));
+        }
+        verEl.setAttribute('text', 'value', bits.join(' | '));
+      }
+
       this._applySeatPose();
     },
 

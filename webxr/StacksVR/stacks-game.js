@@ -107,6 +107,10 @@
 
     _boot: function () {
       if (this._sceneRoot) return;
+      this._fpsFrames = 0;
+      this._fpsLast = performance.now();
+      this._fpsValue = 0;
+      this._refreshVersionDisplay();
       var scene = this.el.sceneEl.object3D;
       this._sceneRoot = new THREE.Group();
       this._sceneRoot.name = 'stacks-arena';
@@ -2914,6 +2918,42 @@
       }
     },
 
+    _appVersion: function () {
+      return String(global.STACKS_VERSION || '0.0.0');
+    },
+
+    /** DodgeVR-style discreet stamp: vX.Y.Z [| N FPS] [| lobby status] */
+    _refreshVersionDisplay: function (extra) {
+      var ver = 'v' + this._appVersion();
+      var parts = [ver];
+      if (this._fpsValue > 0) parts.push(this._fpsValue + ' FPS');
+      if (extra) parts.push(extra);
+      var label = parts.join(' | ');
+      var el = document.getElementById('version-display');
+      if (el) el.setAttribute('text', 'value', label);
+      var chip = document.getElementById('app-version-chip');
+      if (chip) chip.textContent = ver;
+      var mob = document.getElementById('mobile-version-label');
+      if (mob) mob.textContent = ver;
+    },
+
+    _tickVersionFps: function () {
+      this._fpsFrames = (this._fpsFrames || 0) + 1;
+      var now = performance.now();
+      if (!this._fpsLast) this._fpsLast = now;
+      if (now - this._fpsLast < 500) return;
+      this._fpsValue = Math.round((this._fpsFrames * 1000) / (now - this._fpsLast));
+      this._fpsFrames = 0;
+      this._fpsLast = now;
+      var status = '';
+      if (global.isMultiplayer) {
+        if (global.isHost) status = 'HOST';
+        else if (global.isMobileSpectator) status = 'WATCH';
+        else status = 'JOINED';
+      }
+      this._refreshVersionDisplay(status || null);
+    },
+
     _updateHUD: function () {
       var blueScore = document.getElementById('blue-score');
       var redScore = document.getElementById('red-score');
@@ -2921,6 +2961,11 @@
       if (redScore) redScore.setAttribute('text', 'value', String(this.modes.scores.red | 0));
 
       this._updateCupStatsHUD();
+      this._refreshVersionDisplay(
+        global.isMultiplayer
+          ? (global.isHost ? 'HOST' : (global.isMobileSpectator ? 'WATCH' : 'JOINED'))
+          : null
+      );
       var hint = document.getElementById('control-hint');
       if (hint) {
         var msg = '';
@@ -3412,6 +3457,7 @@
 
     tick: function () {
       if (!this._sceneRoot) return;
+      this._tickVersionFps();
       if (this._poseDesktop) this._poseDesktop();
       this._tickPieceAnims();
       this._tickVictory();

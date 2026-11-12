@@ -3,7 +3,15 @@
   <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <!-- Bump this whenever shipping a visible build (also bump script ?v= below). -->
+  <meta name="stacks-version" content="0.2.0" />
   <title>StacksVR</title>
+  <script>
+    (function () {
+      var m = document.querySelector('meta[name="stacks-version"]');
+      window.STACKS_VERSION = (m && m.getAttribute('content')) || '0.0.0';
+    })();
+  </script>
     <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.6.0/dist/aframe-extras.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
@@ -18,21 +26,21 @@
     };
   </script>
 
-  <script src="shapes.js?v=27"></script>
-  <script src="cup.js?v=34"></script>
-  <script src="clear.js?v=19"></script>
-  <script src="attack.js?v=19"></script>
-  <script src="cup-bot.js?v=25"></script>
-  <script src="stats.js?v=7"></script>
-  <script src="modes.js?v=19"></script>
-  <script src="lobby.js?v=47"></script>
-  <script src="match-replay.js?v=19"></script>
-  <script src="stacks-audio.js?v=3"></script>
-  <script src="game-menu.js?v=51"></script>
-  <script src="mixamo-body.js?v=21"></script>
-  <script src="locomotion.js?v=20"></script>
-  <script src="stacks-game.js?v=82"></script>
-  <script src="mobile-spectator.js?v=39"></script>
+  <script src="shapes.js?v=28"></script>
+  <script src="cup.js?v=35"></script>
+  <script src="clear.js?v=20"></script>
+  <script src="attack.js?v=20"></script>
+  <script src="cup-bot.js?v=26"></script>
+  <script src="stats.js?v=8"></script>
+  <script src="modes.js?v=20"></script>
+  <script src="lobby.js?v=48"></script>
+  <script src="match-replay.js?v=20"></script>
+  <script src="stacks-audio.js?v=4"></script>
+  <script src="game-menu.js?v=52"></script>
+  <script src="mixamo-body.js?v=22"></script>
+  <script src="locomotion.js?v=21"></script>
+  <script src="stacks-game.js?v=83"></script>
+  <script src="mobile-spectator.js?v=40"></script>
 
     <style>
     html, body { margin: 0; height: 100%; background: #111; font-family: sans-serif; }
@@ -53,6 +61,13 @@
       border: 2px solid #4488ff; border-radius: 6px; background: #222; color: #fff; outline: none;
     }
     #pre-vr-overlay .hint { font-size: 0.8em; color: #666; margin-top: 1.5em; }
+    #app-version-chip {
+      position: fixed; left: 10px; bottom: 8px; z-index: 10000;
+      font-size: 11px; letter-spacing: 0.04em; color: rgba(170, 180, 190, 0.55);
+      pointer-events: none; user-select: none;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    body.mobile-spectator #app-version-chip { color: rgba(170, 180, 190, 0.7); }
 
     /* DodgeVR mobile spectator UI (ported) */
       #mobile-spectator-overlay {
@@ -205,6 +220,13 @@
       <p class="hint">Press <b>Enter VR</b> below to start</p>
     </div>
   </div>
+  <div id="app-version-chip" aria-hidden="true"></div>
+  <script>
+    (function () {
+      var chip = document.getElementById('app-version-chip');
+      if (chip) chip.textContent = 'v' + (window.STACKS_VERSION || '0.0.0');
+    })();
+  </script>
   <script>
     (function () {
       var input = document.getElementById('nickname-input');
@@ -225,7 +247,7 @@
     <div id="mobile-spectator-overlay">
       <div id="mobile-lobby-screen">
       <h1>STACKS VR</h1>
-        <div class="subtitle">Mobile Spectator</div>
+        <div class="subtitle">Mobile Spectator · <span id="mobile-version-label"></span></div>
         <div class="lobby-row">
           <label>Lobby:</label>
         <button class="lobby-num-btn" id="mobile-lobby-minus" type="button">&minus;</button>
@@ -280,9 +302,9 @@
     <!-- Hide flat floor — arena ground is built in stacks-game -->
     <a-plane visible="false" position="0 -0.05 0" rotation="-90 0 0" width="1" height="1"></a-plane>
 
-    <!-- Tiny status only — BattleBlocks keeps score on diegetic cards -->
-    <a-entity id="version-display" position="0 2.35 0"
-      text="value: ; align: center; width: 0.8; color: #556070"></a-entity>
+    <!-- Discreet build stamp (DodgeVR-style) — kept in sync from STACKS_VERSION -->
+    <a-entity id="version-display" position="0 2.42 0"
+      text="value: v0.2.0; align: center; width: 0.85; color: #5a6878"></a-entity>
     <a-entity id="score-display" position="0 2.2 0">
       <a-entity id="blue-score" position="-0.16 0 0"
         text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>

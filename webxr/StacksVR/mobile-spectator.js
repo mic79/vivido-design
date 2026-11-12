@@ -469,6 +469,11 @@
     if (!global.isMobileSpectator) return;
 
     document.body.classList.add('mobile-spectator');
+    var ver = 'v' + (global.STACKS_VERSION || '0.0.0');
+    var mobVer = document.getElementById('mobile-version-label');
+    if (mobVer) mobVer.textContent = ver;
+    var chip = document.getElementById('app-version-chip');
+    if (chip) chip.textContent = ver;
 
     var preVr = document.getElementById('pre-vr-overlay');
     if (preVr) preVr.classList.add('gone');
