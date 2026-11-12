@@ -353,6 +353,13 @@
       return false;
     },
 
+    /** Only the lobby host may start (seating / bot fill live on the host). */
+    _canStartMatch: function () {
+      if (!window.isMultiplayer) return true;
+      if (window.isMobileSpectator) return false;
+      return !!window.isHost;
+    },
+
     _bindClicks: function () {
       var self = this;
       var root = document.getElementById('vr-menu-root');
@@ -525,6 +532,11 @@
             this.closeMenu();
             break;
           }
+          // Non-host clients must not see a working Start — host owns seating/bot fill
+          if (window.isMultiplayer && !this._canStartMatch()) {
+            this.refreshLobbyUI();
+            break;
+          }
           // Clear dual-bot idle without sending a no-op lobby "end" while WAITING
           if (comp && typeof comp.stopLocalPreview === 'function') {
             comp.stopLocalPreview();
@@ -536,8 +548,6 @@
                 typeof window.startLobbyMatch === 'function') {
               // Host start: alone → vs bot; two queued → PvP
               window.startLobbyMatch();
-            } else if (window.sendMatchAction) {
-              window.sendMatchAction('start');
             }
             this.refreshLobbyUI();
             this.closeMenu();
@@ -548,8 +558,6 @@
           if (window.StacksLobby && window.StacksLobby.isHost &&
               typeof window.startLobbyMatch === 'function') {
             window.startLobbyMatch();
-          } else if (window.isMultiplayer && typeof window.sendMatchAction === 'function') {
-            window.sendMatchAction('start');
           } else if (comp) {
             comp.startOfflineBotMatch();
           }
@@ -590,8 +598,14 @@
           if (window.sendQueueAction) window.sendQueueAction('leave');
           break;
         case 'start-match':
-          if (window.sendMatchAction) window.sendMatchAction('start');
-          else if (window.StacksLobby && window.StacksLobby.isHost) window.startLobbyMatch();
+          if (!this._canStartMatch()) {
+            this.refreshLobbyUI();
+            break;
+          }
+          if (window.StacksLobby && window.StacksLobby.isHost &&
+              typeof window.startLobbyMatch === 'function') {
+            window.startLobbyMatch();
+          }
           break;
         case 'stats':
           this.menuMode = 'stats';
@@ -793,6 +807,7 @@
       if (!btn) return;
       var playing = this._isRealMatchPlaying();
       var canControl = this._canControlMatch();
+      var canStart = this._canStartMatch();
       var label;
       var color;
       var action = 'start-bot';
@@ -804,13 +819,21 @@
         label = 'SPECTATING';
         color = '#445566';
         action = 'noop';
-      } else if (this.menuMode === 'multi') {
-        label = canControl || !window.isMultiplayer || window.isHost
-          ? 'START MATCH'
-          : 'WAITING';
-        color = (canControl || !window.isMultiplayer || window.isHost) ? '#ff8800' : '#445566';
-        if (!(canControl || !window.isMultiplayer || window.isHost)) action = 'noop';
+      } else if (this.menuMode === 'multi' && window.isMultiplayer) {
+        // Only HOST can start. Seated clients used to see START MATCH but
+        // handleMatchAction silently ignored them — confusing dead control.
+        if (canStart) {
+          label = 'START MATCH';
+          color = '#ff8800';
         } else {
+          label = 'WAIT FOR HOST';
+          color = '#445566';
+          action = 'noop';
+        }
+      } else if (this.menuMode === 'multi') {
+        label = 'START MATCH';
+        color = '#ff8800';
+      } else {
         label = 'START vs BOT';
         color = '#ff8800';
       }
