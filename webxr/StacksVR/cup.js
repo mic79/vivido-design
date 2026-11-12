@@ -440,6 +440,59 @@
     }
   };
 
+  Cup.prototype._clearShell = function () {
+    // Remove everything under root except blocksRoot
+    for (var i = this.root.children.length - 1; i >= 0; i--) {
+      var ch = this.root.children[i];
+      if (ch === this.blocksRoot) continue;
+      this.root.remove(ch);
+      if (ch && typeof ch.traverse === 'function') {
+        ch.traverse(function (o) {
+          if (o.geometry && o.geometry.dispose) o.geometry.dispose();
+        });
+      } else if (ch && ch.geometry && ch.geometry.dispose) {
+        ch.geometry.dispose();
+      }
+    }
+    if (this._shellMats) {
+      for (var m = 0; m < this._shellMats.length; m++) {
+        if (this._shellMats[m] && this._shellMats[m].dispose) this._shellMats[m].dispose();
+      }
+    }
+    this._shellMats = [];
+    this._rim = null;
+    this._rimMat = null;
+    this._highLine = null;
+    this._highLineMat = null;
+  };
+
+  /**
+   * Change XZ grid size in place, keeping world-center / yaw / height.
+   * Used for 6×6 ↔ 4×4 board switching (synced over lobby).
+   */
+  Cup.prototype.resize = function (width, depth) {
+    width = Math.max(3, Math.min(8, width | 0));
+    depth = Math.max(3, Math.min(8, (depth == null ? width : depth) | 0));
+    if (width === this.width && depth === this.depth) return false;
+    var yaw = this.yaw || 0;
+    var heightY = this.getHeight ? this.getHeight() : this.position.y;
+    this.clearAll();
+    this._clearShell();
+    this.width = width;
+    this.depth = depth;
+    this._resetGrid();
+    var w0 = this.width * this.cellSize;
+    var d0 = this.depth * this.cellSize;
+    this.root.position.set(-w0 / 2, 0, -d0 / 2);
+    // pivot already at world center — leave x/z; refresh base position corner for serialization
+    this.position.x = (this.pivot ? this.pivot.position.x : 0) - w0 / 2;
+    this.position.z = (this.pivot ? this.pivot.position.z : 0) - d0 / 2;
+    this._buildShell();
+    this.setYaw(yaw);
+    if (this.setHeight) this.setHeight(heightY);
+    return true;
+  };
+
   Cup.prototype.occupiedCount = function () {
     var n = 0;
     for (var y = 0; y < this.height; y++) {
@@ -476,6 +529,10 @@
   };
 
   Cup.prototype.applySnapshot = function (snap) {
+    if (snap && snap.width && snap.depth &&
+        (snap.width !== this.width || snap.depth !== this.depth)) {
+      this.resize(snap.width, snap.depth);
+    }
     this.clearAll();
     if (!snap || !snap.cells) return;
     for (var i = 0; i < snap.cells.length; i++) {

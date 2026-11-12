@@ -24,6 +24,9 @@
     onDisconnected: null
   };
 
+  // Survives lobby teardown so offline 4×4 choice carries into a new host session
+  var preferredBoardSize = 6;
+
   function createLobbyState() {
     return {
       players: [],
@@ -34,8 +37,53 @@
       matchScore: { blue: 0, red: 0 },
       matchGameState: null,
       spectatorSlots: [null, null, null, null],
-      mobileSpectatorCount: 0
+      mobileSpectatorCount: 0,
+      // Playfield XZ size — 6 (classic) or 4 (compact). Host-authored; synced to all.
+      boardSize: normalizeBoardSize(preferredBoardSize)
     };
+  }
+
+  function normalizeBoardSize(size) {
+    return size === 4 ? 4 : 6;
+  }
+
+  /**
+   * Host (or offline) sets board size. Broadcasts lobby-state so peers/spectators match.
+   * Returns false if a non-host peer tried to change it while connected.
+   */
+  function setBoardSize(size) {
+    size = normalizeBoardSize(size);
+    if (Lobby.isMultiplayer && !Lobby.isHost) return false;
+    preferredBoardSize = size;
+    if (!Lobby.lobbyState) Lobby.lobbyState = createLobbyState();
+    if (Lobby.lobbyState.boardSize === size) {
+      global.lobbyState = Lobby.lobbyState;
+      return true;
+    }
+    Lobby.lobbyState.boardSize = size;
+    global.lobbyState = Lobby.lobbyState;
+    broadcastLobbyState();
+    var scene = document.querySelector('a-scene');
+    if (scene) scene.emit('board-size-changed', { boardSize: size });
+    return true;
+  }
+
+  function getBoardSize() {
+    if (Lobby.lobbyState && Lobby.lobbyState.boardSize) {
+      return normalizeBoardSize(Lobby.lobbyState.boardSize);
+    }
+    return normalizeBoardSize(preferredBoardSize);
+  }
+
+  /** Offline/host applies locally; peer requests host so lobby-state syncs everyone. */
+  function requestBoardSize(size) {
+    size = normalizeBoardSize(size);
+    if (!Lobby.isMultiplayer || Lobby.isHost) return setBoardSize(size);
+    if (Lobby.conn && Lobby.conn.open) {
+      Lobby.conn.send({ type: 'board-size', size: size });
+      return true;
+    }
+    return false;
   }
 
   function broadcastLobbyState() {
@@ -170,6 +218,7 @@
           startTime: startTime,
           isBotMatch: isBotMatch,
           bagSeed: bagSeed,
+          boardSize: normalizeBoardSize(Lobby.lobbyState.boardSize),
           state: Lobby.lobbyState
         });
       }
@@ -256,6 +305,7 @@
       startTime: Lobby.lobbyState.matchStartTime,
       isBotMatch: !!Lobby.isLobbyBotMatch || mp.red === '__BOT__',
       bagSeed: Lobby.lobbyState.bagSeed,
+      boardSize: normalizeBoardSize(Lobby.lobbyState.boardSize),
       state: Lobby.lobbyState
     });
   }
@@ -342,6 +392,7 @@
     if (Lobby.isHost) {
       if (data.type === 'queue-action') handleQueueAction(fromId, data.action);
       else if (data.type === 'match-action') handleMatchAction(fromId, data.action, data.result);
+      else if (data.type === 'board-size') setBoardSize(data.size);
       else if (data.type === 'cup-event') {
         if (!data.from) data.from = fromId;
         // Rebroadcast to other peers, then apply locally on host
@@ -405,6 +456,9 @@
     // Peer / mobile spectator
     if (data.type === 'lobby-state') {
       Lobby.lobbyState = data.state;
+      if (Lobby.lobbyState && Lobby.lobbyState.boardSize == null) Lobby.lobbyState.boardSize = 6;
+      else if (Lobby.lobbyState) Lobby.lobbyState.boardSize = normalizeBoardSize(Lobby.lobbyState.boardSize);
+      if (Lobby.lobbyState) preferredBoardSize = Lobby.lobbyState.boardSize;
       global.lobbyState = data.state;
       var mp = data.state.matchPlayers;
       Lobby.isSpectator = !(mp && (mp.blue === Lobby.myPlayerId || mp.red === Lobby.myPlayerId));
@@ -412,7 +466,12 @@
       syncWindowState();
       if (Lobby.onLobbyState) Lobby.onLobbyState(data.state);
       var scene = document.querySelector('a-scene');
-      if (scene) scene.emit('lobby-state-updated');
+      if (scene) {
+        scene.emit('lobby-state-updated');
+        scene.emit('board-size-changed', {
+          boardSize: Lobby.lobbyState ? Lobby.lobbyState.boardSize : 6
+        });
+      }
     } else if (data.type === 'match-started') {
       // MUST update local lobbyState here — do not wait for a later lobby-state
       // (HUD / avatar routing key off matchState === PLAYING + matchPlayers)
@@ -435,6 +494,14 @@
       var bagSeed = data.bagSeed;
       if (bagSeed == null && data.state && data.state.bagSeed != null) bagSeed = data.state.bagSeed;
       if (bagSeed != null) Lobby.lobbyState.bagSeed = bagSeed >>> 0;
+      if (data.boardSize != null) {
+        Lobby.lobbyState.boardSize = normalizeBoardSize(data.boardSize);
+      } else if (data.state && data.state.boardSize != null) {
+        Lobby.lobbyState.boardSize = normalizeBoardSize(data.state.boardSize);
+      } else if (Lobby.lobbyState.boardSize == null) {
+        Lobby.lobbyState.boardSize = 6;
+      }
+      preferredBoardSize = Lobby.lobbyState.boardSize;
       global.lobbyState = Lobby.lobbyState;
       Lobby.isSpectator = !(Lobby.lobbyState.matchPlayers &&
         (Lobby.lobbyState.matchPlayers.blue === Lobby.myPlayerId ||
@@ -450,7 +517,12 @@
         );
       }
       var scene2 = document.querySelector('a-scene');
-      if (scene2) scene2.emit('lobby-state-updated');
+      if (scene2) {
+        scene2.emit('lobby-state-updated');
+        scene2.emit('board-size-changed', {
+          boardSize: Lobby.lobbyState.boardSize || 6
+        });
+      }
     } else if (data.type === 'match-ended') {
       if (Lobby.lobbyState) {
         Lobby.lobbyState.matchState = 'WAITING';
@@ -864,6 +936,13 @@
   global.startLobbyMatch = startLobbyMatch;
   global.endLobbyMatch = endLobbyMatch;
   global.broadcastLobbyState = broadcastLobbyState;
+  global.setBoardSize = setBoardSize;
+  global.getBoardSize = getBoardSize;
+  global.requestBoardSize = requestBoardSize;
+  Lobby.setBoardSize = setBoardSize;
+  Lobby.getBoardSize = getBoardSize;
+  Lobby.requestBoardSize = requestBoardSize;
+  Lobby.normalizeBoardSize = normalizeBoardSize;
   global.ensureLobbyMatchPublished = ensureLobbyMatchPublished;
   Lobby.ensureLobbyMatchPublished = ensureLobbyMatchPublished;
   Lobby.sendMatchStartedToConn = sendMatchStartedToConn;

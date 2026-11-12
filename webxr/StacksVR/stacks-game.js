@@ -38,6 +38,7 @@
       this.playerScore = 0;
       this.botScore = 0;
       this.matchState = 'WAITING';
+      this.boardSize = 6;
 
       this._sceneRoot = null;
       this._pad = null;
@@ -107,8 +108,10 @@
       // - POSITION is diagonal (blue left-near, red right-far)
       // - ROTATION stays axis-aligned — cups face each other head-on along Z
       //   (floor squares are not diamond-rotated).
+      var boardSize = (global.getBoardSize && global.getBoardSize()) || 6;
+      this.boardSize = boardSize === 4 ? 4 : 6;
       var CUP_Y = 0.92;
-      var CUP_HALF = (6 * CELL) / 2; // 0.36
+      var CUP_HALF = (this.boardSize * CELL) / 2;
       var PAD_Y = 1.12;
       var SHIFT_X = 0.65; // lateral stagger
       var SHIFT_Z = 0.85; // depth separation
@@ -141,12 +144,12 @@
 
       var blue = new global.StacksCup({
         id: 'blue', side: 'blue',
-        width: 6, depth: 6, height: 12,
+        width: this.boardSize, depth: this.boardSize, height: 12,
         position: cornerFromCenter(blueC)
       });
       var red = new global.StacksCup({
         id: 'red', side: 'red',
-        width: 6, depth: 6, height: 12,
+        width: this.boardSize, depth: this.boardSize, height: 12,
         position: cornerFromCenter(redC)
       });
       this.cups.blue = blue;
@@ -307,7 +310,39 @@
       this._padPiece = null;
       this._updateHUD();
       this._desktopHands();
-      console.log('[StacksGame] ready');
+
+      var selfBoot = this;
+      this.el.sceneEl.addEventListener('board-size-changed', function (e) {
+        var sz = e && e.detail && e.detail.boardSize;
+        selfBoot.applyBoardSize(sz);
+      });
+      this.el.sceneEl.addEventListener('lobby-state-updated', function () {
+        if (global.getBoardSize) selfBoot.applyBoardSize(global.getBoardSize());
+      });
+      console.log('[StacksGame] ready board=' + this.boardSize + 'x' + this.boardSize);
+    },
+
+    /**
+     * Resize both cups to 4×4 or 6×6. Keeps world centers. Clears cells.
+     * Called from lobby boardSize sync (host toggle / peer lobby-state / match-started).
+     */
+    applyBoardSize: function (size) {
+      size = size === 4 ? 4 : 6;
+      if (this.cups.blue && this.cups.blue.width === size &&
+          this.cups.red && this.cups.red.width === size) {
+        this.boardSize = size;
+        return false;
+      }
+      this.boardSize = size;
+      if (this.held && this._cancelHold) this._cancelHold();
+      else if (this._clearGhost) this._clearGhost();
+      if (this.cups.blue && this.cups.blue.resize) this.cups.blue.resize(size, size);
+      if (this.cups.red && this.cups.red.resize) this.cups.red.resize(size, size);
+      if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.isHost &&
+          this.matchActive && this._broadcastState) {
+        this._broadcastState('board-resize');
+      }
+      return true;
     },
 
     _botStation: function (side) {
@@ -1870,6 +1905,11 @@
         (global.isSpectator && global.isMultiplayer &&
           !(global.StacksLobby && global.StacksLobby.amMatchPlayer && global.StacksLobby.amMatchPlayer())));
       this._pendingMatch.spectating = spectating;
+
+      // Sync playfield size from lobby (4×4 / 6×6) before wipe / spectator snapshot
+      var bs = (global.getBoardSize && global.getBoardSize()) ||
+        (global.lobbyState && global.lobbyState.boardSize) || 6;
+      this.applyBoardSize(bs);
 
       // Spectators must NOT clear — late-join snapshot would be wiped by match-started
       if (!spectating) {

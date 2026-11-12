@@ -19,19 +19,19 @@
   </script>
 
   <script src="shapes.js?v=27"></script>
-  <script src="cup.js?v=33"></script>
+  <script src="cup.js?v=34"></script>
   <script src="clear.js?v=19"></script>
   <script src="attack.js?v=19"></script>
   <script src="cup-bot.js?v=23"></script>
   <script src="stats.js?v=7"></script>
   <script src="modes.js?v=19"></script>
-  <script src="lobby.js?v=39"></script>
+  <script src="lobby.js?v=40"></script>
   <script src="match-replay.js?v=19"></script>
   <script src="stacks-audio.js?v=3"></script>
-  <script src="game-menu.js?v=42"></script>
+  <script src="game-menu.js?v=43"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=19"></script>
-  <script src="stacks-game.js?v=74"></script>
+  <script src="stacks-game.js?v=75"></script>
   <script src="mobile-spectator.js?v=37"></script>
 
     <style>
@@ -344,8 +344,13 @@
             <a-plane width="0.20" height="0.006" color="#33bbff"
               material="opacity: 0.95; transparent: true; shader: flat; toneMapped: false" position="0 0.20 0.001"></a-plane>
 
-            <a-text value="STACKS VR" position="-0.06 0.235 0.002" align="center" width="0.72" color="#e8f4ff"></a-text>
-            <a-entity class="menu-btn clickable" data-action="toggle-music" id="menu-music-toggle" position="0.26 0.235 0.002"
+            <a-text value="STACKS VR" position="0 0.235 0.002" align="center" width="0.55" color="#e8f4ff"></a-text>
+            <a-entity class="menu-btn clickable" data-action="toggle-board" id="menu-board-toggle" position="-0.28 0.235 0.002"
+              geometry="primitive: box; width: 0.14; height: 0.045; depth: 0.008"
+              material="color: #1e6ad4; shader: flat">
+              <a-text id="menu-board-text" value="6×6" align="center" width="0.32" color="#ffffff" position="0 0 0.006"></a-text>
+            </a-entity>
+            <a-entity class="menu-btn clickable" data-action="toggle-music" id="menu-music-toggle" position="0.28 0.235 0.002"
               geometry="primitive: box; width: 0.14; height: 0.045; depth: 0.008"
               material="color: #1f9d45; shader: flat">
               <a-text id="menu-music-text" value="MUSIC" align="center" width="0.32" color="#ffffff" position="0 0 0.006"></a-text>

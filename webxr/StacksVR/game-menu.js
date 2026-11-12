@@ -98,6 +98,7 @@
       function onMenuButton() { self.requestToggleMenu(); }
       this.el.sceneEl.addEventListener('xbuttondown', onMenuButton);
       this.el.sceneEl.addEventListener('lobby-state-updated', function () { self.refreshLobbyUI(); });
+      this.el.sceneEl.addEventListener('board-size-changed', function () { self._setBoardButton(); });
 
       setTimeout(function attachX() {
         var leftHand = document.getElementById('leftHand');
@@ -506,9 +507,47 @@
           }
           this._setMusicButton();
           break;
+        case 'toggle-board':
+          this._toggleBoardSize();
+          break;
         default:
           break;
       }
+    },
+
+    _toggleBoardSize: function () {
+      var cur = (window.getBoardSize && window.getBoardSize()) || 6;
+      var next = cur === 4 ? 6 : 4;
+      if (window.requestBoardSize) window.requestBoardSize(next);
+      else if (window.setBoardSize) window.setBoardSize(next);
+      else {
+        var scene = this.el.sceneEl;
+        if (scene) scene.emit('board-size-changed', { boardSize: next });
+      }
+      this._setBoardButton();
+      pulseHaptic(this._leftHandEl || document.getElementById('leftHand'), 0.4, 35);
+    },
+
+    _setBoardButton: function () {
+      var btn = document.getElementById('menu-board-toggle');
+      var txt = document.getElementById('menu-board-text');
+      if (!btn) return;
+      var size = (window.getBoardSize && window.getBoardSize()) || 6;
+      var gm = document.querySelector('[stacks-game]');
+      var comp = gm && gm.components && gm.components['stacks-game'];
+      if (comp && comp.boardSize) size = comp.boardSize;
+      if (window.lobbyState && window.lobbyState.boardSize) {
+        size = window.lobbyState.boardSize === 4 ? 4 : 6;
+      }
+      var label = size === 4 ? '4×4' : '6×6';
+      var color = size === 4 ? '#c45a12' : '#1e6ad4';
+      // Non-host peers can still request; host/offline apply immediately
+      var canEdit = !window.isMultiplayer || !!window.isHost ||
+        !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
+      btn.setAttribute('material', 'color', canEdit ? color : '#444444');
+      btn.dataset.baseColor = canEdit ? color : '#444444';
+      btn.dataset.hoverColor = lightenHex(canEdit ? color : '#444444', 0.42);
+      if (txt) txt.setAttribute('value', label);
     },
 
     _setMusicButton: function () {
@@ -589,6 +628,7 @@
       this._setLobbyLabel();
       this._setStartButton();
       this._setMusicButton();
+      this._setBoardButton();
       if (stats) this._showStats();
 
       var status = document.getElementById('menu-lobby-status');
