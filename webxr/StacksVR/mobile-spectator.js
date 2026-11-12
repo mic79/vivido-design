@@ -145,7 +145,9 @@
     }
     if (isMatchPlaying(ls)) {
       activateSpectatorBodies();
-      statusEl.textContent = 'Swipe to orbit · Watching lobby ' + (_lobbyNum || '');
+      statusEl.textContent = (_desktopSpectate || !isMobileDevice()
+        ? 'Drag to orbit · Watching lobby '
+        : 'Swipe to orbit · Watching lobby ') + (_lobbyNum || '');
     } else {
       var pc = ls.players ? ls.players.length : 0;
       statusEl.textContent = 'Waiting for match... (' + pc + ' player' + (pc !== 1 ? 's' : '') + ' in lobby)';
