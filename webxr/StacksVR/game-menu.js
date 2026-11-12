@@ -333,6 +333,20 @@
       return true;
     },
 
+    /** Host or seated human only — spectators / late joiners cannot end someone else's match. */
+    _canControlMatch: function () {
+      if (!window.isMultiplayer) return true;
+      if (window.isMobileSpectator) return false;
+      if (window.StacksLobby && typeof window.StacksLobby.canIControlMatch === 'function') {
+        return !!window.StacksLobby.canIControlMatch();
+      }
+      if (window.isHost) return true;
+      if (window.StacksLobby && window.StacksLobby.amMatchPlayer) {
+        return !!window.StacksLobby.amMatchPlayer();
+      }
+      return false;
+    },
+
     _bindClicks: function () {
       var self = this;
       var root = document.getElementById('vr-menu-root');
@@ -487,6 +501,11 @@
         case 'start-bot':
           // Dual-purpose START / END like DodgeVR's orange button
           if (playing) {
+            if (!this._canControlMatch()) {
+              // Spectator / late joiner — do not touch the live match
+              this.refreshLobbyUI();
+              break;
+            }
             if (comp) comp.endMatch();
             this.refreshLobbyUI();
             this.closeMenu();
@@ -524,7 +543,7 @@
           this.closeMenu();
           break;
         case 'end-match':
-          if (comp) comp.endMatch();
+          if (this._canControlMatch() && comp) comp.endMatch();
           this.refreshLobbyUI();
           break;
         case 'lobby-minus':
@@ -586,6 +605,8 @@
           break;
         case 'bot-speed-track':
           this._nudgeBotBpm(1);
+          break;
+        case 'noop':
           break;
         default:
           break;
@@ -750,14 +771,24 @@
       var txt = document.getElementById('menu-start-match-text');
       if (!btn) return;
       var playing = this._isRealMatchPlaying();
+      var canControl = this._canControlMatch();
       var label;
       var color;
-      if (playing) {
+      var action = 'start-bot';
+      if (playing && canControl) {
         label = 'END MATCH';
         color = '#cc3333';
+      } else if (playing && !canControl) {
+        // Late joiner / spectator watching a live match — no end control
+        label = 'SPECTATING';
+        color = '#445566';
+        action = 'noop';
       } else if (this.menuMode === 'multi') {
-        label = 'START MATCH';
-        color = '#ff8800';
+        label = canControl || !window.isMultiplayer || window.isHost
+          ? 'START MATCH'
+          : 'WAITING';
+        color = (canControl || !window.isMultiplayer || window.isHost) ? '#ff8800' : '#445566';
+        if (!(canControl || !window.isMultiplayer || window.isHost)) action = 'noop';
       } else {
         label = 'START vs BOT';
         color = '#ff8800';
@@ -766,8 +797,7 @@
       btn.setAttribute('material', 'color', color);
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
-      // Keep data-action as start-bot (handles end when playing)
-      btn.setAttribute('data-action', 'start-bot');
+      btn.setAttribute('data-action', action);
     },
 
     refreshLobbyUI: function () {

@@ -2581,12 +2581,24 @@
 
     endMatch: function () {
       if (this._endingMatch) return;
+      var lobbyPlaying = !!(global.lobbyState && global.lobbyState.matchState === 'PLAYING');
+
+      // Spectators / late joiners must NEVER end a live lobby match
+      if (global.isMultiplayer && lobbyPlaying) {
+        var can = global.StacksLobby && typeof global.StacksLobby.canIControlMatch === 'function'
+          ? global.StacksLobby.canIControlMatch()
+          : !!(global.StacksLobby && global.StacksLobby.isHost);
+        if (!can) {
+          console.warn('[StacksGame] endMatch ignored — not a match controller');
+          return;
+        }
+      }
+
       this._endingMatch = true;
       if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
       this._countdownGoAt = null;
       this._clearMatchBanner();
       var result = this._matchEndResult(null, true);
-      var lobbyPlaying = !!(global.lobbyState && global.lobbyState.matchState === 'PLAYING');
 
       // Only hit the lobby end path while a lobby match is actually PLAYING.
       // Hosting + dual-bot idle is WAITING — sendMatchAction('end') was a no-op and

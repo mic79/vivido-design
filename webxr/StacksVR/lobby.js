@@ -299,16 +299,38 @@
     }
   }
 
+  function isHumanMatchPlayer(playerId) {
+    if (!Lobby.lobbyState || !playerId) return false;
+    var mp = Lobby.lobbyState.matchPlayers || {};
+    if (mp.blue === playerId) return true;
+    if (mp.red === playerId && mp.red !== '__BOT__') return true;
+    return false;
+  }
+
+  /**
+   * Who may start/end a lobby match?
+   * - Host (the peer running the lobby), identified by playerId === myPlayerId while isHost
+   * - Seated human match players (blue / human red)
+   * NEVER: spectators, late joiners, or "__BOT__"
+   *
+   * IMPORTANT: do NOT use bare `Lobby.isHost` — that is true on the host machine for
+   * EVERY incoming peer message and previously let spectators end the host's match.
+   */
+  function canControlMatch(playerId) {
+    if (!playerId) return false;
+    if (Lobby.isHost && playerId === Lobby.myPlayerId) return true;
+    return isHumanMatchPlayer(playerId);
+  }
+
   function handleMatchAction(playerId, action, result) {
     if (!Lobby.lobbyState) return;
-    var mp = Lobby.lobbyState.matchPlayers;
-    // Host may start/end even before seating (startLobbyMatch auto-seats host as blue).
-    // Seated match players may also start/end.
-    var allowed = Lobby.isHost ||
-      playerId === mp.blue ||
-      playerId === mp.red;
-    if (!allowed) return;
+    if (!canControlMatch(playerId)) {
+      console.warn('[StacksLobby] ignore match-action from non-controller', playerId, action);
+      return;
+    }
     if (action === 'start' && Lobby.lobbyState.matchState !== 'PLAYING') {
+      // Only the host may start (auto-seats / bot fill live here)
+      if (!(Lobby.isHost && playerId === Lobby.myPlayerId)) return;
       startLobbyMatch();
     } else if (action === 'end' && Lobby.lobbyState.matchState === 'PLAYING') {
       endLobbyMatch(result || null);
@@ -928,9 +950,11 @@
   }
 
   function amMatchPlayer() {
-    if (!Lobby.lobbyState) return false;
-    var mp = Lobby.lobbyState.matchPlayers;
-    return mp && (mp.blue === Lobby.myPlayerId || mp.red === Lobby.myPlayerId);
+    return isHumanMatchPlayer(Lobby.myPlayerId);
+  }
+
+  function canIControlMatch() {
+    return canControlMatch(Lobby.myPlayerId);
   }
 
   function mySide() {
@@ -977,6 +1001,10 @@
   Lobby.connectAsMobileSpectator = connectAsMobileSpectator;
   Lobby.endMultiplayer = endMultiplayer;
   Lobby.amMatchPlayer = amMatchPlayer;
+  Lobby.canControlMatch = canControlMatch;
+  Lobby.canIControlMatch = canIControlMatch;
+  Lobby.isHumanMatchPlayer = isHumanMatchPlayer;
+  global.canIControlMatch = canIControlMatch;
   Lobby.mySide = mySide;
   Lobby.startLobbyMatch = startLobbyMatch;
   Lobby.endLobbyMatch = endLobbyMatch;

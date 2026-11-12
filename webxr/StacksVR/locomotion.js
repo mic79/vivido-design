@@ -59,7 +59,9 @@
     },
 
     tick: function (t, dt) {
-      if (window.isSpectator) return;
+      // Mobile watchers use their own orbit camera — don't drive #player.
+      // VR spectators / late joiners MUST still be able to walk and look around.
+      if (window.isMobileSpectator) return;
       var ms = Math.min(dt || 16, 50) / 1000;
       var cam = document.getElementById('camera');
       if (!cam) return;
