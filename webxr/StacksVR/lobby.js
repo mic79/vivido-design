@@ -12,6 +12,8 @@
     isMobileSpectator: false,
     isLobbyBotMatch: false,
     myPlayerId: null,
+    /** Stable host id while hosting — survives temporary myPlayerId swaps / tests */
+    hostPlayerId: null,
     lobbyState: null,
     connectionState: 'idle',
     lobbyNum: 1,
@@ -86,8 +88,90 @@
     return false;
   }
 
+  /** True when a PeerJS data connection is actually usable (not a zombie open=true). */
+  function isConnLive(conn) {
+    if (!conn) return false;
+    if (!conn.open) return false;
+    try {
+      var pc = conn.peerConnection;
+      if (pc) {
+        var st = pc.connectionState || pc.iceConnectionState;
+        if (st === 'failed' || st === 'closed' || st === 'disconnected') return false;
+      }
+    } catch (e) { /* ignore */ }
+    return true;
+  }
+
+  /** Live peer ids the host still has an open data channel to (+ host self). */
+  function livePlayerIds() {
+    var live = {};
+    if (Lobby.isHost) {
+      var hid = Lobby.hostPlayerId || Lobby.myPlayerId;
+      if (hid) live[hid] = true;
+    }
+    for (var i = 0; i < Lobby.connections.length; i++) {
+      var c = Lobby.connections[i];
+      if (c && c.id && isConnLive(c.conn)) live[c.id] = true;
+    }
+    return live;
+  }
+
+  /**
+   * DodgeVR-style membership hygiene: drop queue/seat/player entries for peers
+   * that are no longer connected. Fixes ghost Q:2/Q:3 after leave+rejoin.
+   */
+  function pruneDisconnectedPlayers() {
+    if (!Lobby.isHost || !Lobby.lobbyState) return false;
+    // Drop zombie PeerJS entries so livePlayerIds cannot keep ghosts forever
+    var nextConns = [];
+    for (var ci = 0; ci < Lobby.connections.length; ci++) {
+      var ce = Lobby.connections[ci];
+      if (ce && ce.id && isConnLive(ce.conn)) nextConns.push(ce);
+    }
+    if (nextConns.length !== Lobby.connections.length) {
+      Lobby.connections = nextConns;
+    }
+
+    var live = livePlayerIds();
+    var changed = false;
+    var ls = Lobby.lobbyState;
+
+    var nextPlayers = (ls.players || []).filter(function (p) { return p && live[p.id]; });
+    if (nextPlayers.length !== (ls.players || []).length) changed = true;
+    ls.players = nextPlayers;
+
+    var nextQ = (ls.queue || []).filter(function (id) { return live[id]; });
+    if (nextQ.length !== (ls.queue || []).length) changed = true;
+    ls.queue = nextQ;
+
+    var mp = ls.matchPlayers || { blue: null, red: null };
+    if (mp.blue && mp.blue !== '__BOT__' && !live[mp.blue]) {
+      mp.blue = null;
+      changed = true;
+    }
+    if (mp.red && mp.red !== '__BOT__' && !live[mp.red]) {
+      mp.red = null;
+      changed = true;
+    }
+    ls.matchPlayers = mp;
+
+    if (ls.spectatorSlots) {
+      for (var s = 0; s < ls.spectatorSlots.length; s++) {
+        var sid = ls.spectatorSlots[s];
+        if (sid && !live[sid]) {
+          ls.spectatorSlots[s] = null;
+          changed = true;
+        }
+      }
+    }
+
+    if (changed && ls.matchState !== 'PLAYING') tryAssignMatchPlayers();
+    return changed;
+  }
+
   function broadcastLobbyState() {
     if (!Lobby.isHost || !Lobby.lobbyState) return;
+    pruneDisconnectedPlayers();
     global.lobbyState = Lobby.lobbyState;
     for (var i = 0; i < Lobby.connections.length; i++) {
       var c = Lobby.connections[i];
@@ -154,6 +238,8 @@
 
   function handleQueueAction(playerId, action) {
     if (!Lobby.lobbyState) return;
+    // Drop ghosts before queue mutations so Q:N never includes departed peers
+    pruneDisconnectedPlayers();
     if (action === 'join') {
       if (Lobby.lobbyState.queue.indexOf(playerId) < 0) {
         Lobby.lobbyState.queue.push(playerId);
@@ -178,6 +264,19 @@
 
   function startLobbyMatch() {
     if (!Lobby.lobbyState) return;
+    // Drop ghosts before seating — otherwise a disconnected peer still in queue
+    // can block red / inflate Q and produce false bot matches.
+    pruneDisconnectedPlayers();
+
+    var live = livePlayerIds();
+    // Rebuild seats from LIVE queue only. Stale seat holders (ghost peer ids that
+    // somehow survived prune) must never block red or force a fake bot match.
+    Lobby.lobbyState.queue = (Lobby.lobbyState.queue || []).filter(function (id) {
+      return !!live[id];
+    });
+    Lobby.lobbyState.matchPlayers.blue = null;
+    Lobby.lobbyState.matchPlayers.red = null;
+
     var mp = Lobby.lobbyState.matchPlayers;
     var hostId = Lobby.myPlayerId;
 
@@ -186,7 +285,7 @@
 
     // 2) If host started without joining queue, give them the first open seat
     //    (blue preferred). NEVER kick a human already on blue/red.
-    if (Lobby.isHost && hostId) {
+    if (Lobby.isHost && hostId && live[hostId]) {
       var hostSeated = mp.blue === hostId || (mp.red === hostId && mp.red !== '__BOT__');
       if (!hostSeated) {
         if (seatOpen(mp.blue)) {
@@ -209,7 +308,7 @@
     tryAssignMatchPlayers();
 
     if (!mp.blue || mp.blue === '__BOT__') {
-      if (Lobby.isHost && hostId && seatOpen(mp.blue)) {
+      if (Lobby.isHost && hostId && live[hostId] && seatOpen(mp.blue)) {
         mp.blue = hostId;
         clearSpectatorSlot(hostId);
       } else {
@@ -217,15 +316,19 @@
       }
     }
 
-    var humanBlue = !!(mp.blue && mp.blue !== '__BOT__');
-    var humanRed = !!(mp.red && mp.red !== '__BOT__');
+    var humanBlue = !!(mp.blue && mp.blue !== '__BOT__' && live[mp.blue]);
+    var humanRed = !!(mp.red && mp.red !== '__BOT__' && live[mp.red]);
+    if (mp.blue && mp.blue !== '__BOT__' && !live[mp.blue]) mp.blue = null;
+    if (mp.red && mp.red !== '__BOT__' && !live[mp.red]) mp.red = null;
+    humanBlue = !!(mp.blue && mp.blue !== '__BOT__');
+    humanRed = !!(mp.red && mp.red !== '__BOT__');
 
-    // 4) Last chance: any other queued human who isn't blue → take red
+    // 4) Last chance: any other queued LIVE human who isn't blue → take red
     if (!humanRed) {
       var q = Lobby.lobbyState.queue || [];
       for (var qi = 0; qi < q.length; qi++) {
         var qid = q[qi];
-        if (!qid || qid === '__BOT__' || qid === mp.blue) continue;
+        if (!qid || qid === '__BOT__' || qid === mp.blue || !live[qid]) continue;
         mp.red = qid;
         clearSpectatorSlot(qid);
         humanRed = true;
@@ -447,16 +550,20 @@
   }
 
   function removePlayer(peerId) {
-    if (!Lobby.lobbyState) return;
+    if (!Lobby.lobbyState || !peerId) return;
+    Lobby.connections = Lobby.connections.filter(function (c) { return c.id !== peerId; });
     Lobby.lobbyState.players = Lobby.lobbyState.players.filter(function (p) { return p.id !== peerId; });
     Lobby.lobbyState.queue = Lobby.lobbyState.queue.filter(function (id) { return id !== peerId; });
     for (var s = 0; s < Lobby.lobbyState.spectatorSlots.length; s++) {
       if (Lobby.lobbyState.spectatorSlots[s] === peerId) Lobby.lobbyState.spectatorSlots[s] = null;
     }
     var wasPlaying = Lobby.lobbyState.matchState === 'PLAYING' &&
-      (Lobby.lobbyState.matchPlayers.blue === peerId || Lobby.lobbyState.matchPlayers.red === peerId);
+      (Lobby.lobbyState.matchPlayers.blue === peerId ||
+        (Lobby.lobbyState.matchPlayers.red === peerId && peerId !== '__BOT__'));
     if (Lobby.lobbyState.matchPlayers.blue === peerId) Lobby.lobbyState.matchPlayers.blue = null;
     if (Lobby.lobbyState.matchPlayers.red === peerId) Lobby.lobbyState.matchPlayers.red = null;
+    // Always prune any other ghosts while we're here
+    pruneDisconnectedPlayers();
     if (wasPlaying) endLobbyMatch();
     else {
       tryAssignMatchPlayers();
@@ -471,6 +578,10 @@
       if (data.type === 'queue-action') handleQueueAction(fromId, data.action);
       else if (data.type === 'match-action') handleMatchAction(fromId, data.action, data.result);
       else if (data.type === 'board-size') setBoardSize(data.size);
+      else if (data.type === 'goodbye') {
+        // Explicit leave (DodgeVR-style) — don't wait for PeerJS close which can lag/miss
+        removePlayer(fromId);
+      }
       else if (data.type === 'cup-event') {
         if (!data.from) data.from = fromId;
         // Rebroadcast to other peers, then apply locally on host
@@ -718,18 +829,29 @@
     });
   }
 
+  // Generation token so a delayed peer.destroy from leave cannot kill a fresh rejoin
+  var leaveEpoch = 0;
+  var pendingLeavePeer = null;
+  var pendingLeaveConn = null;
+
+  function destroyPeerNow(peer, conn) {
+    try { if (conn) conn.close(); } catch (e) {}
+    try { if (peer) peer.destroy(); } catch (e2) {}
+  }
+
   function cleanupMultiplayer() {
-    try {
-      if (Lobby.conn) { Lobby.conn.close(); }
-    } catch (e) {}
-    Lobby.conn = null;
+    leaveEpoch += 1;
+    var peer = Lobby.peer;
+    var conn = Lobby.conn;
+    var stalePeer = pendingLeavePeer;
+    var staleConn = pendingLeaveConn;
+    pendingLeavePeer = null;
+    pendingLeaveConn = null;
     for (var i = 0; i < Lobby.connections.length; i++) {
       try { Lobby.connections[i].conn.close(); } catch (e2) {}
     }
     Lobby.connections = [];
-    try {
-      if (Lobby.peer) Lobby.peer.destroy();
-    } catch (e3) {}
+    Lobby.conn = null;
     Lobby.peer = null;
     Lobby.isMultiplayer = false;
     Lobby.isHost = false;
@@ -737,14 +859,62 @@
     Lobby.isMobileSpectator = false;
     Lobby.lobbyState = null;
     Lobby.myPlayerId = null;
+    Lobby.hostPlayerId = null;
     Lobby.connectionState = 'idle';
     Lobby.statusText = '';
+    Lobby.isLobbyBotMatch = false;
+    global.isLobbyBotMatch = false;
     syncWindowState();
+    // Immediate teardown for host / hard cleanup / rejoin paths
+    destroyPeerNow(peer, conn);
+    // Also kill a peer that endMultiplayer parked for goodbye-flush
+    if (stalePeer && stalePeer !== peer) destroyPeerNow(stalePeer, staleConn);
   }
 
   function endMultiplayer() {
-    cleanupMultiplayer();
+    // Tell host immediately so queue/seats don't keep a ghost id.
+    // Delay peer.destroy so the goodbye can flush on the data channel —
+    // immediate destroy was the root of Q:2 ghosts → rejoin Q:3.
+    var epoch = ++leaveEpoch;
+    var leavingId = Lobby.myPlayerId;
+    var leavingConn = Lobby.conn;
+    var leavingPeer = Lobby.peer;
+    try {
+      if (!Lobby.isHost && leavingConn && leavingConn.open) {
+        leavingConn.send({ type: 'goodbye', from: leavingId });
+      }
+    } catch (e) { /* ignore */ }
+
+    // Detach lobby identity immediately (UI + rejoin can start) but keep the
+    // old peer alive briefly so goodbye / close reach the host.
+    Lobby.conn = null;
+    for (var i = 0; i < Lobby.connections.length; i++) {
+      try { Lobby.connections[i].conn.close(); } catch (e2) {}
+    }
+    Lobby.connections = [];
+    Lobby.peer = null;
+    Lobby.isMultiplayer = false;
+    Lobby.isHost = false;
+    Lobby.isSpectator = false;
+    Lobby.isMobileSpectator = false;
+    Lobby.lobbyState = null;
+    Lobby.myPlayerId = null;
+    Lobby.hostPlayerId = null;
+    Lobby.connectionState = 'idle';
+    Lobby.statusText = '';
+    Lobby.isLobbyBotMatch = false;
+    global.isLobbyBotMatch = false;
+    pendingLeavePeer = leavingPeer;
+    pendingLeaveConn = leavingConn;
+    syncWindowState();
     setStatus('Disconnected');
+
+    setTimeout(function () {
+      if (epoch !== leaveEpoch) return; // superseded by a newer cleanup/rejoin
+      destroyPeerNow(leavingPeer, leavingConn);
+      if (pendingLeavePeer === leavingPeer) pendingLeavePeer = null;
+      if (pendingLeaveConn === leavingConn) pendingLeaveConn = null;
+    }, 280);
   }
 
   async function setupHost(lobbyNum) {
@@ -752,6 +922,7 @@
     Lobby.lobbyNum = lobbyNum;
     Lobby.lobbyState = createLobbyState();
     Lobby.myPlayerId = 'stacksvr-host-' + lobbyNum;
+    Lobby.hostPlayerId = Lobby.myPlayerId;
     Lobby.lobbyState.players.push({
       id: Lobby.myPlayerId,
       nickname: (global.playerNickname || 'Host').slice(0, 12),
@@ -994,10 +1165,12 @@
 
   function mySide() {
     if (!Lobby.lobbyState) return 'blue';
-    var mp = Lobby.lobbyState.matchPlayers;
-    // Vs bot: local human is always blue (pad/station ownership)
-    if (Lobby.isLobbyBotMatch || (mp && mp.red === '__BOT__')) return 'blue';
-    if (mp.red === Lobby.myPlayerId) return 'red';
+    var mp = Lobby.lobbyState.matchPlayers || {};
+    // Seat assignment wins over any sticky isLobbyBotMatch from a prior match
+    if (mp.red === Lobby.myPlayerId && mp.red !== '__BOT__') return 'red';
+    if (mp.blue === Lobby.myPlayerId) return 'blue';
+    // True vs-bot: local human always owns blue
+    if (mp.red === '__BOT__' || Lobby.isLobbyBotMatch) return 'blue';
     return 'blue';
   }
 
@@ -1039,6 +1212,11 @@
   Lobby.canControlMatch = canControlMatch;
   Lobby.canIControlMatch = canIControlMatch;
   Lobby.isHumanMatchPlayer = isHumanMatchPlayer;
+  Lobby.pruneDisconnectedPlayers = pruneDisconnectedPlayers;
+  Lobby.livePlayerIds = livePlayerIds;
+  Lobby.removePlayer = removePlayer;
+  Lobby.handleData = handleData;
+  global.pruneDisconnectedPlayers = pruneDisconnectedPlayers;
   global.canIControlMatch = canIControlMatch;
   Lobby.mySide = mySide;
   Lobby.startLobbyMatch = startLobbyMatch;

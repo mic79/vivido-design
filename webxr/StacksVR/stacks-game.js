@@ -888,12 +888,15 @@
 
     _localCup: function () {
       var mp = global.lobbyState && global.lobbyState.matchPlayers;
-      // Human vs bot: the grabbable pad is always the blue station — never project onto red.
-      var botMatch = !!(global.isLobbyBotMatch || (mp && mp.red === '__BOT__'));
-      if (botMatch) return this.cups.blue;
-      if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.amMatchPlayer()) {
-        return this.cups[global.StacksLobby.mySide()];
+      // PvP seat wins — NEVER let a sticky isLobbyBotMatch from a prior match force blue
+      if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.amMatchPlayer &&
+          global.StacksLobby.amMatchPlayer()) {
+        var side = global.StacksLobby.mySide ? global.StacksLobby.mySide() : 'blue';
+        return this.cups[side] || this.cups.blue;
       }
+      // Human vs bot: the grabbable pad is always the blue station
+      var botMatch = !!(mp && mp.red === '__BOT__') || !!global.isLobbyBotMatch;
+      if (botMatch) return this.cups.blue;
       return this.cups.blue;
     },
 
@@ -2006,12 +2009,20 @@
       if (this.bot) this.bot.enable(false);
       if (this.botBlue) this.botBlue.enable(false);
 
+      // Clear sticky bot flag from a previous match — human on red ⇒ always PvP
+      var liveMp = mp || (global.lobbyState && global.lobbyState.matchPlayers);
+      var reallyBot = !!(liveMp && liveMp.red === '__BOT__') ||
+        (!!isBotMatch && !(liveMp && liveMp.red && liveMp.red !== '__BOT__'));
+      global.isLobbyBotMatch = reallyBot;
+      if (global.StacksLobby) global.StacksLobby.isLobbyBotMatch = reallyBot;
+
       this.matchActive = true;
       this.matchState = 'COUNTDOWN';
       this._pendingMatch = {
-        mp: mp,
+        mp: liveMp,
         startTime: startTime || Date.now(),
-        isBotMatch: !!isBotMatch,
+        isBotMatch: reallyBot,
+        isBotSeat: reallyBot,
         bagSeed: bagSeed
       };
       var spectating = !!(global.isMobileSpectator ||
@@ -2044,8 +2055,9 @@
       this._setRemoteHeld('blue', { holding: false });
       this._setRemoteHeld('red', { holding: false });
 
-      var isBotSeat = !!isBotMatch || (mp && mp.red === '__BOT__');
+      var isBotSeat = reallyBot;
       this._pendingMatch.isBotSeat = isBotSeat;
+      this._pendingMatch.isBotMatch = reallyBot;
       // Keep both stations visible for everyone (players + spectators)
       if (this._pad) this._pad.visible = true;
       if (this._pocket) this._pocket.visible = true;
@@ -2109,12 +2121,11 @@
       // Re-resolve bot seat from live lobby — pending flag alone was wrong when
       // startLobbyMatch passed isBotMatch=false while red was already __BOT__.
       var mp = (pending.mp) || (global.lobbyState && global.lobbyState.matchPlayers);
-      var isBotSeat = !!pending.isBotSeat || !!(mp && mp.red === '__BOT__') ||
-        !!global.isLobbyBotMatch;
-      if (isBotSeat) {
-        global.isLobbyBotMatch = true;
-        if (global.StacksLobby) global.StacksLobby.isLobbyBotMatch = true;
-      }
+      // Seat truth: human on red ⇒ PvP. Never keep sticky isLobbyBotMatch alone.
+      var isBotSeat = !!(mp && mp.red === '__BOT__') ||
+        (!!(pending.isBotMatch || pending.isBotSeat) && !(mp && mp.red && mp.red !== '__BOT__'));
+      global.isLobbyBotMatch = !!isBotSeat;
+      if (global.StacksLobby) global.StacksLobby.isLobbyBotMatch = !!isBotSeat;
       var startTime = pending.startTime || Date.now();
 
       // Host vs bot is never a spectator seat
@@ -2141,6 +2152,10 @@
         this._applyMirroredBags(pending.bagSeed != null ? pending.bagSeed : this.bagSeed);
         this._spawnBothPads({ dropIn: true });
       }
+
+      // Snap local player to the correct side / body color now that seats are final
+      var sceneEl = this.el.sceneEl;
+      if (sceneEl) sceneEl.emit('lobby-state-updated');
 
       // Always show both stations during a live match (PvP + bot + spectators)
       if (this._pad) this._pad.visible = true;

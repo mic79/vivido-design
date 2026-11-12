@@ -768,7 +768,7 @@
       } else if (window.isMultiplayer) {
         label = window.isHost ? 'LEAVE' : 'LEAVE';
         color = '#cc3333';
-      } else {
+        } else {
         label = 'JOIN';
         color = '#22aa44';
       }
@@ -802,7 +802,7 @@
           : 'WAITING';
         color = (canControl || !window.isMultiplayer || window.isHost) ? '#ff8800' : '#445566';
         if (!(canControl || !window.isMultiplayer || window.isHost)) action = 'noop';
-      } else {
+        } else {
         label = 'START vs BOT';
         color = '#ff8800';
       }
@@ -859,7 +859,7 @@
     },
 
     _resetRigLocal: function () {
-          var rig = document.getElementById('rig');
+      var rig = document.getElementById('rig');
       if (!rig) return;
       rig.setAttribute('position', '0 0 0');
       rig.setAttribute('rotation', '0 0 0');
@@ -908,6 +908,9 @@
         if (window.StacksLobby) window.StacksLobby.isSpectator = false;
       }
 
+      // Always refresh local body color to match seat (blue / red)
+      this._setLocalBodyColor(isRed ? '#E25A4A' : '#4A90E2');
+
       if (key === this._poseKey) return;
       this._poseKey = key;
 
@@ -918,6 +921,31 @@
         this._movePlayerTo(PLAY_POSITION_RED);
       } else {
         this._movePlayerTo(PLAY_POSITION_BLUE);
+      }
+    },
+
+    _setLocalBodyColor: function (hex) {
+      var body = document.getElementById('player-body');
+      if (!body) return;
+      try {
+        body.setAttribute('mixamo-body', 'color', hex);
+      } catch (e) { /* ignore */ }
+      // Also tint any already-loaded meshes if the component caches color
+      var mb = body.components && body.components['mixamo-body'];
+      if (mb) {
+        mb.data = mb.data || {};
+        mb.data.color = hex;
+        if (typeof mb.update === 'function') {
+          try { mb.update({ color: hex }); } catch (e2) { /* ignore */ }
+        }
+        if (mb.model) {
+          var col = new THREE.Color(hex);
+          mb.model.traverse(function (o) {
+            if (o.isMesh && o.material && o.material.color) {
+              o.material.color.copy(col);
+            }
+          });
+        }
       }
     },
 
