@@ -91,6 +91,7 @@
         chain('onCupEvent', self.onRemoteCupEvent);
         chain('onCupSnapshot', self.onRemoteSnapshot);
         chain('onPlayerPose', self.onRemotePlayerPose);
+        chain('onDisconnected', self.onHostDisconnected);
         global.StacksLobby.onRequestSnapshot = function () {
           return self._buildSnapshot();
         };
@@ -2223,8 +2224,49 @@
       this._matchBanner = null;
     },
 
+    /**
+     * Host left / connection dropped — clear remotes. Match end is usually already
+     * fired by handleHostGone; this is the safety net if only onDisconnected ran.
+     */
+    onHostDisconnected: function (opts) {
+      opts = opts || {};
+      this._setRemoteHeld('blue', { holding: false });
+      this._setRemoteHeld('red', { holding: false });
+      this._clearBotHoldMesh('blue');
+      this._clearBotHoldMesh('red');
+      // Hide networked avatars that would otherwise freeze in last pose
+      var hideIds = ['spec-blue-body', 'bot-body', 'remote-body-0', 'remote-body-1',
+        'remote-body-2', 'remote-body-3'];
+      for (var i = 0; i < hideIds.length; i++) {
+        var el = document.getElementById(hideIds[i]);
+        if (el) {
+          el.setAttribute('visible', false);
+          if (el.object3D) el.object3D.visible = false;
+          if (el.dataset) delete el.dataset.posed;
+        }
+      }
+      if (this.matchActive) {
+        this.onMatchEnded({
+          cancelled: true,
+          victory: false,
+          reason: (opts && opts.reason) || 'host-left',
+          hostLeft: !!(opts && opts.hostLeft)
+        });
+      } else if (!global.isMobileSpectator) {
+        this._scheduleDualIdle(400);
+      }
+    },
+
     onMatchEnded: function (opts) {
       opts = opts || {};
+      // Idempotent — host-leaving may fire match-ended then onDisconnected
+      if (!this.matchActive && this.matchState === 'WAITING' && !this._pendingMatch) {
+        if (!opts.hostLeft) {
+          var sceneEarly = this.el && this.el.sceneEl;
+          if (sceneEarly) sceneEarly.emit('lobby-state-updated');
+          return;
+        }
+      }
       this.matchActive = false;
       this.matchState = 'WAITING';
       this._dualBotPreview = false;

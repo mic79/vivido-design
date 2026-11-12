@@ -320,6 +320,77 @@
     }
   }
 
+  var _reconnectTimer = null;
+  var _reconnectAttempts = 0;
+
+  function hideStaleSpectatorBodies() {
+    var ids = ['spec-blue-body', 'bot-body', 'remote-body-0', 'remote-body-1',
+      'remote-body-2', 'remote-body-3'];
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
+      if (!el) continue;
+      el.setAttribute('visible', false);
+      if (el.object3D) el.object3D.visible = false;
+      if (el.dataset) delete el.dataset.posed;
+    }
+  }
+
+  function scheduleMobileReconnect() {
+    if (!global._stacksDeviceMobileSpectator && !global.isMobileSpectator) return;
+    if (_reconnectTimer) return;
+    if (_reconnectAttempts >= 5) {
+      var hudDone = document.getElementById('mobile-hud-status');
+      if (hudDone) hudDone.textContent = 'Host left — lobby closed';
+      var lobbyScreen = document.getElementById('mobile-lobby-screen');
+      var matchHud = document.getElementById('mobile-match-hud');
+      if (matchHud) matchHud.classList.remove('active');
+      if (lobbyScreen) lobbyScreen.style.display = '';
+      var watchBtn = document.getElementById('mobile-watch-btn');
+      if (watchBtn) watchBtn.disabled = false;
+      return;
+    }
+    _reconnectAttempts++;
+    var hudStatus = document.getElementById('mobile-hud-status');
+    if (hudStatus) {
+      hudStatus.textContent = 'Host left — reconnecting' +
+        (_reconnectAttempts > 1 ? ' (' + _reconnectAttempts + ')' : '') + '...';
+    }
+    _reconnectTimer = setTimeout(function () {
+      _reconnectTimer = null;
+      if (global.isMultiplayer) return;
+      if (typeof global.connectAsMobileSpectator !== 'function') return;
+      global.connectAsMobileSpectator(_lobbyNum || 1).then(function (res) {
+        if (res && res.ok) {
+          _reconnectAttempts = 0;
+          showMatchHud('Watching lobby ' + (_lobbyNum || 1));
+          activateSpectatorBodies();
+          updateMobileHudNames();
+          updateMobileHudStatus();
+          updateMobileHudScores();
+        } else {
+          scheduleMobileReconnect();
+        }
+      }).catch(function () {
+        scheduleMobileReconnect();
+      });
+    }, 2000 + _reconnectAttempts * 500);
+  }
+
+  function onHostDisconnectedMobile(opts) {
+    opts = opts || {};
+    hideStaleSpectatorBodies();
+    global._stacksDeviceMobileSpectator = true;
+    global.isMobileSpectator = true;
+    global.isSpectator = true;
+    var hudStatus = document.getElementById('mobile-hud-status');
+    if (opts.voluntary) {
+      if (hudStatus) hudStatus.textContent = 'Disconnected';
+      return;
+    }
+    // DodgeVR: try reconnect a few times; if host is gone, surface that clearly
+    scheduleMobileReconnect();
+  }
+
   function wireLobbyCallbacks() {
     if (!global.StacksLobby) return;
     var prevLobby = global.StacksLobby.onLobbyState;
@@ -332,6 +403,8 @@
       if (typeof prevMatch === 'function') {
         prevMatch.apply(null, arguments);
       }
+      _reconnectAttempts = 0;
+      if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
       showMatchHud('');
       activateSpectatorBodies();
       updateMobileHudNames();
@@ -357,6 +430,11 @@
       activateSpectatorBodies();
       updateMobileHudScores();
       updateMobileHudStatus();
+    };
+    var prevDisc = global.StacksLobby.onDisconnected;
+    global.StacksLobby.onDisconnected = function (opts) {
+      if (typeof prevDisc === 'function') prevDisc(opts);
+      onHostDisconnectedMobile(opts);
     };
   }
 

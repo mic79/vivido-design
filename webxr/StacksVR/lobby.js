@@ -724,11 +724,18 @@
           victory: !data.cancelled && !!data.winner,
           winner: data.winner || null,
           reason: data.reason || null,
-          scores: data.scores || null
+          scores: data.scores || null,
+          hostLeft: data.reason === 'host-left'
         });
       }
       var scene3 = document.querySelector('a-scene');
       if (scene3) scene3.emit('lobby-state-updated');
+      // Host announced lobby teardown — fully drop MP so we don't keep a zombie lobby
+      if (data.reason === 'host-left') {
+        handleHostGone('host-left');
+      }
+    } else if (data.type === 'host-leaving') {
+      handleHostGone((data && data.reason) || 'host-left');
     } else if (data.type === 'cup-event' || data.type === 'cup-snapshot') {
       if (Lobby.onCupEvent) Lobby.onCupEvent(data);
       if (data.type === 'cup-snapshot' && Lobby.onCupSnapshot) Lobby.onCupSnapshot(data);
@@ -871,26 +878,99 @@
     if (stalePeer && stalePeer !== peer) destroyPeerNow(stalePeer, staleConn);
   }
 
+  /**
+   * Peer/mobile: host connection died or host announced leave.
+   * MUST clear lobbyState + end any local match — otherwise clients stare at a
+   * stale PLAYING board forever (no host transfer in PeerJS model; same as DodgeVR).
+   */
+  var _hostGoneLock = false;
+  function handleHostGone(reason) {
+    if (_hostGoneLock) return;
+    _hostGoneLock = true;
+    var why = reason || 'host-left';
+    var wasPlaying = !!(Lobby.lobbyState && Lobby.lobbyState.matchState === 'PLAYING');
+    var wasMp = Lobby.isMultiplayer;
+    var peer = Lobby.peer;
+    var conn = Lobby.conn;
+
+    Lobby.conn = null;
+    Lobby.peer = null;
+    Lobby.connections = [];
+    Lobby.isMultiplayer = false;
+    Lobby.isHost = false;
+    Lobby.isSpectator = false;
+    // Keep device mobile-spectator sticky via syncWindowState/_stacksDeviceMobileSpectator
+    Lobby.isMobileSpectator = false;
+    Lobby.lobbyState = null;
+    Lobby.myPlayerId = null;
+    Lobby.hostPlayerId = null;
+    Lobby.connectionState = 'idle';
+    Lobby.isLobbyBotMatch = false;
+    global.isLobbyBotMatch = false;
+    global.lobbyState = null;
+    syncWindowState();
+    setStatus(why === 'host-left' ? 'Host left — lobby closed' : 'Disconnected from lobby');
+
+    if (wasPlaying && Lobby.onMatchEnded) {
+      try {
+        Lobby.onMatchEnded({
+          cancelled: true,
+          victory: false,
+          winner: null,
+          reason: why,
+          hostLeft: true
+        });
+      } catch (e) { /* ignore */ }
+    }
+    if (wasMp && Lobby.onDisconnected) {
+      try { Lobby.onDisconnected({ reason: why, hostLeft: why === 'host-left' }); }
+      catch (e2) { /* ignore */ }
+    }
+
+    destroyPeerNow(peer, conn);
+    setTimeout(function () { _hostGoneLock = false; }, 50);
+  }
+
+  function broadcastHostLeaving() {
+    if (!Lobby.isHost) return;
+    var endMsg = {
+      type: 'match-ended',
+      cancelled: true,
+      winner: null,
+      reason: 'host-left',
+      scores: null
+    };
+    var leaveMsg = { type: 'host-leaving', reason: 'host-left' };
+    for (var i = 0; i < Lobby.connections.length; i++) {
+      var c = Lobby.connections[i];
+      if (!c || !c.conn || !c.conn.open) continue;
+      try { c.conn.send(endMsg); } catch (e) { /* ignore */ }
+      try { c.conn.send(leaveMsg); } catch (e2) { /* ignore */ }
+    }
+  }
+
   function endMultiplayer() {
-    // Tell host immediately so queue/seats don't keep a ghost id.
-    // Delay peer.destroy so the goodbye can flush on the data channel —
-    // immediate destroy was the root of Q:2 ghosts → rejoin Q:3.
     var epoch = ++leaveEpoch;
+    var wasHost = Lobby.isHost;
+    var wasPlaying = !!(Lobby.lobbyState && Lobby.lobbyState.matchState === 'PLAYING');
     var leavingId = Lobby.myPlayerId;
     var leavingConn = Lobby.conn;
     var leavingPeer = Lobby.peer;
+    var leavingConns = Lobby.connections.slice();
+
+    // Host: warn peers BEFORE teardown so they don't sit on a stale match.
+    // Peer: goodbye so host prunes queue immediately.
     try {
-      if (!Lobby.isHost && leavingConn && leavingConn.open) {
+      if (wasHost) {
+        broadcastHostLeaving();
+      } else if (leavingConn && leavingConn.open) {
         leavingConn.send({ type: 'goodbye', from: leavingId });
       }
     } catch (e) { /* ignore */ }
 
     // Detach lobby identity immediately (UI + rejoin can start) but keep the
-    // old peer alive briefly so goodbye / close reach the host.
+    // old peer alive briefly so goodbye / host-leaving can flush.
     Lobby.conn = null;
-    for (var i = 0; i < Lobby.connections.length; i++) {
-      try { Lobby.connections[i].conn.close(); } catch (e2) {}
-    }
     Lobby.connections = [];
     Lobby.peer = null;
     Lobby.isMultiplayer = false;
@@ -904,13 +984,39 @@
     Lobby.statusText = '';
     Lobby.isLobbyBotMatch = false;
     global.isLobbyBotMatch = false;
+    global.lobbyState = null;
     pendingLeavePeer = leavingPeer;
     pendingLeaveConn = leavingConn;
     syncWindowState();
-    setStatus('Disconnected');
+    setStatus(wasHost ? 'Lobby closed' : 'Disconnected');
+
+    // Local match must not keep running after leaving the lobby
+    if (wasPlaying && Lobby.onMatchEnded) {
+      try {
+        Lobby.onMatchEnded({
+          cancelled: true,
+          victory: false,
+          winner: null,
+          reason: wasHost ? 'host-left' : 'left-lobby',
+          hostLeft: !!wasHost
+        });
+      } catch (e3) { /* ignore */ }
+    }
+    if (Lobby.onDisconnected) {
+      try {
+        Lobby.onDisconnected({
+          reason: wasHost ? 'host-left' : 'left-lobby',
+          hostLeft: !!wasHost,
+          voluntary: true
+        });
+      } catch (e4) { /* ignore */ }
+    }
 
     setTimeout(function () {
       if (epoch !== leaveEpoch) return; // superseded by a newer cleanup/rejoin
+      for (var i = 0; i < leavingConns.length; i++) {
+        try { if (leavingConns[i].conn) leavingConns[i].conn.close(); } catch (e5) {}
+      }
       destroyPeerNow(leavingPeer, leavingConn);
       if (pendingLeavePeer === leavingPeer) pendingLeavePeer = null;
       if (pendingLeaveConn === leavingConn) pendingLeaveConn = null;
@@ -1051,11 +1157,8 @@
           fail('Connection failed to lobby ' + lobbyNum);
         });
         Lobby.conn.on('close', function () {
-          Lobby.isMultiplayer = false;
-          Lobby.connectionState = 'idle';
-          syncWindowState();
-          setStatus('Disconnected from lobby');
-          if (Lobby.onDisconnected) Lobby.onDisconnected();
+          // DodgeVR: close ⇒ full teardown. Never leave peers/spectators on a stale match.
+          handleHostGone('host-left');
         });
       });
       Lobby.peer.on('error', function (err) {
@@ -1216,7 +1319,10 @@
   Lobby.livePlayerIds = livePlayerIds;
   Lobby.removePlayer = removePlayer;
   Lobby.handleData = handleData;
+  Lobby.handleHostGone = handleHostGone;
+  Lobby.broadcastHostLeaving = broadcastHostLeaving;
   global.pruneDisconnectedPlayers = pruneDisconnectedPlayers;
+  global.handleHostGone = handleHostGone;
   global.canIControlMatch = canIControlMatch;
   Lobby.mySide = mySide;
   Lobby.startLobbyMatch = startLobbyMatch;
