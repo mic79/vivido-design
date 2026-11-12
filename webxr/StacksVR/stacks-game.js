@@ -901,15 +901,12 @@
       var mp = ls && ls.matchPlayers;
       var seated = !!(mp && myId &&
         (mp.blue === myId || (mp.red === myId && mp.red !== '__BOT__')));
-      var botSeat = !!(mp && mp.red === '__BOT__') || !!global.isLobbyBotMatch;
-      // Seated match player always controls (ignore stale isSpectator)
+      // Only seated humans control — host is NOT auto-granted control for bot
+      // matches (that blocked spectating dual-bots / client-vs-bot).
       if (global.isMultiplayer && ls && ls.matchState === 'PLAYING') {
-        if (seated) return true;
-        // Host vs bot: host may not be flagged seated if lobby publish raced
-        if (botSeat && Lobby && Lobby.isHost) return true;
-        return false;
+        return seated;
       }
-      if (global.isSpectator && global.isMultiplayer && !botSeat) return false;
+      if (global.isSpectator && global.isMultiplayer && !seated) return false;
       return true;
     },
 
@@ -1379,11 +1376,7 @@
       var mp = global.lobbyState && global.lobbyState.matchPlayers;
       if (global.isMultiplayer && mp && myId) {
         if (mp[side] === myId) return true;
-        // Human vs bot: seated/host human owns blue (never steal if another human is blue)
-        if (side === 'blue' && mp.red === '__BOT__') {
-          if (mp.blue === myId) return true;
-          if (global.StacksLobby && global.StacksLobby.isHost && !mp.blue) return true;
-        }
+        // Bot seats are never local-player authority (host may drive them as AI)
         return false;
       }
       // Offline / preview: player owns blue only
@@ -2396,40 +2389,40 @@
       this.matchState = 'PLAYING';
       this._pendingMatch = null;
 
-      var spectating = !!pending.spectating;
-      // Re-resolve bot seat from live lobby — pending flag alone was wrong when
-      // startLobbyMatch passed isBotMatch=false while red was already __BOT__.
+      // Re-resolve seats from live lobby — pending flags alone can be stale.
       var mp = (pending.mp) || (global.lobbyState && global.lobbyState.matchPlayers);
-      // Seat truth: human on red ⇒ PvP. Never keep sticky isLobbyBotMatch alone.
-      var isBotSeat = !!(mp && mp.red === '__BOT__') ||
-        (!!(pending.isBotMatch || pending.isBotSeat) && !(mp && mp.red && mp.red !== '__BOT__'));
+      var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+      var seated = !!(mp && myId &&
+        (mp.blue === myId || (mp.red === myId && mp.red !== '__BOT__')));
+      // Seat id wins over any sticky isSpectator / "host vs bot ⇒ play" shortcut
+      var spectating = !!pending.spectating;
+      if (global.isMultiplayer) {
+        spectating = !seated;
+        global.isSpectator = spectating;
+        if (global.StacksLobby) global.StacksLobby.isSpectator = spectating;
+      }
+      var blueBot = !!(mp && mp.blue === '__BOT__');
+      var redBot = !!(mp && mp.red === '__BOT__');
+      var isBotSeat = redBot || blueBot;
       global.isLobbyBotMatch = !!isBotSeat;
       if (global.StacksLobby) global.StacksLobby.isLobbyBotMatch = !!isBotSeat;
       var startTime = pending.startTime || Date.now();
-
-      // Host vs bot is never a spectator seat
-      if (isBotSeat && global.StacksLobby && global.StacksLobby.isHost) {
-        spectating = false;
-        global.isSpectator = false;
-        global.StacksLobby.isSpectator = false;
-      }
+      var hostRunsBots = !global.isMultiplayer ||
+        !!(global.StacksLobby && global.StacksLobby.isHost);
 
       this.modes.start(startTime);
       if (this.matchStats) this.matchStats.start(performance.now());
 
-      if (!spectating) {
-        this._resetStationsForMatch();
-        this._applyMirroredBags(pending.bagSeed != null ? pending.bagSeed : this.bagSeed);
-        if (isBotSeat) {
-          // Human owns blue pad; bot.enable fills red
-          this._spawnSidePadPiece('blue', { dropIn: true });
-        } else {
-          // PvP: both stations get pieces from mirrored bags
-          this._spawnBothPads({ dropIn: true });
-        }
-      } else if (pending.bagSeed != null || this.bagSeed) {
-        this._applyMirroredBags(pending.bagSeed != null ? pending.bagSeed : this.bagSeed);
+      this._resetStationsForMatch();
+      this._applyMirroredBags(pending.bagSeed != null ? pending.bagSeed : this.bagSeed);
+      if (spectating || (blueBot && redBot) || (!blueBot && !redBot)) {
+        // Spectators / dual-bot / PvP: both pads
         this._spawnBothPads({ dropIn: true });
+      } else if (redBot && !blueBot) {
+        // Human on blue vs red bot
+        this._spawnSidePadPiece('blue', { dropIn: true });
+      } else if (blueBot && !redBot) {
+        this._spawnSidePadPiece('red', { dropIn: true });
       }
 
       // Snap local player to the correct side / body color now that seats are final
@@ -2441,16 +2434,20 @@
       if (this._pocket) this._pocket.visible = true;
       this._setBotStationVisible(true);
 
+      var bpm = this.botTargetBpm != null ? this.botTargetBpm : 12;
       if (this.bot) {
         this.bot.setCup(this.cups.red);
-        var runBot = (!spectating) && isBotSeat;
-        this.bot.enable(runBot);
-        if (runBot && this.bot.setTargetBpm) {
-          this.bot.setTargetBpm(this.botTargetBpm != null ? this.botTargetBpm : 12);
-        }
+        var runRed = !!(redBot && hostRunsBots);
+        this.bot.enable(runRed);
+        if (runRed && this.bot.setTargetBpm) this.bot.setTargetBpm(bpm);
       }
-      if (this.botBlue) this.botBlue.enable(false);
-      this._showMatchBodies({ showBot: !!isBotSeat && !spectating });
+      if (this.botBlue) {
+        this.botBlue.setCup(this.cups.blue);
+        var runBlue = !!(blueBot && hostRunsBots);
+        this.botBlue.enable(runBlue);
+        if (runBlue && this.botBlue.setTargetBpm) this.botBlue.setTargetBpm(bpm);
+      }
+      this._showMatchBodies({ showBot: !!redBot });
 
       if (window.matchRecorder) window.matchRecorder.startRecording(startTime);
       this._updateHUD();

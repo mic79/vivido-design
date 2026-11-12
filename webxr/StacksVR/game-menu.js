@@ -852,7 +852,13 @@
         // Only HOST can start. Seated clients used to see START MATCH but
         // handleMatchAction silently ignored them — confusing dead control.
         if (canStart) {
-          label = 'START MATCH';
+          // Queue is required to play — empty queue = spectate dual bots
+          var qLen = (window.lobbyState && window.lobbyState.queue &&
+            window.lobbyState.queue.length) || 0;
+          var inQ = !!(window.lobbyState && window.myPlayerId &&
+            window.lobbyState.queue &&
+            window.lobbyState.queue.indexOf(window.myPlayerId) >= 0);
+          label = inQ ? 'START MATCH' : (qLen ? 'START (WATCH)' : 'START BOTS');
           color = '#ff8800';
         } else {
           label = 'WAIT FOR HOST';

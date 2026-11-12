@@ -280,76 +280,57 @@
     var mp = Lobby.lobbyState.matchPlayers;
     var hostId = Lobby.myPlayerId;
 
-    // 1) Seat everyone already in the queue into open slots (client-first stays blue)
+    // Seat ONLY from the queue. Host is NOT auto-seated — that blocked spectating
+    // when the host wanted to watch PvP or dual bots without playing.
     tryAssignMatchPlayers();
 
-    // 2) If host started without joining queue, give them the first open seat
-    //    (blue preferred). NEVER kick a human already on blue/red.
-    if (Lobby.isHost && hostId && live[hostId]) {
-      var hostSeated = mp.blue === hostId || (mp.red === hostId && mp.red !== '__BOT__');
-      if (!hostSeated) {
-        if (seatOpen(mp.blue)) {
-          mp.blue = hostId;
-          clearSpectatorSlot(hostId);
-        } else if (seatOpen(mp.red)) {
-          mp.red = hostId;
-          clearSpectatorSlot(hostId);
-        }
-      } else if (mp.red === hostId && seatOpen(mp.blue)) {
-        // Solo host was on red with blue empty — move to blue for vs-bot pad ownership.
-        // Do NOT do this when blue already has another human (that was the PvP bug).
-        mp.red = null;
-        mp.blue = hostId;
-        clearSpectatorSlot(hostId);
-      }
-    }
-
-    // 3) Re-run assign in case queue still has a second human for red
-    tryAssignMatchPlayers();
-
-    if (!mp.blue || mp.blue === '__BOT__') {
-      if (Lobby.isHost && hostId && live[hostId] && seatOpen(mp.blue)) {
-        mp.blue = hostId;
-        clearSpectatorSlot(hostId);
-      } else {
-        return;
-      }
-    }
-
-    var humanBlue = !!(mp.blue && mp.blue !== '__BOT__' && live[mp.blue]);
-    var humanRed = !!(mp.red && mp.red !== '__BOT__' && live[mp.red]);
-    if (mp.blue && mp.blue !== '__BOT__' && !live[mp.blue]) mp.blue = null;
-    if (mp.red && mp.red !== '__BOT__' && !live[mp.red]) mp.red = null;
-    humanBlue = !!(mp.blue && mp.blue !== '__BOT__');
-    humanRed = !!(mp.red && mp.red !== '__BOT__');
-
-    // 4) Last chance: any other queued LIVE human who isn't blue → take red
-    if (!humanRed) {
-      var q = Lobby.lobbyState.queue || [];
-      for (var qi = 0; qi < q.length; qi++) {
-        var qid = q[qi];
-        if (!qid || qid === '__BOT__' || qid === mp.blue || !live[qid]) continue;
+    // Last pass: any remaining queued LIVE human into an open seat
+    var q = Lobby.lobbyState.queue || [];
+    for (var qi = 0; qi < q.length; qi++) {
+      var qid = q[qi];
+      if (!qid || qid === '__BOT__' || !live[qid]) continue;
+      if (mp.blue === qid || mp.red === qid) continue;
+      if (seatOpen(mp.blue)) {
+        mp.blue = qid;
+        clearSpectatorSlot(qid);
+      } else if (seatOpen(mp.red)) {
         mp.red = qid;
         clearSpectatorSlot(qid);
-        humanRed = true;
+      } else {
         break;
       }
     }
 
-    // 5) Bot fill ONLY when there is no second human. Never steal blue from a peer.
-    var isBotMatch = humanBlue && !humanRed;
-    if (isBotMatch) {
-      mp.red = '__BOT__';
-    }
+    if (mp.blue && mp.blue !== '__BOT__' && !live[mp.blue]) mp.blue = null;
+    if (mp.red && mp.red !== '__BOT__' && !live[mp.red]) mp.red = null;
+
+    var humanBlue = !!(mp.blue && mp.blue !== '__BOT__');
+    var humanRed = !!(mp.red && mp.red !== '__BOT__');
+
+    // Empty seats → bots (0 queued = dual-bot spectacle; 1 queued = human vs bot)
+    if (!humanBlue) mp.blue = '__BOT__';
+    if (!humanRed) mp.red = '__BOT__';
+
+    var isPvp = humanBlue && humanRed;
+    var isBotMatch = !isPvp;
     Lobby.isLobbyBotMatch = isBotMatch;
     global.isLobbyBotMatch = isBotMatch;
 
-    // Consume seated players from the queue (they're now playing)
+    // Consume seated humans from the queue (they're now playing)
     Lobby.lobbyState.queue = Lobby.lobbyState.queue.filter(function (id) {
       return id !== mp.blue && id !== mp.red;
     });
-    clearSpectatorSlot(mp.blue);
+    if (mp.blue && mp.blue !== '__BOT__') clearSpectatorSlot(mp.blue);
     if (mp.red && mp.red !== '__BOT__') clearSpectatorSlot(mp.red);
+
+    // Park everyone else (including non-queued host) as spectators
+    var players = Lobby.lobbyState.players || [];
+    for (var pi = 0; pi < players.length; pi++) {
+      var pid = players[pi] && players[pi].id;
+      if (!pid || players[pi].mobile) continue;
+      if (pid === mp.blue || pid === mp.red) continue;
+      assignSpectatorSlot(pid);
+    }
 
     Lobby.lobbyState.matchState = 'PLAYING';
     Lobby.lobbyState.matchScore = { blue: 0, red: 0 };
@@ -361,7 +342,8 @@
       ? global.StacksShapes.newBagSeed()
       : ((Date.now() ^ (Math.random() * 0x100000000)) >>> 0);
     Lobby.lobbyState.bagSeed = bagSeed;
-    Lobby.isSpectator = !(mp.blue === Lobby.myPlayerId || mp.red === Lobby.myPlayerId);
+    Lobby.isSpectator = !(mp.blue === Lobby.myPlayerId ||
+      (mp.red === Lobby.myPlayerId && mp.red !== '__BOT__'));
     global.isSpectator = Lobby.isSpectator;
     global.lobbyState = Lobby.lobbyState;
     syncWindowState();
