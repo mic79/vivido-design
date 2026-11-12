@@ -1362,6 +1362,44 @@
       if (cups.red) this.cups.red.applySnapshot(cups.red);
     },
 
+    /** True when this client owns gameplay for `side` (must not accept remote overwrites). */
+    _isLocalAuthoritySide: function (side) {
+      if (!side) return false;
+      if (global.isSpectator || global.isMobileSpectator) return false;
+      if (!(this._canControl && this._canControl())) return false;
+      return side === this._localSide();
+    },
+
+    /**
+     * Merge networked cups without clobbering the cup we are actively playing.
+     * Peer place payloads include BOTH cups — the remote's copy of OUR cup is often
+     * stale and was wiping just-placed blocks / swapping shapes (host bug).
+     */
+    _applyNetworkCups: function (cups, opts) {
+      opts = opts || {};
+      if (!cups) return;
+      if (opts.forceAll || global.isSpectator || global.isMobileSpectator ||
+          !(this._canControl && this._canControl())) {
+        this._applyRemoteCups(cups);
+        return;
+      }
+      var local = this._localSide();
+      if (local !== 'blue' && cups.blue) this.cups.blue.applySnapshot(cups.blue);
+      if (local !== 'red' && cups.red) this.cups.red.applySnapshot(cups.red);
+    },
+
+    _applyNetworkStation: function (data) {
+      if (!data || !data.side) return;
+      if (this._isLocalAuthoritySide(data.side)) return;
+      this._applyStationVisual(data);
+    },
+
+    _applyNetworkStations: function (stations) {
+      if (!stations) return;
+      if (stations.blue) this._applyNetworkStation(stations.blue);
+      if (stations.red) this._applyNetworkStation(stations.red);
+    },
+
     _setRemoteHeld: function (side, data) {
       if (!this._sceneRoot) return;
       var prev = this._remoteHeld[side];
@@ -1979,30 +2017,39 @@
       if (evt.from && myId && evt.from === myId) return;
 
       if (evt.kind === 'transform' && evt.side && this.cups[evt.side]) {
+        // Never let the opponent spin/raise our cup
+        if (this._isLocalAuthoritySide(evt.side)) return;
         this.cups[evt.side].applyTransform({ yaw: evt.yaw, heightY: evt.heightY });
         return;
       }
       if (evt.kind === 'station') {
-        // Never overwrite the local player's live station from a remote echo
-        if (evt.side === this._localSide() && this._canControl() && !global.isSpectator) return;
-        this._applyStationVisual(evt);
+        this._applyNetworkStation(evt);
         return;
       }
       if (evt.kind === 'hold') {
-        this._setRemoteHeld(evt.side, evt);
+        // Hold mesh only for the remote side — never remap onto our seat
+        if (!this._isLocalAuthoritySide(evt.side)) {
+          this._setRemoteHeld(evt.side, evt);
+        }
         if (evt.station) {
-          if (!(evt.side === this._localSide() && this._canControl() && !global.isSpectator)) {
-            this._applyStationVisual(evt.station);
-          }
+          this._applyNetworkStation(evt.station);
         } else if (evt.pocketType !== undefined && evt.side) {
-          if (!(evt.side === this._localSide() && this._canControl() && !global.isSpectator)) {
+          if (!this._isLocalAuthoritySide(evt.side)) {
             this._applyPocketVisual(evt.side, evt.pocketType || null);
           }
         }
         return;
       }
       if (evt.kind === 'place' || evt.kind === 'state') {
-        this._applyRemoteCups(evt.cups);
+        if (evt.kind === 'place' && evt.side && evt.cups && evt.cups[evt.side]) {
+          // Place: apply ONLY the placing side's cup (authoritative for that seat)
+          if (!this._isLocalAuthoritySide(evt.side)) {
+            this.cups[evt.side].applySnapshot(evt.cups[evt.side]);
+          }
+        } else if (evt.kind === 'state') {
+          this._applyNetworkCups(evt.cups, { forceAll: false });
+        }
+
         if (evt.scores) {
           this.modes.scores.blue = evt.scores.blue;
           this.modes.scores.red = evt.scores.red;
@@ -2011,23 +2058,32 @@
             global.lobbyState.matchScore.red = evt.scores.red;
           }
         }
-        if (evt.attack) this.attackSys.applySerialized(evt.attack);
+
+        // Derive attack from the clear instead of replacing both buffers with a
+        // peer clock snapshot (readyAt skew was fighting the host tick).
+        if (evt.kind === 'place' && evt.clear && evt.clear.layersCleared > 0 && evt.side) {
+          this.attackSys.onClear(evt.side, evt.clear, performance.now());
+        } else if (evt.kind === 'state' && evt.attack &&
+            (global.isSpectator || global.isMobileSpectator || !this._canControl())) {
+          this.attackSys.applySerialized(evt.attack);
+        }
+
         if (evt.kind === 'place' && evt.side) {
-          this._setRemoteHeld(evt.side, { holding: false });
+          if (!this._isLocalAuthoritySide(evt.side)) {
+            this._setRemoteHeld(evt.side, { holding: false });
+          }
           if (this.matchStats && evt.side) {
             this.matchStats.onPlace(evt.side, evt.clear || null, performance.now());
           }
         }
-        // Authoritative station visuals (pad / NEXT / pocket) — prefer payload over bag guess
+
+        // Stations: never apply our own seat (stale padType was swapping held/next)
         if (evt.stations) {
-          if (evt.stations.blue) this._applyStationVisual(evt.stations.blue);
-          if (evt.stations.red) this._applyStationVisual(evt.stations.red);
+          this._applyNetworkStations(evt.stations);
         } else if (evt.station) {
-          this._applyStationVisual(evt.station);
-        } else if (evt.kind === 'place' && evt.side &&
-            (evt.side !== this._localSide() || !this._canControl())) {
-          // Legacy fallback: advance bag for that side only if no station payload
-          this._spawnSidePadPiece(evt.side, { dropIn: false });
+          this._applyNetworkStation(evt.station);
+        } else if (evt.kind === 'place' && evt.side && !this._isLocalAuthoritySide(evt.side)) {
+          this._spawnSidePadPiece(evt.side, { dropIn: false, broadcast: false });
         }
         this._updateHUD();
         this._updateDamageHUD();
@@ -2037,21 +2093,21 @@
     onRemoteSnapshot: function (data) {
       if (!data || !data.snapshot) return;
       var snap = data.snapshot;
-      this._applyRemoteCups(snap);
+      // Match players: never clobber the cup/station they own. Spectators take all.
+      this._applyNetworkCups(snap, { forceAll: false });
       if (snap.scores) {
         this.modes.scores.blue = snap.scores.blue;
         this.modes.scores.red = snap.scores.red;
       }
-      if (snap.attack) this.attackSys.applySerialized(snap.attack);
-      if (snap.stations) {
-        if (snap.stations.blue) this._applyStationVisual(snap.stations.blue);
-        if (snap.stations.red) this._applyStationVisual(snap.stations.red);
+      if (snap.attack && (global.isSpectator || global.isMobileSpectator || !this._canControl())) {
+        this.attackSys.applySerialized(snap.attack);
       }
+      if (snap.stations) this._applyNetworkStations(snap.stations);
       if (snap.held) {
-        if (snap.held.blue && snap.held.blue.holding) {
+        if (snap.held.blue && snap.held.blue.holding && !this._isLocalAuthoritySide('blue')) {
           this._setRemoteHeld('blue', snap.held.blue);
         }
-        if (snap.held.red && snap.held.red.holding) {
+        if (snap.held.red && snap.held.red.holding && !this._isLocalAuthoritySide('red')) {
           this._setRemoteHeld('red', snap.held.red);
         }
       }
