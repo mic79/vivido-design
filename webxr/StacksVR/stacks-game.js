@@ -26,7 +26,10 @@
         ? new global.StacksStats.MatchStats()
         : null;
       this.bag = new global.StacksShapes.ShapeBag();
+      this.bags = { blue: this.bag, red: new global.StacksShapes.ShapeBag() };
       this.bot = null;
+      this._remoteBodyMap = {}; // playerId -> element id
+      this._nextTypeBySide = { blue: null, red: null };
 
       this.held = null; // { mesh, type, rot, handEl }
       this.ghostMesh = null;
@@ -889,6 +892,39 @@
       return this.cups.blue;
     },
 
+    _localSide: function () {
+      var cup = this._localCup();
+      return cup ? cup.side : 'blue';
+    },
+
+    _sideBag: function (side) {
+      side = side || this._localSide();
+      if (!this.bags) this.bags = { blue: this.bag, red: this.bag };
+      if (side === 'red') {
+        if (!this.bags.red) this.bags.red = this.bag;
+        return this.bags.red;
+      }
+      if (!this.bags.blue) this.bags.blue = this.bag;
+      return this.bags.blue;
+    },
+
+    _sidePad: function (side) {
+      return side === 'red' ? this._botPad : this._pad;
+    },
+
+    _sidePocket: function (side) {
+      return side === 'red' ? this._botPocket : this._pocket;
+    },
+
+    _sidePadPiece: function (side) {
+      return side === 'red' ? this._botPadPiece : this._padPiece;
+    },
+
+    _setSidePadPiece: function (side, mesh) {
+      if (side === 'red') this._botPadPiece = mesh;
+      else this._padPiece = mesh;
+    },
+
     _isPresenting: function () {
       return !!(this.el.sceneEl.renderer && this.el.sceneEl.renderer.xr &&
         this.el.sceneEl.renderer.xr.isPresenting);
@@ -910,24 +946,28 @@
     },
 
     _handDistToPad: function (handEl) {
-      if (!this._padPiece || !handEl) return Infinity;
+      var side = this._localSide();
+      var piece = this._sidePadPiece(side);
+      if (!piece || !handEl) return Infinity;
       handEl.object3D.updateWorldMatrix(true, false);
       handEl.object3D.getWorldPosition(this._tmp);
-      this._padPiece.updateWorldMatrix(true, false);
-      this._padPiece.getWorldPosition(this._tmp2);
+      piece.updateWorldMatrix(true, false);
+      piece.getWorldPosition(this._tmp2);
       return this._tmp.distanceTo(this._tmp2);
     },
 
     _pocketWorldPos: function (out) {
-      if (!this._pocket) return null;
-      this._pocket.updateWorldMatrix(true, false);
-      this._pocket.getWorldPosition(out);
+      var pocket = this._sidePocket(this._localSide());
+      if (!pocket) return null;
+      pocket.updateWorldMatrix(true, false);
+      pocket.getWorldPosition(out);
       out.y += 0.1;
       return out;
     },
 
     _distToPocket: function (handEl) {
-      if (!this._pocket || !handEl) return Infinity;
+      var pocket = this._sidePocket(this._localSide());
+      if (!pocket || !handEl) return Infinity;
       if (!this._pocketWorldPos(this._tmp2)) return Infinity;
       handEl.object3D.updateWorldMatrix(true, false);
       handEl.object3D.getWorldPosition(this._tmp);
@@ -950,10 +990,11 @@
     },
 
     _refreshPocketMesh: function () {
-      if (!this._pocket) return;
-      for (var i = this._pocket.children.length - 1; i >= 0; i--) {
-        var ch = this._pocket.children[i];
-        if (ch.userData && ch.userData.pocketPiece) this._pocket.remove(ch);
+      var pocket = this._sidePocket(this._localSide()) || this._pocket;
+      if (!pocket) return;
+      for (var i = pocket.children.length - 1; i >= 0; i--) {
+        var ch = pocket.children[i];
+        if (ch.userData && ch.userData.pocketPiece) pocket.remove(ch);
       }
       this._pocketMesh = null;
       if (!this._pocketType) return;
@@ -963,7 +1004,7 @@
       mesh.userData.pocketPiece = true;
       mesh.position.set(0, 0.1, 0);
       this._fitStationPiece(mesh, 0.30);
-      this._pocket.add(mesh);
+      pocket.add(mesh);
       this._pocketMesh = mesh;
     },
 
@@ -1254,35 +1295,55 @@
       mesh.rotation.set(Math.PI / 2, 0, 0);
     },
 
-    _spawnPadPiece: function (opts) {
+    /** Spawn / refresh the pad piece for one side (blue or red). */
+    _spawnSidePadPiece: function (side, opts) {
       opts = opts || {};
-      // Always wipe pad first — dual-preview / failed anims left overlapping scraps
-      if (this._pad) {
-        for (var i = this._pad.children.length - 1; i >= 0; i--) {
-          var ch = this._pad.children[i];
-          if (this._isPieceUserData(ch.userData)) this._pad.remove(ch);
-        }
+      side = side === 'red' ? 'red' : 'blue';
+      var pad = this._sidePad(side);
+      var bag = this._sideBag(side);
+      if (!pad || !bag) return;
+      for (var i = pad.children.length - 1; i >= 0; i--) {
+        var ch = pad.children[i];
+        if (this._isPieceUserData(ch.userData)) pad.remove(ch);
       }
-      this._nextType = this.bag.next();
-      this._padPiece = null;
-      this._previewPiece = null;
+      this._setSidePadPiece(side, null);
+      if (side === 'blue') this._previewPiece = null;
 
-      var bottom = this._nextBlue && this._nextBlue.slots && this._nextBlue.slots.children[0];
+      var nextType = bag.next();
+      if (!this._nextTypeBySide) this._nextTypeBySide = { blue: null, red: null };
+      this._nextTypeBySide[side] = nextType;
+      if (side === this._localSide()) this._nextType = nextType;
+
+      var col = side === 'red' ? this._nextRed : this._nextBlue;
+      var bottom = col && col.slots && col.slots.children[0];
       if (opts.animate && bottom) {
-        this._animateQueueAdvance('blue', this.bag, bottom);
+        this._animateQueueAdvance(side, bag, bottom);
         return;
       }
 
-      var mesh = global.StacksShapes.createShapeMesh(this._nextType, {
+      var mesh = global.StacksShapes.createShapeMesh(nextType, {
         centerPivot: true,
         rotationY: 0
       });
       mesh.userData.padPiece = true;
+      if (side === 'red') mesh.userData.botPadPiece = true;
       mesh.position.set(0, 0.1, 0);
       this._fitStationPiece(mesh, 0.30);
-      this._pad.add(mesh);
-      this._padPiece = mesh;
-      this._rebuildNextQueue('blue', this.bag, { dropIn: !!opts.dropIn });
+      pad.add(mesh);
+      this._setSidePadPiece(side, mesh);
+      this._rebuildNextQueue(side, bag, { dropIn: !!opts.dropIn });
+    },
+
+    _spawnPadPiece: function (opts) {
+      opts = opts || {};
+      this._spawnSidePadPiece(this._localSide(), opts);
+    },
+
+    /** PvP: both stations get a first piece from mirrored bags. */
+    _spawnBothPads: function (opts) {
+      opts = opts || {};
+      this._spawnSidePadPiece('blue', opts);
+      this._spawnSidePadPiece('red', opts);
     },
 
     /** Instant or drop-in fill of the NEXT column from bag.peek. */
@@ -1437,8 +1498,11 @@
 
     _grab: function (handEl) {
       if (!this.matchActive || this._dualBotPreview || this.matchState === 'COUNTDOWN') return;
-      if (this.held || !this._nextType || !this._padPiece) return;
-      if (this._padPiece.userData && this._padPiece.userData.spawning) return;
+      var side = this._localSide();
+      var padPiece = this._sidePadPiece(side);
+      var nextType = (this._nextTypeBySide && this._nextTypeBySide[side]) || this._nextType;
+      if (this.held || !nextType || !padPiece) return;
+      if (padPiece.userData && padPiece.userData.spawning) return;
 
       var hand = handEl || document.getElementById('rightHand');
       if (!hand) return;
@@ -1447,14 +1511,16 @@
       if (this._isPresenting() && !this._handNearPad(hand)) return;
 
       // Capture pad piece world pose so the grab doesn't jump
-      this._padPiece.updateWorldMatrix(true, false);
-      this._padPiece.getWorldPosition(this._tmp);
-      this._padPiece.getWorldQuaternion(this._tmpQ);
+      padPiece.updateWorldMatrix(true, false);
+      padPiece.getWorldPosition(this._tmp);
+      padPiece.getWorldQuaternion(this._tmpQ);
 
-      if (this._padPiece.parent) this._padPiece.parent.remove(this._padPiece);
-      this._padPiece = null;
+      if (padPiece.parent) padPiece.parent.remove(padPiece);
+      this._setSidePadPiece(side, null);
+      if (side === 'blue') this._padPiece = null;
 
-      var mesh = global.StacksShapes.createShapeMesh(this._nextType, {
+      this._nextType = nextType;
+      var mesh = global.StacksShapes.createShapeMesh(nextType, {
         centerPivot: true,
         rotationY: 0
       });
@@ -1477,14 +1543,15 @@
 
       this.held = {
         mesh: mesh,
-        type: this._nextType,
+        type: nextType,
         rot: 0,
         handEl: hand,
         suppressPlace: false,
         wasGhostValid: false
       };
       this._nextType = null;
-      this._spawnPadPiece({ animate: true });
+      if (this._nextTypeBySide) this._nextTypeBySide[side] = null;
+      this._spawnSidePadPiece(side, { animate: true });
       this._sfx('grab');
       this._pulseHaptic(hand, 0.55, 55);
       this._broadcastHold();
@@ -1760,7 +1827,16 @@
           }
         }
         if (evt.attack) this.attackSys.applySerialized(evt.attack);
-        if (evt.kind === 'place' && evt.side) this._setRemoteHeld(evt.side, { holding: false });
+        if (evt.kind === 'place' && evt.side) {
+          this._setRemoteHeld(evt.side, { holding: false });
+          // Placer already advanced their bag on grab; we advance here to keep pads in sync
+          if (evt.side !== this._localSide() || !this._canControl()) {
+            this._spawnSidePadPiece(evt.side, { dropIn: false });
+          }
+          if (this.matchStats && evt.side) {
+            this.matchStats.onPlace(evt.side, evt.clear || null, performance.now());
+          }
+        }
         this._updateHUD();
         this._updateDamageHUD();
       }
@@ -1779,6 +1855,45 @@
     },
 
     /**
+     * Pick a visible Mixamo body for a remote player.
+     * Match seats prefer bot-body / spec-blue-body; everyone else gets remote-body-N.
+     */
+    _bodyForRemotePlayer: function (fromId) {
+      if (!fromId) return null;
+      var mp = global.lobbyState && global.lobbyState.matchPlayers;
+      var playing = global.lobbyState && global.lobbyState.matchState === 'PLAYING';
+      if (fromId === '__BOT__' || (mp && mp.red === '__BOT__' && fromId === mp.red)) {
+        return document.getElementById('bot-body');
+      }
+      if (playing && mp && fromId === mp.red) return document.getElementById('bot-body');
+      if (playing && mp && fromId === mp.blue) return document.getElementById('spec-blue-body');
+
+      if (!this._remoteBodyMap) this._remoteBodyMap = {};
+      if (this._remoteBodyMap[fromId]) {
+        var existing = document.getElementById(this._remoteBodyMap[fromId]);
+        if (existing) return existing;
+      }
+      // Assign first free remote-body-0..3
+      var used = {};
+      var id;
+      for (id in this._remoteBodyMap) {
+        if (Object.prototype.hasOwnProperty.call(this._remoteBodyMap, id)) {
+          used[this._remoteBodyMap[id]] = true;
+        }
+      }
+      for (var i = 0; i < 4; i++) {
+        var bid = 'remote-body-' + i;
+        if (used[bid]) continue;
+        var el = document.getElementById(bid);
+        if (!el) continue;
+        this._remoteBodyMap[fromId] = bid;
+        return el;
+      }
+      // Fallback
+      return document.getElementById('spec-blue-body') || document.getElementById('remote-body-0');
+    },
+
+    /**
      * Apply networked head/hand pose to the correct remote body.
      * Accepts nested {head,leftHand,rightHand} or DodgeVR flat {x,y,z,hqx,...,lhx,...}.
      */
@@ -1790,19 +1905,7 @@
       var rd = this._normalizeRemotePose(data);
       if (!rd || !rd.head) return;
 
-      var mp = global.lobbyState && global.lobbyState.matchPlayers;
-      var body = null;
-      var isBot = fromId === '__BOT__' || (mp && fromId === mp.red && mp.red === '__BOT__');
-      if (isBot || (mp && fromId === mp.red)) {
-        body = document.getElementById('bot-body');
-      } else if (mp && fromId === mp.blue) {
-        body = document.getElementById('spec-blue-body');
-      } else if (fromId === '__BOT__') {
-        body = document.getElementById('bot-body');
-      } else {
-        // Host / unknown match player → blue spectator body
-        body = document.getElementById('spec-blue-body');
-      }
+      var body = this._bodyForRemotePlayer(fromId);
       if (!body) return;
 
       // Never drive the local VR player's own body with remote data
@@ -1876,7 +1979,12 @@
       var seed = this._resolveBagSeed(bagSeed);
       this.bagSeed = seed;
       if (global.lobbyState) global.lobbyState.bagSeed = seed;
-      this.bag = new global.StacksShapes.ShapeBag(seed);
+      this.bags = {
+        blue: new global.StacksShapes.ShapeBag(seed),
+        red: new global.StacksShapes.ShapeBag(seed)
+      };
+      this.bag = this.bags.blue;
+      this._nextTypeBySide = { blue: null, red: null };
       if (this.bot) this.bot.reset(seed);
       if (this.botBlue) this.botBlue.reset(seed);
       return seed;
@@ -1933,9 +2041,10 @@
 
       var isBotSeat = !!isBotMatch || (mp && mp.red === '__BOT__');
       this._pendingMatch.isBotSeat = isBotSeat;
-      if (this._pad) this._pad.visible = !spectating;
-      if (this._pocket) this._pocket.visible = !spectating;
-      this._setBotStationVisible(!!isBotSeat && !spectating);
+      // Keep both stations visible for everyone (players + spectators)
+      if (this._pad) this._pad.visible = true;
+      if (this._pocket) this._pocket.visible = true;
+      this._setBotStationVisible(true);
       this._showMatchBodies({ showBot: !!isBotSeat && !spectating });
 
       // Host pushes board wipe; live pad spawn happens on GO
@@ -2016,15 +2125,28 @@
       if (!spectating) {
         this._resetStationsForMatch();
         this._applyMirroredBags(pending.bagSeed != null ? pending.bagSeed : this.bagSeed);
-        this._spawnPadPiece({ dropIn: true });
+        if (isBotSeat) {
+          // Human owns blue pad; bot.enable fills red
+          this._spawnSidePadPiece('blue', { dropIn: true });
+        } else {
+          // PvP: both stations get pieces from mirrored bags
+          this._spawnBothPads({ dropIn: true });
+        }
+      } else if (pending.bagSeed != null || this.bagSeed) {
+        this._applyMirroredBags(pending.bagSeed != null ? pending.bagSeed : this.bagSeed);
+        this._spawnBothPads({ dropIn: true });
       }
+
+      // Always show both stations during a live match (PvP + bot + spectators)
+      if (this._pad) this._pad.visible = true;
+      if (this._pocket) this._pocket.visible = true;
+      this._setBotStationVisible(true);
 
       if (this.bot) {
         this.bot.setCup(this.cups.red);
         var runBot = (!spectating) && isBotSeat;
-        this._setBotStationVisible(!!isBotSeat && !spectating);
         this.bot.enable(runBot);
-        if (runBot) this.bot.setTargetPpm(12);
+        if (runBot) this.bot.setTargetPpm(10);
       }
       if (this.botBlue) this.botBlue.enable(false);
       this._showMatchBodies({ showBot: !!isBotSeat && !spectating });
@@ -2395,6 +2517,8 @@
     },
 
     _hidePreviewBotBodies: function () {
+      // In multiplayer, remotes own bot-body / spec-blue / remote-body-* — never hide them
+      if (global.isMultiplayer) return;
       var ids = ['bot-body', 'spec-blue-body'];
       for (var i = 0; i < ids.length; i++) {
         var el = document.getElementById(ids[i]);
@@ -2408,7 +2532,7 @@
     /**
      * Local player body always on.
      * Offline bot: show red bot avatar.
-     * Multiplayer: do NOT force-hide bot/spec-blue — remote poses own those entities.
+     * Multiplayer: leave remote-driven bodies alone (poses keep them visible).
      */
     _showMatchBodies: function (opts) {
       opts = opts || {};
@@ -2418,16 +2542,15 @@
         if (player.object3D) player.object3D.visible = true;
       }
 
+      if (global.isMultiplayer) return;
+
       var bot = document.getElementById('bot-body');
       var showBot = !!opts.showBot;
-      // Host/offline vs bot: show red bot avatar. Pure PvP: leave bot body to remote poses.
-      var pvpRemote = !!(global.isMultiplayer && !showBot && !global.isLobbyBotMatch);
-      if (bot && !pvpRemote) {
+      if (bot) {
         bot.setAttribute('visible', showBot);
         if (bot.object3D) bot.object3D.visible = showBot;
         if (!showBot && bot.dataset) bot.dataset.posed = '';
       }
-      if (global.isMultiplayer && !showBot) return;
 
       var spec = document.getElementById('spec-blue-body');
       if (spec) {
@@ -2824,22 +2947,31 @@
       var blue = this.matchStats.blue;
       var red = this.matchStats.red;
 
+      function paceFrom(sideStats, fallback) {
+        if (!sideStats) return fallback;
+        // Adapt from the first place — don't wait for 3 pieces
+        if (sideStats.pieces >= 1) {
+          var gap = sideStats.meanPlaceGapMs && sideStats.meanPlaceGapMs();
+          if (gap && gap > 200) return Math.max(4, Math.min(40, 60000 / gap));
+          return Math.max(4, Math.min(40, sideStats.ppmRolling(now) || sideStats.bps(now) || fallback));
+        }
+        return fallback;
+      }
+
       if (this.bot && this.bot.enabled) {
         var targetPpm;
         if (this._dualBotPreview) {
-          // Dual demo: each bot loosely tracks the other / shared mid pace
-          targetPpm = red.pieces >= 3 ? red.ppmRolling(now) : 14;
-          if (blue.pieces >= 3) targetPpm = 0.55 * targetPpm + 0.45 * blue.ppmRolling(now);
-        } else if (blue.pieces >= 3) {
-          targetPpm = blue.ppmRolling(now);
+          targetPpm = paceFrom(red, 14);
+          if (blue.pieces >= 1) targetPpm = 0.55 * targetPpm + 0.45 * paceFrom(blue, targetPpm);
         } else {
-          targetPpm = 12;
+          // Vs human: track blue player pace immediately
+          targetPpm = paceFrom(blue, 10);
         }
         this.bot.setTargetPpm(targetPpm, now);
       }
       if (this.botBlue && this.botBlue.enabled) {
-        var blueTarget = red.pieces >= 3 ? red.ppmRolling(now) : 13;
-        if (blue.pieces >= 3) blueTarget = 0.5 * blueTarget + 0.5 * blue.ppmRolling(now);
+        var blueTarget = paceFrom(red, 13);
+        if (blue.pieces >= 1) blueTarget = 0.5 * blueTarget + 0.5 * paceFrom(blue, blueTarget);
         this.botBlue.setTargetPpm(blueTarget, now);
       }
     },
@@ -2916,14 +3048,12 @@
       if (global.isMobileSpectator) return;
 
       var host = global.StacksLobby && global.StacksLobby.isHost;
-      var seated = global.StacksLobby && global.StacksLobby.amMatchPlayer &&
-        global.StacksLobby.amMatchPlayer();
       var hasPeers = host
         ? (global.StacksLobby.connections && global.StacksLobby.connections.length > 0)
         : !!(global.StacksLobby.conn && global.StacksLobby.conn.open);
-      // DodgeVR: stream whenever multiplayer + peers exist (not only after matchActive)
+      // Everyone in the lobby streams poses (players + VR spectators) so joiners
+      // can see who is already here. Mobile watchers stay receive-only.
       if (!hasPeers) return;
-      if (!host && !seated) return;
 
       var now = performance.now();
       if (now - this._lastPoseSend < 50) return;

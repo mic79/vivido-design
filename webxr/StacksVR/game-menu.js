@@ -3,7 +3,10 @@
   'use strict';
 
   // Diagonal position stagger, head-on Z facing (not 45° cup yaw)
-  var PLAY_POSITION = { x: -0.65, y: 0, z: 1.75, ry: 0 };
+  var PLAY_POSITION_BLUE = { x: -0.65, y: 0, z: 1.75, ry: 0 };
+  var PLAY_POSITION_RED = { x: 0.65, y: 0, z: -1.75, ry: 180 };
+  // Back-compat alias
+  var PLAY_POSITION = PLAY_POSITION_BLUE;
 
   var SPECTATOR_POSITIONS = [
     { x: -3.2, y: 0, z: 2.8, ry: -20 },
@@ -682,7 +685,9 @@
 
       var ls = window.lobbyState;
       var mp = ls.matchPlayers || {};
-      var isMatchPlayer = mp.blue === myId || (mp.red === myId && mp.red !== '__BOT__');
+      var isBlue = mp.blue === myId;
+      var isRed = mp.red === myId && mp.red !== '__BOT__';
+      var isMatchPlayer = isBlue || isRed;
       var inQueue = (ls.queue || []).indexOf(myId) >= 0;
       var slots = ls.spectatorSlots || [];
       var specIdx = slots.indexOf(myId);
@@ -692,9 +697,10 @@
       var useSpectator = !isMatchPlayer && !inQueue &&
         ls.matchState === 'PLAYING' && specIdx >= 0;
 
+      var playSide = isRed ? 'red' : 'blue';
       var key = useSpectator
         ? ('spec:' + (specIdx % SPECTATOR_POSITIONS.length))
-        : 'play';
+        : ('play:' + playSide);
 
       // Always sync spectator flag — early pose-key return used to leave a stale
       // isSpectator=true that blocked place/cup-grab after host vs-bot start.
@@ -712,8 +718,10 @@
       if (useSpectator) {
         var p = SPECTATOR_POSITIONS[specIdx % SPECTATOR_POSITIONS.length];
         this._movePlayerTo(p);
+      } else if (isRed) {
+        this._movePlayerTo(PLAY_POSITION_RED);
       } else {
-        this._movePlayerTo(PLAY_POSITION);
+        this._movePlayerTo(PLAY_POSITION_BLUE);
       }
     },
 

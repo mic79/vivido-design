@@ -117,25 +117,38 @@
     return !id || id === '__BOT__';
   }
 
+  function clearSpectatorSlot(playerId) {
+    if (!Lobby.lobbyState) return;
+    for (var s = 0; s < Lobby.lobbyState.spectatorSlots.length; s++) {
+      if (Lobby.lobbyState.spectatorSlots[s] === playerId) {
+        Lobby.lobbyState.spectatorSlots[s] = null;
+      }
+    }
+  }
+
+  /**
+   * Seat queued humans into open blue/red slots WITHOUT removing them from queue.
+   * Queue length is the source of truth for "how many want to play" (Q:N in HUD).
+   * Leaving queue removes only that player; others stay queued + seated.
+   */
   function tryAssignMatchPlayers() {
     if (!Lobby.lobbyState) return;
     if (Lobby.lobbyState.matchState === 'PLAYING') return;
     if (Lobby.lobbyState.queue.length === 0) return;
 
     var mp = Lobby.lobbyState.matchPlayers;
-    while (Lobby.lobbyState.queue.length > 0 && (seatOpen(mp.blue) || seatOpen(mp.red))) {
-      var nextId = Lobby.lobbyState.queue.shift();
-      // Prefer blue (human pad side). Never treat __BOT__ as an occupied human seat.
+    var q = Lobby.lobbyState.queue;
+    for (var i = 0; i < q.length; i++) {
+      var nextId = q[i];
+      if (mp.blue === nextId || mp.red === nextId) continue;
       if (seatOpen(mp.blue)) {
         mp.blue = nextId;
       } else if (seatOpen(mp.red)) {
         mp.red = nextId;
+      } else {
+        break;
       }
-      for (var s = 0; s < Lobby.lobbyState.spectatorSlots.length; s++) {
-        if (Lobby.lobbyState.spectatorSlots[s] === nextId) {
-          Lobby.lobbyState.spectatorSlots[s] = null;
-        }
-      }
+      clearSpectatorSlot(nextId);
     }
   }
 
@@ -147,6 +160,7 @@
       }
       tryAssignMatchPlayers();
     } else if (action === 'leave') {
+      // Only this player leaves — never clear the whole queue
       Lobby.lobbyState.queue = Lobby.lobbyState.queue.filter(function (id) { return id !== playerId; });
       if (Lobby.lobbyState.matchState !== 'PLAYING') {
         if (Lobby.lobbyState.matchPlayers.blue === playerId) {
@@ -191,6 +205,13 @@
     }
     Lobby.isLobbyBotMatch = isBotMatch;
     global.isLobbyBotMatch = isBotMatch;
+
+    // Consume seated players from the queue (they're now playing)
+    Lobby.lobbyState.queue = Lobby.lobbyState.queue.filter(function (id) {
+      return id !== mp.blue && id !== mp.red;
+    });
+    clearSpectatorSlot(mp.blue);
+    if (mp.red && mp.red !== '__BOT__') clearSpectatorSlot(mp.red);
 
     Lobby.lobbyState.matchState = 'PLAYING';
     Lobby.lobbyState.matchScore = { blue: 0, red: 0 };

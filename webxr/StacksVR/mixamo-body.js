@@ -609,7 +609,13 @@
           // Spectator bodies (invisible) share the same getFrame() playback object;
           // if they also call it, they corrupt shared state (_prevBg, _frameIdx)
           // and cause clips to appear randomly interrupted.
-          if (!this.remoteHandData && this.el.id !== 'bot-body') return;
+          // Only the primary bot-body may run idle/AI without remote pose data.
+          // Lobby remotes (remote-body-N / spec-blue) stay quiet until posed.
+          var id = this.el && this.el.id;
+          var isPrimaryBot = id === 'bot-body';
+          var isRemotePool = id && String(id).indexOf('remote-body-') === 0;
+          if (!this.remoteHandData && !isPrimaryBot) return;
+          if (isRemotePool && !this.remoteHandData) return;
 
           // --- Multiplayer: use real remote player tracking data ---
           if (this.remoteHandData) {
