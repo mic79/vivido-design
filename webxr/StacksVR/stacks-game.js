@@ -1979,6 +1979,7 @@
       var cup = this.cups[side];
       var clearSys = side === 'red' ? this.clearSysRed : this.clearSysBlue;
       var clearResult = clearSys.resolveAfterPlace(cup, placed, type);
+      var atk = null;
       if (this.matchStats) this.matchStats.onPlace(side, clearResult, performance.now());
       if (clearResult.layersCleared > 0) {
         // Exact Dotmination sonar (Web Audio) — pitch rises with layers cleared.
@@ -1991,11 +1992,11 @@
             this._sfx('clear', { layers: layers, volume: 0.55 });
           }
         }
-        var atk = this.attackSys.onClear(side, clearResult, performance.now());
+        atk = this.attackSys.onClear(side, clearResult, performance.now());
         if (this.matchStats && atk && atk.sent > 0) {
           this.matchStats.onAttack(side, atk.sent, performance.now());
-          // Attack whoosh reserved for when garbage actually lands (see attack tick)
         }
+        if (!this._dualBotPreview) this._showClearPopup(side, clearResult, atk);
         if (this.matchActive) {
           var endInfo = this.modes.addClear(side, clearResult);
           this.playerScore = this.modes.scores.blue;
@@ -2006,18 +2007,27 @@
           }
           if (endInfo && endInfo.ended) this._endFromMode(endInfo);
         }
-        if (window.matchRecorder) {
-          window.matchRecorder.recordEvent('clear', {
-            side: side, layers: clearResult.layersCleared, score: clearResult.score
-          });
-        }
       } else {
         if (!this._dualBotPreview) this._sfx('place');
         clearSys.resetCombo();
       }
 
       if (window.matchRecorder) {
-        window.matchRecorder.recordEvent('place', { side: side, type: type, cells: cells });
+        window.matchRecorder.recordEvent('place', {
+          side: side,
+          type: type,
+          cells: cells,
+          clear: clearResult.layersCleared > 0 ? {
+            layersCleared: clearResult.layersCleared,
+            score: clearResult.score,
+            damage: clearResult.damage,
+            combo: clearResult.combo,
+            tStack: !!clearResult.tStack,
+            perfectClear: !!clearResult.perfectClear
+          } : null,
+          scores: { blue: this.modes.scores.blue, red: this.modes.scores.red },
+          atk: atk || null
+        });
       }
       if (broadcast && global.sendCupEvent) {
         // ONLY the placing seat — never both cups/stations (peer's copy of our
@@ -2622,6 +2632,7 @@
       this._pendingMatch = null;
       this._countdownGoAt = null;
       this._clearMatchBanner();
+      this._clearClearPopup();
       if (this.bot) this.bot.enable(false);
       if (this.botBlue) this.botBlue.enable(false);
       this._setBotStationVisible(false);
@@ -2683,13 +2694,11 @@
       var scene = this.el && this.el.sceneEl;
       if (scene) scene.emit('lobby-state-updated');
 
-      // History + events-only replay well after victory paints (not setTimeout 0)
+      // History + events-only replay well after victory paints.
+      // CRITICAL: history.timestamp MUST equal replay.matchTimestamp or pruneOld
+      // deletes every replay (was the "no replays" bug).
       setTimeout(function () {
-        try {
-          if (!opts.cancelled && !opts.hostLeft) selfEnd._saveMatchHistory(opts);
-        } catch (e2) {
-          console.warn('[StacksGame] history save failed', e2);
-        }
+        if (opts.cancelled || opts.hostLeft) return;
         try {
           var replayPending = null;
           if (window.matchRecorder) {
@@ -2699,13 +2708,29 @@
               replayPending = window.matchRecorder.stopRecording();
             }
           }
+          var ts = (replayPending && replayPending.matchTimestamp) ||
+            (window.matchRecorder && window.matchRecorder._matchTimestamp) ||
+            Date.now();
+          selfEnd._saveMatchHistory(opts, ts);
           if (replayPending && window.matchReplayStorage) {
+            replayPending.matchTimestamp = ts;
             var p = window.matchReplayStorage.save(replayPending);
-            if (p && typeof p.then === 'function') p.catch(function (err) {
-              console.warn('[StacksGame] replay save failed', err);
-            });
+            if (p && typeof p.then === 'function') {
+              p.then(function () {
+                try {
+                  var hist = global.StacksStats && global.StacksStats.loadHistory
+                    ? global.StacksStats.loadHistory() : { single: [], multi: [] };
+                  var keep = (hist.single || []).concat(hist.multi || []).map(function (m) {
+                    return m.timestamp;
+                  });
+                  if (window.matchReplayStorage.pruneOld) window.matchReplayStorage.pruneOld(keep);
+                } catch (ePrune) { /* ignore */ }
+              }).catch(function (err) {
+                console.warn('[StacksGame] replay save failed', err);
+              });
+            }
           }
-        } catch (e3) { console.warn('[StacksGame] replay save failed', e3); }
+        } catch (e3) { console.warn('[StacksGame] replay/history save failed', e3); }
       }, 400);
     },
 
@@ -2865,6 +2890,90 @@
         }
       }
       this._victory = null;
+    },
+
+    /** Floating clear callout: lines / combo / attack sent or cancelled. */
+    _showClearPopup: function (side, clearResult, atk) {
+      if (!this._sceneRoot || !THREE || !clearResult) return;
+      this._clearClearPopup();
+      var layers = clearResult.layersCleared | 0;
+      if (layers <= 0) return;
+      var names = ['', 'SINGLE', 'DOUBLE', 'TRIPLE', 'QUAD'];
+      var title = layers <= 4 ? names[layers] : (layers + ' LINES');
+      if (clearResult.perfectClear) title = 'PERFECT';
+      if (clearResult.tStack) title += '  T';
+
+      var lines = [title];
+      if ((clearResult.combo | 0) > 1) lines.push('COMBO x' + (clearResult.combo | 0));
+      var sent = atk && atk.sent > 0 ? (atk.sent | 0) : 0;
+      var cancelled = atk && atk.cancelled > 0 ? (atk.cancelled | 0) : 0;
+      if (sent > 0) lines.push('+' + sent + ' ATK');
+      else if (cancelled > 0) lines.push('-' + cancelled + ' BLOCK');
+      else if (layers === 1) lines.push('no attack');
+      lines.push('+' + (clearResult.score | 0));
+
+      var canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 256;
+      var ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, 512, 256);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 72px Arial, Helvetica, sans-serif';
+      ctx.fillStyle = side === 'red' ? '#ff8a5c' : '#5ad0ff';
+      ctx.shadowColor = 'rgba(0,0,0,0.75)';
+      ctx.shadowBlur = 12;
+      ctx.fillText(lines[0], 256, 70);
+      ctx.shadowBlur = 0;
+      ctx.font = '600 42px Arial, Helvetica, sans-serif';
+      ctx.fillStyle = '#e8eef6';
+      for (var i = 1; i < lines.length; i++) {
+        ctx.fillText(lines[i], 256, 70 + i * 48);
+      }
+      var tex = new THREE.CanvasTexture(canvas);
+      tex.needsUpdate = true;
+      var mat = new THREE.MeshBasicMaterial({
+        map: tex, transparent: true, depthWrite: false, toneMapped: false, side: THREE.DoubleSide
+      });
+      var mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.28), mat);
+      var cup = this.cups[side];
+      var pos = new THREE.Vector3(side === 'blue' ? -0.55 : 0.55, 1.55, side === 'blue' ? 1.15 : -1.15);
+      if (cup && cup.root) {
+        cup.root.getWorldPosition(pos);
+        pos.y += 0.55;
+      }
+      mesh.position.copy(pos);
+      var player = document.getElementById('player');
+      if (player && player.object3D) {
+        var look = new THREE.Vector3();
+        player.object3D.getWorldPosition(look);
+        look.y = mesh.position.y;
+        mesh.lookAt(look);
+      }
+      this._sceneRoot.add(mesh);
+      this._clearPopup = { mesh: mesh, tex: tex, mat: mat, t0: performance.now() };
+    },
+
+    _clearClearPopup: function () {
+      var p = this._clearPopup;
+      if (!p) return;
+      if (p.mesh && p.mesh.parent) p.mesh.parent.remove(p.mesh);
+      if (p.tex) p.tex.dispose();
+      if (p.mat) p.mat.dispose();
+      if (p.mesh && p.mesh.geometry) p.mesh.geometry.dispose();
+      this._clearPopup = null;
+    },
+
+    _tickClearPopup: function (now) {
+      var p = this._clearPopup;
+      if (!p || !p.mesh) return;
+      now = now || performance.now();
+      var t = (now - p.t0) / 1000;
+      p.mesh.position.y += 0.012;
+      var op = t < 0.15 ? (t / 0.15) : Math.max(0, 1 - (t - 0.9) / 0.55);
+      if (p.mat) p.mat.opacity = op;
+      p.mesh.scale.setScalar(1 + Math.min(0.12, t * 0.35));
+      if (t > 1.5) this._clearClearPopup();
     },
 
     _tickVictory: function (now) {
@@ -3093,7 +3202,7 @@
       }, 0);
     },
 
-    _saveMatchHistory: function (opts) {
+    _saveMatchHistory: function (opts, matchTimestamp) {
       opts = opts || {};
       if (global.isMobileSpectator || global.isSpectator) return;
       if (this._dualBotPreview) return;
@@ -3130,7 +3239,8 @@
       else if (winner === 'draw') result = 'DRAW';
 
       var record = {
-        timestamp: Date.now(),
+        // Must match IndexedDB replay key or Watch replay / prune cannot find it
+        timestamp: matchTimestamp || Date.now(),
         mode: multi ? 'multi' : 'single',
         result: result,
         playerScore: scores[side] | 0,
@@ -3141,19 +3251,10 @@
         opponentName: oppName,
         side: side,
         player: snap,
-        boardSize: this.boardSize || 6
+        boardSize: this.boardSize || 6,
+        hasReplay: true
       };
       global.StacksStats.saveMatch(record);
-
-      if (window.matchReplayStorage && window.matchReplayStorage.pruneOld) {
-        try {
-          var hist = global.StacksStats.loadHistory();
-          var keep = (hist.single || []).concat(hist.multi || []).map(function (m) {
-            return m.timestamp;
-          });
-          window.matchReplayStorage.pruneOld(keep);
-        } catch (e2) {}
-      }
     },
 
     _appVersion: function () {
@@ -3828,6 +3929,7 @@
       if (this._poseDesktop) this._poseDesktop();
       this._tickPieceAnims();
       this._tickVictory();
+      this._tickClearPopup();
       this._prepareMatchHud();
       this._placeMatchHud();
 
@@ -3854,6 +3956,13 @@
             if (applied && applied.length) {
               if (!this._dualBotPreview) this._sfx('attack', { volume: 0.5 });
               for (var i = 0; i < applied.length; i++) {
+                if (window.matchRecorder) {
+                  window.matchRecorder.recordEvent('garbage', {
+                    side: applied[i].side,
+                    layers: applied[i].layers,
+                    holes: this.attackSys.garbageHoles
+                  });
+                }
                 if (this.cups[applied[i].side].isToppedOut()) {
                   var over = this.modes.onOverflow(applied[i].side);
                   if (over) this._endFromMode(over);

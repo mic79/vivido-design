@@ -778,6 +778,15 @@
           this.statsPage = 0;
           this._showStats();
           break;
+        case 'stats-replay-0':
+          this._toggleReplaySlot(0);
+          break;
+        case 'stats-replay-1':
+          this._toggleReplaySlot(1);
+          break;
+        case 'stats-replay-2':
+          this._toggleReplaySlot(2);
+          break;
         case 'replay-latest':
           this._playLatestReplay();
           break;
@@ -1391,6 +1400,14 @@
       }
       if (summary) summary.setAttribute('value', sumLines.join('\n'));
 
+      var replayBtns = [];
+      var replayTexts = [];
+      for (var ri = 0; ri < this.STATS_PER_PAGE; ri++) {
+        replayBtns.push(document.getElementById('menu-stats-replay-' + ri));
+        replayTexts.push(document.getElementById('menu-stats-replay-' + ri + '-text'));
+        if (replayBtns[ri]) replayBtns[ri].setAttribute('visible', false);
+      }
+
       if (!list.length) {
         panel.setAttribute('value', 'Play a match to track\nprogression & bests.');
         if (pageEl) pageEl.setAttribute('value', '');
@@ -1436,16 +1453,74 @@
         pageEl.setAttribute('value',
           totalPages > 1 ? (this.statsPage + 1) + ' / ' + totalPages : '');
       }
+
+      var activeTs = (window.replayActive && window.matchReplayPlayer)
+        ? window.matchReplayPlayer._matchTimestamp : null;
+      if (!window.matchReplayStorage) return;
+      var selfStats = this;
+      for (var si = 0; si < end - start; si++) {
+        (function (slotIdx, match) {
+          if (!match || !match.timestamp) return;
+          if (activeTs && match.timestamp === activeTs) {
+            if (replayBtns[slotIdx]) {
+              replayBtns[slotIdx].setAttribute('visible', true);
+              replayBtns[slotIdx].setAttribute('material', 'color', '#cc3333');
+            }
+            if (replayTexts[slotIdx]) replayTexts[slotIdx].setAttribute('value', 'Stop');
+            return;
+          }
+          window.matchReplayStorage.load(match.timestamp).then(function (replay) {
+            if (!replay || !replayBtns[slotIdx]) return;
+            // Events-only or legacy frames both count
+            var usable = (replay.events && replay.events.length) ||
+              (replay.frames && replay.frames.length);
+            if (!usable) return;
+            replayBtns[slotIdx].setAttribute('visible', true);
+            replayBtns[slotIdx].setAttribute('material', 'color', '#4488ff');
+            if (replayTexts[slotIdx]) replayTexts[slotIdx].setAttribute('value', 'Watch');
+            if (selfStats.refreshRaycasters) selfStats.refreshRaycasters();
+          }).catch(function () { /* no replay */ });
+        })(si, list[start + si]);
+      }
+    },
+
+    _toggleReplaySlot: function (slot) {
+      var hist = (window.StacksStats && window.StacksStats.loadHistory)
+        ? window.StacksStats.loadHistory()
+        : { single: [], multi: [] };
+      var list = this.statsSubTab === 'multi' ? (hist.multi || []) : (hist.single || []);
+      var idx = this.statsPage * this.STATS_PER_PAGE + slot;
+      if (idx >= list.length) return;
+      var match = list[idx];
+      if (!match || !match.timestamp) return;
+
+      if (window.replayActive && window.matchReplayPlayer &&
+          window.matchReplayPlayer._matchTimestamp === match.timestamp) {
+        if (window.stopMatchReplay) window.stopMatchReplay();
+        this._showStats();
+        return;
+      }
+
+      if (window.startMatchReplay) {
+        window.startMatchReplay(match.timestamp);
+        this.menuVisible = false;
+        if (this.menu) this.menu.setAttribute('visible', false);
+        if (typeof this.setRaycasters === 'function') this.setRaycasters(false);
+      }
     },
 
     _playLatestReplay: function () {
       if (!window.matchReplayStorage) return;
+      var self = this;
       window.matchReplayStorage.list().then(function (keys) {
         if (!keys || !keys.length) return;
         var latest = keys.sort(function (a, b) { return b - a; })[0];
-        return window.matchReplayStorage.load(latest).then(function (replay) {
-          if (replay && window.matchReplayPlayer) window.matchReplayPlayer.play(replay);
-        });
+        if (window.startMatchReplay) {
+          window.startMatchReplay(latest);
+          self.menuVisible = false;
+          if (self.menu) self.menu.setAttribute('visible', false);
+          if (typeof self.setRaycasters === 'function') self.setRaycasters(false);
+        }
       });
     }
   });

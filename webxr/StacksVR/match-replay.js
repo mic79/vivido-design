@@ -1,7 +1,6 @@
 // match-replay.js — events-only replay for StacksVR
-// DodgeVR can sample every frame because each frame is ~70 floats (delta-encoded).
-// StacksVR used to dump full cup JSON grids @10Hz offline — that ballooned to
-// multi-MB and froze Quest on IndexedDB save at match end. Never do that again.
+// DodgeVR samples ~70 floats/frame; StacksVR never dumps full cup JSON @10Hz
+// (that froze Quest on IDB). Places + garbage events reconstruct the board.
 (function () {
   'use strict';
 
@@ -73,7 +72,9 @@
 
   function pruneOldReplays(keepTimestamps) {
     return listReplayTimestamps().then(function (all) {
-      var toDelete = all.filter(function (ts) { return keepTimestamps.indexOf(ts) < 0; });
+      var keep = {};
+      for (var i = 0; i < keepTimestamps.length; i++) keep[keepTimestamps[i]] = true;
+      var toDelete = all.filter(function (ts) { return !keep[ts]; });
       if (toDelete.length === 0) return Promise.resolve();
       return openDB().then(function (d) {
         return new Promise(function (resolve) {
@@ -119,12 +120,8 @@
       });
     },
 
-    // Intentionally empty: cup snapshots @10Hz froze Quest on bot-win IDB save.
-    // Events (place/clear) are enough for history; board replay needs a compact
-    // binary format like DodgeVR before we sample frames again.
     tick: function () {},
 
-    /** Stop capturing immediately (O(1)). Call takeReplay later off the win frame. */
     stopCapture: function () {
       if (!this.isRecording && !this._events.length) return;
       if (this.isRecording) {
@@ -133,13 +130,12 @@
       this.isRecording = false;
     },
 
-    /** Package events into a lightweight replay object. Safe after stopCapture. */
     takeReplay: function () {
       this.isRecording = false;
       if (!this._events.length && !this._durationMs) return null;
       var replay = {
         matchTimestamp: this._matchTimestamp,
-        version: 2,
+        version: 3,
         kind: 'stacksvr',
         events: this._events,
         frames: [],
@@ -152,12 +148,16 @@
       return replay;
     },
 
-    /** Back-compat: stop + package (prefer stopCapture + deferred takeReplay). */
     stopRecording: function () {
       this.stopCapture();
       return this.takeReplay();
     }
   };
+
+  function getGame() {
+    var gm = document.querySelector('[stacks-game]');
+    return gm && gm.components && gm.components['stacks-game'];
+  }
 
   window.matchReplayPlayer = {
     playing: false,
@@ -165,53 +165,139 @@
     _start: 0,
     _eventIdx: 0,
     _frameIdx: 0,
+    _matchTimestamp: null,
+    _clearBlue: null,
+    _clearRed: null,
 
     play: function (replay) {
+      if (!replay) return;
+      this.stop();
       this._replay = replay;
       this.playing = true;
+      window.replayActive = true;
+      this._matchTimestamp = replay.matchTimestamp;
       this._start = performance.now();
       this._eventIdx = 0;
       this._frameIdx = 0;
-      var gm = document.querySelector('[stacks-game]');
-      var comp = gm && gm.components && gm.components['stacks-game'];
+      var comp = getGame();
       if (comp) {
-        comp.cups.blue.clearAll();
-        comp.cups.red.clearAll();
+        if (comp._dualIdleTimer) {
+          clearTimeout(comp._dualIdleTimer);
+          comp._dualIdleTimer = null;
+        }
+        if (comp.bot) comp.bot.enable(false);
+        if (comp.botBlue) comp.botBlue.enable(false);
+        comp._dualBotPreview = false;
+        comp.matchActive = false;
+        if (comp.cups && comp.cups.blue) comp.cups.blue.clearAll();
+        if (comp.cups && comp.cups.red) comp.cups.red.clearAll();
+        if (comp.attackSys) comp.attackSys.reset();
+        if (comp.modes) {
+          comp.modes.scores.blue = 0;
+          comp.modes.scores.red = 0;
+        }
+        this._clearBlue = window.StacksClear ? new window.StacksClear() : null;
+        this._clearRed = window.StacksClear ? new window.StacksClear() : null;
+        if (comp._updateHUD) comp._updateHUD();
+        if (comp._updateDamageHUD) comp._updateDamageHUD();
       }
-      console.log('[MatchReplay] Playing replay', replay.matchTimestamp);
+      console.log('[MatchReplay] Playing', replay.matchTimestamp,
+        (replay.events && replay.events.length) || 0, 'events');
     },
 
     stop: function () {
       this.playing = false;
       this._replay = null;
+      this._matchTimestamp = null;
+      window.replayActive = false;
+      var comp = getGame();
+      if (comp && typeof comp._scheduleDualIdle === 'function') {
+        comp._scheduleDualIdle(400);
+      }
+    },
+
+    _applyEvent: function (e) {
+      var comp = getGame();
+      if (!comp || !e || !e.data) return;
+      var d = e.data;
+      if (e.type === 'place' && d.side && d.cells && comp.cups[d.side]) {
+        var cup = comp.cups[d.side];
+        var placed = cup.placeCells(d.cells, {
+          owner: d.side,
+          shapeType: d.type || null
+        });
+        if (placed) {
+          var clearSys = d.side === 'red' ? this._clearRed : this._clearBlue;
+          if (clearSys && clearSys.resolveAfterPlace) {
+            clearSys.resolveAfterPlace(cup, placed, d.type || null);
+          }
+        }
+        if (d.scores && comp.modes) {
+          if (d.scores.blue != null) comp.modes.scores.blue = d.scores.blue;
+          if (d.scores.red != null) comp.modes.scores.red = d.scores.red;
+        } else if (d.clear && d.clear.score && comp.modes) {
+          comp.modes.scores[d.side] = (comp.modes.scores[d.side] | 0) + (d.clear.score | 0);
+        }
+        if (comp._updateHUD) comp._updateHUD();
+        return;
+      }
+      if (e.type === 'garbage' && d.side && d.layers > 0 && comp.cups[d.side]) {
+        if (comp.cups[d.side].spawnGarbageLayers) {
+          comp.cups[d.side].spawnGarbageLayers(d.layers | 0, d.holes != null ? d.holes : 1);
+        }
+        if (comp._updateHUD) comp._updateHUD();
+        return;
+      }
+      if (e.type === 'score' && d && comp.modes) {
+        if (d.blue != null) comp.modes.scores.blue = d.blue;
+        if (d.red != null) comp.modes.scores.red = d.red;
+        if (comp._updateHUD) comp._updateHUD();
+      }
     },
 
     tick: function () {
       if (!this.playing || !this._replay) return;
       var t = performance.now() - this._start;
+      var events = this._replay.events || [];
+      while (this._eventIdx < events.length && events[this._eventIdx].t <= t) {
+        this._applyEvent(events[this._eventIdx++]);
+      }
+      // Legacy frame path (pre-v2)
       var frames = this._replay.frames || [];
-      while (this._frameIdx < frames.length && frames[this._frameIdx].t <= t) {
-        var f = frames[this._frameIdx++];
-        var gm = document.querySelector('[stacks-game]');
-        var comp = gm && gm.components && gm.components['stacks-game'];
-        if (comp && f.cups) {
-          if (f.cups.blue) comp.cups.blue.applySnapshot(f.cups.blue);
-          if (f.cups.red) comp.cups.red.applySnapshot(f.cups.red);
-          if (f.scores) {
-            comp.modes.scores.blue = f.scores.blue;
-            comp.modes.scores.red = f.scores.red;
-            comp._updateHUD();
-          }
-          if (f.attack) {
-            comp.attackSys.applySerialized(f.attack);
-            comp._updateDamageHUD();
+      if (frames.length) {
+        while (this._frameIdx < frames.length && frames[this._frameIdx].t <= t) {
+          var f = frames[this._frameIdx++];
+          var comp = getGame();
+          if (comp && f.cups) {
+            if (f.cups.blue) comp.cups.blue.applySnapshot(f.cups.blue);
+            if (f.cups.red) comp.cups.red.applySnapshot(f.cups.red);
+            if (f.scores) {
+              comp.modes.scores.blue = f.scores.blue;
+              comp.modes.scores.red = f.scores.red;
+              comp._updateHUD();
+            }
           }
         }
       }
-      if (this._frameIdx >= frames.length && t > (this._replay.durationMs || 0) + 500) {
+      var doneEvents = this._eventIdx >= events.length;
+      var doneFrames = !frames.length || this._frameIdx >= frames.length;
+      if (doneEvents && doneFrames && t > (this._replay.durationMs || 0) + 600) {
         this.stop();
       }
     }
+  };
+
+  window.startMatchReplay = function (ts) {
+    if (!window.matchReplayStorage) return;
+    window.matchReplayStorage.load(ts).then(function (replay) {
+      if (replay && window.matchReplayPlayer) window.matchReplayPlayer.play(replay);
+    }).catch(function (err) {
+      console.warn('[MatchReplay] load failed', err);
+    });
+  };
+
+  window.stopMatchReplay = function () {
+    if (window.matchReplayPlayer) window.matchReplayPlayer.stop();
   };
 
   AFRAME.registerComponent('match-replay-ticker', {
