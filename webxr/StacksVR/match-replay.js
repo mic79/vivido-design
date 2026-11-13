@@ -1,12 +1,14 @@
-// match-replay.js — stack-event + dual-cup replay for StacksVR
+// match-replay.js — events-only replay for StacksVR
+// DodgeVR can sample every frame because each frame is ~70 floats (delta-encoded).
+// StacksVR used to dump full cup JSON grids @10Hz offline — that ballooned to
+// multi-MB and froze Quest on IndexedDB save at match end. Never do that again.
 (function () {
   'use strict';
 
   var DB_NAME = 'stacksvr-replays';
   var DB_VERSION = 1;
   var STORE_NAME = 'replays';
-  var SAMPLE_RATE = 10;
-  var SAMPLE_INTERVAL = 1000 / SAMPLE_RATE;
+  var MAX_EVENTS = 4000;
 
   var db = null;
 
@@ -95,22 +97,21 @@
   window.matchRecorder = {
     isRecording: false,
     _events: [],
-    _frames: [],
     _startTime: 0,
-    _lastSampleTime: 0,
     _matchTimestamp: 0,
+    _durationMs: 0,
 
     startRecording: function (matchTimestamp) {
       this._events = [];
-      this._frames = [];
       this._startTime = performance.now();
-      this._lastSampleTime = -SAMPLE_INTERVAL;
       this._matchTimestamp = matchTimestamp || Date.now();
+      this._durationMs = 0;
       this.isRecording = true;
     },
 
     recordEvent: function (type, data) {
       if (!this.isRecording) return;
+      if (this._events.length >= MAX_EVENTS) return;
       this._events.push({
         t: Math.round(performance.now() - this._startTime),
         type: type,
@@ -118,56 +119,43 @@
       });
     },
 
-    tick: function () {
-      if (!this.isRecording) return;
-      // Multiplayer: events-only — full cup snapshots every 100ms made match-end
-      // IndexedDB saves freeze the Quest for >1s.
-      if (window.isMultiplayer) return;
-      var now = performance.now();
-      var elapsed = now - this._startTime;
-      if (elapsed - this._lastSampleTime < SAMPLE_INTERVAL) return;
-      this._lastSampleTime = elapsed;
+    // Intentionally empty: cup snapshots @10Hz froze Quest on bot-win IDB save.
+    // Events (place/clear) are enough for history; board replay needs a compact
+    // binary format like DodgeVR before we sample frames again.
+    tick: function () {},
 
-      var gm = document.querySelector('[stacks-game]');
-      var comp = gm && gm.components && gm.components['stacks-game'];
-      var frame = {
-        t: Math.round(elapsed),
-        scores: comp ? { blue: comp.modes.scores.blue, red: comp.modes.scores.red } : null,
-        attack: comp ? comp.attackSys.serialize() : null,
-        cups: null,
-        pose: null
-      };
-      if (comp && comp.cups.blue && comp.cups.red) {
-        frame.cups = {
-          blue: comp.cups.blue.serialize(),
-          red: comp.cups.red.serialize()
-        };
+    /** Stop capturing immediately (O(1)). Call takeReplay later off the win frame. */
+    stopCapture: function () {
+      if (!this.isRecording && !this._events.length) return;
+      if (this.isRecording) {
+        this._durationMs = Math.round(performance.now() - this._startTime);
       }
-      var cam = document.querySelector('[camera]');
-      if (cam) {
-        var p = new THREE.Vector3(), q = new THREE.Quaternion();
-        cam.object3D.getWorldPosition(p);
-        cam.object3D.getWorldQuaternion(q);
-        frame.pose = { head: { x: p.x, y: p.y, z: p.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w } };
-      }
-      this._frames.push(frame);
+      this.isRecording = false;
     },
 
-    stopRecording: function () {
-      if (!this.isRecording) return null;
+    /** Package events into a lightweight replay object. Safe after stopCapture. */
+    takeReplay: function () {
       this.isRecording = false;
+      if (!this._events.length && !this._durationMs) return null;
       var replay = {
         matchTimestamp: this._matchTimestamp,
-        version: 1,
+        version: 2,
         kind: 'stacksvr',
         events: this._events,
-        frames: this._frames,
-        durationMs: Math.round(performance.now() - this._startTime)
+        frames: [],
+        durationMs: this._durationMs || Math.round(performance.now() - this._startTime)
       };
       this._events = [];
-      this._frames = [];
-      console.log('[MatchReplay] Saved', replay.frames.length, 'frames', replay.events.length, 'events');
+      this._durationMs = 0;
+      console.log('[MatchReplay] events-only', replay.events.length, 'events',
+        Math.round(replay.durationMs / 1000) + 's');
       return replay;
+    },
+
+    /** Back-compat: stop + package (prefer stopCapture + deferred takeReplay). */
+    stopRecording: function () {
+      this.stopCapture();
+      return this.takeReplay();
     }
   };
 

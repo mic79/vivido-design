@@ -21,6 +21,18 @@
     }
   }
 
+  function setPlaybackRate(node, rate) {
+    var sc = soundComp(node);
+    if (!sc || !sc.pool || !sc.pool.children) return;
+    var r = (rate != null && isFinite(rate)) ? Math.max(0.4, Math.min(2.5, rate)) : 1;
+    for (var i = 0; i < sc.pool.children.length; i++) {
+      var child = sc.pool.children[i];
+      if (child && typeof child.setPlaybackRate === 'function') {
+        try { child.setPlaybackRate(r); } catch (e) { /* ignore */ }
+      }
+    }
+  }
+
   function isPlaying(node) {
     var sc = soundComp(node);
     if (!sc || !sc.pool || !sc.pool.children) return false;
@@ -133,7 +145,8 @@
       }
     },
 
-    /** Play a one-shot SFX by entity id suffix: grab, place, clear, attack, boom, win, ui, rotate */
+    /** Play a one-shot SFX by entity id suffix: grab, place, clear, attack, boom, win, ui, rotate.
+     *  opts.rate — playbackRate (Dotmination-style pitch). opts.volume — one-shot level. */
     sfx: function (name, opts) {
       opts = opts || {};
       if (AudioApi.sfxEnabled === false) return;
@@ -142,6 +155,7 @@
       var sc = soundComp(node);
       if (!sc) return;
       try {
+        setPlaybackRate(node, opts.rate != null ? opts.rate : 1);
         if (opts.volume != null) setVolume(node, opts.volume);
         sc.stopSound();
         sc.playSound();

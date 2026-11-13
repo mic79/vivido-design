@@ -1982,11 +1982,16 @@
       if (!this._dualBotPreview) this._sfx('place');
       if (this.matchStats) this.matchStats.onPlace(side, clearResult, performance.now());
       if (clearResult.layersCleared > 0) {
-        if (!this._dualBotPreview) this._sfx('clear');
+        // Dotmination-style: subtle clear tone, pitch rises with layers cleared
+        if (!this._dualBotPreview) {
+          var layers = clearResult.layersCleared | 0;
+          var clearRate = 0.72 + Math.min(layers, 8) * 0.14;
+          this._sfx('clear', { rate: clearRate, volume: 0.42 });
+        }
         var atk = this.attackSys.onClear(side, clearResult, performance.now());
         if (this.matchStats && atk && atk.sent > 0) {
           this.matchStats.onAttack(side, atk.sent, performance.now());
-          if (!this._dualBotPreview) this._sfx('attack');
+          if (!this._dualBotPreview) this._sfx('attack', { volume: 0.55 });
         }
         if (this.matchActive) {
           var endInfo = this.modes.addClear(side, clearResult);
@@ -2638,14 +2643,18 @@
         if (this.modes.stop) this.modes.stop();
       }
 
-      // NEVER block the frame on IndexedDB / giant JSON — that froze Quest >1s on win/loss
+      // Stop capture NOW (O(1)). Never package/save replay on the win frame —
+      // offline bot matches used to dump full cup JSON @10Hz and freeze Quest on IDB.
       var selfEnd = this;
-      var replayPending = null;
       try {
-        if (window.matchRecorder && window.matchRecorder.isRecording) {
-          replayPending = window.matchRecorder.stopRecording();
+        if (window.matchRecorder) {
+          if (typeof window.matchRecorder.stopCapture === 'function') {
+            window.matchRecorder.stopCapture();
+          } else {
+            window.matchRecorder.isRecording = false;
+          }
         }
-      } catch (e) { console.warn('[StacksGame] replay stop failed', e); }
+      } catch (e) { console.warn('[StacksGame] replay stopCapture failed', e); }
 
       this._updateHUD();
 
@@ -2670,22 +2679,30 @@
       var scene = this.el && this.el.sceneEl;
       if (scene) scene.emit('lobby-state-updated');
 
+      // History + events-only replay well after victory paints (not setTimeout 0)
       setTimeout(function () {
         try {
           if (!opts.cancelled && !opts.hostLeft) selfEnd._saveMatchHistory(opts);
         } catch (e2) {
           console.warn('[StacksGame] history save failed', e2);
         }
-        if (replayPending && window.matchReplayStorage) {
-          try {
+        try {
+          var replayPending = null;
+          if (window.matchRecorder) {
+            if (typeof window.matchRecorder.takeReplay === 'function') {
+              replayPending = window.matchRecorder.takeReplay();
+            } else if (typeof window.matchRecorder.stopRecording === 'function') {
+              replayPending = window.matchRecorder.stopRecording();
+            }
+          }
+          if (replayPending && window.matchReplayStorage) {
             var p = window.matchReplayStorage.save(replayPending);
             if (p && typeof p.then === 'function') p.catch(function (err) {
               console.warn('[StacksGame] replay save failed', err);
             });
-          } catch (e3) { console.warn('[StacksGame] replay save failed', e3); }
-        }
-        replayPending = null;
-      }, 0);
+          }
+        } catch (e3) { console.warn('[StacksGame] replay save failed', e3); }
+      }, 400);
     },
 
     /**
@@ -3056,15 +3073,20 @@
       if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
 
       var result = this._matchEndResult(info, false);
-      if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.isHost) {
-        global.endLobbyMatch(result);
-      } else if (!global.isMultiplayer) {
-        this.onMatchEnded(Object.assign({ victory: true }, result));
-      } else if (global.sendMatchAction) {
-        global.sendMatchAction('end', result);
-        // onMatchEnded arrives via match-ended broadcast (with winner payload)
-        this._endingMatch = false;
-      }
+      var selfEnd = this;
+      // Defer teardown so the winning place can finish record/broadcast on this frame
+      // (sync onMatchEnded mid-_afterPlace previously cleared cups before serialize).
+      setTimeout(function () {
+        if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.isHost) {
+          global.endLobbyMatch(result);
+        } else if (!global.isMultiplayer) {
+          selfEnd.onMatchEnded(Object.assign({ victory: true }, result));
+        } else if (global.sendMatchAction) {
+          global.sendMatchAction('end', result);
+          // onMatchEnded arrives via match-ended broadcast (with winner payload)
+          selfEnd._endingMatch = false;
+        }
+      }, 0);
     },
 
     _saveMatchHistory: function (opts) {
