@@ -3509,12 +3509,14 @@
     },
 
     /**
-     * Quest passthrough (immersive-ar): clear void backdrop so the room shows.
-     * Cups / stations / bodies stay opaque. Default VR keeps the dark arena.
+     * Quest passthrough look (VRLeague-style): stay in immersive-ar and only
+     * show/hide an opaque shell. Transparent clear ⇒ room; opaque dome ⇒ VR void.
+     * Cups / stations / bodies always stay visible.
      */
     applyPassthroughVisuals: function (on) {
       var sceneEl = this.el && this.el.sceneEl;
       var scene3d = sceneEl && sceneEl.object3D;
+      var root = this._sceneRoot;
       var showShell = !on;
 
       if (this._arenaGround) this._arenaGround.visible = showShell;
@@ -3522,27 +3524,37 @@
       if (this._arenaHorizon) this._arenaHorizon.visible = showShell;
       if (this._arenaHaze) this._arenaHaze.visible = showShell;
 
+      // Full-sphere veil so AR alpha-blend can't leak room when PASS is off
+      if (root && THREE && !this._arenaPassVeil) {
+        var veil = new THREE.Mesh(
+          new THREE.SphereGeometry(12, 24, 16),
+          new THREE.MeshBasicMaterial({
+            color: 0x06040a,
+            side: THREE.BackSide,
+            depthWrite: true,
+            fog: false,
+            toneMapped: false
+          })
+        );
+        veil.name = 'arena-pass-veil';
+        veil.renderOrder = -10;
+        root.add(veil);
+        this._arenaPassVeil = veil;
+      }
+      if (this._arenaPassVeil) this._arenaPassVeil.visible = showShell;
+
       if (!sceneEl || !scene3d) return;
 
       if (on) {
         sceneEl.removeAttribute('background');
         scene3d.background = null;
         scene3d.fog = null;
-        try {
-          sceneEl.setAttribute('renderer', 'alpha', true);
-        } catch (e) { /* ignore */ }
-        if (sceneEl.renderer) {
-          sceneEl.renderer.setClearColor(0x000000, 0);
-        }
+        if (sceneEl.renderer) sceneEl.renderer.setClearColor(0x000000, 0);
       } else {
         sceneEl.setAttribute('background', 'color', '#06040a');
         scene3d.fog = new THREE.FogExp2(0x09060c, 0.010);
-        try {
-          sceneEl.setAttribute('renderer', 'alpha', false);
-        } catch (e2) { /* ignore */ }
-        if (sceneEl.renderer) {
-          sceneEl.renderer.setClearColor(0x06040a, 1);
-        }
+        // Keep renderer alpha true (AR session); opaque veil + clear cover the room
+        if (sceneEl.renderer) sceneEl.renderer.setClearColor(0x06040a, 1);
       }
     },
 

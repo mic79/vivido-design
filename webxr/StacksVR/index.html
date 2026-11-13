@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below). -->
-  <meta name="stacks-version" content="0.2.12" />
+  <meta name="stacks-version" content="0.2.13" />
   <title>StacksVR</title>
   <script>
     (function () {
@@ -36,10 +36,10 @@
   <script src="lobby.js?v=51"></script>
   <script src="match-replay.js?v=21"></script>
   <script src="stacks-audio.js?v=4"></script>
-  <script src="game-menu.js?v=59"></script>
+  <script src="game-menu.js?v=60"></script>
   <script src="mixamo-body.js?v=22"></script>
   <script src="locomotion.js?v=21"></script>
-  <script src="stacks-game.js?v=91"></script>
+  <script src="stacks-game.js?v=92"></script>
   <script src="mobile-spectator.js?v=42"></script>
 
     <style>
@@ -307,8 +307,9 @@
     match-replay-ticker
     mobile-spectator-cam
     background="color: #06040a"
-    renderer="colorManagement: true; antialias: true; physicallyCorrectLights: true; shadow: true"
+    renderer="colorManagement: true; antialias: true; physicallyCorrectLights: true; shadow: true; alpha: true"
     webxr="optionalFeatures: local-floor, bounded-floor, hand-tracking"
+    xr-mode-ui="enterVREnabled: true; enterAREnabled: true"
   >
     <a-entity light="type: ambient; color: #1a1420; intensity: 0.22"></a-entity>
     <a-entity light="type: directional; color: #fff2e8; intensity: 1.15; castShadow: true; shadowMapWidth: 2048; shadowMapHeight: 2048; shadowCameraLeft: -5; shadowCameraRight: 5; shadowCameraTop: 5; shadowCameraBottom: -5; shadowCameraNear: 0.5; shadowCameraFar: 16; shadowBias: -0.0004"
@@ -322,7 +323,7 @@
 
     <!-- Discreet build stamp (DodgeVR-style) — kept in sync from STACKS_VERSION -->
     <a-entity id="version-display" position="0 2.42 0"
-      text="value: v0.2.12; align: center; width: 0.85; color: #5a6878"></a-entity>
+      text="value: v0.2.13; align: center; width: 0.85; color: #5a6878"></a-entity>
     <a-entity id="score-display" position="0 2.2 0">
       <a-entity id="blue-score" position="-0.16 0 0"
         text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>

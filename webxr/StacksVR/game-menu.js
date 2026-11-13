@@ -145,8 +145,11 @@
   // Back-compat name used by older stacks-game hooks
   window.StacksBotSpeed = window.StacksBotBpm;
 
-  // --- Quest passthrough (opt-in immersive-ar) ---
+  // --- Quest passthrough (opt-in look; VRLeague-style — no session tear-down) ---
+  // Smooth toggle = stay in immersive-ar and only show/hide the opaque arena shell.
+  // Ending XR to swap VR↔AR froze tracking + killed the wrist menu.
   var PASS_KEY = 'stacksvr.passthrough.v1';
+  window._stacksArSupported = false;
   function loadPassthroughPref() {
     try {
       if (location.hash && /(^|[&#])passthrough\b/i.test(location.hash)) return true;
@@ -170,48 +173,48 @@
       g.applyPassthroughVisuals(!!on);
     }
   }
-  /**
-   * A-Frame enterVR(true) → immersive-ar (Quest passthrough).
-   * Mid-session toggle ends the current XR session and re-enters in the other mode.
-   */
-  function enterPreferredXr(wantAr) {
+  function inXrSession(scene) {
+    return !!(scene && scene.is && (scene.is('vr-mode') || scene.is('ar-mode')));
+  }
+  function enterXrSession(useAr) {
     var scene = document.querySelector('a-scene');
     if (!scene || typeof scene.enterVR !== 'function') return Promise.resolve(false);
-    applyPassthroughVisuals(wantAr);
+    // Visuals follow the PASS preference (opaque shell = “VR look” even in AR session)
+    applyPassthroughVisuals(!!(window.StacksPassthrough && window.StacksPassthrough.enabled));
     try {
-      var p = scene.enterVR(!!wantAr);
+      var p = scene.enterVR(!!useAr);
       return p && typeof p.then === 'function' ? p.then(function () { return true; }) : Promise.resolve(true);
     } catch (e) {
       console.warn('[StacksPassthrough] enterVR failed', e);
       return Promise.resolve(false);
     }
   }
-  function setPassthroughEnabled(on, opts) {
-    opts = opts || {};
+  /**
+   * Toggle passthrough look. Never ends the XR session when already in AR —
+   * that was the freeze/menu bug. Opaque shell ⇔ room visible only.
+   * If somehow still in immersive-vr, migrate once into AR then stay there.
+   */
+  function setPassthroughEnabled(on) {
     on = !!on;
     window.StacksPassthrough.enabled = on;
     savePassthroughPref(on);
     applyPassthroughVisuals(on);
+
     var scene = document.querySelector('a-scene');
-    if (!scene) return Promise.resolve(false);
+    if (!scene || !inXrSession(scene)) return Promise.resolve(true);
 
-    var inXr = !!(scene.is && (scene.is('vr-mode') || scene.is('ar-mode')));
-    if (!inXr) {
-      // Preference only — next Enter XR uses AR if enabled (hooked below)
-      return Promise.resolve(true);
-    }
-    if (opts.skipSessionSwap) return Promise.resolve(true);
+    // Already AR (or entered as AR): smooth visual toggle only
+    if (scene.is('ar-mode')) return Promise.resolve(true);
 
-    // Must swap session mode for real passthrough (opaque VR cannot show the room)
+    // Rare: stuck in immersive-vr — need one migrate to AR for room to show
+    if (!on || !window._stacksArSupported) return Promise.resolve(true);
     var exitP = (typeof scene.exitVR === 'function') ? scene.exitVR() : Promise.resolve();
     return Promise.resolve(exitP).then(function () {
       return new Promise(function (resolve) {
-        setTimeout(function () {
-          enterPreferredXr(on).then(resolve);
-        }, 120);
+        setTimeout(function () { enterXrSession(true).then(resolve); }, 80);
       });
     }).catch(function (err) {
-      console.warn('[StacksPassthrough] session swap failed', err);
+      console.warn('[StacksPassthrough] migrate to AR failed', err);
       return false;
     });
   }
@@ -220,29 +223,39 @@
     setEnabled: setPassthroughEnabled,
     isEnabled: function () { return !!window.StacksPassthrough.enabled; }
   };
-  // Capture default Enter VR → AR when preference is on
-  (function hookEnterVrButton() {
-    function bind() {
+  // Probe AR; Enter VR uses immersive-ar when available so PASS can toggle without tearing XR down
+  (function initArEntry() {
+    function probe() {
+      if (!navigator.xr || !navigator.xr.isSessionSupported) return;
+      navigator.xr.isSessionSupported('immersive-ar').then(function (ok) {
+        window._stacksArSupported = !!ok;
+      }).catch(function () { window._stacksArSupported = false; });
+    }
+    function bindEnter() {
       var btn = document.querySelector('.a-enter-vr-button');
       if (!btn || btn.dataset.stacksPassHook === '1') return;
       btn.dataset.stacksPassHook = '1';
       btn.addEventListener('click', function (e) {
-        if (!window.StacksPassthrough || !window.StacksPassthrough.enabled) return;
         var scene = document.querySelector('a-scene');
-        if (!scene || (scene.is && (scene.is('vr-mode') || scene.is('ar-mode')))) return;
+        if (!scene || inXrSession(scene)) return;
+        // Quest: enter AR session always (opaque shell by default = VR look)
+        if (!window._stacksArSupported) return;
         e.preventDefault();
         e.stopImmediatePropagation();
-        enterPreferredXr(true);
+        enterXrSession(true);
       }, true);
     }
+    probe();
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', function () {
-        setTimeout(bind, 0);
-        setTimeout(bind, 500);
+        setTimeout(bindEnter, 0);
+        setTimeout(bindEnter, 500);
+        setTimeout(probe, 0);
       });
     } else {
-      setTimeout(bind, 0);
-      setTimeout(bind, 500);
+      setTimeout(bindEnter, 0);
+      setTimeout(bindEnter, 500);
+      setTimeout(probe, 0);
     }
   })();
 
@@ -277,14 +290,12 @@
       this.el.sceneEl.addEventListener('xbuttondown', onMenuButton);
       this.el.sceneEl.addEventListener('lobby-state-updated', function () { self.refreshLobbyUI(); });
       this.el.sceneEl.addEventListener('board-size-changed', function () { self._setBoardButton(); });
-      // Void vs room: follow actual XR mode (ar-mode = passthrough). Preference is separate.
+      // Visuals follow PASS preference (AR session + opaque shell = VR look)
       this.el.sceneEl.addEventListener('enter-vr', function () {
-        var ar = !!(self.el.sceneEl.is && self.el.sceneEl.is('ar-mode'));
-        applyPassthroughVisuals(ar);
+        applyPassthroughVisuals(!!(window.StacksPassthrough && window.StacksPassthrough.enabled));
         self._setPassthroughButton();
       });
       this.el.sceneEl.addEventListener('exit-vr', function () {
-        // Flatscreen / after exit: restore opaque arena (pref still used on next Enter)
         applyPassthroughVisuals(false);
         self._setPassthroughButton();
       });
