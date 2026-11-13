@@ -1982,16 +1982,16 @@
       if (!this._dualBotPreview) this._sfx('place');
       if (this.matchStats) this.matchStats.onPlace(side, clearResult, performance.now());
       if (clearResult.layersCleared > 0) {
-        // Dotmination-style: subtle clear tone, pitch rises with layers cleared
+        // Dotmination-style sonar blip — pitch rises with layers (no explosion on clear)
         if (!this._dualBotPreview) {
           var layers = clearResult.layersCleared | 0;
-          var clearRate = 0.72 + Math.min(layers, 8) * 0.14;
-          this._sfx('clear', { rate: clearRate, volume: 0.42 });
+          var clearRate = 0.85 + Math.min(layers, 8) * 0.12;
+          this._sfx('clear', { rate: clearRate, volume: 0.55 });
         }
         var atk = this.attackSys.onClear(side, clearResult, performance.now());
         if (this.matchStats && atk && atk.sent > 0) {
           this.matchStats.onAttack(side, atk.sent, performance.now());
-          if (!this._dualBotPreview) this._sfx('attack', { volume: 0.55 });
+          // Attack whoosh reserved for when garbage actually lands (see attack tick)
         }
         if (this.matchActive) {
           var endInfo = this.modes.addClear(side, clearResult);
@@ -3848,6 +3848,7 @@
           if (tickAttack) {
             var applied = this.attackSys.tick(this.cups, performance.now());
             if (applied && applied.length) {
+              if (!this._dualBotPreview) this._sfx('attack', { volume: 0.5 });
               for (var i = 0; i < applied.length; i++) {
                 if (this.cups[applied[i].side].isToppedOut()) {
                   var over = this.modes.onOverflow(applied[i].side);

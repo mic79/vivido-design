@@ -155,10 +155,13 @@
       var sc = soundComp(node);
       if (!sc) return;
       try {
-        setPlaybackRate(node, opts.rate != null ? opts.rate : 1);
+        var rate = opts.rate != null ? opts.rate : 1;
         if (opts.volume != null) setVolume(node, opts.volume);
+        setPlaybackRate(node, rate);
         sc.stopSound();
         sc.playSound();
+        // A-Frame may bind the buffer source on play — set rate again after
+        setPlaybackRate(node, rate);
       } catch (e) { /* ignore */ }
     },
 

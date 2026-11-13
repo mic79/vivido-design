@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below). -->
-  <meta name="stacks-version" content="0.2.14" />
+  <meta name="stacks-version" content="0.2.15" />
   <title>StacksVR</title>
   <script>
     (function () {
@@ -35,11 +35,11 @@
   <script src="modes.js?v=20"></script>
   <script src="lobby.js?v=51"></script>
   <script src="match-replay.js?v=22"></script>
-  <script src="stacks-audio.js?v=5"></script>
+  <script src="stacks-audio.js?v=6"></script>
   <script src="game-menu.js?v=60"></script>
   <script src="mixamo-body.js?v=22"></script>
   <script src="locomotion.js?v=21"></script>
-  <script src="stacks-game.js?v=93"></script>
+  <script src="stacks-game.js?v=94"></script>
   <script src="mobile-spectator.js?v=42"></script>
 
     <style>
@@ -323,7 +323,7 @@
 
     <!-- Discreet build stamp (DodgeVR-style) — kept in sync from STACKS_VERSION -->
     <a-entity id="version-display" position="0 2.42 0"
-      text="value: v0.2.14; align: center; width: 0.85; color: #5a6878"></a-entity>
+      text="value: v0.2.15; align: center; width: 0.85; color: #5a6878"></a-entity>
     <a-entity id="score-display" position="0 2.2 0">
       <a-entity id="blue-score" position="-0.16 0 0"
         text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>
@@ -622,7 +622,8 @@
     <a-entity id="sfx-match-music" sound="src: url(audio/match-music.mp3); autoplay: false; loop: true; volume: 0; positional: false"></a-entity>
     <a-entity id="sfx-grab" sound="src: url(audio/grab.mp3); autoplay: false; loop: false; volume: 0.55; positional: false; poolSize: 3"></a-entity>
     <a-entity id="sfx-place" sound="src: url(audio/place.mp3); autoplay: false; loop: false; volume: 0.7; positional: false; poolSize: 4"></a-entity>
-    <a-entity id="sfx-clear" sound="src: url(audio/clear.mp3); autoplay: false; loop: false; volume: 0.42; positional: false; poolSize: 4"></a-entity>
+    <!-- Dotmination-style sonar blip (NOT the old explosion clear.mp3) — pitch = layers -->
+    <a-entity id="sfx-clear" sound="src: url(audio/clear-chime.mp3); autoplay: false; loop: false; volume: 0.55; positional: false; poolSize: 4"></a-entity>
     <a-entity id="sfx-attack" sound="src: url(audio/attack.mp3); autoplay: false; loop: false; volume: 0.65; positional: false; poolSize: 3"></a-entity>
     <a-entity id="sfx-boom" sound="src: url(audio/boom.mp3); autoplay: false; loop: false; volume: 0.7; positional: false; poolSize: 2"></a-entity>
     <a-entity id="sfx-win" sound="src: url(audio/win.mp3); autoplay: false; loop: false; volume: 0.8; positional: false; poolSize: 1"></a-entity>
