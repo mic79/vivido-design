@@ -3425,8 +3425,10 @@
       ground.rotation.x = -Math.PI / 2;
       ground.position.y = 0.001;
       ground.receiveShadow = true;
+      ground.name = 'arena-ground';
       root.add(ground);
       this._groundMat = groundMat;
+      this._arenaGround = ground;
 
       // Soft radial neon under-glow (additive so it reads as floor bloom)
       var underGlow = new THREE.Mesh(
@@ -3442,7 +3444,9 @@
       );
       underGlow.rotation.x = -Math.PI / 2;
       underGlow.position.y = 0.012;
+      underGlow.name = 'arena-underglow';
       root.add(underGlow);
+      this._arenaUnderGlow = underGlow;
 
       // Station floor plates (black squares + neon diamond rings) removed —
       // they z-fought / flickered against the arena ground.
@@ -3460,7 +3464,9 @@
         })
       );
       horizon.position.y = 0.7;
+      horizon.name = 'arena-horizon';
       root.add(horizon);
+      this._arenaHorizon = horizon;
 
       var haze = new THREE.Mesh(
         new THREE.CylinderGeometry(9.2, 9.2, 0.8, 48, 1, true),
@@ -3474,7 +3480,14 @@
         })
       );
       haze.position.y = 1.4;
+      haze.name = 'arena-haze';
       root.add(haze);
+      this._arenaHaze = haze;
+
+      // Honor passthrough preference if already set before arena boot
+      if (global.StacksPassthrough && global.StacksPassthrough.enabled) {
+        this.applyPassthroughVisuals(true);
+      }
 
       // Neon station lamps — light the white blocks + feed glossy floor
       var blueLamp = new THREE.PointLight(0x66ddff, 1.4, 6.5, 1.6);
@@ -3493,6 +3506,44 @@
       var keyFill = new THREE.PointLight(0xfff0e8, 0.55, 10, 1.8);
       keyFill.position.set(0, 4.2, 0.4);
       root.add(keyFill);
+    },
+
+    /**
+     * Quest passthrough (immersive-ar): clear void backdrop so the room shows.
+     * Cups / stations / bodies stay opaque. Default VR keeps the dark arena.
+     */
+    applyPassthroughVisuals: function (on) {
+      var sceneEl = this.el && this.el.sceneEl;
+      var scene3d = sceneEl && sceneEl.object3D;
+      var showShell = !on;
+
+      if (this._arenaGround) this._arenaGround.visible = showShell;
+      if (this._arenaUnderGlow) this._arenaUnderGlow.visible = showShell;
+      if (this._arenaHorizon) this._arenaHorizon.visible = showShell;
+      if (this._arenaHaze) this._arenaHaze.visible = showShell;
+
+      if (!sceneEl || !scene3d) return;
+
+      if (on) {
+        sceneEl.removeAttribute('background');
+        scene3d.background = null;
+        scene3d.fog = null;
+        try {
+          sceneEl.setAttribute('renderer', 'alpha', true);
+        } catch (e) { /* ignore */ }
+        if (sceneEl.renderer) {
+          sceneEl.renderer.setClearColor(0x000000, 0);
+        }
+      } else {
+        sceneEl.setAttribute('background', 'color', '#06040a');
+        scene3d.fog = new THREE.FogExp2(0x09060c, 0.010);
+        try {
+          sceneEl.setAttribute('renderer', 'alpha', false);
+        } catch (e2) { /* ignore */ }
+        if (sceneEl.renderer) {
+          sceneEl.renderer.setClearColor(0x06040a, 1);
+        }
+      }
     },
 
     _prepareMatchHud: function () {

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below). -->
-  <meta name="stacks-version" content="0.2.11" />
+  <meta name="stacks-version" content="0.2.12" />
   <title>StacksVR</title>
   <script>
     (function () {
@@ -36,10 +36,10 @@
   <script src="lobby.js?v=51"></script>
   <script src="match-replay.js?v=21"></script>
   <script src="stacks-audio.js?v=4"></script>
-  <script src="game-menu.js?v=58"></script>
+  <script src="game-menu.js?v=59"></script>
   <script src="mixamo-body.js?v=22"></script>
   <script src="locomotion.js?v=21"></script>
-  <script src="stacks-game.js?v=90"></script>
+  <script src="stacks-game.js?v=91"></script>
   <script src="mobile-spectator.js?v=42"></script>
 
     <style>
@@ -322,7 +322,7 @@
 
     <!-- Discreet build stamp (DodgeVR-style) — kept in sync from STACKS_VERSION -->
     <a-entity id="version-display" position="0 2.42 0"
-      text="value: v0.2.11; align: center; width: 0.85; color: #5a6878"></a-entity>
+      text="value: v0.2.12; align: center; width: 0.85; color: #5a6878"></a-entity>
     <a-entity id="score-display" position="0 2.2 0">
       <a-entity id="blue-score" position="-0.16 0 0"
         text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>
@@ -406,10 +406,16 @@
                 <a-text id="menu-board-6-text" value="6x6" align="center" width="0.28" color="#ffffff" position="0 0 0.004"></a-text>
               </a-entity>
             </a-entity>
-            <a-entity class="menu-btn clickable" data-action="toggle-music" id="menu-music-toggle" position="0.28 0.255 0.002"
-              geometry="primitive: box; width: 0.14; height: 0.045; depth: 0.008"
+            <a-entity class="menu-btn clickable" data-action="toggle-music" id="menu-music-toggle" position="0.22 0.255 0.002"
+              geometry="primitive: box; width: 0.11; height: 0.045; depth: 0.008"
               material="color: #1f9d45; shader: flat">
-              <a-text id="menu-music-text" value="MUSIC" align="center" width="0.32" color="#ffffff" position="0 0 0.006"></a-text>
+              <a-text id="menu-music-text" value="MUSIC" align="center" width="0.28" color="#ffffff" position="0 0 0.006"></a-text>
+            </a-entity>
+            <!-- Opt-in Quest passthrough (immersive-ar). Default OFF = opaque VR. -->
+            <a-entity class="menu-btn clickable" data-action="toggle-passthrough" id="menu-passthrough-toggle" position="0.325 0.255 0.002"
+              geometry="primitive: box; width: 0.11; height: 0.045; depth: 0.008"
+              material="color: #243044; shader: flat">
+              <a-text id="menu-passthrough-text" value="PASS" align="center" width="0.28" color="#a8b8c8" position="0 0 0.006"></a-text>
             </a-entity>
 
             <a-entity position="0 0.165 0.002">

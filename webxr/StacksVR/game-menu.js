@@ -145,6 +145,107 @@
   // Back-compat name used by older stacks-game hooks
   window.StacksBotSpeed = window.StacksBotBpm;
 
+  // --- Quest passthrough (opt-in immersive-ar) ---
+  var PASS_KEY = 'stacksvr.passthrough.v1';
+  function loadPassthroughPref() {
+    try {
+      if (location.hash && /(^|[&#])passthrough\b/i.test(location.hash)) return true;
+      var q = new URLSearchParams(location.search);
+      if (q.get('passthrough') === '1') return true;
+      return localStorage.getItem(PASS_KEY) === '1';
+    } catch (e) {
+      return false;
+    }
+  }
+  function savePassthroughPref(on) {
+    try { localStorage.setItem(PASS_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+  }
+  function getStacksGame() {
+    var el = document.querySelector('[stacks-game]');
+    return el && el.components && el.components['stacks-game'];
+  }
+  function applyPassthroughVisuals(on) {
+    var g = getStacksGame();
+    if (g && typeof g.applyPassthroughVisuals === 'function') {
+      g.applyPassthroughVisuals(!!on);
+    }
+  }
+  /**
+   * A-Frame enterVR(true) → immersive-ar (Quest passthrough).
+   * Mid-session toggle ends the current XR session and re-enters in the other mode.
+   */
+  function enterPreferredXr(wantAr) {
+    var scene = document.querySelector('a-scene');
+    if (!scene || typeof scene.enterVR !== 'function') return Promise.resolve(false);
+    applyPassthroughVisuals(wantAr);
+    try {
+      var p = scene.enterVR(!!wantAr);
+      return p && typeof p.then === 'function' ? p.then(function () { return true; }) : Promise.resolve(true);
+    } catch (e) {
+      console.warn('[StacksPassthrough] enterVR failed', e);
+      return Promise.resolve(false);
+    }
+  }
+  function setPassthroughEnabled(on, opts) {
+    opts = opts || {};
+    on = !!on;
+    window.StacksPassthrough.enabled = on;
+    savePassthroughPref(on);
+    applyPassthroughVisuals(on);
+    var scene = document.querySelector('a-scene');
+    if (!scene) return Promise.resolve(false);
+
+    var inXr = !!(scene.is && (scene.is('vr-mode') || scene.is('ar-mode')));
+    if (!inXr) {
+      // Preference only — next Enter XR uses AR if enabled (hooked below)
+      return Promise.resolve(true);
+    }
+    if (opts.skipSessionSwap) return Promise.resolve(true);
+
+    // Must swap session mode for real passthrough (opaque VR cannot show the room)
+    var exitP = (typeof scene.exitVR === 'function') ? scene.exitVR() : Promise.resolve();
+    return Promise.resolve(exitP).then(function () {
+      return new Promise(function (resolve) {
+        setTimeout(function () {
+          enterPreferredXr(on).then(resolve);
+        }, 120);
+      });
+    }).catch(function (err) {
+      console.warn('[StacksPassthrough] session swap failed', err);
+      return false;
+    });
+  }
+  window.StacksPassthrough = {
+    enabled: loadPassthroughPref(),
+    setEnabled: setPassthroughEnabled,
+    isEnabled: function () { return !!window.StacksPassthrough.enabled; }
+  };
+  // Capture default Enter VR → AR when preference is on
+  (function hookEnterVrButton() {
+    function bind() {
+      var btn = document.querySelector('.a-enter-vr-button');
+      if (!btn || btn.dataset.stacksPassHook === '1') return;
+      btn.dataset.stacksPassHook = '1';
+      btn.addEventListener('click', function (e) {
+        if (!window.StacksPassthrough || !window.StacksPassthrough.enabled) return;
+        var scene = document.querySelector('a-scene');
+        if (!scene || (scene.is && (scene.is('vr-mode') || scene.is('ar-mode')))) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        enterPreferredXr(true);
+      }, true);
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function () {
+        setTimeout(bind, 0);
+        setTimeout(bind, 500);
+      });
+    } else {
+      setTimeout(bind, 0);
+      setTimeout(bind, 500);
+    }
+  })();
+
   AFRAME.registerComponent('vr-menu', {
     init: function () {
       this.menuVisible = false;
@@ -164,13 +265,29 @@
       this._joinCooldownUntil = 0;
       var self = this;
 
-      this.el.sceneEl.addEventListener('loaded', function () { self.cacheRefs(); });
+      this.el.sceneEl.addEventListener('loaded', function () {
+        self.cacheRefs();
+        if (window.StacksPassthrough && window.StacksPassthrough.enabled) {
+          applyPassthroughVisuals(true);
+        }
+      });
       if (this.el.sceneEl.hasLoaded) this.cacheRefs();
 
       function onMenuButton() { self.requestToggleMenu(); }
       this.el.sceneEl.addEventListener('xbuttondown', onMenuButton);
       this.el.sceneEl.addEventListener('lobby-state-updated', function () { self.refreshLobbyUI(); });
       this.el.sceneEl.addEventListener('board-size-changed', function () { self._setBoardButton(); });
+      // Void vs room: follow actual XR mode (ar-mode = passthrough). Preference is separate.
+      this.el.sceneEl.addEventListener('enter-vr', function () {
+        var ar = !!(self.el.sceneEl.is && self.el.sceneEl.is('ar-mode'));
+        applyPassthroughVisuals(ar);
+        self._setPassthroughButton();
+      });
+      this.el.sceneEl.addEventListener('exit-vr', function () {
+        // Flatscreen / after exit: restore opaque arena (pref still used on next Enter)
+        applyPassthroughVisuals(false);
+        self._setPassthroughButton();
+      });
 
       setTimeout(function attachX() {
         var leftHand = document.getElementById('leftHand');
@@ -661,6 +778,17 @@
           }
           this._setMusicButton();
           break;
+        case 'toggle-passthrough': {
+          var want = !(window.StacksPassthrough && window.StacksPassthrough.enabled);
+          var selfPass = this;
+          if (window.StacksPassthrough && window.StacksPassthrough.setEnabled) {
+            window.StacksPassthrough.setEnabled(want).then(function () {
+              selfPass._setPassthroughButton();
+            });
+          }
+          this._setPassthroughButton();
+          break;
+        }
         case 'toggle-board':
           this._toggleBoardSize();
           break;
@@ -811,6 +939,21 @@
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
       if (txt) txt.setAttribute('value', on ? 'MUSIC' : 'MUTED');
+    },
+
+    _setPassthroughButton: function () {
+      var btn = document.getElementById('menu-passthrough-toggle');
+      var txt = document.getElementById('menu-passthrough-text');
+      if (!btn) return;
+      var on = !!(window.StacksPassthrough && window.StacksPassthrough.enabled);
+      var color = on ? '#2a8fbf' : '#243044';
+      btn.setAttribute('material', 'color', color);
+      btn.dataset.baseColor = color;
+      btn.dataset.hoverColor = lightenHex(color, 0.42);
+      if (txt) {
+        txt.setAttribute('value', on ? 'PASS ON' : 'PASS');
+        txt.setAttribute('color', on ? '#ffffff' : '#a8b8c8');
+      }
     },
 
     _setLobbyLabel: function () {
@@ -1017,6 +1160,7 @@
       this._setLobbyLabel();
       this._setStartButton();
       this._setMusicButton();
+      this._setPassthroughButton();
       this._setBoardButton();
       this._setBotSpeedUI();
       if (stats) this._showStats();
