@@ -1,9 +1,14 @@
 // stacks-audio.js — music + SFX for StacksVR (DodgeVR sound-manager pattern)
+// Line-clear uses Web Audio (Dotmination Howler pattern) — A-Frame sound pools
+// were silently failing / still tied to the old explosion asset.
 (function (global) {
   'use strict';
 
   var _unlocked = false;
   var _fadeTickers = {};
+  var _clearBuf = null;
+  var _clearBufLoading = null;
+  var CLEAR_URL = 'audio/dotmination-clear.mp3';
 
   function el(id) {
     return document.getElementById(id);
@@ -11,6 +16,16 @@
 
   function soundComp(node) {
     return node && node.components && node.components.sound;
+  }
+
+  function getAudioCtx() {
+    var scene = document.querySelector('a-scene');
+    var ctx = scene && scene.audioListener && scene.audioListener.context;
+    if (!ctx && scene && scene.audioContext) ctx = scene.audioContext;
+    if (!ctx && global.AudioContext) {
+      try { ctx = new AudioContext(); } catch (e) { /* ignore */ }
+    }
+    return ctx || null;
   }
 
   function setVolume(node, vol) {
@@ -40,6 +55,73 @@
       if (sc.pool.children[i].isPlaying) return true;
     }
     return false;
+  }
+
+  function ensureClearBuffer() {
+    if (_clearBuf) return Promise.resolve(_clearBuf);
+    if (_clearBufLoading) return _clearBufLoading;
+    var ctx = getAudioCtx();
+    if (!ctx || typeof fetch !== 'function') {
+      return Promise.reject(new Error('no audio ctx'));
+    }
+    _clearBufLoading = fetch(CLEAR_URL, { cache: 'force-cache' })
+      .then(function (res) {
+        if (!res.ok) throw new Error('clear fetch ' + res.status);
+        return res.arrayBuffer();
+      })
+      .then(function (ab) {
+        return new Promise(function (resolve, reject) {
+          ctx.decodeAudioData(ab.slice(0), resolve, reject);
+        });
+      })
+      .then(function (buf) {
+        _clearBuf = buf;
+        _clearBufLoading = null;
+        return buf;
+      })
+      .catch(function (err) {
+        _clearBufLoading = null;
+        console.warn('[StacksAudio] clear buffer load failed', err);
+        throw err;
+      });
+    return _clearBufLoading;
+  }
+
+  /** Dotmination incrementSound: sonar blip, rate rises with layers cleared. */
+  function playClearChime(layers, volume) {
+    if (AudioApi.sfxEnabled === false) return;
+    resumeCtx();
+    var ctx = getAudioCtx();
+    if (!ctx) return;
+    var n = Math.max(1, layers | 0);
+    // Dotmination: basePitch 1.0 + chain * 0.05 — map layers the same way
+    var rate = Math.max(0.7, Math.min(2.2, 1.0 + (n - 1) * 0.08));
+    var vol = volume != null ? volume : 0.45;
+
+    function fire(buf) {
+      try {
+        if (ctx.state === 'suspended') ctx.resume();
+        var src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.playbackRate.value = rate;
+        var gain = ctx.createGain();
+        gain.gain.value = vol;
+        src.connect(gain);
+        gain.connect(ctx.destination);
+        src.start(0);
+      } catch (e) {
+        console.warn('[StacksAudio] clearChime play failed', e);
+      }
+    }
+
+    if (_clearBuf) {
+      fire(_clearBuf);
+      return;
+    }
+    ensureClearBuffer().then(fire).catch(function () {
+      // Last resort: A-Frame entity (may still be silent on some Quest builds)
+      AudioApi.sfx('clear', { rate: rate, volume: vol });
+    });
   }
 
   function fadeSound(node, fromVol, toVol, durationMs, onDone) {
@@ -146,10 +228,15 @@
     },
 
     /** Play a one-shot SFX by entity id suffix: grab, place, clear, attack, boom, win, ui, rotate.
-     *  opts.rate — playbackRate (Dotmination-style pitch). opts.volume — one-shot level. */
+     *  opts.rate — playbackRate. opts.volume — one-shot level.
+     *  Prefer clearChime() for line clears — not this path. */
     sfx: function (name, opts) {
       opts = opts || {};
       if (AudioApi.sfxEnabled === false) return;
+      if (name === 'clear') {
+        playClearChime(opts.layers != null ? opts.layers : 1, opts.volume);
+        return;
+      }
       AudioApi.unlock();
       var node = el('sfx-' + name);
       var sc = soundComp(node);
@@ -160,9 +247,17 @@
         setPlaybackRate(node, rate);
         sc.stopSound();
         sc.playSound();
-        // A-Frame may bind the buffer source on play — set rate again after
         setPlaybackRate(node, rate);
       } catch (e) { /* ignore */ }
+    },
+
+    clearChime: function (layers, volume) {
+      playClearChime(layers, volume);
+    },
+
+    preloadClear: function () {
+      resumeCtx();
+      ensureClearBuffer().catch(function () { /* ignore */ });
     },
 
     toMatch: function () {
@@ -221,10 +316,14 @@
     window.addEventListener('touchstart', once, { passive: true });
     var scene = document.querySelector('a-scene');
     if (scene) {
-      scene.addEventListener('enter-vr', function () { AudioApi.unlock(); });
+      scene.addEventListener('enter-vr', function () {
+        AudioApi.unlock();
+        AudioApi.preloadClear();
+      });
       scene.addEventListener('loaded', function () {
-        // Warm SFX pools silently
-        ['grab', 'place', 'clear', 'attack', 'boom', 'win', 'ui', 'rotate'].forEach(function (n) {
+        AudioApi.preloadClear();
+        // Warm SFX pools silently (skip clear — Web Audio path)
+        ['grab', 'place', 'attack', 'boom', 'win', 'ui', 'rotate'].forEach(function (n) {
           var node = el('sfx-' + n);
           var sc = soundComp(node);
           if (!sc) return;

@@ -1979,14 +1979,17 @@
       var cup = this.cups[side];
       var clearSys = side === 'red' ? this.clearSysRed : this.clearSysBlue;
       var clearResult = clearSys.resolveAfterPlace(cup, placed, type);
-      if (!this._dualBotPreview) this._sfx('place');
       if (this.matchStats) this.matchStats.onPlace(side, clearResult, performance.now());
       if (clearResult.layersCleared > 0) {
-        // Dotmination-style sonar blip — pitch rises with layers (no explosion on clear)
+        // Exact Dotmination sonar (Web Audio) — pitch rises with layers cleared.
+        // Skip place click so it isn't masked by the blip.
         if (!this._dualBotPreview) {
           var layers = clearResult.layersCleared | 0;
-          var clearRate = 0.85 + Math.min(layers, 8) * 0.12;
-          this._sfx('clear', { rate: clearRate, volume: 0.55 });
+          if (global.StacksAudio && typeof global.StacksAudio.clearChime === 'function') {
+            global.StacksAudio.clearChime(layers, 0.55);
+          } else {
+            this._sfx('clear', { layers: layers, volume: 0.55 });
+          }
         }
         var atk = this.attackSys.onClear(side, clearResult, performance.now());
         if (this.matchStats && atk && atk.sent > 0) {
@@ -2009,6 +2012,7 @@
           });
         }
       } else {
+        if (!this._dualBotPreview) this._sfx('place');
         clearSys.resetCombo();
       }
 
