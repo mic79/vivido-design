@@ -600,6 +600,7 @@
           holes[hx + ',' + hz] = true;
         }
       }
+      var spawned = [];
       for (var z2 = 0; z2 < this.depth; z2++) {
         for (var x2 = 0; x2 < this.width; x2++) {
           if (holes[x2 + ',' + z2]) {
@@ -610,10 +611,12 @@
           var mesh = this._makeBlockMesh(gCol);
           mesh.position.copy(this.cellCenterLocal(x2, 0, z2));
           this.blocksRoot.add(mesh);
-          this.grid[0][z2][x2] = { color: gCol, owner: 'garbage', garbage: true, mesh: mesh };
+          var gCell = { color: gCol, owner: 'garbage', garbage: true, mesh: mesh };
+          this.grid[0][z2][x2] = gCell;
+          spawned.push({ x: x2, y: 0, z: z2, cell: gCell });
         }
       }
-      results.push(true);
+      results.push({ layer: n, cells: spawned });
     }
     this._recomputeHeight();
     return results;

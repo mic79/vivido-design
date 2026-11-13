@@ -92,8 +92,17 @@
       }
       if (total > 0) {
         // Cap applied garbage this flush to remaining damageCap semantics (already capped on send)
-        cup.spawnGarbageLayers(total, this.garbageHoles);
-        applied.push({ side: side, layers: total });
+        var spawnedLayers = cup.spawnGarbageLayers(total, this.garbageHoles);
+        var spawnedCells = [];
+        if (spawnedLayers && spawnedLayers.length) {
+          for (var li = 0; li < spawnedLayers.length; li++) {
+            var layerCells = spawnedLayers[li] && spawnedLayers[li].cells;
+            if (layerCells && layerCells.length) {
+              for (var ci = 0; ci < layerCells.length; ci++) spawnedCells.push(layerCells[ci]);
+            }
+          }
+        }
+        applied.push({ side: side, layers: total, spawned: spawnedCells });
       }
     }
     return applied;

@@ -1982,6 +1982,10 @@
     _afterPlace: function (side, type, cells, placed, broadcast) {
       var cup = this.cups[side];
       var clearSys = side === 'red' ? this.clearSysRed : this.clearSysBlue;
+      // Live + bot places: blink newly locked blocks (replay drives its own FX)
+      if (placed && placed.length && !global.replayActive) {
+        this._startBlockBlink(placed);
+      }
       var clearResult = clearSys.resolveAfterPlace(cup, placed, type);
       var atk = null;
       if (!this._lastPlaceAt) this._lastPlaceAt = { blue: 0, red: 0 };
@@ -2089,6 +2093,21 @@
           // Place: apply ONLY the placing side's cup (authoritative for that seat)
           if (!this._isLocalAuthoritySide(evt.side)) {
             this.cups[evt.side].applySnapshot(evt.cups[evt.side]);
+            // Blink the remote place cells so peers see the same lock flash
+            if (evt.cells && evt.cells.length && this.cups[evt.side]) {
+              var rPlaced = [];
+              for (var ri = 0; ri < evt.cells.length; ri++) {
+                var rc = evt.cells[ri];
+                var rx = rc[0] != null ? rc[0] : rc.x;
+                var ry = rc[1] != null ? rc[1] : rc.y;
+                var rz = rc[2] != null ? rc[2] : rc.z;
+                var rcell = this.cups[evt.side].grid[ry] &&
+                  this.cups[evt.side].grid[ry][rz] &&
+                  this.cups[evt.side].grid[ry][rz][rx];
+                if (rcell) rPlaced.push({ x: rx, y: ry, z: rz, cell: rcell });
+              }
+              if (rPlaced.length) this._startBlockBlink(rPlaced);
+            }
           }
         } else if (evt.kind === 'state') {
           this._applyNetworkCups(evt.cups, { forceAll: false });
@@ -2985,6 +3004,86 @@
       if (t > 1.5) this._clearClearPopup();
     },
 
+    /**
+     * Flash newly placed / junk blocks white a few times (live + replay share this).
+     * placed: [{ cell: { mesh, color } }, ...] from placeCells / spawnGarbageLayers.
+     */
+    _startBlockBlink: function (placed, opts) {
+      if (!placed || !placed.length) return;
+      opts = opts || {};
+      if (!this._blockBlinks) this._blockBlinks = [];
+      var meshes = [];
+      var colors = [];
+      for (var i = 0; i < placed.length; i++) {
+        var cell = placed[i] && (placed[i].cell || placed[i]);
+        var mesh = cell && cell.mesh;
+        if (!mesh || !mesh.material) continue;
+        meshes.push(mesh);
+        colors.push(cell.color || (opts.garbage ? '#e8e8ee' : '#ffffff'));
+      }
+      if (!meshes.length) return;
+      var fx = {
+        meshes: meshes,
+        colors: colors,
+        t0: performance.now(),
+        stepMs: opts.stepMs != null ? opts.stepMs : 85,
+        durationMs: opts.durationMs != null ? opts.durationMs : 520,
+        garbage: !!opts.garbage
+      };
+      this._blockBlinks.push(fx);
+      this._paintBlockBlink(fx, true);
+    },
+
+    _paintBlockBlink: function (fx, bright) {
+      if (!fx || !fx.meshes) return;
+      for (var i = 0; i < fx.meshes.length; i++) {
+        var m = fx.meshes[i].material;
+        if (!m) continue;
+        if (bright) {
+          if (m.color) m.color.set(0xffffff);
+          if (m.emissive) m.emissive.set(0xffffff);
+          if (m.emissiveIntensity != null) m.emissiveIntensity = fx.garbage ? 0.95 : 1.15;
+        } else {
+          if (m.color) m.color.set(fx.garbage ? 0x9aa3ad : 0xb0b8c4);
+          if (m.emissive) m.emissive.set(fx.garbage ? 0x556677 : 0x445566);
+          if (m.emissiveIntensity != null) m.emissiveIntensity = 0.22;
+        }
+        m.needsUpdate = true;
+      }
+    },
+
+    _restoreBlockBlink: function (fx) {
+      if (!fx || !fx.meshes) return;
+      for (var i = 0; i < fx.meshes.length; i++) {
+        var mesh = fx.meshes[i];
+        if (!mesh || !mesh.material) continue;
+        var m = mesh.material;
+        var col = fx.colors[i] || '#ffffff';
+        if (m.color) m.color.set(col);
+        if (m.emissive) m.emissive.set(0xffffff);
+        if (m.emissiveIntensity != null) m.emissiveIntensity = 0.42;
+        m.needsUpdate = true;
+      }
+    },
+
+    _tickBlockBlinks: function (now) {
+      if (!this._blockBlinks || !this._blockBlinks.length) return;
+      now = now || performance.now();
+      var kept = [];
+      for (var i = 0; i < this._blockBlinks.length; i++) {
+        var fx = this._blockBlinks[i];
+        var elapsed = now - fx.t0;
+        if (elapsed >= fx.durationMs) {
+          this._restoreBlockBlink(fx);
+          continue;
+        }
+        var step = Math.floor(elapsed / Math.max(1, fx.stepMs));
+        this._paintBlockBlink(fx, (step % 2) === 0);
+        kept.push(fx);
+      }
+      this._blockBlinks = kept;
+    },
+
     _tickVictory: function (now) {
       var v = this._victory;
       if (!v || !v.root) return;
@@ -3793,7 +3892,18 @@
 
         var cup = this.cups[side];
         if (!cup || !cup.spawnGarbageLayers) continue;
-        cup.spawnGarbageLayers(1, this.attackSys.garbageHoles);
+        var idleLayers = cup.spawnGarbageLayers(1, this.attackSys.garbageHoles);
+        var idleSpawned = [];
+        if (idleLayers && idleLayers.length) {
+          for (var il = 0; il < idleLayers.length; il++) {
+            if (idleLayers[il].cells) {
+              for (var ic = 0; ic < idleLayers[il].cells.length; ic++) {
+                idleSpawned.push(idleLayers[il].cells[ic]);
+              }
+            }
+          }
+        }
+        if (idleSpawned.length) this._startBlockBlink(idleSpawned, { garbage: true });
         this._lastInactiveJunkAt[side] = now;
         if (window.matchRecorder) {
           window.matchRecorder.recordEvent('garbage', {
@@ -3991,6 +4101,7 @@
       this._tickPieceAnims();
       this._tickVictory();
       this._tickClearPopup();
+      this._tickBlockBlinks();
       this._prepareMatchHud();
       this._placeMatchHud();
 
@@ -4017,6 +4128,9 @@
             if (applied && applied.length) {
               if (!this._dualBotPreview) this._sfx('attack', { volume: 0.5 });
               for (var i = 0; i < applied.length; i++) {
+                if (applied[i].spawned && applied[i].spawned.length) {
+                  this._startBlockBlink(applied[i].spawned, { garbage: true });
+                }
                 if (window.matchRecorder) {
                   window.matchRecorder.recordEvent('garbage', {
                     side: applied[i].side,

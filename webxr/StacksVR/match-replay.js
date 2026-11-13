@@ -300,43 +300,7 @@
       };
     },
 
-    _setPlacedBlink: function (placed, bright) {
-      if (!placed) return;
-      for (var i = 0; i < placed.length; i++) {
-        var cell = placed[i].cell;
-        var mesh = cell && cell.mesh;
-        if (!mesh || !mesh.material) continue;
-        var m = mesh.material;
-        if (bright) {
-          if (m.color) m.color.set(0xffffff);
-          if (m.emissive) m.emissive.set(0xffffff);
-          if (m.emissiveIntensity != null) m.emissiveIntensity = 1.15;
-          if (m.opacity != null) m.opacity = 1;
-        } else {
-          if (m.color) m.color.set(0xb0b8c4);
-          if (m.emissive) m.emissive.set(0x445566);
-          if (m.emissiveIntensity != null) m.emissiveIntensity = 0.25;
-        }
-        m.needsUpdate = true;
-      }
-    },
-
-    _restorePlacedMats: function (placed) {
-      if (!placed) return;
-      var col = (window.StacksShapes && window.StacksShapes.BLOCK_COLOR) || '#ffffff';
-      for (var i = 0; i < placed.length; i++) {
-        var cell = placed[i].cell;
-        var mesh = cell && cell.mesh;
-        if (!mesh || !mesh.material) continue;
-        var m = mesh.material;
-        if (m.color) m.color.set(cell.color || col);
-        if (m.emissive) m.emissive.set(0xffffff);
-        if (m.emissiveIntensity != null) m.emissiveIntensity = 0.42;
-        m.needsUpdate = true;
-      }
-    },
-
-    /** Commit board place + clear popup / chime / stats. skipFx=true for flush. */
+    /** Commit board place + clear popup / chime / stats (instant / ghost-flush path). */
     _applyPlaceCommit: function (e, placedOpt) {
       var comp = getGame();
       if (!comp || !e || !e.data) return;
@@ -391,7 +355,6 @@
       if (fx.phase === 'ghost' || (fx.phase === 'blink' && !fx.placed)) {
         this._applyPlaceCommit(fx.event);
       } else if (fx.phase === 'blink' && fx.placed) {
-        this._restorePlacedMats(fx.placed);
         // Clear was deferred until blink end — commit clear side now
         this._applyPlaceCommitAfterBlink(fx);
       }
@@ -459,15 +422,14 @@
         fx.placed = placed;
         fx.phase = 'blink';
         fx.t0 = now;
-        this._setPlacedBlink(placed, true);
+        if (comp && typeof comp._startBlockBlink === 'function') {
+          comp._startBlockBlink(placed, { stepMs: PLACE_BLINK_STEP, durationMs: PLACE_BLINK_MS });
+        }
         return;
       }
 
       if (fx.phase === 'blink') {
-        var step = Math.floor(elapsed / PLACE_BLINK_STEP);
-        this._setPlacedBlink(fx.placed, (step % 2) === 0);
         if (elapsed < PLACE_BLINK_MS) return;
-        this._restorePlacedMats(fx.placed);
         this._applyPlaceCommitAfterBlink(fx);
         this._placeFx = null;
       }
@@ -483,7 +445,21 @@
       }
       if (e.type === 'garbage' && d.side && d.layers > 0 && comp.cups[d.side]) {
         if (comp.cups[d.side].spawnGarbageLayers) {
-          comp.cups[d.side].spawnGarbageLayers(d.layers | 0, d.holes != null ? d.holes : 1);
+          var gLayers = comp.cups[d.side].spawnGarbageLayers(
+            d.layers | 0, d.holes != null ? d.holes : 1);
+          var gSpawned = [];
+          if (gLayers && gLayers.length) {
+            for (var gi = 0; gi < gLayers.length; gi++) {
+              if (gLayers[gi].cells) {
+                for (var gj = 0; gj < gLayers[gi].cells.length; gj++) {
+                  gSpawned.push(gLayers[gi].cells[gj]);
+                }
+              }
+            }
+          }
+          if (gSpawned.length && typeof comp._startBlockBlink === 'function') {
+            comp._startBlockBlink(gSpawned, { garbage: true });
+          }
         }
         if (comp._updateHUD) comp._updateHUD();
         return;
