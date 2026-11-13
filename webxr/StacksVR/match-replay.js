@@ -159,6 +159,10 @@
     return gm && gm.components && gm.components['stacks-game'];
   }
 
+  var PLACE_GHOST_MS = 320;
+  var PLACE_BLINK_MS = 520;
+  var PLACE_BLINK_STEP = 85;
+
   window.matchReplayPlayer = {
     playing: false,
     _replay: null,
@@ -168,6 +172,7 @@
     _matchTimestamp: null,
     _clearBlue: null,
     _clearRed: null,
+    _placeFx: null,
 
     play: function (replay) {
       if (!replay) return;
@@ -179,6 +184,7 @@
       this._start = performance.now();
       this._eventIdx = 0;
       this._frameIdx = 0;
+      this._placeFx = null;
       var comp = getGame();
       if (comp) {
         if (comp._dualIdleTimer) {
@@ -195,11 +201,9 @@
         if (comp.modes) {
           comp.modes.scores.blue = 0;
           comp.modes.scores.red = 0;
-          // Align mode clock with replay playback so Blitz remaining / elapsed match
           comp.modes.matchStart = Date.now();
           comp.modes.active = false;
         }
-        // Station-card Time must follow replay playback, not a stale live match clock
         if (comp.matchStats && comp.matchStats.start) {
           comp.matchStats.start(this._start);
         }
@@ -219,13 +223,253 @@
     },
 
     stop: function () {
+      this._finishPlaceFx(true);
       this.playing = false;
       this._replay = null;
       this._matchTimestamp = null;
+      this._placeFx = null;
       window.replayActive = false;
       var comp = getGame();
       if (comp && typeof comp._scheduleDualIdle === 'function') {
         comp._scheduleDualIdle(400);
+      }
+    },
+
+    _removeGhostGroup: function (fx) {
+      if (!fx || !fx.ghostGroup) return;
+      if (fx.ghostGroup.parent) fx.ghostGroup.parent.remove(fx.ghostGroup);
+      fx.ghostGroup.traverse(function (o) {
+        if (o.isMesh) {
+          if (o.material) o.material.dispose();
+        }
+      });
+      fx.ghostGroup = null;
+    },
+
+    _makeGhostGroup: function (cup, cells) {
+      if (!cup || !cells || !cells.length || !THREE) return null;
+      var group = new THREE.Group();
+      group.name = 'replay-place-ghost';
+      var geo = (window.StacksShapes && window.StacksShapes.roundedBlockGeo)
+        ? window.StacksShapes.roundedBlockGeo()
+        : new THREE.BoxGeometry(0.11, 0.11, 0.11);
+      var mat = new THREE.MeshBasicMaterial({
+        color: 0x69F0AE,
+        transparent: true,
+        opacity: 0.88,
+        depthWrite: false,
+        toneMapped: false
+      });
+      for (var i = 0; i < cells.length; i++) {
+        var c = cells[i];
+        var x = c[0] != null ? c[0] : c.x;
+        var y = c[1] != null ? c[1] : c.y;
+        var z = c[2] != null ? c[2] : c.z;
+        var mesh = new THREE.Mesh(geo, mat.clone());
+        mesh.renderOrder = 12;
+        if (cup.cellCenterLocal) {
+          mesh.position.copy(cup.cellCenterLocal(x, y, z));
+        } else {
+          var cs = cup.cellSize || 0.12;
+          mesh.position.set((x + 0.5) * cs, (y + 0.5) * cs, (z + 0.5) * cs);
+        }
+        group.add(mesh);
+      }
+      (cup.blocksRoot || cup.root).add(group);
+      return group;
+    },
+
+    _beginPlaceFx: function (e) {
+      var comp = getGame();
+      var d = e && e.data;
+      if (!comp || !d || !d.side || !d.cells || !comp.cups[d.side]) {
+        this._applyPlaceCommit(e);
+        return;
+      }
+      this._finishPlaceFx(true);
+      var cup = comp.cups[d.side];
+      this._placeFx = {
+        event: e,
+        side: d.side,
+        cells: d.cells,
+        type: d.type || null,
+        phase: 'ghost',
+        t0: performance.now(),
+        ghostGroup: this._makeGhostGroup(cup, d.cells),
+        placed: null
+      };
+    },
+
+    _setPlacedBlink: function (placed, bright) {
+      if (!placed) return;
+      for (var i = 0; i < placed.length; i++) {
+        var cell = placed[i].cell;
+        var mesh = cell && cell.mesh;
+        if (!mesh || !mesh.material) continue;
+        var m = mesh.material;
+        if (bright) {
+          if (m.color) m.color.set(0xffffff);
+          if (m.emissive) m.emissive.set(0xffffff);
+          if (m.emissiveIntensity != null) m.emissiveIntensity = 1.15;
+          if (m.opacity != null) m.opacity = 1;
+        } else {
+          if (m.color) m.color.set(0xb0b8c4);
+          if (m.emissive) m.emissive.set(0x445566);
+          if (m.emissiveIntensity != null) m.emissiveIntensity = 0.25;
+        }
+        m.needsUpdate = true;
+      }
+    },
+
+    _restorePlacedMats: function (placed) {
+      if (!placed) return;
+      var col = (window.StacksShapes && window.StacksShapes.BLOCK_COLOR) || '#ffffff';
+      for (var i = 0; i < placed.length; i++) {
+        var cell = placed[i].cell;
+        var mesh = cell && cell.mesh;
+        if (!mesh || !mesh.material) continue;
+        var m = mesh.material;
+        if (m.color) m.color.set(cell.color || col);
+        if (m.emissive) m.emissive.set(0xffffff);
+        if (m.emissiveIntensity != null) m.emissiveIntensity = 0.42;
+        m.needsUpdate = true;
+      }
+    },
+
+    /** Commit board place + clear popup / chime / stats. skipFx=true for flush. */
+    _applyPlaceCommit: function (e, placedOpt) {
+      var comp = getGame();
+      if (!comp || !e || !e.data) return;
+      var d = e.data;
+      var cup = comp.cups[d.side];
+      if (!cup) return;
+      var placed = placedOpt;
+      if (!placed) {
+        placed = cup.placeCells(d.cells, {
+          owner: d.side,
+          shapeType: d.type || null
+        });
+      }
+      var clearResult = null;
+      if (placed) {
+        var clearSys = d.side === 'red' ? this._clearRed : this._clearBlue;
+        if (clearSys && clearSys.resolveAfterPlace) {
+          clearResult = clearSys.resolveAfterPlace(cup, placed, d.type || null);
+        }
+      }
+      if (d.scores && comp.modes) {
+        if (d.scores.blue != null) comp.modes.scores.blue = d.scores.blue;
+        if (d.scores.red != null) comp.modes.scores.red = d.scores.red;
+      } else if (d.clear && d.clear.score && comp.modes) {
+        comp.modes.scores[d.side] = (comp.modes.scores[d.side] | 0) + (d.clear.score | 0);
+      }
+      if (comp.matchStats) {
+        var at = this._start + (e.t | 0);
+        var clearForStats = d.clear || clearResult;
+        comp.matchStats.onPlace(d.side, clearForStats, at);
+        if (d.atk && d.atk.sent > 0) {
+          comp.matchStats.onAttack(d.side, d.atk.sent, at);
+        }
+      }
+      // Trigger clear/combo callout + chime from live logic (not stored as video)
+      var popupClear = clearResult || d.clear;
+      if (popupClear && (popupClear.layersCleared | 0) > 0) {
+        if (typeof comp._showClearPopup === 'function') {
+          comp._showClearPopup(d.side, popupClear, d.atk || null);
+        }
+        if (window.StacksAudio && typeof window.StacksAudio.clearChime === 'function') {
+          window.StacksAudio.clearChime(popupClear.layersCleared | 0, 0.5);
+        }
+      }
+      if (comp._updateHUD) comp._updateHUD();
+    },
+
+    _finishPlaceFx: function (instant) {
+      var fx = this._placeFx;
+      if (!fx) return;
+      this._removeGhostGroup(fx);
+      if (fx.phase === 'ghost' || (fx.phase === 'blink' && !fx.placed)) {
+        this._applyPlaceCommit(fx.event);
+      } else if (fx.phase === 'blink' && fx.placed) {
+        this._restorePlacedMats(fx.placed);
+        // Clear was deferred until blink end — commit clear side now
+        this._applyPlaceCommitAfterBlink(fx);
+      }
+      this._placeFx = null;
+      if (instant) { /* no-op */ }
+    },
+
+    _applyPlaceCommitAfterBlink: function (fx) {
+      var e = fx.event;
+      var d = e && e.data;
+      var comp = getGame();
+      if (!comp || !d) return;
+      var cup = comp.cups[d.side];
+      var clearResult = null;
+      if (fx.placed && cup) {
+        var clearSys = d.side === 'red' ? this._clearRed : this._clearBlue;
+        if (clearSys && clearSys.resolveAfterPlace) {
+          clearResult = clearSys.resolveAfterPlace(cup, fx.placed, d.type || null);
+        }
+      }
+      if (d.scores && comp.modes) {
+        if (d.scores.blue != null) comp.modes.scores.blue = d.scores.blue;
+        if (d.scores.red != null) comp.modes.scores.red = d.scores.red;
+      }
+      if (comp.matchStats) {
+        var at = this._start + ((e && e.t) | 0);
+        var clearForStats = d.clear || clearResult;
+        comp.matchStats.onPlace(d.side, clearForStats, at);
+        if (d.atk && d.atk.sent > 0) {
+          comp.matchStats.onAttack(d.side, d.atk.sent, at);
+        }
+      }
+      var popupClear = clearResult || d.clear;
+      if (popupClear && (popupClear.layersCleared | 0) > 0) {
+        if (typeof comp._showClearPopup === 'function') {
+          comp._showClearPopup(d.side, popupClear, d.atk || null);
+        }
+        if (window.StacksAudio && typeof window.StacksAudio.clearChime === 'function') {
+          window.StacksAudio.clearChime(popupClear.layersCleared | 0, 0.5);
+        }
+      }
+      if (comp._updateHUD) comp._updateHUD();
+    },
+
+    _tickPlaceFx: function () {
+      var fx = this._placeFx;
+      if (!fx) return;
+      var now = performance.now();
+      var elapsed = now - fx.t0;
+      var comp = getGame();
+      var cup = comp && comp.cups[fx.side];
+
+      if (fx.phase === 'ghost') {
+        if (elapsed < PLACE_GHOST_MS) return;
+        this._removeGhostGroup(fx);
+        if (!cup) {
+          this._applyPlaceCommit(fx.event);
+          this._placeFx = null;
+          return;
+        }
+        var placed = cup.placeCells(fx.cells, {
+          owner: fx.side,
+          shapeType: fx.type || null
+        });
+        fx.placed = placed;
+        fx.phase = 'blink';
+        fx.t0 = now;
+        this._setPlacedBlink(placed, true);
+        return;
+      }
+
+      if (fx.phase === 'blink') {
+        var step = Math.floor(elapsed / PLACE_BLINK_STEP);
+        this._setPlacedBlink(fx.placed, (step % 2) === 0);
+        if (elapsed < PLACE_BLINK_MS) return;
+        this._restorePlacedMats(fx.placed);
+        this._applyPlaceCommitAfterBlink(fx);
+        this._placeFx = null;
       }
     },
 
@@ -234,33 +478,7 @@
       if (!comp || !e || !e.data) return;
       var d = e.data;
       if (e.type === 'place' && d.side && d.cells && comp.cups[d.side]) {
-        var cup = comp.cups[d.side];
-        var placed = cup.placeCells(d.cells, {
-          owner: d.side,
-          shapeType: d.type || null
-        });
-        var clearResult = null;
-        if (placed) {
-          var clearSys = d.side === 'red' ? this._clearRed : this._clearBlue;
-          if (clearSys && clearSys.resolveAfterPlace) {
-            clearResult = clearSys.resolveAfterPlace(cup, placed, d.type || null);
-          }
-        }
-        if (d.scores && comp.modes) {
-          if (d.scores.blue != null) comp.modes.scores.blue = d.scores.blue;
-          if (d.scores.red != null) comp.modes.scores.red = d.scores.red;
-        } else if (d.clear && d.clear.score && comp.modes) {
-          comp.modes.scores[d.side] = (comp.modes.scores[d.side] | 0) + (d.clear.score | 0);
-        }
-        if (comp.matchStats) {
-          var at = this._start + (e.t | 0);
-          var clearForStats = d.clear || clearResult;
-          comp.matchStats.onPlace(d.side, clearForStats, at);
-          if (d.atk && d.atk.sent > 0) {
-            comp.matchStats.onAttack(d.side, d.atk.sent, at);
-          }
-        }
-        if (comp._updateHUD) comp._updateHUD();
+        this._beginPlaceFx(e);
         return;
       }
       if (e.type === 'garbage' && d.side && d.layers > 0 && comp.cups[d.side]) {
@@ -279,14 +497,17 @@
 
     tick: function () {
       if (!this.playing || !this._replay) return;
+      // Advance place ghost→blink→clear before pulling more events
+      if (this._placeFx) this._tickPlaceFx();
+
       var t = performance.now() - this._start;
       var events = this._replay.events || [];
-      while (this._eventIdx < events.length && events[this._eventIdx].t <= t) {
+      while (!this._placeFx && this._eventIdx < events.length && events[this._eventIdx].t <= t) {
         this._applyEvent(events[this._eventIdx++]);
       }
-      // Legacy frame path (pre-v2)
+
       var frames = this._replay.frames || [];
-      if (frames.length) {
+      if (frames.length && !this._placeFx) {
         while (this._frameIdx < frames.length && frames[this._frameIdx].t <= t) {
           var f = frames[this._frameIdx++];
           var comp = getGame();
@@ -301,12 +522,11 @@
           }
         }
       }
-      // Keep Time / rates ticking every ~100ms even between sparse place events
+
       if (!this._lastHud || performance.now() - this._lastHud > 100) {
         this._lastHud = performance.now();
         var hudComp = getGame();
         if (hudComp) {
-          // Pin stats clock to replay t=0 so formatTime == playback elapsed
           if (hudComp.matchStats) {
             if (hudComp.matchStats.blue) hudComp.matchStats.blue._startMs = this._start;
             if (hudComp.matchStats.red) hudComp.matchStats.red._startMs = this._start;
@@ -315,7 +535,8 @@
           if (hudComp._updateHUD) hudComp._updateHUD();
         }
       }
-      var doneEvents = this._eventIdx >= events.length;
+
+      var doneEvents = this._eventIdx >= events.length && !this._placeFx;
       var doneFrames = !frames.length || this._frameIdx >= frames.length;
       if (doneEvents && doneFrames && t > (this._replay.durationMs || 0) + 600) {
         this.stop();
