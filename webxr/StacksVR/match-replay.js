@@ -195,14 +195,27 @@
         if (comp.modes) {
           comp.modes.scores.blue = 0;
           comp.modes.scores.red = 0;
+          // Align mode clock with replay playback so Blitz remaining / elapsed match
+          comp.modes.matchStart = Date.now();
+          comp.modes.active = false;
+        }
+        // Station-card Time must follow replay playback, not a stale live match clock
+        if (comp.matchStats && comp.matchStats.start) {
+          comp.matchStats.start(this._start);
         }
         this._clearBlue = window.StacksClear ? new window.StacksClear() : null;
         this._clearRed = window.StacksClear ? new window.StacksClear() : null;
+        this._lastHud = 0;
         if (comp._updateHUD) comp._updateHUD();
         if (comp._updateDamageHUD) comp._updateDamageHUD();
       }
       console.log('[MatchReplay] Playing', replay.matchTimestamp,
         (replay.events && replay.events.length) || 0, 'events');
+    },
+
+    elapsedMs: function () {
+      if (!this.playing || !this._start) return 0;
+      return Math.max(0, performance.now() - this._start);
     },
 
     stop: function () {
@@ -226,10 +239,11 @@
           owner: d.side,
           shapeType: d.type || null
         });
+        var clearResult = null;
         if (placed) {
           var clearSys = d.side === 'red' ? this._clearRed : this._clearBlue;
           if (clearSys && clearSys.resolveAfterPlace) {
-            clearSys.resolveAfterPlace(cup, placed, d.type || null);
+            clearResult = clearSys.resolveAfterPlace(cup, placed, d.type || null);
           }
         }
         if (d.scores && comp.modes) {
@@ -237,6 +251,14 @@
           if (d.scores.red != null) comp.modes.scores.red = d.scores.red;
         } else if (d.clear && d.clear.score && comp.modes) {
           comp.modes.scores[d.side] = (comp.modes.scores[d.side] | 0) + (d.clear.score | 0);
+        }
+        if (comp.matchStats) {
+          var at = this._start + (e.t | 0);
+          var clearForStats = d.clear || clearResult;
+          comp.matchStats.onPlace(d.side, clearForStats, at);
+          if (d.atk && d.atk.sent > 0) {
+            comp.matchStats.onAttack(d.side, d.atk.sent, at);
+          }
         }
         if (comp._updateHUD) comp._updateHUD();
         return;
@@ -277,6 +299,20 @@
               comp._updateHUD();
             }
           }
+        }
+      }
+      // Keep Time / rates ticking every ~100ms even between sparse place events
+      if (!this._lastHud || performance.now() - this._lastHud > 100) {
+        this._lastHud = performance.now();
+        var hudComp = getGame();
+        if (hudComp) {
+          // Pin stats clock to replay t=0 so formatTime == playback elapsed
+          if (hudComp.matchStats) {
+            if (hudComp.matchStats.blue) hudComp.matchStats.blue._startMs = this._start;
+            if (hudComp.matchStats.red) hudComp.matchStats.red._startMs = this._start;
+          }
+          if (hudComp._updateCupStatsHUD) hudComp._updateCupStatsHUD();
+          if (hudComp._updateHUD) hudComp._updateHUD();
         }
       }
       var doneEvents = this._eventIdx >= events.length;

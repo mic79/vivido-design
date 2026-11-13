@@ -9,6 +9,10 @@
   var REGRAB_REACH = 0.28;
   var CUP_GRAB_REACH = 0.28;
   var CUP_MARGIN = CELL * 0.85;
+  // Battle Blocks: "Filling the playfield due to inactivity results in a loss."
+  // After this idle grace, push 1 junk layer every INTERVAL until they place / top out.
+  var INACTIVE_GRACE_MS = 10000;
+  var INACTIVE_INTERVAL_MS = 4000;
 
   AFRAME.registerComponent('stacks-game', {
     schema: {
@@ -1980,6 +1984,8 @@
       var clearSys = side === 'red' ? this.clearSysRed : this.clearSysBlue;
       var clearResult = clearSys.resolveAfterPlace(cup, placed, type);
       var atk = null;
+      if (!this._lastPlaceAt) this._lastPlaceAt = { blue: 0, red: 0 };
+      this._lastPlaceAt[side] = performance.now();
       if (this.matchStats) this.matchStats.onPlace(side, clearResult, performance.now());
       if (clearResult.layersCleared > 0) {
         // Exact Dotmination sonar (Web Audio) — pitch rises with layers cleared.
@@ -2469,6 +2475,9 @@
       this._showMatchBodies({ showBot: !!redBot });
 
       if (window.matchRecorder) window.matchRecorder.startRecording(startTime);
+      var goNow = performance.now();
+      this._lastPlaceAt = { blue: goNow, red: goNow };
+      this._lastInactiveJunkAt = { blue: 0, red: 0 };
       this._updateHUD();
       if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.isHost) {
         this._broadcastState('match-go');
@@ -3752,6 +3761,58 @@
       }
     },
 
+    /**
+     * Battle Blocks inactivity pressure: after GRACE with no place on a side,
+     * spawn 1 junk layer every INTERVAL until they act or top out.
+     * Not a mid-match timed dump — docs say idle fill causes loss.
+     */
+    _tickInactivityJunk: function (now) {
+      if (!this.matchActive || this._endingMatch || this._dualBotPreview) return;
+      if (global.replayActive) return;
+      now = now || performance.now();
+      if (!this._lastPlaceAt) this._lastPlaceAt = { blue: now, red: now };
+      if (!this._lastInactiveJunkAt) this._lastInactiveJunkAt = { blue: 0, red: 0 };
+
+      var sides = ['blue', 'red'];
+      for (var i = 0; i < sides.length; i++) {
+        var side = sides[i];
+        // Skip sides that are AI-driven — bots place on their own clock
+        if (side === 'red' && this.bot && this.bot.enabled) continue;
+        if (side === 'blue' && this.botBlue && this.botBlue.enabled) continue;
+
+        var last = this._lastPlaceAt[side] || now;
+        var idle = now - last;
+        if (idle < INACTIVE_GRACE_MS) continue;
+
+        var sinceJunk = now - (this._lastInactiveJunkAt[side] || 0);
+        // First junk fires once grace expires; then every INTERVAL
+        var firstDue = !(this._lastInactiveJunkAt[side]) ||
+          (this._lastInactiveJunkAt[side] < last);
+        if (!firstDue && sinceJunk < INACTIVE_INTERVAL_MS) continue;
+        if (firstDue && idle < INACTIVE_GRACE_MS) continue;
+
+        var cup = this.cups[side];
+        if (!cup || !cup.spawnGarbageLayers) continue;
+        cup.spawnGarbageLayers(1, this.attackSys.garbageHoles);
+        this._lastInactiveJunkAt[side] = now;
+        if (window.matchRecorder) {
+          window.matchRecorder.recordEvent('garbage', {
+            side: side, layers: 1, holes: this.attackSys.garbageHoles, reason: 'inactive'
+          });
+        }
+        if (!this._dualBotPreview) this._sfx('attack', { volume: 0.4 });
+        if (cup.isToppedOut()) {
+          var over = this.modes.onOverflow(side);
+          if (over) this._endFromMode(over);
+        }
+        var mp = !!global.isMultiplayer;
+        var host = global.StacksLobby && global.StacksLobby.isHost;
+        if (mp && host && global.sendCupEvent) this._broadcastState('garbage');
+        this._updateHUD();
+        this._updateDamageHUD();
+      }
+    },
+
     _updateDamageHUD: function () {
       var now = performance.now();
       this._updateThreat('blue', now);
@@ -3975,6 +4036,8 @@
               if (mp && host) this._broadcastState('garbage');
               this._updateHUD();
             }
+            // Battle Blocks inactivity fill (host / offline / lobby-bot only)
+            this._tickInactivityJunk(performance.now());
           }
           this._updateDamageHUD();
           var t = this.modes.tick(Date.now());
