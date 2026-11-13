@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below). -->
-  <meta name="stacks-version" content="0.2.16" />
+  <meta name="stacks-version" content="0.2.17" />
   <title>StacksVR</title>
   <script>
     (function () {
@@ -323,7 +323,7 @@
 
     <!-- Discreet build stamp (DodgeVR-style) — kept in sync from STACKS_VERSION -->
     <a-entity id="version-display" position="0 2.42 0"
-      text="value: v0.2.16; align: center; width: 0.85; color: #5a6878"></a-entity>
+      text="value: v0.2.17; align: center; width: 0.85; color: #5a6878"></a-entity>
     <a-entity id="score-display" position="0 2.2 0">
       <a-entity id="blue-score" position="-0.16 0 0"
         text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>
@@ -620,16 +620,17 @@
     <!-- Audio: lobby ambient + match action + one-shot SFX (project-local) -->
     <a-entity id="sfx-bg-music" sound="src: url(audio/bg-music.mp3); autoplay: false; loop: true; volume: 0.28; positional: false"></a-entity>
     <a-entity id="sfx-match-music" sound="src: url(audio/match-music.mp3); autoplay: false; loop: true; volume: 0; positional: false"></a-entity>
-    <a-entity id="sfx-grab" sound="src: url(audio/grab.mp3); autoplay: false; loop: false; volume: 0.55; positional: false; poolSize: 3"></a-entity>
-    <a-entity id="sfx-place" sound="src: url(audio/place.mp3); autoplay: false; loop: false; volume: 0.7; positional: false; poolSize: 4"></a-entity>
+    <a-entity id="sfx-grab" sound="src: url(audio/click.mp3); autoplay: false; loop: false; volume: 0.35; positional: false; poolSize: 4"></a-entity>
+    <a-entity id="sfx-place" sound="src: url(audio/place.mp3); autoplay: false; loop: false; volume: 0.55; positional: false; poolSize: 4"></a-entity>
     <!-- Clear SFX is Web Audio from audio/dotmination-clear.mp3 (see stacks-audio.clearChime).
          Keep a dormant entity only as fallback id for older code paths. -->
     <a-entity id="sfx-clear" sound="src: url(audio/dotmination-clear.mp3); autoplay: false; loop: false; volume: 0.5; positional: false; poolSize: 2"></a-entity>
     <a-entity id="sfx-attack" sound="src: url(audio/attack.mp3); autoplay: false; loop: false; volume: 0.65; positional: false; poolSize: 3"></a-entity>
     <a-entity id="sfx-boom" sound="src: url(audio/boom.mp3); autoplay: false; loop: false; volume: 0.7; positional: false; poolSize: 2"></a-entity>
-    <a-entity id="sfx-win" sound="src: url(audio/win.mp3); autoplay: false; loop: false; volume: 0.8; positional: false; poolSize: 1"></a-entity>
-    <a-entity id="sfx-ui" sound="src: url(audio/ui.mp3); autoplay: false; loop: false; volume: 0.45; positional: false; poolSize: 4"></a-entity>
-    <a-entity id="sfx-rotate" sound="src: url(audio/rotate.mp3); autoplay: false; loop: false; volume: 0.4; positional: false; poolSize: 3"></a-entity>
+    <!-- VRLeague / VRKnockout goal braam (not the old hissing win.mp3) -->
+    <a-entity id="sfx-win" sound="src: url(audio/win-braam.mp3); autoplay: false; loop: false; volume: 0.72; positional: false; poolSize: 2"></a-entity>
+    <a-entity id="sfx-ui" sound="src: url(audio/click.mp3); autoplay: false; loop: false; volume: 0.3; positional: false; poolSize: 4"></a-entity>
+    <a-entity id="sfx-rotate" sound="src: url(audio/click.mp3); autoplay: false; loop: false; volume: 0.32; positional: false; poolSize: 4"></a-entity>
     </a-scene>
 
   <script>
