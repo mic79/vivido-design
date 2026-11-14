@@ -108,23 +108,49 @@
     return applied;
   };
 
-  AttackSystem.prototype.serialize = function () {
+  function packSide(buf, now) {
+    var queue = [];
+    var src = (buf && buf.queue) ? buf.queue : [];
+    for (var i = 0; i < src.length; i++) {
+      var q = src[i];
+      queue.push({
+        amount: q.amount,
+        from: q.from,
+        // Relative delay — DodgeVR-style: receivers reconstruct against local clock
+        readyIn: Math.max(0, (q.readyAt || 0) - now)
+      });
+    }
+    return { pending: buf ? (buf.pending | 0) : 0, queue: queue };
+  }
+
+  function unpackSide(data, now) {
+    var queue = [];
+    var src = (data && data.queue) ? data.queue : [];
+    for (var i = 0; i < src.length; i++) {
+      var q = src[i];
+      var readyAt;
+      if (q.readyIn != null) readyAt = now + Math.max(0, q.readyIn);
+      else if (q.readyAt != null) readyAt = q.readyAt;
+      else readyAt = now;
+      queue.push({ amount: q.amount | 0, from: q.from, readyAt: readyAt });
+    }
+    return { pending: data ? (data.pending | 0) : 0, queue: queue };
+  }
+
+  /** Wire format uses readyIn so every peer shares the same countdown. */
+  AttackSystem.prototype.serialize = function (now) {
+    now = now || performance.now();
     return {
-      blue: { pending: this.buffers.blue.pending, queue: this.buffers.blue.queue.slice() },
-      red: { pending: this.buffers.red.pending, queue: this.buffers.red.queue.slice() }
+      blue: packSide(this.buffers.blue, now),
+      red: packSide(this.buffers.red, now)
     };
   };
 
-  AttackSystem.prototype.applySerialized = function (data) {
+  AttackSystem.prototype.applySerialized = function (data, now) {
     if (!data) return;
-    this.buffers.blue = {
-      pending: data.blue ? data.blue.pending : 0,
-      queue: (data.blue && data.blue.queue) ? data.blue.queue.slice() : []
-    };
-    this.buffers.red = {
-      pending: data.red ? data.red.pending : 0,
-      queue: (data.red && data.red.queue) ? data.red.queue.slice() : []
-    };
+    now = now || performance.now();
+    this.buffers.blue = unpackSide(data.blue, now);
+    this.buffers.red = unpackSide(data.red, now);
   };
 
   global.StacksAttack = AttackSystem;

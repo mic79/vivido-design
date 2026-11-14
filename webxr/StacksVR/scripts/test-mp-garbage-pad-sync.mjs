@@ -93,7 +93,7 @@ function main() {
   assert.strictEqual(hostView.red, hostGarbageOnPeer.red, 'host applies red garbage side');
 
   // Attack buffer must sync on garbage (seated players are not spectators)
-  assert(src.includes('if (evt.attack) this.attackSys.applySerialized(evt.attack)'),
+  assert(src.includes('if (evt.attack) this.attackSys.applySerialized(evt.attack'),
     'garbage event applies attack buffer');
   assert(src.includes("evt.reason === 'garbage'"), 'state reason=garbage also syncs attack');
 

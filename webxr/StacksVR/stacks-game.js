@@ -2113,16 +2113,20 @@
         });
       }
       if (broadcast && global.sendCupEvent) {
-        // ONLY the placing seat — never both cups/stations (peer's copy of our
-        // board is stale and previously wiped host blocks / empty pads).
+        // ONLY the placing seat cup/station — attack is host-mirrored like DodgeVR state.
         var cupsMsg = {};
         cupsMsg[side] = this.cups[side].serialize();
-        global.sendCupEvent({
+        var placeMsg = {
           kind: 'place', side: side, shapeType: type, cells: cells, clear: clearResult,
           scores: { blue: this.modes.scores.blue, red: this.modes.scores.red },
           cups: cupsMsg,
           station: this._serializeStation(side)
-        });
+        };
+        // Host includes authoritative attack (readyIn) so every peer/spectator matches HUD
+        if (global.StacksLobby && global.StacksLobby.isHost) {
+          placeMsg.attack = this.attackSys.serialize(performance.now());
+        }
+        global.sendCupEvent(placeMsg);
       }
       if (cup.isToppedOut()) {
         var over = this.modes.onOverflow(side);
@@ -2147,6 +2151,19 @@
         this._applyNetworkStation(evt);
         return;
       }
+      // Host attack echo after peer clears (DodgeVR-style authoritative state push)
+      if (evt.kind === 'attack') {
+        if (!(global.StacksLobby && global.StacksLobby.isHost) || this._isViewOnlyObserver()) {
+          if (evt.attack) this.attackSys.applySerialized(evt.attack, performance.now());
+          if (evt.scores) {
+            this.modes.scores.blue = evt.scores.blue;
+            this.modes.scores.red = evt.scores.red;
+          }
+          this._updateHUD();
+          this._updateDamageHUD();
+        }
+        return;
+      }
       // Host-authoritative garbage (attack flush + inactivity junk). Must apply
       // even to the local player's cup — host is the only attack ticker.
       if (evt.kind === 'garbage') {
@@ -2158,7 +2175,7 @@
           if (evt.cups && evt.cups.red) forceSides.red = true;
         }
         this._applyNetworkCups(evt.cups, { forceSides: forceSides });
-        if (evt.attack) this.attackSys.applySerialized(evt.attack);
+        if (evt.attack) this.attackSys.applySerialized(evt.attack, performance.now());
         if (evt.scores) {
           this.modes.scores.blue = evt.scores.blue;
           this.modes.scores.red = evt.scores.red;
@@ -2250,11 +2267,20 @@
           }
         }
 
-        // Derive attack from the clear instead of replacing both buffers with a
-        // peer clock snapshot (readyAt skew was fighting the host tick).
+        // Attack: DodgeVR-style — host is authority; everyone else applies readyIn snapshots.
+        var isHostPeer = !!(global.StacksLobby && global.StacksLobby.isHost);
         if (evt.kind === 'place' && evt.clear && evt.clear.layersCleared > 0 && evt.side) {
-          var remoteAtk = this.attackSys.onClear(evt.side, evt.clear, performance.now());
-          // Same clear FX the placer saw — otherwise only host/local gets sonar+popup
+          var remoteAtk = null;
+          if (isHostPeer) {
+            // Host owns the buffer + tick (same as DodgeVR host sim)
+            remoteAtk = this.attackSys.onClear(evt.side, evt.clear, performance.now());
+          } else if (evt.attack) {
+            this.attackSys.applySerialized(evt.attack, performance.now());
+            remoteAtk = evt.atk || null;
+          } else {
+            // Optimistic until host attack echo arrives
+            remoteAtk = this.attackSys.onClear(evt.side, evt.clear, performance.now());
+          }
           if (!this._dualBotPreview) {
             var rLayers = evt.clear.layersCleared | 0;
             if (global.StacksAudio && typeof global.StacksAudio.clearChime === 'function') {
@@ -2264,10 +2290,11 @@
             }
             this._showClearPopup(evt.side, evt.clear, remoteAtk);
           }
-        } else if (evt.kind === 'state' && evt.attack &&
-            (evt.reason === 'garbage' || global.isSpectator || global.isMobileSpectator ||
-              !this._canControl())) {
-          this.attackSys.applySerialized(evt.attack);
+        } else if (evt.attack) {
+          // state / attack echo — every non-sim peer takes host buffer
+          if (!isHostPeer || this._isViewOnlyObserver()) {
+            this.attackSys.applySerialized(evt.attack, performance.now());
+          }
         }
 
         if (evt.kind === 'place' && evt.side) {
@@ -2280,6 +2307,14 @@
           }
           if (this.matchStats && evt.side) {
             this.matchStats.onPlace(evt.side, evt.clear || null, performance.now());
+          }
+          // After a peer place, host pushes attack so placer/spectators match (DodgeVR echo)
+          if (isHostPeer && evt.clear && evt.clear.layersCleared > 0 && global.sendCupEvent) {
+            global.sendCupEvent({
+              kind: 'attack',
+              attack: this.attackSys.serialize(performance.now()),
+              scores: { blue: this.modes.scores.blue, red: this.modes.scores.red }
+            });
           }
         }
 
@@ -2307,8 +2342,9 @@
         this.modes.scores.blue = snap.scores.blue;
         this.modes.scores.red = snap.scores.red;
       }
-      if (snap.attack && (viewOnly || !this._canControl())) {
-        this.attackSys.applySerialized(snap.attack);
+      // Heartbeat attack: everyone except the host sim takes it (readyIn clocks)
+      if (snap.attack && (viewOnly || !(global.StacksLobby && global.StacksLobby.isHost))) {
+        this.attackSys.applySerialized(snap.attack, performance.now());
       }
       if (snap.stations) {
         if (viewOnly) {
