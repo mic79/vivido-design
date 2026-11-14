@@ -9,8 +9,9 @@
   var REGRAB_REACH = 0.28;
   var CUP_GRAB_REACH = 0.28;
   var CUP_MARGIN = CELL * 0.85;
-  // Battle Blocks: "Filling the playfield due to inactivity results in a loss."
-  // After this idle grace, push 1 junk layer every INTERVAL until they place / top out.
+  // Battle Blocks inactivity pressure — late-match urgency, not from GO.
+  // No junk until MATCH_ARM after GO; then GRACE idle → 1 layer every INTERVAL.
+  var INACTIVE_MATCH_ARM_MS = 60000;
   var INACTIVE_GRACE_MS = 10000;
   var INACTIVE_INTERVAL_MS = 4000;
 
@@ -2625,6 +2626,7 @@
 
       if (window.matchRecorder) window.matchRecorder.startRecording(startTime);
       var goNow = performance.now();
+      this._matchGoAt = goNow;
       this._lastPlaceAt = { blue: goNow, red: goNow };
       this._lastInactiveJunkAt = { blue: 0, red: 0 };
       this._updateHUD();
@@ -2789,6 +2791,7 @@
       this._dualBotPreview = false;
       this._pendingMatch = null;
       this._countdownGoAt = null;
+      this._matchGoAt = 0;
       this._clearMatchBanner();
       this._clearClearPopup();
       if (this.bot) this.bot.enable(false);
@@ -4050,15 +4053,28 @@
       }
     },
 
+    _idleJunkEnabled: function () {
+      if (typeof global.getIdleJunk === 'function') return !!global.getIdleJunk();
+      if (global.lobbyState && global.lobbyState.idleJunk != null) {
+        return !!global.lobbyState.idleJunk;
+      }
+      return true;
+    },
+
     /**
-     * Battle Blocks inactivity pressure: after GRACE with no place on a side,
-     * spawn 1 junk layer every INTERVAL until they act or top out.
-     * Not a mid-match timed dump — docs say idle fill causes loss.
+     * Battle Blocks inactivity pressure: optional, and only after MATCH_ARM from GO.
+     * Then GRACE with no place → 1 junk layer every INTERVAL until they act / top out.
      */
     _tickInactivityJunk: function (now) {
       if (!this.matchActive || this._endingMatch || this._dualBotPreview) return;
       if (global.replayActive) return;
+      if (!this._idleJunkEnabled()) return;
       now = now || performance.now();
+      var goAt = this._matchGoAt || 0;
+      var armAt = goAt + INACTIVE_MATCH_ARM_MS;
+      // Whole match is safe until arm — pressure is late-game, not opener
+      if (!goAt || now < armAt) return;
+
       if (!this._lastPlaceAt) this._lastPlaceAt = { blue: now, red: now };
       if (!this._lastInactiveJunkAt) this._lastInactiveJunkAt = { blue: 0, red: 0 };
 
@@ -4069,7 +4085,9 @@
         if (side === 'red' && this.bot && this.bot.enabled) continue;
         if (side === 'blue' && this.botBlue && this.botBlue.enabled) continue;
 
-        var last = this._lastPlaceAt[side] || now;
+        // Idle clock starts at arm (or last place after arm), not from GO
+        var last = this._lastPlaceAt[side] || goAt;
+        if (last < armAt) last = armAt;
         var idle = now - last;
         if (idle < INACTIVE_GRACE_MS) continue;
 

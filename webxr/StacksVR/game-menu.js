@@ -290,6 +290,7 @@
       this.el.sceneEl.addEventListener('xbuttondown', onMenuButton);
       this.el.sceneEl.addEventListener('lobby-state-updated', function () { self.refreshLobbyUI(); });
       this.el.sceneEl.addEventListener('board-size-changed', function () { self._setBoardButton(); });
+      this.el.sceneEl.addEventListener('idle-junk-changed', function () { self._setIdleJunkButton(); });
       // Visuals follow PASS preference (AR session + opaque shell = VR look)
       this.el.sceneEl.addEventListener('enter-vr', function () {
         applyPassthroughVisuals(!!(window.StacksPassthrough && window.StacksPassthrough.enabled));
@@ -790,6 +791,9 @@
         case 'replay-latest':
           this._playLatestReplay();
           break;
+        case 'toggle-idle-junk':
+          this._toggleIdleJunk();
+          break;
         case 'toggle-music':
           if (window.StacksAudio && typeof window.StacksAudio.toggleMusic === 'function') {
             window.StacksAudio.toggleMusic();
@@ -945,6 +949,40 @@
         el.dataset.baseColor = '#152032';
         el.dataset.hoverColor = lightenHex('#1e6ad4', 0.35);
       });
+    },
+
+    _idleJunkOn: function () {
+      if (typeof window.getIdleJunk === 'function') return !!window.getIdleJunk();
+      if (window.lobbyState && window.lobbyState.idleJunk != null) {
+        return !!window.lobbyState.idleJunk;
+      }
+      return true;
+    },
+
+    _toggleIdleJunk: function () {
+      var next = !this._idleJunkOn();
+      if (window.requestIdleJunk) window.requestIdleJunk(next);
+      else if (window.setIdleJunk) window.setIdleJunk(next);
+      else if (window.lobbyState) window.lobbyState.idleJunk = next;
+      this._setIdleJunkButton();
+      pulseHaptic(this._leftHandEl || document.getElementById('leftHand'), 0.35, 30);
+    },
+
+    _setIdleJunkButton: function () {
+      var btn = document.getElementById('menu-idle-junk-toggle');
+      var txt = document.getElementById('menu-idle-junk-text');
+      if (!btn) return;
+      var on = this._idleJunkOn();
+      var canEdit = !window.isMultiplayer || !!window.isHost ||
+        !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
+      var color = !canEdit ? '#555555' : (on ? '#1f9d45' : '#555555');
+      btn.setAttribute('material', 'color', color);
+      btn.dataset.baseColor = color;
+      btn.dataset.hoverColor = lightenHex(on ? '#1f9d45' : '#1e6ad4', 0.42);
+      if (txt) {
+        txt.setAttribute('value', on ? 'IDLE' : 'IDLE OFF');
+        txt.setAttribute('color', on ? '#ffffff' : '#a8b8c8');
+      }
     },
 
     _setMusicButton: function () {
@@ -1182,6 +1220,7 @@
       this._setMusicButton();
       this._setPassthroughButton();
       this._setBoardButton();
+      this._setIdleJunkButton();
       this._setBotSpeedUI();
       if (stats) this._showStats();
 

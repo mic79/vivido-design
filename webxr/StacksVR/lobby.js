@@ -28,6 +28,13 @@
 
   // Survives lobby teardown so offline 4×4 choice carries into a new host session
   var preferredBoardSize = 6;
+  // Idle-fill pressure (late-match junk). Default ON; host-authored + synced.
+  var preferredIdleJunk = true;
+  try {
+    var storedIdle = global.localStorage && global.localStorage.getItem('stacksvr-idle-junk');
+    if (storedIdle === '0' || storedIdle === 'false') preferredIdleJunk = false;
+    else if (storedIdle === '1' || storedIdle === 'true') preferredIdleJunk = true;
+  } catch (e) { /* ignore */ }
 
   function createLobbyState() {
     return {
@@ -41,7 +48,9 @@
       spectatorSlots: [null, null, null, null],
       mobileSpectatorCount: 0,
       // Playfield XZ size — 6 (classic) or 4 (compact). Host-authored; synced to all.
-      boardSize: normalizeBoardSize(preferredBoardSize)
+      boardSize: normalizeBoardSize(preferredBoardSize),
+      // Late-match inactivity junk (after 60s arm). Host-authored; synced to all.
+      idleJunk: !!preferredIdleJunk
     };
   }
 
@@ -83,6 +92,45 @@
     if (!Lobby.isMultiplayer || Lobby.isHost) return setBoardSize(size);
     if (Lobby.conn && Lobby.conn.open) {
       Lobby.conn.send({ type: 'board-size', size: size });
+      return true;
+    }
+    return false;
+  }
+
+  function setIdleJunk(on) {
+    on = !!on;
+    if (Lobby.isMultiplayer && !Lobby.isHost) return false;
+    preferredIdleJunk = on;
+    try {
+      if (global.localStorage) {
+        global.localStorage.setItem('stacksvr-idle-junk', on ? '1' : '0');
+      }
+    } catch (e2) { /* ignore */ }
+    if (!Lobby.lobbyState) Lobby.lobbyState = createLobbyState();
+    if (!!Lobby.lobbyState.idleJunk === on) {
+      global.lobbyState = Lobby.lobbyState;
+      return true;
+    }
+    Lobby.lobbyState.idleJunk = on;
+    global.lobbyState = Lobby.lobbyState;
+    broadcastLobbyState();
+    var scene = document.querySelector('a-scene');
+    if (scene) scene.emit('idle-junk-changed', { idleJunk: on });
+    return true;
+  }
+
+  function getIdleJunk() {
+    if (Lobby.lobbyState && Lobby.lobbyState.idleJunk != null) {
+      return !!Lobby.lobbyState.idleJunk;
+    }
+    return !!preferredIdleJunk;
+  }
+
+  function requestIdleJunk(on) {
+    on = !!on;
+    if (!Lobby.isMultiplayer || Lobby.isHost) return setIdleJunk(on);
+    if (Lobby.conn && Lobby.conn.open) {
+      Lobby.conn.send({ type: 'idle-junk', enabled: on });
       return true;
     }
     return false;
@@ -613,6 +661,7 @@
       if (data.type === 'queue-action') handleQueueAction(fromId, data.action);
       else if (data.type === 'match-action') handleMatchAction(fromId, data.action, data.result);
       else if (data.type === 'board-size') setBoardSize(data.size);
+      else if (data.type === 'idle-junk') setIdleJunk(!!data.enabled);
       else if (data.type === 'goodbye') {
         // Explicit leave (DodgeVR-style) — don't wait for PeerJS close which can lag/miss
         removePlayer(fromId);
@@ -683,6 +732,11 @@
       if (Lobby.lobbyState && Lobby.lobbyState.boardSize == null) Lobby.lobbyState.boardSize = 6;
       else if (Lobby.lobbyState) Lobby.lobbyState.boardSize = normalizeBoardSize(Lobby.lobbyState.boardSize);
       if (Lobby.lobbyState) preferredBoardSize = Lobby.lobbyState.boardSize;
+      if (Lobby.lobbyState && Lobby.lobbyState.idleJunk == null) Lobby.lobbyState.idleJunk = true;
+      else if (Lobby.lobbyState) {
+        Lobby.lobbyState.idleJunk = !!Lobby.lobbyState.idleJunk;
+        preferredIdleJunk = Lobby.lobbyState.idleJunk;
+      }
       global.lobbyState = data.state;
       var mp = data.state.matchPlayers;
       Lobby.isSpectator = !(mp && (mp.blue === Lobby.myPlayerId || mp.red === Lobby.myPlayerId));
@@ -1381,6 +1435,12 @@
   global.broadcastLobbyState = broadcastLobbyState;
   global.setBoardSize = setBoardSize;
   global.getBoardSize = getBoardSize;
+  global.setIdleJunk = setIdleJunk;
+  global.getIdleJunk = getIdleJunk;
+  global.requestIdleJunk = requestIdleJunk;
+  Lobby.setIdleJunk = setIdleJunk;
+  Lobby.getIdleJunk = getIdleJunk;
+  Lobby.requestIdleJunk = requestIdleJunk;
   global.requestBoardSize = requestBoardSize;
   Lobby.setBoardSize = setBoardSize;
   Lobby.getBoardSize = getBoardSize;
