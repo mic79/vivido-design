@@ -2614,6 +2614,15 @@
       }
       this._showMatchBodies({ showBot: !!redBot });
 
+      // Snapshot seats for victory banner — endLobbyMatch clears matchPlayers first.
+      this._matchSeatMeta = {
+        blueIsBot: !!blueBot,
+        redIsBot: !!redBot,
+        blueName: this._sideNickname('blue'),
+        redName: this._sideNickname('red'),
+        wasBotMatch: !!isBotSeat
+      };
+
       if (window.matchRecorder) window.matchRecorder.startRecording(startTime);
       var goNow = performance.now();
       this._lastPlaceAt = { blue: goNow, red: goNow };
@@ -2824,13 +2833,27 @@
 
       var winner = (opts && opts.winner) || (this.modes && this.modes.winner);
       var festive = !opts.cancelled && !!winner;
+      // Merge end payload seat labels (host clears matchPlayers before banner)
+      if (opts.wasBotMatch != null || opts.blueName || opts.redName) {
+        this._matchSeatMeta = Object.assign({}, this._matchSeatMeta || {}, {
+          wasBotMatch: opts.wasBotMatch != null ? !!opts.wasBotMatch :
+            !!(this._matchSeatMeta && this._matchSeatMeta.wasBotMatch),
+          redIsBot: opts.wasBotMatch != null ? !!opts.wasBotMatch :
+            !!(this._matchSeatMeta && this._matchSeatMeta.redIsBot),
+          blueName: opts.blueName || (this._matchSeatMeta && this._matchSeatMeta.blueName) || null,
+          redName: opts.redName || (this._matchSeatMeta && this._matchSeatMeta.redName) || null
+        });
+      }
       this._musicIdle();
       if (festive) {
         // Defer heavy canvas/confetti one frame so the last place still paints
         setTimeout(function () {
           selfEnd._playVictory({
             winner: winner,
-            reason: (opts && opts.reason) || (selfEnd.modes && selfEnd.modes.reason)
+            reason: (opts && opts.reason) || (selfEnd.modes && selfEnd.modes.reason),
+            wasBotMatch: opts && opts.wasBotMatch,
+            blueName: opts && opts.blueName,
+            redName: opts && opts.redName
           });
         }, 0);
         this._scheduleDualIdle(3800);
@@ -2907,6 +2930,48 @@
       }, delayMs == null ? 400 : delayMs);
     },
 
+    /** Resolve end-banner text. NEVER assume red === Bot (PvP red is a human). */
+    _victoryTitle: function (winner, info) {
+      info = info || {};
+      if (winner === 'draw') return 'DRAW!';
+
+      var mySide = 'blue';
+      if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.mySide) {
+        mySide = global.StacksLobby.mySide() || 'blue';
+      } else if (typeof this._localSide === 'function') {
+        mySide = this._localSide() || 'blue';
+      }
+      if (winner === mySide) return 'YOU WIN!';
+
+      // Seat meta is snapshotted at GO — endLobbyMatch clears matchPlayers before banner.
+      var meta = this._matchSeatMeta || {};
+      var mp = global.lobbyState && global.lobbyState.matchPlayers;
+      var oppIsBot = false;
+      if (winner === 'red') {
+        if (info.wasBotMatch != null) oppIsBot = !!info.wasBotMatch;
+        else if (meta.redIsBot != null) oppIsBot = !!meta.redIsBot;
+        else if (mp && mp.red === '__BOT__') oppIsBot = true;
+        else if (!global.isMultiplayer &&
+          (global.isLobbyBotMatch || (this.bot && this.bot.enabled) || this._dualBotPreview)) {
+          oppIsBot = true;
+        }
+      } else if (winner === 'blue') {
+        oppIsBot = !!(meta.blueIsBot || (mp && mp.blue === '__BOT__'));
+      }
+      if (oppIsBot) return 'BOT WINS!';
+
+      var name = (winner === 'red'
+        ? (info.redName || meta.redName)
+        : (info.blueName || meta.blueName)) ||
+        (typeof this._sideNickname === 'function' ? this._sideNickname(winner) : null);
+      if (name && name !== 'Blue' && name !== 'Red' && name !== 'Bot') {
+        return String(name).toUpperCase() + ' WINS!';
+      }
+      if (winner === 'red') return 'RED WINS!';
+      if (winner === 'blue') return 'BLUE WINS!';
+      return String(winner).toUpperCase();
+    },
+
     /** Festive win banner + confetti burst (keeps board visible for a beat). */
     _playVictory: function (info) {
       info = info || {};
@@ -2914,13 +2979,7 @@
       if (!this._sceneRoot || !THREE) return;
 
       var winner = info.winner || (this.modes && this.modes.winner) || 'draw';
-      var youAreBlue = !(global.isMultiplayer && global.StacksLobby &&
-        global.StacksLobby.mySide && global.StacksLobby.mySide() === 'red');
-      var title;
-      if (winner === 'draw') title = 'DRAW!';
-      else if (winner === 'blue') title = youAreBlue ? 'YOU WIN!' : 'BLUE WINS!';
-      else if (winner === 'red') title = youAreBlue ? 'BOT WINS!' : 'YOU WIN!';
-      else title = String(winner).toUpperCase();
+      var title = this._victoryTitle(winner, info);
 
       var accent = winner === 'red' ? 0xff6a3d : (winner === 'blue' ? 0x33bbff : 0xffd56a);
       var root = new THREE.Group();
@@ -3346,13 +3405,23 @@
 
     _matchEndResult: function (info, cancelled) {
       info = info || {};
+      var meta = this._matchSeatMeta || {};
+      var mp = global.lobbyState && global.lobbyState.matchPlayers;
+      var wasBot = meta.wasBotMatch;
+      if (wasBot == null) {
+        wasBot = !!(mp && mp.red === '__BOT__') ||
+          (!!global.isLobbyBotMatch && !(mp && mp.red && mp.red !== '__BOT__'));
+      }
       return {
         cancelled: !!cancelled,
         winner: cancelled ? null : (info.winner || (this.modes && this.modes.winner) || null),
         reason: cancelled ? null : (info.reason || (this.modes && this.modes.reason) || null),
         scores: this.modes && this.modes.scores
           ? { blue: this.modes.scores.blue | 0, red: this.modes.scores.red | 0 }
-          : null
+          : null,
+        wasBotMatch: !!wasBot,
+        blueName: meta.blueName || null,
+        redName: meta.redName || null
       };
     },
 

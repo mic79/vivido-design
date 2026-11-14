@@ -413,10 +413,15 @@
   function endLobbyMatch(result) {
     if (!Lobby.lobbyState) return;
     result = result || {};
-    Lobby.isLobbyBotMatch = false;
-    global.isLobbyBotMatch = false;
     var oldBlue = Lobby.lobbyState.matchPlayers.blue;
     var oldRed = Lobby.lobbyState.matchPlayers.red;
+    // Capture BEFORE clearing seats — victory banner needs this after WAITING reset
+    var wasBotMatch = result.wasBotMatch != null
+      ? !!result.wasBotMatch
+      : (oldRed === '__BOT__' || !!Lobby.isLobbyBotMatch);
+
+    Lobby.isLobbyBotMatch = false;
+    global.isLobbyBotMatch = false;
 
     Lobby.lobbyState.matchState = 'WAITING';
     Lobby.lobbyState.matchGameState = null;
@@ -442,7 +447,10 @@
       winner: result.winner || null,
       reason: result.reason || null,
       scores: result.scores || null,
-      cancelled: !!result.cancelled || !result.winner
+      cancelled: !!result.cancelled || !result.winner,
+      wasBotMatch: wasBotMatch,
+      blueName: result.blueName || null,
+      redName: result.redName || null
     };
     for (var i = 0; i < Lobby.connections.length; i++) {
       if (Lobby.connections[i].conn.open) {
@@ -456,7 +464,10 @@
         victory: !endMsg.cancelled && !!endMsg.winner,
         winner: endMsg.winner,
         reason: endMsg.reason,
-        scores: endMsg.scores
+        scores: endMsg.scores,
+        wasBotMatch: endMsg.wasBotMatch,
+        blueName: endMsg.blueName,
+        redName: endMsg.redName
       });
     }
   }
@@ -749,7 +760,10 @@
           winner: data.winner || null,
           reason: data.reason || null,
           scores: data.scores || null,
-          hostLeft: data.reason === 'host-left'
+          hostLeft: data.reason === 'host-left',
+          wasBotMatch: !!data.wasBotMatch,
+          blueName: data.blueName || null,
+          redName: data.redName || null
         });
       }
       var scene3 = document.querySelector('a-scene');
