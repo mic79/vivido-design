@@ -2367,6 +2367,50 @@
     },
 
     /**
+     * Drop a peer's lobby remote-body-N slot so match seats don't double-render.
+     * (Lobby poses stick remoteHandData on remote-body-N; match then also drives
+     * bot-body / spec-blue-body → two avatars at the opponent.)
+     */
+    _releaseRemoteBodySlot: function (fromId) {
+      if (!fromId || !this._remoteBodyMap) return;
+      var bid = this._remoteBodyMap[fromId];
+      if (!bid) return;
+      delete this._remoteBodyMap[fromId];
+      // Only clear pool bodies — never wipe the seat mesh we are switching to
+      if (String(bid).indexOf('remote-body-') === 0) {
+        this._clearRemoteAvatarEl(document.getElementById(bid));
+      }
+    },
+
+    /**
+     * On GO: seated humans use seat bodies only. Clear any leftover lobby pool
+     * avatars for those peer ids (root cause of double opponent bodies).
+     */
+    _rebindMatchSeatAvatars: function () {
+      var mp = global.lobbyState && global.lobbyState.matchPlayers;
+      if (!mp) return;
+      var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+      var sides = ['blue', 'red'];
+      for (var i = 0; i < sides.length; i++) {
+        var pid = mp[sides[i]];
+        if (!pid || pid === '__BOT__' || pid === myId) continue;
+        this._releaseRemoteBodySlot(pid);
+      }
+      // Also hide any pool body that still has pose data but is not mapped
+      if (!this._remoteBodyMap) this._remoteBodyMap = {};
+      var used = {};
+      for (var id in this._remoteBodyMap) {
+        if (Object.prototype.hasOwnProperty.call(this._remoteBodyMap, id)) {
+          used[this._remoteBodyMap[id]] = true;
+        }
+      }
+      for (var r = 0; r < 4; r++) {
+        var rid = 'remote-body-' + r;
+        if (!used[rid]) this._clearRemoteAvatarEl(document.getElementById(rid));
+      }
+    },
+
+    /**
      * Pick a visible Mixamo body for a remote player.
      * Match seats prefer bot-body / spec-blue-body; everyone else gets remote-body-N.
      */
@@ -2375,10 +2419,17 @@
       var mp = global.lobbyState && global.lobbyState.matchPlayers;
       var playing = global.lobbyState && global.lobbyState.matchState === 'PLAYING';
       if (fromId === '__BOT__' || (mp && mp.red === '__BOT__' && fromId === mp.red)) {
+        this._releaseRemoteBodySlot(fromId);
         return document.getElementById('bot-body');
       }
-      if (playing && mp && fromId === mp.red) return document.getElementById('bot-body');
-      if (playing && mp && fromId === mp.blue) return document.getElementById('spec-blue-body');
+      if (playing && mp && fromId === mp.red) {
+        this._releaseRemoteBodySlot(fromId);
+        return document.getElementById('bot-body');
+      }
+      if (playing && mp && fromId === mp.blue) {
+        this._releaseRemoteBodySlot(fromId);
+        return document.getElementById('spec-blue-body');
+      }
 
       if (!this._remoteBodyMap) this._remoteBodyMap = {};
       if (this._remoteBodyMap[fromId]) {
@@ -2696,6 +2747,8 @@
         }
       }
       this._showMatchBodies({ showBot: !!redBot });
+      // Lobby remote-body-N → seat body; without this both stay posed (double avatar)
+      this._rebindMatchSeatAvatars();
 
       // Snapshot seats for victory/history — endLobbyMatch parks everyone as spectator.
       var mySeatSide = null;
@@ -2837,6 +2890,25 @@
         if (!(playing && mp.red === '__BOT__')) {
           this._clearRemoteAvatarEl(document.getElementById('bot-body'));
         }
+      }
+
+      // During PLAYING, match seats must NOT also occupy remote-body-N
+      if (playing) {
+        var myId2 = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+        var seatSides = ['blue', 'red'];
+        for (var s = 0; s < seatSides.length; s++) {
+          var pid = mp[seatSides[s]];
+          if (!pid || pid === '__BOT__' || pid === myId2) continue;
+          if (nextMap[pid]) {
+            var oldBid = nextMap[pid];
+            delete nextMap[pid];
+            delete stillUsed[oldBid];
+            if (String(oldBid).indexOf('remote-body-') === 0) {
+              this._clearRemoteAvatarEl(document.getElementById(oldBid));
+            }
+          }
+        }
+        this._remoteBodyMap = nextMap;
       }
 
       // Free unused remote-body slots
