@@ -163,6 +163,35 @@
   var PLACE_BLINK_MS = 520;
   var PLACE_BLINK_STEP = 85;
 
+  var REPLAY_BROADCAST_MS = 100;
+
+  function resolveReplayNames(replay) {
+    var blue = 'Blue';
+    var red = 'Red';
+    try {
+      var hist = (window.StacksStats && window.StacksStats.loadHistory)
+        ? window.StacksStats.loadHistory()
+        : { single: [], multi: [] };
+      var all = (hist.single || []).concat(hist.multi || []);
+      var ts = replay && replay.matchTimestamp;
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].timestamp === ts) {
+          if (all[i].playerName) blue = all[i].playerName;
+          else if (window.playerNickname) blue = window.playerNickname;
+          red = all[i].opponentName || (all[i].bot ? 'Bot' : red);
+          break;
+        }
+      }
+    } catch (e) { /* ignore */ }
+    if (blue === 'Blue' && window.playerNickname) blue = window.playerNickname;
+    return { blue: blue, red: red };
+  }
+
+  function canBroadcastLobbyReplay() {
+    return !!(window.isMultiplayer && window.sendReplayMsg &&
+      !(window.matchReplayPlayer && window.matchReplayPlayer._remoteOnly));
+  }
+
   window.matchReplayPlayer = {
     playing: false,
     _replay: null,
@@ -173,18 +202,26 @@
     _clearBlue: null,
     _clearRed: null,
     _placeFx: null,
+    _lastBroadcast: 0,
+    _remoteOnly: false,
+    _sharing: false,
 
     play: function (replay) {
       if (!replay) return;
-      this.stop();
+      this.stop({ silent: true });
+      this._remoteOnly = false;
       this._replay = replay;
       this.playing = true;
       window.replayActive = true;
+      window.replaySpectator = false;
       this._matchTimestamp = replay.matchTimestamp;
       this._start = performance.now();
       this._eventIdx = 0;
       this._frameIdx = 0;
       this._placeFx = null;
+      this._lastBroadcast = 0;
+      var names = resolveReplayNames(replay);
+      window._replayNames = names;
       var comp = getGame();
       if (comp) {
         if (comp._dualIdleTimer) {
@@ -213,8 +250,21 @@
         if (comp._updateHUD) comp._updateHUD();
         if (comp._updateDamageHUD) comp._updateDamageHUD();
       }
+      // DodgeVR: stream Watch to the whole lobby so everyone sees the same replay
+      this._sharing = canBroadcastLobbyReplay();
+      if (this._sharing) {
+        window.sendReplayMsg({
+          type: 'replay-started',
+          matchTimestamp: replay.matchTimestamp,
+          blueName: names.blue,
+          redName: names.red,
+          durationMs: replay.durationMs | 0
+        });
+        this._broadcastState(true);
+      }
       console.log('[MatchReplay] Playing', replay.matchTimestamp,
-        (replay.events && replay.events.length) || 0, 'events');
+        (replay.events && replay.events.length) || 0, 'events',
+        this._sharing ? '(lobby share)' : '');
     },
 
     elapsedMs: function () {
@@ -222,16 +272,52 @@
       return Math.max(0, performance.now() - this._start);
     },
 
-    stop: function () {
+    _broadcastState: function (force) {
+      if (!this._sharing || !window.sendReplayMsg) return;
+      var now = performance.now();
+      if (!force && now - this._lastBroadcast < REPLAY_BROADCAST_MS) return;
+      this._lastBroadcast = now;
+      var comp = getGame();
+      if (!comp || !comp.cups) return;
+      var t = this.elapsedMs();
+      var rem = Math.max(0, (this._replay && this._replay.durationMs | 0) - t);
+      var mins = Math.floor(rem / 60000);
+      var secs = Math.floor((rem % 60000) / 1000);
+      var timerText = 'REPLAY  ' + mins + ':' + (secs < 10 ? '0' : '') + secs;
+      var scores = comp.modes
+        ? { blue: comp.modes.scores.blue | 0, red: comp.modes.scores.red | 0 }
+        : { blue: 0, red: 0 };
+      window.sendReplayMsg({
+        type: 'replay-state',
+        t: Math.round(t),
+        timerText: timerText,
+        scores: scores,
+        cups: {
+          blue: comp.cups.blue.serialize(),
+          red: comp.cups.red.serialize()
+        }
+      });
+    },
+
+    stop: function (opts) {
+      opts = opts || {};
+      var wasSharing = this._sharing && !this._remoteOnly;
       this._finishPlaceFx(true);
       this.playing = false;
       this._replay = null;
       this._matchTimestamp = null;
       this._placeFx = null;
+      this._sharing = false;
+      this._remoteOnly = false;
       window.replayActive = false;
-      var comp = getGame();
-      if (comp && typeof comp._scheduleDualIdle === 'function') {
-        comp._scheduleDualIdle(400);
+      if (wasSharing && !opts.silent && window.sendReplayMsg && window.isMultiplayer) {
+        window.sendReplayMsg({ type: 'replay-ended' });
+      }
+      if (!opts.silent && !opts.keepIdle) {
+        var comp = getGame();
+        if (comp && typeof comp._scheduleDualIdle === 'function') {
+          comp._scheduleDualIdle(400);
+        }
       }
     },
 
@@ -478,8 +564,10 @@
 
       var t = performance.now() - this._start;
       var events = this._replay.events || [];
+      var applied = false;
       while (!this._placeFx && this._eventIdx < events.length && events[this._eventIdx].t <= t) {
         this._applyEvent(events[this._eventIdx++]);
+        applied = true;
       }
 
       var frames = this._replay.frames || [];
@@ -495,6 +583,7 @@
               comp.modes.scores.red = f.scores.red;
               comp._updateHUD();
             }
+            applied = true;
           }
         }
       }
@@ -511,6 +600,9 @@
           if (hudComp._updateHUD) hudComp._updateHUD();
         }
       }
+
+      // Stream board to lobby peers (DodgeVR replay-state)
+      if (this._sharing) this._broadcastState(applied);
 
       var doneEvents = this._eventIdx >= events.length && !this._placeFx;
       var doneFrames = !frames.length || this._frameIdx >= frames.length;

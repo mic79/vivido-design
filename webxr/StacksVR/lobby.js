@@ -23,6 +23,7 @@
     onCupEvent: null,
     onCupSnapshot: null,
     onPlayerPose: null,
+    onReplayMsg: null,
     onDisconnected: null
   };
 
@@ -680,6 +681,15 @@
           if (cs.id !== fromId && cs.conn.open) cs.conn.send(data);
         }
         if (Lobby.onCupSnapshot) Lobby.onCupSnapshot(data);
+      } else if (data.type === 'replay-started' || data.type === 'replay-state' ||
+                 data.type === 'replay-ended') {
+        // DodgeVR parity: whoever starts Watch streams to the whole lobby
+        if (!data.from) data.from = fromId;
+        for (var ri = 0; ri < Lobby.connections.length; ri++) {
+          var cr = Lobby.connections[ri];
+          if (cr.id !== fromId && cr.conn.open) cr.conn.send(data);
+        }
+        if (Lobby.onReplayMsg) Lobby.onReplayMsg(data);
       } else if (data.type === 'player-pose') {
         for (var j = 0; j < Lobby.connections.length; j++) {
           var cj = Lobby.connections[j];
@@ -831,6 +841,9 @@
     } else if (data.type === 'cup-event' || data.type === 'cup-snapshot') {
       if (Lobby.onCupEvent) Lobby.onCupEvent(data);
       if (data.type === 'cup-snapshot' && Lobby.onCupSnapshot) Lobby.onCupSnapshot(data);
+    } else if (data.type === 'replay-started' || data.type === 'replay-state' ||
+               data.type === 'replay-ended') {
+      if (Lobby.onReplayMsg) Lobby.onReplayMsg(data);
     } else if (data.type === 'player-pose') {
       var poseFrom = data.from || fromId;
       if (Lobby.onPlayerPose) Lobby.onPlayerPose(poseFrom, data);
@@ -1387,6 +1400,19 @@
     }
   }
 
+  /** Broadcast lobby shared-replay messages (DodgeVR replay-state pattern). */
+  function sendReplayMsg(msg) {
+    if (!msg || !msg.type) return;
+    msg = Object.assign({}, msg, { from: Lobby.myPlayerId });
+    if (Lobby.isHost) {
+      for (var i = 0; i < Lobby.connections.length; i++) {
+        if (Lobby.connections[i].conn.open) Lobby.connections[i].conn.send(msg);
+      }
+    } else if (Lobby.conn && Lobby.conn.open) {
+      Lobby.conn.send(msg);
+    }
+  }
+
   function sendPlayerPose(pose) {
     var fromId = (pose && pose.from) || Lobby.myPlayerId;
     var msg = Object.assign({}, pose, { type: 'player-pose', from: fromId });
@@ -1428,6 +1454,7 @@
   global.sendMatchAction = sendMatchAction;
   global.sendCupEvent = sendCupEvent;
   global.sendCupSnapshot = sendCupSnapshot;
+  global.sendReplayMsg = sendReplayMsg;
   global.sendPlayerPose = sendPlayerPose;
   global.createLobbyState = createLobbyState;
   global.startLobbyMatch = startLobbyMatch;
@@ -1454,6 +1481,7 @@
   Lobby.sendMatchAction = sendMatchAction;
   Lobby.sendCupEvent = sendCupEvent;
   Lobby.sendCupSnapshot = sendCupSnapshot;
+  Lobby.sendReplayMsg = sendReplayMsg;
   Lobby.sendPlayerPose = sendPlayerPose;
   Lobby.connectToLobby = connectToLobby;
   Lobby.connectAsMobileSpectator = connectAsMobileSpectator;

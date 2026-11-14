@@ -101,6 +101,7 @@
         chain('onCupEvent', self.onRemoteCupEvent);
         chain('onCupSnapshot', self.onRemoteSnapshot);
         chain('onPlayerPose', self.onRemotePlayerPose);
+        chain('onReplayMsg', self.onRemoteReplayMsg);
         chain('onDisconnected', self.onHostDisconnected);
         global.StacksLobby.onRequestSnapshot = function () {
           return self._buildSnapshot();
@@ -3083,8 +3084,84 @@
      */
     _canResumeDualIdle: function () {
       if (global.isMobileSpectator) return false;
+      if (global.replayActive || global.replaySpectator) return false;
       if (global.lobbyState && global.lobbyState.matchState === 'PLAYING') return false;
       return true;
+    },
+
+    /**
+     * DodgeVR parity: another lobby member started Watch — mirror their cups.
+     * Local player who started the replay already applies events; ignore their own stream.
+     */
+    onRemoteReplayMsg: function (msg) {
+      if (!msg || !msg.type) return;
+      var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+      if (msg.from && myId && msg.from === myId) return;
+      // Local Watch driver already owns the board
+      if (global.replayActive && window.matchReplayPlayer && window.matchReplayPlayer.playing &&
+          !window.matchReplayPlayer._remoteOnly) {
+        return;
+      }
+
+      if (msg.type === 'replay-started') {
+        if (this._dualIdleTimer) {
+          clearTimeout(this._dualIdleTimer);
+          this._dualIdleTimer = null;
+        }
+        if (this.bot) this.bot.enable(false);
+        if (this.botBlue) this.botBlue.enable(false);
+        this._dualBotPreview = false;
+        this.matchActive = false;
+        if (this.cups && this.cups.blue) this.cups.blue.clearAll();
+        if (this.cups && this.cups.red) this.cups.red.clearAll();
+        if (this.attackSys) this.attackSys.reset();
+        if (this.modes) {
+          this.modes.scores.blue = 0;
+          this.modes.scores.red = 0;
+          this.modes.active = false;
+        }
+        global.replaySpectator = true;
+        global.replayActive = true;
+        window._replayNames = {
+          blue: msg.blueName || 'Blue',
+          red: msg.redName || 'Red'
+        };
+        if (this._updateHUD) this._updateHUD();
+        if (this._updateDamageHUD) this._updateDamageHUD();
+        return;
+      }
+
+      if (msg.type === 'replay-state') {
+        if (!global.replaySpectator && !global.replayActive) {
+          // Late join mid-stream — enter spectator mode
+          this.onRemoteReplayMsg({
+            type: 'replay-started',
+            from: msg.from,
+            blueName: (window._replayNames && window._replayNames.blue) || 'Blue',
+            redName: (window._replayNames && window._replayNames.red) || 'Red'
+          });
+        }
+        if (msg.cups) this._applyNetworkCups(msg.cups, { forceAll: true });
+        if (msg.scores && this.modes) {
+          if (msg.scores.blue != null) this.modes.scores.blue = msg.scores.blue;
+          if (msg.scores.red != null) this.modes.scores.red = msg.scores.red;
+        }
+        if (this._updateHUD) this._updateHUD();
+        return;
+      }
+
+      if (msg.type === 'replay-ended') {
+        global.replaySpectator = false;
+        global.replayActive = false;
+        if (this.cups && this.cups.blue) this.cups.blue.clearAll();
+        if (this.cups && this.cups.red) this.cups.red.clearAll();
+        if (this.modes) {
+          this.modes.scores.blue = 0;
+          this.modes.scores.red = 0;
+        }
+        if (this._updateHUD) this._updateHUD();
+        this._scheduleDualIdle(400);
+      }
     },
 
     _scheduleDualIdle: function (delayMs) {
