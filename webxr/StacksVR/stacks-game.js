@@ -1383,7 +1383,7 @@
      */
     _isLocalAuthoritySide: function (side) {
       if (!side) return false;
-      if (global.isMobileSpectator) return false;
+      if (this._isViewOnlyObserver()) return false;
       var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
       var mp = global.lobbyState && global.lobbyState.matchPlayers;
       if (global.isMultiplayer && mp && myId) {
@@ -1397,14 +1397,34 @@
     },
 
     /**
+     * VR / mobile / late-join watchers — must mirror BOTH cups/stations from host.
+     * Seat id wins: queued humans are never "view-only" even if isSpectator flickered.
+     */
+    _isViewOnlyObserver: function () {
+      if (global.isMobileSpectator) return true;
+      if (!global.isMultiplayer) return false;
+      var Lobby = global.StacksLobby;
+      if (Lobby && typeof Lobby.amMatchPlayer === 'function' && Lobby.amMatchPlayer()) {
+        return false;
+      }
+      var myId = global.myPlayerId || (Lobby && Lobby.myPlayerId);
+      var mp = global.lobbyState && global.lobbyState.matchPlayers;
+      if (mp && myId && (mp.blue === myId || (mp.red === myId && mp.red !== '__BOT__'))) {
+        return false;
+      }
+      return !!(global.isSpectator || global.isMobileSpectator);
+    },
+
+    /**
      * Merge networked cups without clobbering the cup we own.
      * Always gate per-seat — never "force both" just because canControl flickered.
      * opts.forceSides = { blue: true, red: true } — host garbage / wipe authority.
+     * View-only observers always take the full host picture.
      */
     _applyNetworkCups: function (cups, opts) {
       opts = opts || {};
       if (!cups) return;
-      if (opts.forceAll || global.isMobileSpectator) {
+      if (opts.forceAll || this._isViewOnlyObserver()) {
         this._applyRemoteCups(cups);
         return;
       }
@@ -2208,14 +2228,17 @@
             }
           }
         } else if (evt.kind === 'state') {
-          // Legacy/fallback: reason=garbage must force-apply own cup (host ticker).
+          // Spectators: full board. Seated: gate own cup unless host garbage/wipe.
           var stateForce = null;
           if (evt.reason === 'garbage' || evt.reason === 'match-start') {
             stateForce = {};
             if (evt.cups && evt.cups.blue) stateForce.blue = true;
             if (evt.cups && evt.cups.red) stateForce.red = true;
           }
-          this._applyNetworkCups(evt.cups, { forceSides: stateForce });
+          this._applyNetworkCups(evt.cups, {
+            forceAll: this._isViewOnlyObserver(),
+            forceSides: stateForce
+          });
         }
 
         if (evt.scores) {
@@ -2276,21 +2299,30 @@
     onRemoteSnapshot: function (data) {
       if (!data || !data.snapshot) return;
       var snap = data.snapshot;
-      // Match players: never clobber the cup/station they own. Spectators take all.
-      this._applyNetworkCups(snap, { forceAll: false });
+      var viewOnly = this._isViewOnlyObserver();
+      // Seated players: never clobber the cup/station they own.
+      // View-only (VR + mobile spectators): take the full host picture.
+      this._applyNetworkCups(snap, { forceAll: viewOnly });
       if (snap.scores) {
         this.modes.scores.blue = snap.scores.blue;
         this.modes.scores.red = snap.scores.red;
       }
-      if (snap.attack && (global.isSpectator || global.isMobileSpectator || !this._canControl())) {
+      if (snap.attack && (viewOnly || !this._canControl())) {
         this.attackSys.applySerialized(snap.attack);
       }
-      if (snap.stations) this._applyNetworkStations(snap.stations);
+      if (snap.stations) {
+        if (viewOnly) {
+          if (snap.stations.blue) this._applyStationVisual(snap.stations.blue);
+          if (snap.stations.red) this._applyStationVisual(snap.stations.red);
+        } else {
+          this._applyNetworkStations(snap.stations);
+        }
+      }
       if (snap.held) {
-        if (snap.held.blue && snap.held.blue.holding && !this._isLocalAuthoritySide('blue')) {
+        if (snap.held.blue && (viewOnly || !this._isLocalAuthoritySide('blue'))) {
           this._setRemoteHeld('blue', snap.held.blue);
         }
-        if (snap.held.red && snap.held.red.holding && !this._isLocalAuthoritySide('red')) {
+        if (snap.held.red && (viewOnly || !this._isLocalAuthoritySide('red'))) {
           this._setRemoteHeld('red', snap.held.red);
         }
       }
