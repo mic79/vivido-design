@@ -14,6 +14,9 @@
   var INACTIVE_MATCH_ARM_MS = 60000;
   var INACTIVE_GRACE_MS = 10000;
   var INACTIVE_INTERVAL_MS = 4000;
+  // Keep win banner + final board readable; dual-idle only after this unless START/Watch
+  var VICTORY_HOLD_MS = 30000;
+  var VICTORY_CONFETTI_S = 3.6;
 
   AFRAME.registerComponent('stacks-game', {
     schema: {
@@ -3028,7 +3031,8 @@
             redName: opts && opts.redName
           });
         }, 0);
-        this._scheduleDualIdle(3800);
+        // Keep YOU WIN / scores on-screen long enough to read (unless START/Watch)
+        this._scheduleDualIdle(VICTORY_HOLD_MS);
       } else {
         this._clearVictory();
         this._scheduleDualIdle(350);
@@ -3549,25 +3553,43 @@
       var dt = Math.min(0.05, (this._lastVictoryTick ? (now - this._lastVictoryTick) / 1000 : 0.016));
       this._lastVictoryTick = now;
 
+      // Title stays for VICTORY_HOLD_MS (cleared by dual-idle / START / Watch)
       if (v.titleMesh) {
         v.titleMesh.scale.setScalar(1 + 0.06 * Math.sin(t * 6));
       }
       if (v.rim && v.rim.material) {
         v.rim.material.opacity = 0.35 + 0.35 * (0.5 + 0.5 * Math.sin(t * 5));
       }
-      for (var i = 0; i < v.bits.length; i++) {
-        var b = v.bits[i];
-        b.vy -= 3.2 * dt;
-        b.mesh.position.x += b.vx * dt;
-        b.mesh.position.y += b.vy * dt;
-        b.mesh.position.z += b.vz * dt;
-        b.mesh.rotation.x += b.spin * dt;
-        b.mesh.rotation.z += b.spin * 0.7 * dt;
-        if (b.mesh.material) {
-          b.mesh.material.opacity = Math.max(0, 0.95 - t * 0.28);
+      // Confetti burst only — strip bits after fade, keep banner
+      if (v.bits && v.bits.length) {
+        for (var i = 0; i < v.bits.length; i++) {
+          var b = v.bits[i];
+          if (!b.mesh) continue;
+          b.vy -= 3.2 * dt;
+          b.mesh.position.x += b.vx * dt;
+          b.mesh.position.y += b.vy * dt;
+          b.mesh.position.z += b.vz * dt;
+          b.mesh.rotation.x += b.spin * dt;
+          b.mesh.rotation.z += b.spin * 0.7 * dt;
+          if (b.mesh.material) {
+            b.mesh.material.opacity = Math.max(0, 0.95 - t * 0.28);
+          }
+        }
+        if (t > VICTORY_CONFETTI_S) {
+          for (var j = 0; j < v.bits.length; j++) {
+            var bj = v.bits[j];
+            if (!bj.mesh) continue;
+            if (bj.mesh.parent) bj.mesh.parent.remove(bj.mesh);
+            if (bj.mesh.material) bj.mesh.material.dispose();
+            bj.mesh = null;
+          }
+          v.bits = [];
+          if (v.sharedGeo) {
+            v.sharedGeo.dispose();
+            v.sharedGeo = null;
+          }
         }
       }
-      if (t > 3.6) this._clearVictory();
     },
 
     startOfflineBotMatch: function () {
