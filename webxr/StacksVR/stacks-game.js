@@ -2230,7 +2230,17 @@
         // Derive attack from the clear instead of replacing both buffers with a
         // peer clock snapshot (readyAt skew was fighting the host tick).
         if (evt.kind === 'place' && evt.clear && evt.clear.layersCleared > 0 && evt.side) {
-          this.attackSys.onClear(evt.side, evt.clear, performance.now());
+          var remoteAtk = this.attackSys.onClear(evt.side, evt.clear, performance.now());
+          // Same clear FX the placer saw — otherwise only host/local gets sonar+popup
+          if (!this._dualBotPreview) {
+            var rLayers = evt.clear.layersCleared | 0;
+            if (global.StacksAudio && typeof global.StacksAudio.clearChime === 'function') {
+              global.StacksAudio.clearChime(rLayers, 0.55);
+            } else {
+              this._sfx('clear', { layers: rLayers, volume: 0.55 });
+            }
+            this._showClearPopup(evt.side, evt.clear, remoteAtk);
+          }
         } else if (evt.kind === 'state' && evt.attack &&
             (evt.reason === 'garbage' || global.isSpectator || global.isMobileSpectator ||
               !this._canControl())) {
@@ -2238,6 +2248,10 @@
         }
 
         if (evt.kind === 'place' && evt.side) {
+          // Host idle-junk clock must reset when the peer places — otherwise the
+          // active client still gets inactivity layers (lastPlace stayed at GO).
+          if (!this._lastPlaceAt) this._lastPlaceAt = { blue: 0, red: 0 };
+          this._lastPlaceAt[evt.side] = performance.now();
           if (!this._isLocalAuthoritySide(evt.side)) {
             this._setRemoteHeld(evt.side, { holding: false });
           }
@@ -2615,13 +2629,20 @@
       }
       this._showMatchBodies({ showBot: !!redBot });
 
-      // Snapshot seats for victory banner — endLobbyMatch clears matchPlayers first.
+      // Snapshot seats for victory/history — endLobbyMatch parks everyone as spectator.
+      var mySeatSide = null;
+      if (seated && myId && mp) {
+        if (mp.blue === myId) mySeatSide = 'blue';
+        else if (mp.red === myId && mp.red !== '__BOT__') mySeatSide = 'red';
+      }
       this._matchSeatMeta = {
         blueIsBot: !!blueBot,
         redIsBot: !!redBot,
         blueName: this._sideNickname('blue'),
         redName: this._sideNickname('red'),
-        wasBotMatch: !!isBotSeat
+        wasBotMatch: !!isBotSeat,
+        mySide: mySeatSide,
+        wasSeatedPlayer: !!seated
       };
 
       if (window.matchRecorder) window.matchRecorder.startRecording(startTime);
@@ -2938,16 +2959,18 @@
       info = info || {};
       if (winner === 'draw') return 'DRAW!';
 
-      var mySide = 'blue';
-      if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.mySide) {
-        mySide = global.StacksLobby.mySide() || 'blue';
-      } else if (typeof this._localSide === 'function') {
-        mySide = this._localSide() || 'blue';
+      var meta = this._matchSeatMeta || {};
+      var mySide = meta.mySide || 'blue';
+      if (!meta.mySide) {
+        if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.mySide) {
+          mySide = global.StacksLobby.mySide() || 'blue';
+        } else if (typeof this._localSide === 'function') {
+          mySide = this._localSide() || 'blue';
+        }
       }
       if (winner === mySide) return 'YOU WIN!';
 
       // Seat meta is snapshotted at GO — endLobbyMatch clears matchPlayers before banner.
-      var meta = this._matchSeatMeta || {};
       var mp = global.lobbyState && global.lobbyState.matchPlayers;
       var oppIsBot = false;
       if (winner === 'red') {
@@ -3505,34 +3528,50 @@
 
     _saveMatchHistory: function (opts, matchTimestamp) {
       opts = opts || {};
-      if (global.isMobileSpectator || global.isSpectator) return;
+      if (global.isMobileSpectator) return;
       if (this._dualBotPreview) return;
       if (!global.StacksStats || typeof global.StacksStats.saveMatch !== 'function') return;
 
-      var side = this._localSide ? this._localSide() : 'blue';
+      // endLobbyMatch parks seated humans as spectators BEFORE deferred history runs.
+      // Use GO seat snapshot — never trust live isSpectator / cleared matchPlayers.
+      var meta = this._matchSeatMeta || {};
+      var wasSeated = !!meta.wasSeatedPlayer;
+      if (global.isMultiplayer && !wasSeated) {
+        if (global.isSpectator) return;
+      } else if (!global.isMultiplayer && global.isSpectator) {
+        return;
+      }
+
+      var side = meta.mySide || (this._localSide ? this._localSide() : 'blue');
       var statsSide = this.matchStats && (side === 'red' ? this.matchStats.red : this.matchStats.blue);
       var snap = statsSide && statsSide.snapshot
         ? statsSide.snapshot(performance.now())
         : null;
       var scores = (this.modes && this.modes.scores) || { blue: 0, red: 0 };
       var winner = (opts && opts.winner) || (this.modes && this.modes.winner) || null;
-      var bot = !!(global.isLobbyBotMatch ||
-        (global.lobbyState && global.lobbyState.matchPlayers &&
-          global.lobbyState.matchPlayers.red === '__BOT__'));
+      var bot = meta.wasBotMatch != null
+        ? !!meta.wasBotMatch
+        : !!(global.isLobbyBotMatch ||
+          (global.lobbyState && global.lobbyState.matchPlayers &&
+            global.lobbyState.matchPlayers.red === '__BOT__'));
       var multi = !!global.isMultiplayer && !bot;
-      var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
       var nick = (global.playerNickname || 'Player').slice(0, 12);
       var oppName = bot ? 'Bot' : null;
-      if (multi && global.lobbyState) {
-        var mp = global.lobbyState.matchPlayers || {};
-        var oppId = mp.blue === myId ? mp.red : mp.blue;
-        var players = global.lobbyState.players || [];
-        for (var i = 0; i < players.length; i++) {
-          if (players[i].id === oppId) {
-            oppName = (players[i].nickname || 'Player').slice(0, 12);
-            break;
+      if (multi) {
+        oppName = (side === 'red' ? meta.blueName : meta.redName) || oppName;
+        if (!oppName && global.lobbyState) {
+          var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+          var mp = global.lobbyState.matchPlayers || {};
+          var oppId = mp.blue === myId ? mp.red : mp.blue;
+          var players = global.lobbyState.players || [];
+          for (var i = 0; i < players.length; i++) {
+            if (players[i].id === oppId) {
+              oppName = (players[i].nickname || 'Player').slice(0, 12);
+              break;
+            }
           }
         }
+        if (!oppName) oppName = side === 'red' ? 'Blue' : 'Red';
       }
       var result = null;
       if (winner === side) result = 'WIN';
@@ -4328,11 +4367,11 @@
         if (this.matchState === 'COUNTDOWN') {
           this._tickCountdown(Date.now());
         } else {
-          // In multiplayer, only host (or offline/bot) advances attack timers —
-          // peers receive board via state/place snapshots (avoids RNG garbage desync).
+          // In multiplayer, ONLY the host advances attack/idle timers.
+          // Never trust sticky isLobbyBotMatch on a peer (double-spawn + RNG desync).
           var mp = !!global.isMultiplayer;
           var host = global.StacksLobby && global.StacksLobby.isHost;
-          var tickAttack = !mp || host || !!global.isLobbyBotMatch;
+          var tickAttack = !mp || !!host;
           if (tickAttack) {
             var applied = this.attackSys.tick(this.cups, performance.now());
             if (applied && applied.length) {
@@ -4364,8 +4403,11 @@
             this._tickInactivityJunk(performance.now());
           }
           this._updateDamageHUD();
-          var t = this.modes.tick(Date.now());
-          if (t && t.ended) this._endFromMode(t);
+          // Timed modes: only host (or offline) may end on clock — peers get match-ended
+          if (!mp || host) {
+            var t = this.modes.tick(Date.now());
+            if (t && t.ended) this._endFromMode(t);
+          }
           this._updateBotPace();
           if (this.bot && this.bot.enabled) this.bot.tick(performance.now());
           if (this.botBlue && this.botBlue.enabled) this.botBlue.tick(performance.now());
