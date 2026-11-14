@@ -614,6 +614,14 @@
           var id = this.el && this.el.id;
           var isPrimaryBot = id === 'bot-body';
           var isRemotePool = id && String(id).indexOf('remote-body-') === 0;
+          var isSeatBody = isPrimaryBot || id === 'spec-blue-body';
+          // Dual-bot pad preview: no Mixamo seats (would ghost the last human pose)
+          if (isSeatBody && window.offlinePreview) {
+            this.remoteHandData = null;
+            if (this.el.object3D) this.el.object3D.visible = false;
+            this.el.setAttribute('visible', false);
+            return;
+          }
           if (!this.remoteHandData && !isPrimaryBot) return;
           if (isRemotePool && !this.remoteHandData) return;
 

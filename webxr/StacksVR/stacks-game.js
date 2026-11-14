@@ -2561,6 +2561,7 @@
       // Leave dual-preview ownership BEFORE bag reset / bot disable so blue
       // pad visuals cannot wipe the human spawn below.
       this._dualBotPreview = false;
+      global.offlinePreview = false;
       if (this.bot) this.bot.enable(false);
       if (this.botBlue) this.botBlue.enable(false);
 
@@ -2950,6 +2951,7 @@
       this.matchActive = false;
       this.matchState = 'WAITING';
       this._dualBotPreview = false;
+      global.offlinePreview = false;
       this._pendingMatch = null;
       this._countdownGoAt = null;
       this._matchGoAt = 0;
@@ -2968,6 +2970,11 @@
       this._nextType = null;
       this._padPiece = null;
       this._cancelHold();
+
+      // Drop human poses off seat meshes immediately — dual-bot idle / lobby must
+      // not keep a ghost in the seat you (or the opponent) just vacated.
+      this._clearRemoteAvatarEl(document.getElementById('bot-body'));
+      this._clearRemoteAvatarEl(document.getElementById('spec-blue-body'));
 
       // Multiplayer peers may only learn the winner from match-ended payload
       if (this.modes) {
@@ -3528,15 +3535,19 @@
     },
 
     _hidePreviewBotBodies: function () {
-      // In multiplayer, remotes own bot-body / spec-blue / remote-body-* — never hide them
-      if (global.isMultiplayer) return;
-      // Must null remoteHandData or mixamo-body will force-visible the last lobby pose
+      // Dual-bot idle is pad-only — bots do NOT use Mixamo seat bodies.
+      // Previously bailed on isMultiplayer, so after PvP the red/blue seat kept
+      // the last human remoteHandData (client saw themselves ghosted in their slot).
       this._clearRemoteAvatarEl(document.getElementById('bot-body'));
       this._clearRemoteAvatarEl(document.getElementById('spec-blue-body'));
-      for (var i = 0; i < 4; i++) {
-        this._clearRemoteAvatarEl(document.getElementById('remote-body-' + i));
+      // Offline-only: wipe lobby pool too. In a live lobby, remote-body-N still
+      // shows other waiting players around the ring.
+      if (!global.isMultiplayer) {
+        for (var i = 0; i < 4; i++) {
+          this._clearRemoteAvatarEl(document.getElementById('remote-body-' + i));
+        }
+        this._remoteBodyMap = {};
       }
-      this._remoteBodyMap = {};
     },
 
     /**

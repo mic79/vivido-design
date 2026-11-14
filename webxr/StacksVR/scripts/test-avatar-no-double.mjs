@@ -18,6 +18,12 @@ function main() {
   assert(src.includes('this._rebindMatchSeatAvatars()'), 'called from live play');
   assert(src.includes('this._releaseRemoteBodySlot(fromId)'), 'release before seat body');
   assert(src.includes("indexOf('remote-body-') === 0"), 'only clear pool bodies');
+  // Dual-idle must clear seats even while still connected to a lobby
+  assert(!/if \(global\.isMultiplayer\) return;\s*\n\s*\/\/ Must null remoteHandData/.test(src),
+    'dual-idle must not skip seat clear when isMultiplayer');
+  assert(src.includes('bots do NOT use Mixamo seat bodies'), 'documents pad-only bots');
+  assert(src.includes("this._clearRemoteAvatarEl(document.getElementById('bot-body'))"),
+    'match end / dual-idle clears bot-body');
 
   // Simulate map transition
   var map = { peer1: 'remote-body-0', host1: 'remote-body-1' };
