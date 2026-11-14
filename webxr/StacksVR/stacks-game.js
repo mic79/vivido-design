@@ -478,9 +478,16 @@
 
     _onBotVisual: function (side, evt) {
       if (!evt || !evt.kind) return;
-      // Human owns the blue pad/pocket outside dual-bot preview — never let
-      // botBlue enable(false)/reset wipe freshly spawned player pieces.
-      if (side === 'blue' && !this._dualBotPreview) return;
+      // Human seats own their pad/pocket. bot.enable(false) emits pad:null —
+      // that used to wipe the red spawn box in PvP right after _spawnBothPads
+      // (blue was protected; red was not → client on red saw an empty pad).
+      if (!this._dualBotPreview) {
+        var mpVis = global.lobbyState && global.lobbyState.matchPlayers;
+        var seatVis = mpVis && mpVis[side];
+        if (seatVis && seatVis !== '__BOT__') return;
+        // Offline / default: blue is always the human station
+        if (side === 'blue' && !seatVis) return;
+      }
       var st = this._botStation(side);
       if (evt.kind === 'reset') {
         this._clearBotStationPieces(side);
@@ -1391,6 +1398,7 @@
     /**
      * Merge networked cups without clobbering the cup we own.
      * Always gate per-seat — never "force both" just because canControl flickered.
+     * opts.forceSides = { blue: true, red: true } — host garbage / wipe authority.
      */
     _applyNetworkCups: function (cups, opts) {
       opts = opts || {};
@@ -1399,12 +1407,56 @@
         this._applyRemoteCups(cups);
         return;
       }
-      if (cups.blue && !this._isLocalAuthoritySide('blue')) {
+      var force = opts.forceSides || null;
+      if (cups.blue && (!this._isLocalAuthoritySide('blue') || (force && force.blue))) {
         this.cups.blue.applySnapshot(cups.blue);
       }
-      if (cups.red && !this._isLocalAuthoritySide('red')) {
+      if (cups.red && (!this._isLocalAuthoritySide('red') || (force && force.red))) {
         this.cups.red.applySnapshot(cups.red);
       }
+    },
+
+    /**
+     * Host-only: push garbage that landed on one or more cups.
+     * Peers MUST apply these cups even on their own seat (host is sole attack ticker).
+     */
+    _broadcastGarbage: function (applied) {
+      if (!global.sendCupEvent || !applied || !applied.length) return;
+      var cupsMsg = {};
+      var sides = [];
+      var blink = {};
+      for (var i = 0; i < applied.length; i++) {
+        var a = applied[i];
+        if (!a || !a.side || !this.cups[a.side]) continue;
+        sides.push(a.side);
+        cupsMsg[a.side] = this.cups[a.side].serialize();
+        var cells = [];
+        if (a.spawned && a.spawned.length) {
+          for (var c = 0; c < a.spawned.length; c++) {
+            var sc = a.spawned[c];
+            if (!sc) continue;
+            if (sc.cell || sc.x != null) {
+              cells.push({
+                x: sc.x != null ? sc.x : (sc.cell && sc.cell.x),
+                y: sc.y != null ? sc.y : (sc.cell && sc.cell.y),
+                z: sc.z != null ? sc.z : (sc.cell && sc.cell.z)
+              });
+            } else if (Array.isArray(sc)) {
+              cells.push({ x: sc[0], y: sc[1], z: sc[2] });
+            }
+          }
+        }
+        blink[a.side] = cells;
+      }
+      if (!sides.length) return;
+      global.sendCupEvent({
+        kind: 'garbage',
+        sides: sides,
+        cups: cupsMsg,
+        blink: blink,
+        attack: this.attackSys.serialize(),
+        scores: { blue: this.modes.scores.blue, red: this.modes.scores.red }
+      });
     },
 
     _applyNetworkStation: function (data) {
@@ -2074,6 +2126,51 @@
         this._applyNetworkStation(evt);
         return;
       }
+      // Host-authoritative garbage (attack flush + inactivity junk). Must apply
+      // even to the local player's cup — host is the only attack ticker.
+      if (evt.kind === 'garbage') {
+        var forceSides = {};
+        if (evt.sides && evt.sides.length) {
+          for (var gs = 0; gs < evt.sides.length; gs++) forceSides[evt.sides[gs]] = true;
+        } else {
+          if (evt.cups && evt.cups.blue) forceSides.blue = true;
+          if (evt.cups && evt.cups.red) forceSides.red = true;
+        }
+        this._applyNetworkCups(evt.cups, { forceSides: forceSides });
+        if (evt.attack) this.attackSys.applySerialized(evt.attack);
+        if (evt.scores) {
+          this.modes.scores.blue = evt.scores.blue;
+          this.modes.scores.red = evt.scores.red;
+          if (global.lobbyState && global.lobbyState.matchScore) {
+            global.lobbyState.matchScore.blue = evt.scores.blue;
+            global.lobbyState.matchScore.red = evt.scores.red;
+          }
+        }
+        if (evt.blink) {
+          var bSides = ['blue', 'red'];
+          for (var bi = 0; bi < bSides.length; bi++) {
+            var bSide = bSides[bi];
+            var bCells = evt.blink[bSide];
+            if (!bCells || !bCells.length || !this.cups[bSide]) continue;
+            var blinkList = [];
+            for (var bj = 0; bj < bCells.length; bj++) {
+              var bc = bCells[bj];
+              var bx = bc.x != null ? bc.x : bc[0];
+              var by = bc.y != null ? bc.y : bc[1];
+              var bz = bc.z != null ? bc.z : bc[2];
+              var bcell = this.cups[bSide].grid[by] &&
+                this.cups[bSide].grid[by][bz] &&
+                this.cups[bSide].grid[by][bz][bx];
+              if (bcell) blinkList.push({ x: bx, y: by, z: bz, cell: bcell });
+            }
+            if (blinkList.length) this._startBlockBlink(blinkList, { garbage: true });
+          }
+        }
+        if (!this._dualBotPreview) this._sfx('attack', { volume: 0.5 });
+        this._updateHUD();
+        this._updateDamageHUD();
+        return;
+      }
       if (evt.kind === 'hold') {
         // Hold mesh only for the remote side — never remap onto our seat
         if (!this._isLocalAuthoritySide(evt.side)) {
@@ -2110,7 +2207,14 @@
             }
           }
         } else if (evt.kind === 'state') {
-          this._applyNetworkCups(evt.cups, { forceAll: false });
+          // Legacy/fallback: reason=garbage must force-apply own cup (host ticker).
+          var stateForce = null;
+          if (evt.reason === 'garbage' || evt.reason === 'match-start') {
+            stateForce = {};
+            if (evt.cups && evt.cups.blue) stateForce.blue = true;
+            if (evt.cups && evt.cups.red) stateForce.red = true;
+          }
+          this._applyNetworkCups(evt.cups, { forceSides: stateForce });
         }
 
         if (evt.scores) {
@@ -2127,7 +2231,8 @@
         if (evt.kind === 'place' && evt.clear && evt.clear.layersCleared > 0 && evt.side) {
           this.attackSys.onClear(evt.side, evt.clear, performance.now());
         } else if (evt.kind === 'state' && evt.attack &&
-            (global.isSpectator || global.isMobileSpectator || !this._canControl())) {
+            (evt.reason === 'garbage' || global.isSpectator || global.isMobileSpectator ||
+              !this._canControl())) {
           this.attackSys.applySerialized(evt.attack);
         }
 
@@ -2490,6 +2595,22 @@
         var runBlue = !!(blueBot && hostRunsBots);
         this.botBlue.enable(runBlue);
         if (runBlue && this.botBlue.setTargetBpm) this.botBlue.setTargetBpm(bpm);
+      }
+      // Safety: bot.enable(false) used to emit pad:null and wipe human red.
+      // If a pad mesh is missing but we already drew from the bag, restore it
+      // without calling bag.next() again (would desync pieces).
+      if (!this._dualBotPreview && this._nextTypeBySide) {
+        var restoreSides = ['blue', 'red'];
+        for (var rsi = 0; rsi < restoreSides.length; rsi++) {
+          var rside = restoreSides[rsi];
+          var rSeat = mp && mp[rside];
+          var humanSeat = (rSeat && rSeat !== '__BOT__') ||
+            (rside === 'blue' && !rSeat && !blueBot);
+          if (!humanSeat) continue;
+          if (this._sidePadPiece(rside)) continue;
+          if (!this._nextTypeBySide[rside]) continue;
+          this._applyStationVisual(this._serializeStation(rside));
+        }
       }
       this._showMatchBodies({ showBot: !!redBot });
 
@@ -3917,7 +4038,9 @@
         }
         var mp = !!global.isMultiplayer;
         var host = global.StacksLobby && global.StacksLobby.isHost;
-        if (mp && host && global.sendCupEvent) this._broadcastState('garbage');
+        if (mp && host && global.sendCupEvent) {
+          this._broadcastGarbage([{ side: side, layers: 1, spawned: idleSpawned }]);
+        }
         this._updateHUD();
         this._updateDamageHUD();
       }
@@ -4147,7 +4270,7 @@
                   this._pulseHaptic(hand, 0.8, 90);
                 }
               }
-              if (mp && host) this._broadcastState('garbage');
+              if (mp && host) this._broadcastGarbage(applied);
               this._updateHUD();
             }
             // Battle Blocks inactivity fill (host / offline / lobby-bot only)
