@@ -676,6 +676,10 @@
             this.refreshLobbyUI();
             break;
           }
+          // Host starting a match interrupts any lobby Watch
+          if (window.replayActive || window.replaySpectator) {
+            if (window.stopMatchReplay) window.stopMatchReplay({ force: true });
+          }
           // Clear dual-bot idle without sending a no-op lobby "end" while WAITING
           if (comp && typeof comp.stopLocalPreview === 'function') {
             comp.stopLocalPreview();
@@ -1495,6 +1499,10 @@
 
       var activeTs = (window.replayActive && window.matchReplayPlayer)
         ? window.matchReplayPlayer._matchTimestamp : null;
+      var gate = window.stacksReplayGate;
+      var liveMatch = gate ? gate.isLiveMatchPlaying() : this._isRealMatchPlaying();
+      var canStartWatch = gate ? gate.canStart() : !liveMatch;
+      var canStopWatch = gate ? gate.canCancel() : true;
       if (!window.matchReplayStorage) return;
       var selfStats = this;
       for (var si = 0; si < end - start; si++) {
@@ -1503,9 +1511,12 @@
           if (activeTs && match.timestamp === activeTs) {
             if (replayBtns[slotIdx]) {
               replayBtns[slotIdx].setAttribute('visible', true);
-              replayBtns[slotIdx].setAttribute('material', 'color', '#cc3333');
+              replayBtns[slotIdx].setAttribute('material', 'color',
+                canStopWatch ? '#cc3333' : '#555555');
             }
-            if (replayTexts[slotIdx]) replayTexts[slotIdx].setAttribute('value', 'Stop');
+            if (replayTexts[slotIdx]) {
+              replayTexts[slotIdx].setAttribute('value', canStopWatch ? 'Stop' : 'Watching');
+            }
             return;
           }
           window.matchReplayStorage.load(match.timestamp).then(function (replay) {
@@ -1515,8 +1526,16 @@
               (replay.frames && replay.frames.length);
             if (!usable) return;
             replayBtns[slotIdx].setAttribute('visible', true);
-            replayBtns[slotIdx].setAttribute('material', 'color', '#4488ff');
-            if (replayTexts[slotIdx]) replayTexts[slotIdx].setAttribute('value', 'Watch');
+            if (liveMatch || !canStartWatch) {
+              replayBtns[slotIdx].setAttribute('material', 'color', '#555555');
+              if (replayTexts[slotIdx]) {
+                replayTexts[slotIdx].setAttribute('value',
+                  liveMatch ? 'In match' : 'Watch');
+              }
+            } else {
+              replayBtns[slotIdx].setAttribute('material', 'color', '#4488ff');
+              if (replayTexts[slotIdx]) replayTexts[slotIdx].setAttribute('value', 'Watch');
+            }
             if (selfStats.refreshRaycasters) selfStats.refreshRaycasters();
           }).catch(function () { /* no replay */ });
         })(si, list[start + si]);
@@ -1533,13 +1552,19 @@
       var match = list[idx];
       if (!match || !match.timestamp) return;
 
-      if (window.replayActive && window.matchReplayPlayer &&
-          window.matchReplayPlayer._matchTimestamp === match.timestamp) {
+      var gate = window.stacksReplayGate;
+      var activeSame = window.replayActive && window.matchReplayPlayer &&
+        window.matchReplayPlayer._matchTimestamp === match.timestamp;
+
+      // Stop only if host (or offline) — clients stay on Watching
+      if (activeSame) {
+        if (gate && !gate.canCancel()) return;
         if (window.stopMatchReplay) window.stopMatchReplay();
         this._showStats();
         return;
       }
 
+      if (gate && !gate.canStart()) return;
       if (window.startMatchReplay) {
         window.startMatchReplay(match.timestamp);
         this.menuVisible = false;
@@ -1550,9 +1575,12 @@
 
     _playLatestReplay: function () {
       if (!window.matchReplayStorage) return;
+      var gate = window.stacksReplayGate;
+      if (gate && !gate.canStart()) return;
       var self = this;
       window.matchReplayStorage.list().then(function (keys) {
         if (!keys || !keys.length) return;
+        if (gate && !gate.canStart()) return;
         var latest = keys.sort(function (a, b) { return b - a; })[0];
         if (window.startMatchReplay) {
           window.startMatchReplay(latest);

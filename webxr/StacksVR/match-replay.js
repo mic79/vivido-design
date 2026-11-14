@@ -192,6 +192,51 @@
       !(window.matchReplayPlayer && window.matchReplayPlayer._remoteOnly));
   }
 
+  /** Live seated match (not dual-idle preview, not Watch). */
+  function isLiveMatchPlaying() {
+    var ls = window.lobbyState;
+    if (ls && (ls.matchState === 'PLAYING' || ls.matchState === 'COUNTDOWN')) return true;
+    var comp = getGame();
+    if (!comp || !comp.matchActive || comp._dualBotPreview) return false;
+    if (window.replayActive || window.replaySpectator) return false;
+    if (comp.matchState === 'COUNTDOWN' || comp.matchState === 'PLAYING') return true;
+    if (comp.modes && comp.modes.active) return true;
+    return false;
+  }
+
+  function isLobbyHost() {
+    return !!(window.isHost || (window.StacksLobby && window.StacksLobby.isHost));
+  }
+
+  /**
+   * Host or client may start Watch only when no live match is running.
+   * If a lobby replay is already playing, only the host may supersede it.
+   */
+  function canStartMatchReplay() {
+    if (isLiveMatchPlaying()) return false;
+    if (!window.isMultiplayer) return true;
+    var active = !!(window.replayActive || window.replaySpectator ||
+      (window.matchReplayPlayer && window.matchReplayPlayer.playing));
+    if (active && !isLobbyHost()) return false;
+    return true;
+  }
+
+  /**
+   * User cancel / Stop: offline anyone; in lobby only the host.
+   * Natural completion and host-forced stop use opts.complete / opts.force.
+   */
+  function canCancelMatchReplay() {
+    if (!window.isMultiplayer) return true;
+    return isLobbyHost();
+  }
+
+  window.stacksReplayGate = {
+    isLiveMatchPlaying: isLiveMatchPlaying,
+    canStart: canStartMatchReplay,
+    canCancel: canCancelMatchReplay,
+    isHost: isLobbyHost
+  };
+
   window.matchReplayPlayer = {
     playing: false,
     _replay: null,
@@ -207,8 +252,13 @@
     _sharing: false,
 
     play: function (replay) {
-      if (!replay) return;
-      this.stop({ silent: true });
+      if (!replay) return false;
+      if (!canStartMatchReplay()) {
+        console.warn('[MatchReplay] blocked — live match or non-host during Watch');
+        return false;
+      }
+      // Host superseding another Watch (or restarting): force-clear without dual-idle flicker
+      this.stop({ silent: true, force: true, keepIdle: true });
       this._remoteOnly = false;
       this._replay = replay;
       this.playing = true;
@@ -301,6 +351,13 @@
 
     stop: function (opts) {
       opts = opts || {};
+      if (!this.playing && !window.replayActive && !this._sharing) return true;
+      // User cancel (Stop): lobby clients may not interrupt — only host
+      var userCancel = !opts.silent && !opts.complete && !opts.force;
+      if (userCancel && !canCancelMatchReplay()) {
+        console.warn('[MatchReplay] only host can cancel lobby Watch');
+        return false;
+      }
       var wasSharing = this._sharing && !this._remoteOnly;
       this._finishPlaceFx(true);
       this.playing = false;
@@ -310,7 +367,11 @@
       this._sharing = false;
       this._remoteOnly = false;
       window.replayActive = false;
-      if (wasSharing && !opts.silent && window.sendReplayMsg && window.isMultiplayer) {
+      window.replaySpectator = false;
+      // Announce end: natural complete (any driver), host cancel/force, or host silent supersede skipped
+      var announce = wasSharing && window.sendReplayMsg && window.isMultiplayer &&
+        !opts.silent && (opts.complete || opts.force || userCancel || isLobbyHost());
+      if (announce) {
         window.sendReplayMsg({ type: 'replay-ended' });
       }
       if (!opts.silent && !opts.keepIdle) {
@@ -319,6 +380,7 @@
           comp._scheduleDualIdle(400);
         }
       }
+      return true;
     },
 
     _removeGhostGroup: function (fx) {
@@ -607,22 +669,34 @@
       var doneEvents = this._eventIdx >= events.length && !this._placeFx;
       var doneFrames = !frames.length || this._frameIdx >= frames.length;
       if (doneEvents && doneFrames && t > (this._replay.durationMs || 0) + 600) {
-        this.stop();
+        this.stop({ complete: true });
       }
     }
   };
 
   window.startMatchReplay = function (ts) {
     if (!window.matchReplayStorage) return;
+    if (!canStartMatchReplay()) {
+      console.warn('[MatchReplay] start blocked (live match or non-host during Watch)');
+      return;
+    }
     window.matchReplayStorage.load(ts).then(function (replay) {
-      if (replay && window.matchReplayPlayer) window.matchReplayPlayer.play(replay);
+      if (!replay || !window.matchReplayPlayer) return;
+      if (!canStartMatchReplay()) return;
+      window.matchReplayPlayer.play(replay);
     }).catch(function (err) {
       console.warn('[MatchReplay] load failed', err);
     });
   };
 
-  window.stopMatchReplay = function () {
-    if (window.matchReplayPlayer) window.matchReplayPlayer.stop();
+  /** Host cancel / start-match interrupt. opts.force bypasses host check for system paths. */
+  window.stopMatchReplay = function (opts) {
+    if (!window.matchReplayPlayer) return false;
+    opts = opts || {};
+    if (opts.force || opts.complete) {
+      return window.matchReplayPlayer.stop(opts);
+    }
+    return window.matchReplayPlayer.stop(opts);
   };
 
   AFRAME.registerComponent('match-replay-ticker', {

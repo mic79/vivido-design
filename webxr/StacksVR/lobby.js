@@ -683,7 +683,13 @@
         if (Lobby.onCupSnapshot) Lobby.onCupSnapshot(data);
       } else if (data.type === 'replay-started' || data.type === 'replay-state' ||
                  data.type === 'replay-ended') {
-        // DodgeVR parity: whoever starts Watch streams to the whole lobby
+        // Never let Watch wipe a live match — drop started/state while PLAYING/COUNTDOWN
+        var liveMs = Lobby.lobbyState &&
+          (Lobby.lobbyState.matchState === 'PLAYING' || Lobby.lobbyState.matchState === 'COUNTDOWN');
+        if (liveMs && data.type !== 'replay-ended') {
+          return;
+        }
+        // DodgeVR parity: Watch streams to the whole lobby (WAITING only for start/state)
         if (!data.from) data.from = fromId;
         for (var ri = 0; ri < Lobby.connections.length; ri++) {
           var cr = Lobby.connections[ri];
@@ -843,7 +849,13 @@
       if (data.type === 'cup-snapshot' && Lobby.onCupSnapshot) Lobby.onCupSnapshot(data);
     } else if (data.type === 'replay-started' || data.type === 'replay-state' ||
                data.type === 'replay-ended') {
-      if (Lobby.onReplayMsg) Lobby.onReplayMsg(data);
+      var livePeer = Lobby.lobbyState &&
+        (Lobby.lobbyState.matchState === 'PLAYING' || Lobby.lobbyState.matchState === 'COUNTDOWN');
+      if (livePeer && data.type !== 'replay-ended') {
+        /* ignore — do not interrupt live match cups */
+      } else if (Lobby.onReplayMsg) {
+        Lobby.onReplayMsg(data);
+      }
     } else if (data.type === 'player-pose') {
       var poseFrom = data.from || fromId;
       if (Lobby.onPlayerPose) Lobby.onPlayerPose(poseFrom, data);

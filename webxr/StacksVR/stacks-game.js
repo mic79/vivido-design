@@ -3089,18 +3089,45 @@
       return true;
     },
 
+    _isLiveMatchPlaying: function () {
+      if (global.stacksReplayGate && typeof global.stacksReplayGate.isLiveMatchPlaying === 'function') {
+        return !!global.stacksReplayGate.isLiveMatchPlaying();
+      }
+      if (this._dualBotPreview) return false;
+      if (global.lobbyState &&
+          (global.lobbyState.matchState === 'PLAYING' || global.lobbyState.matchState === 'COUNTDOWN')) {
+        return true;
+      }
+      return !!(this.matchActive && !global.replayActive && !global.replaySpectator);
+    },
+
+    _replayMsgFromHost: function (msg) {
+      if (!msg || !msg.from) return false;
+      var Lobby = global.StacksLobby;
+      if (Lobby && Lobby.hostPlayerId && msg.from === Lobby.hostPlayerId) return true;
+      if (typeof msg.from === 'string' && msg.from.indexOf('stacksvr-host-') === 0) return true;
+      return false;
+    },
+
     /**
-     * DodgeVR parity: another lobby member started Watch — mirror their cups.
-     * Local player who started the replay already applies events; ignore their own stream.
+     * DodgeVR parity: lobby Watch stream. Never interrupts a live match.
+     * Only the host may interrupt another player's Watch (client drivers yield).
      */
     onRemoteReplayMsg: function (msg) {
       if (!msg || !msg.type) return;
       var myId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
       if (msg.from && myId && msg.from === myId) return;
-      // Local Watch driver already owns the board
-      if (global.replayActive && window.matchReplayPlayer && window.matchReplayPlayer.playing &&
-          !window.matchReplayPlayer._remoteOnly) {
-        return;
+
+      // Live match wins — never clear cups for a late/errant Watch packet
+      if (msg.type !== 'replay-ended' && this._isLiveMatchPlaying()) return;
+
+      var localDriver = global.replayActive && window.matchReplayPlayer &&
+        window.matchReplayPlayer.playing && !window.matchReplayPlayer._remoteOnly;
+      if (localDriver) {
+        // Peer streams ignored while we drive; host interrupt forces yield
+        if (!this._replayMsgFromHost(msg)) return;
+        window.matchReplayPlayer.stop({ silent: true, force: true, keepIdle: true });
+        localDriver = false;
       }
 
       if (msg.type === 'replay-started') {
@@ -3133,7 +3160,6 @@
 
       if (msg.type === 'replay-state') {
         if (!global.replaySpectator && !global.replayActive) {
-          // Late join mid-stream — enter spectator mode
           this.onRemoteReplayMsg({
             type: 'replay-started',
             from: msg.from,
@@ -3141,6 +3167,7 @@
             redName: (window._replayNames && window._replayNames.red) || 'Red'
           });
         }
+        if (this._isLiveMatchPlaying()) return;
         if (msg.cups) this._applyNetworkCups(msg.cups, { forceAll: true });
         if (msg.scores && this.modes) {
           if (msg.scores.blue != null) this.modes.scores.blue = msg.scores.blue;
