@@ -2208,7 +2208,7 @@
             if (blinkList.length) this._startBlockBlink(blinkList, { garbage: true });
           }
         }
-        if (!this._dualBotPreview) this._sfx('attack', { volume: 0.5 });
+        if (!this._dualBotPreview) this._sfx('garbage');
         this._updateHUD();
         this._updateDamageHUD();
         return;
@@ -4434,7 +4434,7 @@
             side: side, layers: 1, holes: this.attackSys.garbageHoles, reason: 'inactive'
           });
         }
-        if (!this._dualBotPreview) this._sfx('attack', { volume: 0.4 });
+        if (!this._dualBotPreview) this._sfx('garbage');
         if (cup.isToppedOut()) {
           var over = this.modes.onOverflow(side);
           if (over) this._endFromMode(over);
@@ -4652,7 +4652,7 @@
           if (tickAttack) {
             var applied = this.attackSys.tick(this.cups, performance.now());
             if (applied && applied.length) {
-              if (!this._dualBotPreview) this._sfx('attack', { volume: 0.5 });
+              if (!this._dualBotPreview) this._sfx('garbage');
               for (var i = 0; i < applied.length; i++) {
                 if (applied[i].spawned && applied[i].spawned.length) {
                   this._startBlockBlink(applied[i].spawned, { garbage: true });

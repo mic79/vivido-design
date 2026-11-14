@@ -185,8 +185,9 @@
   }
 
   var AudioApi = {
-    bgVol: 0.28,
-    matchVol: 0.32,
+    // Keep beds under dialogue/SFX — users reported prior 0.28/0.32 as too loud
+    bgVol: 0.12,
+    matchVol: 0.14,
     sfxEnabled: true,
     musicEnabled: loadMusicPref(),
 
@@ -227,15 +228,28 @@
       }
     },
 
-    /** Play a one-shot SFX by entity id suffix: grab, place, clear, attack, boom, win, ui, rotate.
-     *  opts.rate — playbackRate. opts.volume — one-shot level.
-     *  Prefer clearChime() for line clears — not this path. */
+    /**
+     * Play a one-shot SFX by entity id suffix: grab, place, clear, garbage, win, ui, rotate.
+     * NEVER play boom/explosion — remapped or dropped (user request, repeated).
+     * opts.rate — playbackRate. opts.volume — one-shot level.
+     * Prefer clearChime() for line clears — not this path.
+     */
     sfx: function (name, opts) {
       opts = opts || {};
       if (AudioApi.sfxEnabled === false) return;
       if (name === 'clear') {
         playClearChime(opts.layers != null ? opts.layers : 1, opts.volume);
         return;
+      }
+      // Hard ban on explosion assets (boom.mp3 / attack.mp3 were the offenders)
+      if (name === 'boom' || name === 'attack') {
+        name = 'garbage';
+      }
+      // Soft thud for incoming garbage lines — place click, not a blast
+      if (name === 'garbage') {
+        name = 'place';
+        if (opts.volume == null) opts.volume = 0.22;
+        if (opts.rate == null) opts.rate = 0.85;
       }
       AudioApi.unlock();
       var node = el('sfx-' + name);
@@ -322,16 +336,8 @@
       });
       scene.addEventListener('loaded', function () {
         AudioApi.preloadClear();
-        // Warm SFX pools silently (skip clear — Web Audio path)
-        ['grab', 'place', 'attack', 'boom', 'win', 'ui', 'rotate'].forEach(function (n) {
-          var node = el('sfx-' + n);
-          var sc = soundComp(node);
-          if (!sc) return;
-          try {
-            sc.playSound();
-            sc.pauseSound();
-          } catch (e) { /* ignore */ }
-        });
+        // Do NOT playSound()/pauseSound() to "warm" pools — that blasted every
+        // SFX (including boom/win) on page open. Decode-only preload is enough.
       });
     }
   }
