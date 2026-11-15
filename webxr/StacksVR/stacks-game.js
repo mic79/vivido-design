@@ -17,6 +17,8 @@
   // Keep win banner + final board readable; dual-idle only after this unless START/Watch
   var VICTORY_HOLD_MS = 30000;
   var VICTORY_CONFETTI_S = 3.6;
+  var DEFAULT_CUP_Y = 0.92;
+  var CUP_HEIGHT_RESET_MS = 1100;
 
   AFRAME.registerComponent('stacks-game', {
     schema: {
@@ -138,9 +140,11 @@
       //   (floor squares are not diamond-rotated).
       var boardSize = (global.getBoardSize && global.getBoardSize()) || 6;
       this.boardSize = boardSize === 4 ? 4 : 6;
-      var CUP_Y = 0.92;
+      var CUP_Y = DEFAULT_CUP_Y;
       var CUP_HALF = (this.boardSize * CELL) / 2;
       var PAD_Y = 1.12;
+      this._defaultCupY = CUP_Y;
+      this._cupHeightAnims = [];
       var SHIFT_X = 0.65; // lateral stagger
       var SHIFT_Z = 0.85; // depth separation
       var blueC = { x: -SHIFT_X, z: SHIFT_Z };
@@ -300,6 +304,7 @@
       this._layout = {
         blueC: blueC, redC: redC,
         blueYaw: blueYaw, redYaw: redYaw,
+        cupY: CUP_Y,
         bluePad: bluePadPos, bluePocket: bluePocketPos, blueNext: blueNextPos,
         redPad: redPadPos, redPocket: redPocketPos, redNext: redNextPos,
         player: { x: blueC.x, y: 0, z: blueC.z + 0.90 },
@@ -1263,6 +1268,7 @@
         startHandY: this._tmp.y,
         startCupY: cup.getHeight ? cup.getHeight() : (cup.pivot ? cup.pivot.position.y : cup.root.position.y)
       };
+      this._cancelCupHeightAnim(cup);
       this._sfx('rotate');
       this._pulseHaptic(handEl, 0.4, 40);
       this._updateHUD();
@@ -1307,6 +1313,68 @@
         yaw: cup.yaw || 0,
         heightY: cup.getHeight ? cup.getHeight() : cup.position.y
       });
+    },
+
+    /** Ease both cups to default height. Never snaps — cancels if that cup is gripped. */
+    _beginSmoothCupHeightReset: function (durationMs) {
+      var target = this._defaultCupY != null ? this._defaultCupY : DEFAULT_CUP_Y;
+      var dur = durationMs != null ? durationMs : CUP_HEIGHT_RESET_MS;
+      var now = performance.now();
+      var next = [];
+      var sides = ['blue', 'red'];
+      for (var i = 0; i < sides.length; i++) {
+        var cup = this.cups && this.cups[sides[i]];
+        if (!cup || !cup.setHeight || !cup.getHeight) continue;
+        var from = cup.getHeight();
+        if (Math.abs(from - target) < 0.002) {
+          cup.setHeight(target);
+          continue;
+        }
+        next.push({
+          cup: cup,
+          side: cup.side,
+          from: from,
+          to: target,
+          t0: now,
+          dur: Math.max(200, dur)
+        });
+      }
+      this._cupHeightAnims = next;
+    },
+
+    _cancelCupHeightAnim: function (cup) {
+      if (!this._cupHeightAnims || !this._cupHeightAnims.length || !cup) return;
+      var kept = [];
+      for (var i = 0; i < this._cupHeightAnims.length; i++) {
+        if (this._cupHeightAnims[i].cup !== cup) kept.push(this._cupHeightAnims[i]);
+      }
+      this._cupHeightAnims = kept;
+    },
+
+    _tickCupHeightAnims: function (now) {
+      if (!this._cupHeightAnims || !this._cupHeightAnims.length) return;
+      now = now || performance.now();
+      var grabCup = this._cupGrab && this._cupGrab.cup;
+      var kept = [];
+      var easeOutCubic = function (u) {
+        var t = 1 - u;
+        return 1 - t * t * t;
+      };
+      for (var i = 0; i < this._cupHeightAnims.length; i++) {
+        var a = this._cupHeightAnims[i];
+        if (!a.cup || !a.cup.setHeight) continue;
+        // Player took over height — stop easing that cup
+        if (grabCup && grabCup === a.cup) continue;
+        var u = (now - a.t0) / a.dur;
+        if (u >= 1) {
+          a.cup.setHeight(a.to);
+          continue;
+        }
+        if (u < 0) u = 0;
+        a.cup.setHeight(a.from + (a.to - a.from) * easeOutCubic(u));
+        kept.push(a);
+      }
+      this._cupHeightAnims = kept;
     },
 
     _broadcastHold: function () {
@@ -2562,6 +2630,8 @@
       this._clearVictory();
       this._clearMatchBanner();
       this._endingMatch = false;
+      // If still off default from a prior raise, ease back (no teleport into GO)
+      this._beginSmoothCupHeightReset(CUP_HEIGHT_RESET_MS);
       // Leave dual-preview ownership BEFORE bag reset / bot disable so blue
       // pad visuals cannot wipe the human spawn below.
       this._dualBotPreview = false;
@@ -3020,6 +3090,8 @@
         });
       }
       this._musicIdle();
+      // Ease playfields back to default height — never snap/teleport
+      this._beginSmoothCupHeightReset(CUP_HEIGHT_RESET_MS);
       if (festive) {
         // Defer heavy canvas/confetti one frame so the last place still paints
         setTimeout(function () {
@@ -4628,6 +4700,7 @@
       this._tickVictory();
       this._tickClearPopup();
       this._tickBlockBlinks();
+      this._tickCupHeightAnims();
       this._prepareMatchHud();
       this._placeMatchHud();
 
