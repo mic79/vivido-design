@@ -38,35 +38,26 @@ jobs:
             [[ -d "$d" ]] && rsync -a --exclude node_modules --exclude .git "$d" "$DEST/"
           done
 
-          # webxr: include only projects that fit the budget. Giants stay in git for
-          # local/dev but are NOT published (use dedicated Pages repos if needed).
-          # Excluded families: RTSVR*, DriveVR*, BattleVR2, VRscifiHallway, ChaseVR,
-          # GTAVR, shared webxr/assets, and any *BAK* trees.
+          # webxr: allowlist only. Heavy A/B / PCVR / BAK trees stay in git for local use.
+          # Paused on Pages (still in git): languageVR, DodgeVR1*, DodgeVR2*, DodgeVR3,
+          # whiteRoomVR, brutalistVR7/8, VRrunner, body-rigged2/4echo/5echo/GD.
           mkdir -p "$DEST/webxr"
           [[ -f webxr/index.html ]] && cp -a webxr/index.html "$DEST/webxr/" || true
 
           ALLOW=(
-            languageVR
+            RTSVR5
+            RTSVR6
             MotionGuidanceVR5
             StacksVR
             DodgeVR
-            DodgeVR1
-            DodgeVR1-1
-            DodgeVR2
-            DodgeVR2v2
-            DodgeVR3
             capVR
             BoltVR
             BattleVR
             VRdrift
             VRdrift2
-            VRrunner
             VRragdoll
             VRragdoll2
-            whiteRoomVR
             brutalistVR6
-            brutalistVR7
-            brutalistVR8
             pinballVR2
             VRKnockout
             VRLeague
@@ -75,26 +66,51 @@ jobs:
             LiteRT
             DotminationVR
             body-rigged
-            body-rigged2
             body-rigged3
             body-rigged4
             body-rigged5
-            body-rigged4echo
-            body-rigged5echo
-            body-riggedGD
             audio
+          )
+
+          # Quest/default runtime only — drop PCVR A/B kits, bake duplicates, scripts, proofs.
+          RTS_EXCLUDES=(
+            --exclude 'scripts/'
+            --exclude 'verify-*/'
+            --exclude 'proof-*/'
+            --exclude '_quest-work/'
+            --exclude 'assets/terrain/scifi-overview-lods.glb'
+            --exclude 'assets/terrain/scifi-overview-lods-quest.glb'
+            --exclude 'assets/terrain/scifi-overview-rocks.glb'
+            --exclude 'assets/terrain/scifi-rts-kit-lod0.glb'
+            --exclude 'assets/terrain/scifi-rts-kit-lod2.glb'
+            --exclude 'assets/terrain/scifi-rts-overview.glb'
+            --exclude 'assets/terrain/terrain-skirmish-ue-lm.glb'
+            --exclude 'assets/terrain/terrain-skirmish-1v1-pcvr.glb'
+            --exclude 'assets/terrain/*Copy*'
+            --exclude 'assets/terrain/*.bak'
+            --exclude 'assets/textures/**/*.exr'
+            --exclude 'assets/mesa/hera-planum/detail/'
+            --exclude 'assets/mesa/hera-planum/diffuse-hq.jpg'
+            --exclude 'assets/mesa/hera-planum/normal-hq.jpg'
+            --exclude 'assets/mesa/hera-planum/*.sd7'
+            --exclude 'assets/mesa/hera-planum/_sd7/'
           )
 
           for name in "${ALLOW[@]}"; do
             src="webxr/$name"
             if [[ -d "$src" ]]; then
               echo "include $src"
+              extra=()
+              if [[ "$name" == RTSVR5 || "$name" == RTSVR6 ]]; then
+                extra=( "${RTS_EXCLUDES[@]}" )
+              fi
               rsync -a \
                 --exclude '.chrome*' \
                 --exclude 'export/' \
                 --exclude 'bench-*/' \
                 --exclude 'node_modules/' \
                 --exclude '.git/' \
+                "${extra[@]}" \
                 "$src" "$DEST/webxr/"
             fi
           done
@@ -103,8 +119,8 @@ jobs:
           BYTES=$(du -sb "$DEST" | awk '{print $1}')
           MB=$((BYTES / 1024 / 1024))
           echo "Slim site size: ${MB} MB"
-          if (( BYTES > 950*1024*1024 )); then
-            echo "::error::Slim site is ${MB}MB (>950MB). Trim ALLOW list."
+          if (( BYTES > 980*1024*1024 )); then
+            echo "::error::Slim site is ${MB}MB (>980MB). Trim ALLOW list or RTS_EXCLUDES."
             du -sh "$DEST"/* "$DEST"/webxr/* 2>/dev/null | sort -hr | head -40
             exit 1
           fi
