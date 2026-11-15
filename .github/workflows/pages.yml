@@ -38,26 +38,24 @@ jobs:
             [[ -d "$d" ]] && rsync -a --exclude node_modules --exclude .git "$d" "$DEST/"
           done
 
-          # webxr: allowlist only. Heavy A/B / PCVR / BAK trees stay in git for local use.
-          # Paused on Pages (still in git): languageVR, DodgeVR1*, DodgeVR2*, DodgeVR3,
-          # whiteRoomVR, brutalistVR7/8, VRrunner, body-rigged2/4echo/5echo/GD.
+          # webxr: allowlist only. 1GB Pages cap — keep product titles, pause demos.
+          # Offline (still in git): RTSVR5, BattleVR, DriveVR*, VRscifiHallway, ChaseVR,
+          # GTAVR, DodgeVR1*, whiteRoomVR, brutalistVR7/8, VRrunner, body-rigged*, VRdrift2.
           mkdir -p "$DEST/webxr"
           [[ -f webxr/index.html ]] && cp -a webxr/index.html "$DEST/webxr/" || true
 
           ALLOW=(
-            RTSVR5
+            languageVR
+            BattleVR2
             RTSVR6
             MotionGuidanceVR5
             StacksVR
             DodgeVR
             capVR
             BoltVR
-            BattleVR
             VRdrift
-            VRdrift2
             VRragdoll
             VRragdoll2
-            brutalistVR6
             pinballVR2
             VRKnockout
             VRLeague
@@ -65,26 +63,22 @@ jobs:
             HeliVR2
             LiteRT
             DotminationVR
-            body-rigged
-            body-rigged3
-            body-rigged4
-            body-rigged5
             audio
           )
 
-          # Quest/default runtime only — drop PCVR A/B kits, bake duplicates, scripts, proofs.
-          RTS_EXCLUDES=(
+          # Shared fat cuts for RTS-family trees (PCVR A/B, proofs, HQ JPEG dupes).
+          HEAVY_EXCLUDES=(
             --exclude 'scripts/'
             --exclude 'verify-*/'
             --exclude 'proof-*/'
             --exclude '_quest-work/'
+            --exclude 'bench-out/'
             --exclude 'assets/terrain/scifi-overview-lods.glb'
             --exclude 'assets/terrain/scifi-overview-lods-quest.glb'
             --exclude 'assets/terrain/scifi-overview-rocks.glb'
             --exclude 'assets/terrain/scifi-rts-kit-lod0.glb'
             --exclude 'assets/terrain/scifi-rts-kit-lod2.glb'
             --exclude 'assets/terrain/scifi-rts-overview.glb'
-            --exclude 'assets/terrain/terrain-skirmish-ue-lm.glb'
             --exclude 'assets/terrain/terrain-skirmish-1v1-pcvr.glb'
             --exclude 'assets/terrain/*Copy*'
             --exclude 'assets/terrain/*.bak'
@@ -96,13 +90,29 @@ jobs:
             --exclude 'assets/mesa/hera-planum/_sd7/'
           )
 
+          # RTSVR6: also drop UE lightmap bake (1v1 GLB is the match default).
+          RTS_EXCLUDES=(
+            "${HEAVY_EXCLUDES[@]}"
+            --exclude 'assets/terrain/terrain-skirmish-ue-lm.glb'
+          )
+
+          # BattleVR2: keep ue-lm (lobby crater); drop optional Canyon map pack.
+          BATTLEVR2_EXCLUDES=(
+            "${HEAVY_EXCLUDES[@]}"
+            --exclude 'assets/terrain/canyon_splat/'
+            --exclude 'assets/terrain/terrain-canyon.glb'
+            --exclude 'assets/terrain/canyon_bare_hera.glb'
+          )
+
           for name in "${ALLOW[@]}"; do
             src="webxr/$name"
             if [[ -d "$src" ]]; then
               echo "include $src"
               extra=()
-              if [[ "$name" == RTSVR5 || "$name" == RTSVR6 ]]; then
+              if [[ "$name" == RTSVR6 || "$name" == RTSVR5 ]]; then
                 extra=( "${RTS_EXCLUDES[@]}" )
+              elif [[ "$name" == BattleVR2 ]]; then
+                extra=( "${BATTLEVR2_EXCLUDES[@]}" )
               fi
               rsync -a \
                 --exclude '.chrome*' \
@@ -119,8 +129,8 @@ jobs:
           BYTES=$(du -sb "$DEST" | awk '{print $1}')
           MB=$((BYTES / 1024 / 1024))
           echo "Slim site size: ${MB} MB"
-          if (( BYTES > 980*1024*1024 )); then
-            echo "::error::Slim site is ${MB}MB (>980MB). Trim ALLOW list or RTS_EXCLUDES."
+          if (( BYTES > 1000*1024*1024 )); then
+            echo "::error::Slim site is ${MB}MB (>1000MB). Trim ALLOW list or excludes."
             du -sh "$DEST"/* "$DEST"/webxr/* 2>/dev/null | sort -hr | head -40
             exit 1
           fi
