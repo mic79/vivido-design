@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below). -->
-  <meta name="stacks-version" content="0.2.37" />
+  <meta name="stacks-version" content="0.2.38" />
   <title>StacksVR</title>
   <script>
     (function () {
@@ -65,12 +65,20 @@
     #pre-vr-overlay .pre-vr-actions {
       display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 1.2em;
     }
-    #pre-vr-spectate-btn {
+    #pre-vr-spectate-btn, #pre-vr-start-btn {
       padding: 12px 36px; border: none; border-radius: 10px;
-      background: #1f9d45; color: #fff; font-size: 1.05em; font-weight: 700;
+      color: #fff; font-size: 1.05em; font-weight: 700;
       cursor: pointer;
     }
+    #pre-vr-spectate-btn { background: #1f9d45; }
     #pre-vr-spectate-btn:hover { background: #188a3a; }
+    #pre-vr-start-btn { background: #2a6dff; display: none; }
+    #pre-vr-start-btn:hover { background: #1e58d6; }
+    #pre-vr-overlay.vr-ready #pre-vr-spectate-btn,
+    #pre-vr-overlay.vr-ready .spectate-hint { display: none !important; }
+    #pre-vr-overlay.vr-ready #pre-vr-start-btn { display: inline-block; }
+    #pre-vr-overlay.vr-ready .hint-flatscreen { display: none !important; }
+    #pre-vr-overlay:not(.vr-ready) .hint-vr { display: none !important; }
     #pre-vr-overlay .spectate-hint {
       font-size: 0.78em; color: #778899; max-width: 280px; line-height: 1.35; margin: 0;
     }
@@ -233,10 +241,12 @@
       <label for="nickname-input">Nickname</label>
       <input id="nickname-input" type="text" maxlength="12" placeholder="Player" autocomplete="username" />
       <div class="pre-vr-actions">
+        <button type="button" id="pre-vr-start-btn">Start VR</button>
         <button type="button" id="pre-vr-spectate-btn">Spectate (flatscreen)</button>
-        <p class="spectate-hint">Same Watch / Offline Preview as mobile — orbit with mouse drag. VR play still uses Enter VR below.</p>
+        <p class="spectate-hint">Orbit with mouse drag — same Watch / Offline Preview as mobile.</p>
       </div>
-      <p class="hint">Headset ready? Press <b>Enter VR</b> below to play</p>
+      <p class="hint hint-vr">Put on your headset, then tap <b>Start VR</b></p>
+      <p class="hint hint-flatscreen">No headset? Spectate flatscreen, or connect a headset for VR play</p>
     </div>
   </div>
   <div id="app-version-chip" aria-hidden="true"></div>
@@ -259,6 +269,64 @@
       }
       input.addEventListener('input', syncNick);
       window.playerNickname = (saved && saved.trim()) ? saved.trim().slice(0, 12) : 'Player';
+    })();
+  </script>
+  <script>
+    (function () {
+      var overlay = document.getElementById('pre-vr-overlay');
+      var startBtn = document.getElementById('pre-vr-start-btn');
+      if (!overlay) return;
+
+      function markVrReady(ready) {
+        if (ready) overlay.classList.add('vr-ready');
+        else overlay.classList.remove('vr-ready');
+      }
+
+      function detectVr() {
+        // Quest / PCVR browser with WebXR immersive-vr
+        if (navigator.xr && navigator.xr.isSessionSupported) {
+          return navigator.xr.isSessionSupported('immersive-vr').then(function (ok) {
+            markVrReady(!!ok);
+            return !!ok;
+          }).catch(function () {
+            markVrReady(false);
+            return false;
+          });
+        }
+        markVrReady(false);
+        return Promise.resolve(false);
+      }
+
+      function enterVr() {
+        var scene = document.querySelector('a-scene');
+        // Prefer A-Frame's own button (handles permissions / session opts)
+        var afBtn = document.querySelector('.a-enter-vr-button');
+        if (afBtn) {
+          afBtn.click();
+          return;
+        }
+        if (scene && typeof scene.enterVR === 'function') {
+          try { scene.enterVR(true); } catch (e) {
+            try { scene.enterVR(); } catch (e2) { /* ignore */ }
+          }
+        }
+      }
+
+      if (startBtn) {
+        startBtn.addEventListener('click', function () {
+          enterVr();
+        });
+      }
+
+      detectVr();
+      // Re-check after scene loads (OpenXR grant can appear late on desktop)
+      var scene = document.querySelector('a-scene');
+      if (scene) {
+        scene.addEventListener('loaded', function () { detectVr(); });
+      }
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) detectVr();
+      });
     })();
   </script>
 
@@ -324,7 +392,7 @@
 
     <!-- Discreet build stamp (DodgeVR-style) — kept in sync from STACKS_VERSION -->
     <a-entity id="version-display" position="0 2.42 0"
-      text="value: v0.2.37; align: center; width: 0.85; color: #5a6878"></a-entity>
+      text="value: v0.2.38; align: center; width: 0.85; color: #5a6878"></a-entity>
     <a-entity id="score-display" position="0 2.2 0">
       <a-entity id="blue-score" position="-0.16 0 0"
         text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>
