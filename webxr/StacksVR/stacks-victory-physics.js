@@ -9,10 +9,11 @@
   var MAX_BLOCKS_PER_CUP = 36;
   // CapVR-proven palm contact (grip-local). Thin box, not a fat sphere.
   var HAND_PALM_LOCAL = { x: 0, y: -0.04, z: -0.08 };
-  var HAND_BOX = { hx: 0.045, hy: 0.018, hz: 0.055 }; // half-extents (metres)
-  var SCOOP_REACH = 0.12;
-  var SCOOP_MAX = 4;
-  var FLING_SCALE = 1.35;
+  var HAND_BOX = { hx: 0.05, hy: 0.02, hz: 0.06 }; // half-extents (metres)
+  var SCOOP_REACH = 0.18;
+  var SCOOP_MAX = 3;
+  var FLING_SCALE = 1.55;
+  var FLING_MAX = 10;
 
   var _b3 = null;
   var _b3Loading = null;
@@ -31,13 +32,16 @@
   var _scoop = { leftHand: [], rightHand: [] };
   var _handGrabButtons = { leftHand: 0, rightHand: 0 }; // grip+trigger refcount
   var _handPrev = {};
+  var _handVel = { leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 } };
   var _boundHands = false;
+  var _tmpOff = null;
 
   function ensureThreeHelpers() {
     if (!_tmpQ && global.THREE) {
       _tmpQ = new THREE.Quaternion();
       _tmpQ2 = new THREE.Quaternion();
       _tmpP = new THREE.Vector3();
+      _tmpOff = new THREE.Vector3();
       _tmpEuler = new THREE.Euler(0, 0, 0, 'YXZ');
     }
   }
@@ -197,18 +201,35 @@
     // Victory debris must stay interactive — sleep freezes piles until a wake
     // chain hits them, which reads as "physics stopped" on untouched blocks.
     if (def.enableSleep != null) def.enableSleep = false;
-    if (def.linearDamping != null) def.linearDamping = 0.12;
-    if (def.angularDamping != null) def.angularDamping = 0.18;
+    if (def.linearDamping != null) def.linearDamping = 0.08;
+    if (def.angularDamping != null) def.angularDamping = 0.12;
     var body = b3.b3CreateBody(world, def);
+    // Heavier + slightly slipperier so towers tumble instead of looking glued
     b3.b3CreateBoxShape(body, shapeDef(b3, {
-      friction: 0.85,
-      restitution: 0.12,
-      density: 0.55
+      friction: 0.55,
+      restitution: 0.15,
+      density: 3.5
     }), half, half, half);
     if (b3.b3Body_EnableSleep) {
       try { b3.b3Body_EnableSleep(body, false); } catch (e) { /* ignore */ }
     }
     if (b3.b3Body_SetAwake) b3.b3Body_SetAwake(body, true);
+    // Break stable stacks on enable — without this, high-friction towers sit
+    // perfectly still and look like physics never started on those blocks.
+    if (b3.b3Body_SetLinearVelocity) {
+      b3.b3Body_SetLinearVelocity(body, {
+        x: (Math.random() - 0.5) * 0.55,
+        y: Math.random() * 0.35,
+        z: (Math.random() - 0.5) * 0.55
+      });
+    }
+    if (b3.b3Body_SetAngularVelocity) {
+      b3.b3Body_SetAngularVelocity(body, {
+        x: (Math.random() - 0.5) * 3.5,
+        y: (Math.random() - 0.5) * 3.5,
+        z: (Math.random() - 0.5) * 3.5
+      });
+    }
     return body;
   }
 
@@ -298,14 +319,14 @@
 
   function beginScoop(handId) {
     if (!_active || !_b3) return;
-    // Already holding — do NOT re-grab. A second grip/trigger beginScoop used to
-    // replace _scoop[] while leaving old entries held=true → frozen mid-air.
+    // Already holding — do NOT re-grab (prevents orphan held freezes).
     if (_scoop[handId] && _scoop[handId].length) return;
     var hand = document.getElementById(handId);
     if (!hand || !hand.object3D) return;
     ensureThreeHelpers();
     handWorldPose(hand, _tmpP, _tmpQ);
     var handPos = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z };
+    var invQ = _tmpQ.clone().invert();
     var grabbed = [];
     var used = {};
     for (var n = 0; n < SCOOP_MAX; n++) {
@@ -319,11 +340,22 @@
       if (_b3.b3Body_SetAngularVelocity) {
         _b3.b3Body_SetAngularVelocity(hit.entry.body, { x: 0, y: 0, z: 0 });
       }
+      // Offset + relative rotation in hand-local space (rotates with wrist)
+      var bp = _b3.b3Body_GetPosition(hit.entry.body);
+      var br = _b3.b3Body_GetRotation(hit.entry.body);
+      _tmpOff.set(bp.x - handPos.x, bp.y - handPos.y, bp.z - handPos.z);
+      _tmpOff.applyQuaternion(invQ);
+      var blockQ = new THREE.Quaternion(
+        br && br.v ? br.v.x : 0,
+        br && br.v ? br.v.y : 0,
+        br && br.v ? br.v.z : 0,
+        br && br.s != null ? br.s : 1
+      );
+      var relQ = invQ.clone().multiply(blockQ);
       grabbed.push({
         entry: hit.entry,
-        ox: hit.entry.mesh.position.x - handPos.x,
-        oy: hit.entry.mesh.position.y - handPos.y,
-        oz: hit.entry.mesh.position.z - handPos.z
+        lx: _tmpOff.x, ly: _tmpOff.y, lz: _tmpOff.z,
+        rq: { x: relQ.x, y: relQ.y, z: relQ.z, w: relQ.w }
       });
     }
     _scoop[handId] = grabbed;
@@ -332,40 +364,30 @@
   function endScoop(handId) {
     var list = _scoop[handId] || [];
     _scoop[handId] = [];
-    var vx = 0, vy = 0, vz = 0;
     if (_active && _b3 && list.length) {
-      var hand = document.getElementById(handId);
-      var prev = _handPrev[handId];
-      if (hand && hand.object3D) {
-        ensureThreeHelpers();
-        handWorldPose(hand, _tmpP, _tmpQ);
-        if (prev && prev.t) {
-          var dt = Math.max(0.008, (performance.now() - prev.t) / 1000);
-          vx = (_tmpP.x - prev.x) / dt;
-          vy = (_tmpP.y - prev.y) / dt;
-          vz = (_tmpP.z - prev.z) / dt;
-        }
-      }
+      // Use EMA hand velocity (updated BEFORE _handPrev overwrite) — old code
+      // read _handPrev after it was set to current pose → ~zero fling.
+      var hv = _handVel[handId] || { x: 0, y: 0, z: 0 };
+      var vx = hv.x * FLING_SCALE;
+      var vy = hv.y * FLING_SCALE;
+      var vz = hv.z * FLING_SCALE;
       var speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
-      var maxSp = 8;
-      if (speed > maxSp) {
-        var s = maxSp / speed;
+      if (speed > FLING_MAX) {
+        var s = FLING_MAX / speed;
         vx *= s; vy *= s; vz *= s;
       }
-      vx *= FLING_SCALE; vy *= FLING_SCALE; vz *= FLING_SCALE;
       for (var i = 0; i < list.length; i++) {
         var g = list[i];
         releaseBlockEntry(g.entry, { x: vx, y: vy, z: vz });
         if (_b3.b3Body_SetAngularVelocity) {
           _b3.b3Body_SetAngularVelocity(g.entry.body, {
-            x: (Math.random() - 0.5) * 6,
-            y: (Math.random() - 0.5) * 6,
-            z: (Math.random() - 0.5) * 6
+            x: (Math.random() - 0.5) * 4 + hv.z * 0.15,
+            y: (Math.random() - 0.5) * 4,
+            z: (Math.random() - 0.5) * 4 - hv.x * 0.15
           });
         }
       }
     }
-    // Always clear orphans for this hand (held without scoop entry)
     for (var j = 0; j < _blocks.length; j++) {
       if (_blocks[j].held === handId) {
         releaseBlockEntry(_blocks[j], { x: 0, y: 0, z: 0 });
@@ -389,37 +411,51 @@
     ensureThreeHelpers();
     var step = Math.max(0.001, dt || 1 / 60);
     ['leftHand', 'rightHand'].forEach(function (handId) {
+      // While gripping with empty hand, keep trying to pick up (more reliable)
+      if (_handGrabButtons[handId] > 0 && (!_scoop[handId] || !_scoop[handId].length)) {
+        beginScoop(handId);
+      }
       var list = _scoop[handId];
       if (!list || !list.length) return;
       var hand = document.getElementById(handId);
       if (!hand || !hand.object3D) return;
       handWorldPose(hand, _tmpP, _tmpQ);
-      var prev = _handPrev[handId];
-      var hvx = 0, hvy = 0, hvz = 0;
-      if (prev && prev.t) {
-        var hdt = Math.max(0.008, (performance.now() - prev.t) / 1000);
-        hvx = (_tmpP.x - prev.x) / hdt;
-        hvy = (_tmpP.y - prev.y) / hdt;
-        hvz = (_tmpP.z - prev.z) / hdt;
-      }
       for (var i = 0; i < list.length; i++) {
         var g = list[i];
-        var tx = _tmpP.x + g.ox;
-        var ty = _tmpP.y + g.oy;
-        var tz = _tmpP.z + g.oz;
-        // Held debris stay dynamic but are hard-driven to the hand each frame
-        _b3.b3Body_SetTransform(g.entry.body, { x: tx, y: ty, z: tz }, quatToB3Rot(_tmpQ));
-        if (_b3.b3Body_SetLinearVelocity) {
-          _b3.b3Body_SetLinearVelocity(g.entry.body, { x: hvx, y: hvy, z: hvz });
-        }
-        if (_b3.b3Body_SetAngularVelocity) {
-          _b3.b3Body_SetAngularVelocity(g.entry.body, { x: 0, y: 0, z: 0 });
-        }
+        _tmpOff.set(g.lx, g.ly, g.lz).applyQuaternion(_tmpQ);
+        var tx = _tmpP.x + _tmpOff.x;
+        var ty = _tmpP.y + _tmpOff.y;
+        var tz = _tmpP.z + _tmpOff.z;
+        _tmpQ2.set(g.rq.x, g.rq.y, g.rq.z, g.rq.w);
+        _tmpQ2.premultiply(_tmpQ);
+        // SetTargetTransform (not SetTransform) so contacts stay physical
+        setKinematicTarget(_b3, g.entry.body, tx, ty, tz, _tmpQ2, step);
         if (_b3.b3Body_SetAwake) _b3.b3Body_SetAwake(g.entry.body, true);
         g.entry.mesh.position.set(tx, ty, tz);
-        g.entry.mesh.quaternion.copy(_tmpQ);
+        g.entry.mesh.quaternion.copy(_tmpQ2);
       }
     });
+  }
+
+  /** Sample palm velocity BEFORE overwriting _handPrev (critical for fling). */
+  function updateHandVelocity(handId, x, y, z, now) {
+    var prev = _handPrev[handId];
+    var vx = 0, vy = 0, vz = 0;
+    if (prev && prev.t) {
+      var hdt = Math.max(0.008, (now - prev.t) / 1000);
+      vx = (x - prev.x) / hdt;
+      vy = (y - prev.y) / hdt;
+      vz = (z - prev.z) / hdt;
+    }
+    // EMA — smooth Quest tracking noise, keep throw readable
+    var old = _handVel[handId] || { x: 0, y: 0, z: 0 };
+    var a = 0.45;
+    _handVel[handId] = {
+      x: old.x * (1 - a) + vx * a,
+      y: old.y * (1 - a) + vy * a,
+      z: old.z * (1 - a) + vz * a
+    };
+    _handPrev[handId] = { x: x, y: y, z: z, t: now };
   }
 
   /** True if this hand could scoop a nearby debris block. */
@@ -515,6 +551,7 @@
         bindHandScoop();
         var worldDef = b3.b3DefaultWorldDef();
         worldDef.gravity = { x: 0, y: -9.8, z: 0 };
+        if (worldDef.enableSleep != null) worldDef.enableSleep = false;
         _world = b3.b3CreateWorld(worldDef);
 
         // Arena floor (static)
@@ -576,6 +613,7 @@
           );
           _kinematics.push({ body: hBody, el: hand, kind: 'hand', handId: hid });
           _handPrev[hid] = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z, t: performance.now() };
+          _handVel[hid] = { x: 0, y: 0, z: 0 };
         });
 
         _active = true;
@@ -611,12 +649,9 @@
         if (!k.body || !k.el || !k.el.object3D) continue;
         if (k.kind === 'hand') {
           handWorldPose(k.el, _tmpP, _tmpQ);
+          // Velocity from previous pose BEFORE we overwrite it
+          if (k.handId) updateHandVelocity(k.handId, _tmpP.x, _tmpP.y, _tmpP.z, now);
           setKinematicTarget(_b3, k.body, _tmpP.x, _tmpP.y, _tmpP.z, _tmpQ, dt);
-          if (k.handId) {
-            _handPrev[k.handId] = {
-              x: _tmpP.x, y: _tmpP.y, z: _tmpP.z, t: now
-            };
-          }
         } else {
           k.el.object3D.updateWorldMatrix(true, false);
           k.el.object3D.getWorldPosition(_tmpP);
