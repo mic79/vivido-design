@@ -87,14 +87,12 @@ jobs:
             --exclude 'assets/terrain/terrain-skirmish-ue-lm.glb'
           )
 
-          # BattleVR2: keep ue-lm (lobby crater); drop Canyon pack + duplicate HDR
-          # (RTSVR6 already ships earthlike_planet.hdr; BVR2 falls back to lights).
+          # BattleVR2: keep ue-lm (lobby crater) + earthlike HDR skybox; drop Canyon pack.
           BATTLEVR2_EXCLUDES=(
             "${HEAVY_EXCLUDES[@]}"
             --exclude 'assets/terrain/canyon_splat/'
             --exclude 'assets/terrain/terrain-canyon.glb'
             --exclude 'assets/terrain/canyon_bare_hera.glb'
-            --exclude 'assets/earthlike_planet.hdr'
           )
 
           for name in "${ALLOW[@]}"; do
