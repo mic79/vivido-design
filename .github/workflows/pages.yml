@@ -39,8 +39,9 @@ jobs:
           done
 
           # webxr: allowlist only. 1GB Pages cap — keep product titles, pause demos.
-          # Offline (still in git): RTSVR5, BattleVR, DriveVR*, VRscifiHallway, ChaseVR,
-          # GTAVR, DodgeVR1*, whiteRoomVR, brutalistVR7/8, VRrunner, body-rigged*, VRdrift2.
+          # Offline (still in git): RTSVR5, BattleVR, MotionGuidanceVR5, DriveVR*,
+          # VRscifiHallway, ChaseVR, GTAVR, DodgeVR1*, whiteRoomVR, brutalist*,
+          # VRrunner, body-rigged*, VRdrift2, pinball/Knockout/League/ragdoll/Heli demos.
           mkdir -p "$DEST/webxr"
           [[ -f webxr/index.html ]] && cp -a webxr/index.html "$DEST/webxr/" || true
 
@@ -48,21 +49,11 @@ jobs:
             languageVR
             BattleVR2
             RTSVR6
-            MotionGuidanceVR5
             StacksVR
             DodgeVR
             capVR
             BoltVR
             VRdrift
-            VRragdoll
-            VRragdoll2
-            pinballVR2
-            VRKnockout
-            VRLeague
-            HeliVR
-            HeliVR2
-            LiteRT
-            DotminationVR
             audio
           )
 
@@ -96,12 +87,14 @@ jobs:
             --exclude 'assets/terrain/terrain-skirmish-ue-lm.glb'
           )
 
-          # BattleVR2: keep ue-lm (lobby crater); drop optional Canyon map pack.
+          # BattleVR2: keep ue-lm (lobby crater); drop Canyon pack + duplicate HDR
+          # (RTSVR6 already ships earthlike_planet.hdr; BVR2 falls back to lights).
           BATTLEVR2_EXCLUDES=(
             "${HEAVY_EXCLUDES[@]}"
             --exclude 'assets/terrain/canyon_splat/'
             --exclude 'assets/terrain/terrain-canyon.glb'
             --exclude 'assets/terrain/canyon_bare_hera.glb'
+            --exclude 'assets/earthlike_planet.hdr'
           )
 
           for name in "${ALLOW[@]}"; do
