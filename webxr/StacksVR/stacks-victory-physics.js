@@ -29,7 +29,7 @@
   var _tmpEuler = null;
   var _lastStep = 0;
   var _scoop = { leftHand: [], rightHand: [] };
-  var _handGrip = { leftHand: false, rightHand: false };
+  var _handGrabButtons = { leftHand: 0, rightHand: 0 }; // grip+trigger refcount
   var _handPrev = {};
   var _boundHands = false;
 
@@ -194,20 +194,53 @@
     def.type = b3.b3BodyType.b3_dynamicBody;
     def.position = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z };
     def.rotation = quatToB3Rot(_tmpQ);
-    // Light blocks scoop/fling better
-    if (def.linearDamping != null) def.linearDamping = 0.15;
-    if (def.angularDamping != null) def.angularDamping = 0.2;
+    // Victory debris must stay interactive — sleep freezes piles until a wake
+    // chain hits them, which reads as "physics stopped" on untouched blocks.
+    if (def.enableSleep != null) def.enableSleep = false;
+    if (def.linearDamping != null) def.linearDamping = 0.12;
+    if (def.angularDamping != null) def.angularDamping = 0.18;
     var body = b3.b3CreateBody(world, def);
     b3.b3CreateBoxShape(body, shapeDef(b3, {
       friction: 0.85,
       restitution: 0.12,
       density: 0.55
     }), half, half, half);
-    if (b3.b3Body_EnableHitEvents) {
-      try { /* optional */ } catch (e) { /* ignore */ }
+    if (b3.b3Body_EnableSleep) {
+      try { b3.b3Body_EnableSleep(body, false); } catch (e) { /* ignore */ }
     }
     if (b3.b3Body_SetAwake) b3.b3Body_SetAwake(body, true);
     return body;
+  }
+
+  /** Drop held flag + re-enable simulation (no fling). */
+  function releaseBlockEntry(entry, vel) {
+    if (!entry || !entry.body) return;
+    entry.held = null;
+    if (!_b3) return;
+    if (_b3.b3Body_SetLinearVelocity) {
+      _b3.b3Body_SetLinearVelocity(entry.body, vel || { x: 0, y: 0, z: 0 });
+    }
+    if (_b3.b3Body_SetAwake) _b3.b3Body_SetAwake(entry.body, true);
+    if (_b3.b3Body_EnableSleep) {
+      try { _b3.b3Body_EnableSleep(entry.body, false); } catch (e) { /* ignore */ }
+    }
+  }
+
+  /** Any held=true block not in an active scoop list is frozen — repair. */
+  function repairOrphanHolds() {
+    var inScoop = [];
+    ['leftHand', 'rightHand'].forEach(function (hid) {
+      var list = _scoop[hid] || [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].entry) inScoop.push(list[i].entry);
+      }
+    });
+    for (var j = 0; j < _blocks.length; j++) {
+      var b = _blocks[j];
+      if (!b.held) continue;
+      if (inScoop.indexOf(b) >= 0) continue;
+      releaseBlockEntry(b, { x: 0, y: 0, z: 0 });
+    }
   }
 
   function cupFloorPose(cup) {
@@ -264,8 +297,10 @@
   }
 
   function beginScoop(handId) {
-    _handGrip[handId] = true;
     if (!_active || !_b3) return;
+    // Already holding — do NOT re-grab. A second grip/trigger beginScoop used to
+    // replace _scoop[] while leaving old entries held=true → frozen mid-air.
+    if (_scoop[handId] && _scoop[handId].length) return;
     var hand = document.getElementById(handId);
     if (!hand || !hand.object3D) return;
     ensureThreeHelpers();
@@ -278,7 +313,6 @@
       if (!hit) break;
       used[hit.index] = true;
       hit.entry.held = handId;
-      // Soft kinematic follow — disable gravity influence by zeroing velocity
       if (_b3.b3Body_SetLinearVelocity) {
         _b3.b3Body_SetLinearVelocity(hit.entry.body, { x: 0, y: 0, z: 0 });
       }
@@ -287,7 +321,6 @@
       }
       grabbed.push({
         entry: hit.entry,
-        // offset in hand space at grab time
         ox: hit.entry.mesh.position.x - handPos.x,
         oy: hit.entry.mesh.position.y - handPos.y,
         oz: hit.entry.mesh.position.z - handPos.z
@@ -297,47 +330,58 @@
   }
 
   function endScoop(handId) {
-    _handGrip[handId] = false;
     var list = _scoop[handId] || [];
     _scoop[handId] = [];
-    if (!_active || !_b3 || !list.length) return;
-    var hand = document.getElementById(handId);
     var vx = 0, vy = 0, vz = 0;
-    var prev = _handPrev[handId];
-    if (hand && hand.object3D) {
-      ensureThreeHelpers();
-      handWorldPose(hand, _tmpP, _tmpQ);
-      if (prev && prev.t) {
-        var dt = Math.max(0.008, (performance.now() - prev.t) / 1000);
-        vx = (_tmpP.x - prev.x) / dt;
-        vy = (_tmpP.y - prev.y) / dt;
-        vz = (_tmpP.z - prev.z) / dt;
+    if (_active && _b3 && list.length) {
+      var hand = document.getElementById(handId);
+      var prev = _handPrev[handId];
+      if (hand && hand.object3D) {
+        ensureThreeHelpers();
+        handWorldPose(hand, _tmpP, _tmpQ);
+        if (prev && prev.t) {
+          var dt = Math.max(0.008, (performance.now() - prev.t) / 1000);
+          vx = (_tmpP.x - prev.x) / dt;
+          vy = (_tmpP.y - prev.y) / dt;
+          vz = (_tmpP.z - prev.z) / dt;
+        }
+      }
+      var speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      var maxSp = 8;
+      if (speed > maxSp) {
+        var s = maxSp / speed;
+        vx *= s; vy *= s; vz *= s;
+      }
+      vx *= FLING_SCALE; vy *= FLING_SCALE; vz *= FLING_SCALE;
+      for (var i = 0; i < list.length; i++) {
+        var g = list[i];
+        releaseBlockEntry(g.entry, { x: vx, y: vy, z: vz });
+        if (_b3.b3Body_SetAngularVelocity) {
+          _b3.b3Body_SetAngularVelocity(g.entry.body, {
+            x: (Math.random() - 0.5) * 6,
+            y: (Math.random() - 0.5) * 6,
+            z: (Math.random() - 0.5) * 6
+          });
+        }
       }
     }
-    var speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
-    // Cap fling so Quest doesn't explode
-    var maxSp = 8;
-    if (speed > maxSp) {
-      var s = maxSp / speed;
-      vx *= s; vy *= s; vz *= s;
-    }
-    vx *= FLING_SCALE; vy *= FLING_SCALE; vz *= FLING_SCALE;
-    for (var i = 0; i < list.length; i++) {
-      var g = list[i];
-      g.entry.held = null;
-      if (_b3.b3Body_SetLinearVelocity) {
-        _b3.b3Body_SetLinearVelocity(g.entry.body, { x: vx, y: vy, z: vz });
-      }
-      if (_b3.b3Body_SetAwake) _b3.b3Body_SetAwake(g.entry.body, true);
-      // Small spin for flair
-      if (_b3.b3Body_SetAngularVelocity) {
-        _b3.b3Body_SetAngularVelocity(g.entry.body, {
-          x: (Math.random() - 0.5) * 6,
-          y: (Math.random() - 0.5) * 6,
-          z: (Math.random() - 0.5) * 6
-        });
+    // Always clear orphans for this hand (held without scoop entry)
+    for (var j = 0; j < _blocks.length; j++) {
+      if (_blocks[j].held === handId) {
+        releaseBlockEntry(_blocks[j], { x: 0, y: 0, z: 0 });
       }
     }
+  }
+
+  function onGrabDown(handId) {
+    _handGrabButtons[handId] = (_handGrabButtons[handId] || 0) + 1;
+    if (_active) beginScoop(handId);
+  }
+
+  function onGrabUp(handId) {
+    _handGrabButtons[handId] = Math.max(0, (_handGrabButtons[handId] || 0) - 1);
+    // Only fling when BOTH grip and trigger are released
+    if (_handGrabButtons[handId] === 0) endScoop(handId);
   }
 
   function tickScoopFollow(dt) {
@@ -392,23 +436,15 @@
     ['leftHand', 'rightHand'].forEach(function (id) {
       var hand = document.getElementById(id);
       if (!hand) return;
-      hand.addEventListener('gripdown', function () {
-        if (_active) beginScoop(id);
-      });
-      hand.addEventListener('gripup', function () {
-        if (_active || (_scoop[id] && _scoop[id].length)) endScoop(id);
-      });
-      hand.addEventListener('triggerdown', function () {
-        // Trigger also scoops during victory (easier than grip-only)
-        if (_active) beginScoop(id);
-      });
-      hand.addEventListener('triggerup', function () {
-        if (_active || (_scoop[id] && _scoop[id].length)) endScoop(id);
-      });
+      hand.addEventListener('gripdown', function () { onGrabDown(id); });
+      hand.addEventListener('gripup', function () { onGrabUp(id); });
+      hand.addEventListener('triggerdown', function () { onGrabDown(id); });
+      hand.addEventListener('triggerup', function () { onGrabUp(id); });
     });
   }
 
   function destroyWorld() {
+    _handGrabButtons = { leftHand: 0, rightHand: 0 };
     endScoop('leftHand');
     endScoop('rightHand');
     if (_b3 && _world && typeof _b3.b3DestroyWorld === 'function') {
@@ -591,6 +627,7 @@
 
       // Scoop follow (held blocks ride with hand)
       tickScoopFollow(dt);
+      repairOrphanHolds();
 
       _b3.b3World_Step(_world, dt, 6);
 
