@@ -30,7 +30,7 @@
   var _tmpEuler = null;
   var _lastStep = 0;
   var _scoop = { leftHand: [], rightHand: [] };
-  var _handGrabButtons = { leftHand: 0, rightHand: 0 }; // grip+trigger refcount
+  var _triggerScoop = { leftHand: false, rightHand: false }; // trigger-only (grip = playfield)
   var _handPrev = {};
   var _handVel = { leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 } };
   var _boundHands = false;
@@ -395,15 +395,14 @@
     }
   }
 
-  function onGrabDown(handId) {
-    _handGrabButtons[handId] = (_handGrabButtons[handId] || 0) + 1;
+  function onTriggerDown(handId) {
+    _triggerScoop[handId] = true;
     if (_active) beginScoop(handId);
   }
 
-  function onGrabUp(handId) {
-    _handGrabButtons[handId] = Math.max(0, (_handGrabButtons[handId] || 0) - 1);
-    // Only fling when BOTH grip and trigger are released
-    if (_handGrabButtons[handId] === 0) endScoop(handId);
+  function onTriggerUp(handId) {
+    _triggerScoop[handId] = false;
+    endScoop(handId);
   }
 
   function tickScoopFollow(dt) {
@@ -411,8 +410,8 @@
     ensureThreeHelpers();
     var step = Math.max(0.001, dt || 1 / 60);
     ['leftHand', 'rightHand'].forEach(function (handId) {
-      // While gripping with empty hand, keep trying to pick up (more reliable)
-      if (_handGrabButtons[handId] > 0 && (!_scoop[handId] || !_scoop[handId].length)) {
+      // While trigger held with empty hand, keep trying to pick up
+      if (_triggerScoop[handId] && (!_scoop[handId] || !_scoop[handId].length)) {
         beginScoop(handId);
       }
       var list = _scoop[handId];
@@ -472,15 +471,14 @@
     ['leftHand', 'rightHand'].forEach(function (id) {
       var hand = document.getElementById(id);
       if (!hand) return;
-      hand.addEventListener('gripdown', function () { onGrabDown(id); });
-      hand.addEventListener('gripup', function () { onGrabUp(id); });
-      hand.addEventListener('triggerdown', function () { onGrabDown(id); });
-      hand.addEventListener('triggerup', function () { onGrabUp(id); });
+      // Trigger = debris only. Grip stays free for playfield yaw/raise in stacks-game.
+      hand.addEventListener('triggerdown', function () { onTriggerDown(id); });
+      hand.addEventListener('triggerup', function () { onTriggerUp(id); });
     });
   }
 
   function destroyWorld() {
-    _handGrabButtons = { leftHand: 0, rightHand: 0 };
+    _triggerScoop = { leftHand: false, rightHand: false };
     endScoop('leftHand');
     endScoop('rightHand');
     if (_b3 && _world && typeof _b3.b3DestroyWorld === 'function') {

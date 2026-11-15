@@ -718,7 +718,8 @@
           return;
         }
 
-        // Free hand while other holds: steal / take-from-pocket / rotate cup
+        // Free hand while other holds: steal / take-from-pocket
+        // (Playfield yaw/height is grip-only — never start cup grab on trigger.)
         if (self.held && self.held.handEl !== handEl) {
           if (self._handNearHeld(handEl)) {
             self._transferHold(handEl);
@@ -728,20 +729,13 @@
             self._interactPocket(handEl);
             return;
           }
-          var cupBusy = self._localCup();
-          if (self._handDistToCup(handEl, cupBusy) <= CUP_GRAB_REACH) {
-            self._startCupGrab(handEl, cupBusy);
-          }
           return;
         }
 
-        // Empty hands
-        var cup = self._localCup();
+        // Empty hands — trigger = pieces/pocket only
         var padD = self._handDistToPad(handEl);
-        var cupD = self._handDistToCup(handEl, cup);
         var pocketD = self._distToPocket(handEl);
         var nearPad = padD <= GRAB_REACH;
-        var nearCup = cupD <= CUP_GRAB_REACH;
         var nearPocket = pocketD <= POCKET_REACH;
 
         // Take from pocket FIRST when over the bin (pad is ~0.75m away — no conflict)
@@ -753,20 +747,13 @@
           self._grab(handEl);
           return;
         }
-        if (nearCup) {
-          self._startCupGrab(handEl, cup);
-          return;
-        }
         // Desktop / far: still allow pad grab without proximity when not presenting
         if (!self._isPresenting()) self._grab(handEl);
       }
 
       function tryReleaseFrom(handEl) {
         if (!self._canControl() || !handEl) return;
-        if (self._cupGrab && self._cupGrab.handEl === handEl) {
-          self._endCupGrab(handEl);
-          return;
-        }
+        // Cup grab is grip-only — trigger-up must not release the playfield
         if (!self.held) return;
         // Never place from the non-owning hand
         if (ownerId() !== handEl.id) return;
@@ -795,32 +782,18 @@
           self._triggerDown[id] = false;
           tryReleaseFrom(hand);
         });
-        // Grip also grabs/rotates the cup (Battleblocks-style free hand)
+        // Grip = playfield only (yaw / raise). Trigger = pieces + victory debris.
         hand.addEventListener('gripdown', function (evt) {
           if (evt) evt.stopPropagation();
           if (!self._canControl()) return;
-          // Victory debris: scoop nearby blocks instead of spinning the empty cup
-          var VP = global.StacksVictoryPhysics;
-          if (VP && VP.active() && typeof VP.canScoopNear === 'function' && VP.canScoopNear(hand)) {
-            if (typeof VP.beginScoopForHand === 'function') VP.beginScoopForHand(id);
-            return;
-          }
           if (self.held && self.held.handEl === hand) return;
-          if (self.held && self._handNearHeld(hand)) {
-            self._transferHold(hand);
-            return;
-          }
-          if (!self.held || self.held.handEl !== hand) {
-            var cup = self._localCup();
-            if (self._handDistToCup(hand, cup) <= CUP_GRAB_REACH) {
-              self._startCupGrab(hand, cup);
-            }
+          var cup = self._localCup();
+          if (self._handDistToCup(hand, cup) <= CUP_GRAB_REACH) {
+            self._startCupGrab(hand, cup);
           }
         });
         hand.addEventListener('gripup', function (evt) {
           if (evt) evt.stopPropagation();
-          var VP2 = global.StacksVictoryPhysics;
-          if (VP2 && typeof VP2.endScoopForHand === 'function') VP2.endScoopForHand(id);
           if (self._cupGrab && self._cupGrab.handEl === hand) self._endCupGrab(hand);
         });
       }
