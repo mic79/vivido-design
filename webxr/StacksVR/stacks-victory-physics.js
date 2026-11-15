@@ -7,8 +7,10 @@
 
   var BOX3D_CDN = 'https://cdn.jsdelivr.net/npm/box3d.js@0.0.2/dist/box3d.inline.mjs';
   var MAX_BLOCKS_PER_CUP = 36;
-  var HAND_RADIUS = 0.11;
-  var SCOOP_REACH = 0.22;
+  // Visible palm ≈ 4–5cm; previous 11cm sphere shoved blocks from >10cm away
+  var HAND_RADIUS = 0.045;
+  var HAND_FORWARD = 0.08; // grip → palm along local -Z
+  var SCOOP_REACH = 0.14;
   var SCOOP_MAX = 4;
   var FLING_SCALE = 1.35;
 
@@ -64,46 +66,62 @@
   function shapeDef(b3, opts) {
     opts = opts || {};
     var sd = b3.b3DefaultShapeDef();
-    sd.friction = opts.friction != null ? opts.friction : 0.55;
-    sd.restitution = opts.restitution != null ? opts.restitution : 0.18;
+    // box3d reads friction/restitution from baseMaterial (not top-level fields)
+    if (!sd.baseMaterial && typeof b3.b3DefaultSurfaceMaterial === 'function') {
+      sd.baseMaterial = b3.b3DefaultSurfaceMaterial();
+    }
+    if (sd.baseMaterial) {
+      sd.baseMaterial.friction = opts.friction != null ? opts.friction : 0.55;
+      sd.baseMaterial.restitution = opts.restitution != null ? opts.restitution : 0.18;
+    } else {
+      sd.friction = opts.friction != null ? opts.friction : 0.55;
+      sd.restitution = opts.restitution != null ? opts.restitution : 0.18;
+    }
     if (opts.density != null) sd.density = opts.density;
     return sd;
   }
 
-  function identityRot() {
-    return { v: { x: 0, y: 0, z: 0 }, s: 1 };
+  function identityQuatArr() {
+    return [0, 0, 0, 1];
   }
 
-  function quatToB3(q) {
+  function quatToArr(q) {
+    if (!q) return identityQuatArr();
+    return [q.x, q.y, q.z, q.w];
+  }
+
+  function quatToB3Rot(q) {
+    if (!q) return { v: { x: 0, y: 0, z: 0 }, s: 1 };
     return { v: { x: q.x, y: q.y, z: q.z }, s: q.w };
   }
 
-  function posRot(x, y, z, q) {
-    return {
-      position: { x: x, y: y, z: z },
-      rotation: q ? quatToB3(q) : identityRot()
-    };
-  }
-
-  /** Drive kinematic so dynamics get proper contact impulse (box3d API). */
+  /**
+   * Drive kinematic so dynamics get contact impulse.
+   * box3d docs: SetTargetTransform(body, { position:[x,y,z], quaternion:[x,y,z,w] }, dt, true)
+   */
   function setKinematicTarget(b3, body, x, y, z, q, dt) {
     if (!body || !b3) return;
-    var target = posRot(x, y, z, q);
     var step = Math.max(0.001, Math.min(0.05, dt || 1 / 60));
+    var qx = q ? q.x : 0, qy = q ? q.y : 0, qz = q ? q.z : 0, qw = q ? q.w : 1;
     if (typeof b3.b3Body_SetTargetTransform === 'function') {
       try {
-        b3.b3Body_SetTargetTransform(body, target, step, true);
+        b3.b3Body_SetTargetTransform(body, {
+          position: [x, y, z],
+          quaternion: [qx, qy, qz, qw]
+        }, step, true);
         return;
       } catch (e1) {
         try {
-          b3.b3Body_SetTargetTransform(body, target.position, target.rotation, step, true);
+          b3.b3Body_SetTargetTransform(body, {
+            position: { x: x, y: y, z: z },
+            quaternion: { x: qx, y: qy, z: qz, w: qw }
+          }, step, true);
           return;
         } catch (e2) { /* fall through */ }
       }
     }
-    // Fallback: transform + explicit velocity from previous (worse tunneling)
     var prev = b3.b3Body_GetPosition(body);
-    b3.b3Body_SetTransform(body, target.position, target.rotation);
+    b3.b3Body_SetTransform(body, { x: x, y: y, z: z }, quatToB3Rot(q));
     if (b3.b3Body_SetLinearVelocity && prev) {
       b3.b3Body_SetLinearVelocity(body, {
         x: (x - prev.x) / step,
@@ -111,6 +129,17 @@
         z: (z - prev.z) / step
       });
     }
+  }
+
+  function handWorldPose(handEl, outPos, outQuat) {
+    ensureThreeHelpers();
+    handEl.object3D.updateWorldMatrix(true, false);
+    handEl.object3D.getWorldPosition(outPos);
+    handEl.object3D.getWorldQuaternion(outQuat);
+    // Collider at palm, not grip pivot (fixes phantom pushes >10cm out)
+    var fwd = new THREE.Vector3(0, 0, -HAND_FORWARD);
+    fwd.applyQuaternion(outQuat);
+    outPos.add(fwd);
   }
 
   function cullCup(cup, maxKeep) {
@@ -153,7 +182,7 @@
   function addStaticBox(b3, world, x, y, z, hx, hy, hz, opts) {
     var def = b3.b3DefaultBodyDef();
     def.position = { x: x, y: y, z: z };
-    def.rotation = identityRot();
+    def.rotation = quatToB3Rot(null);
     var body = b3.b3CreateBody(world, def);
     b3.b3CreateBoxShape(body, shapeDef(b3, opts || { friction: 0.85, restitution: 0.05 }), hx, hy, hz);
     return body;
@@ -163,7 +192,7 @@
     var def = b3.b3DefaultBodyDef();
     def.type = b3.b3BodyType.b3_kinematicBody;
     def.position = { x: x, y: y, z: z };
-    def.rotation = q ? quatToB3(q) : identityRot();
+    def.rotation = quatToB3Rot(q);
     var body = b3.b3CreateBody(world, def);
     b3.b3CreateBoxShape(body, shapeDef(b3, opts || {
       friction: 0.95,
@@ -180,7 +209,7 @@
     var def = b3.b3DefaultBodyDef();
     def.type = b3.b3BodyType.b3_dynamicBody;
     def.position = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z };
-    def.rotation = quatToB3(_tmpQ);
+    def.rotation = quatToB3Rot(_tmpQ);
     // Light blocks scoop/fling better
     if (def.linearDamping != null) def.linearDamping = 0.15;
     if (def.angularDamping != null) def.angularDamping = 0.2;
@@ -201,20 +230,24 @@
     ensureThreeHelpers();
     var w = cup.width * cup.cellSize;
     var d = cup.depth * cup.cellSize;
-    var hy = 0.035;
-    // Floor plane at local y=0 of cup root, oriented with playfield yaw
-    var local = new THREE.Vector3(w * 0.5, -hy, d * 0.5);
-    cup.root.updateWorldMatrix(true, false);
-    local.applyMatrix4(cup.root.matrixWorld);
-    cup.root.getWorldQuaternion(_tmpQ);
+    // Thin slab just under the cell grid (y=0). No walls/ceiling — open top.
+    // Use pivot world pose so yaw/height raise drive the kinematic floor correctly.
+    var hy = 0.018;
+    var pivot = cup.pivot || cup.root;
+    pivot.updateWorldMatrix(true, false);
+    // Floor center = pivot origin, dropped by hy along world-up of the cup
+    pivot.getWorldPosition(_tmpP);
+    pivot.getWorldQuaternion(_tmpQ);
+    var down = new THREE.Vector3(0, -hy, 0);
+    down.applyQuaternion(_tmpQ);
     return {
-      x: local.x,
-      y: local.y,
-      z: local.z,
+      x: _tmpP.x + down.x,
+      y: _tmpP.y + down.y,
+      z: _tmpP.z + down.z,
       q: _tmpQ.clone(),
-      hx: w * 0.5 + 0.04,
+      hx: w * 0.5 + 0.02,
       hy: hy,
-      hz: d * 0.5 + 0.04
+      hz: d * 0.5 + 0.02
     };
   }
 
@@ -252,8 +285,7 @@
     var hand = document.getElementById(handId);
     if (!hand || !hand.object3D) return;
     ensureThreeHelpers();
-    hand.object3D.updateWorldMatrix(true, false);
-    hand.object3D.getWorldPosition(_tmpP);
+    handWorldPose(hand, _tmpP, _tmpQ);
     var handPos = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z };
     var grabbed = [];
     var used = {};
@@ -290,8 +322,7 @@
     var prev = _handPrev[handId];
     if (hand && hand.object3D) {
       ensureThreeHelpers();
-      hand.object3D.updateWorldMatrix(true, false);
-      hand.object3D.getWorldPosition(_tmpP);
+      handWorldPose(hand, _tmpP, _tmpQ);
       if (prev && prev.t) {
         var dt = Math.max(0.008, (performance.now() - prev.t) / 1000);
         vx = (_tmpP.x - prev.x) / dt;
@@ -334,9 +365,7 @@
       if (!list || !list.length) return;
       var hand = document.getElementById(handId);
       if (!hand || !hand.object3D) return;
-      hand.object3D.updateWorldMatrix(true, false);
-      hand.object3D.getWorldPosition(_tmpP);
-      hand.object3D.getWorldQuaternion(_tmpQ);
+      handWorldPose(hand, _tmpP, _tmpQ);
       var prev = _handPrev[handId];
       var hvx = 0, hvy = 0, hvz = 0;
       if (prev && prev.t) {
@@ -351,7 +380,7 @@
         var ty = _tmpP.y + g.oy;
         var tz = _tmpP.z + g.oz;
         // Held debris stay dynamic but are hard-driven to the hand each frame
-        _b3.b3Body_SetTransform(g.entry.body, { x: tx, y: ty, z: tz }, quatToB3(_tmpQ));
+        _b3.b3Body_SetTransform(g.entry.body, { x: tx, y: ty, z: tz }, quatToB3Rot(_tmpQ));
         if (_b3.b3Body_SetLinearVelocity) {
           _b3.b3Body_SetLinearVelocity(g.entry.body, { x: hvx, y: hvy, z: hvz });
         }
@@ -369,8 +398,7 @@
   function canScoopNear(handEl) {
     if (!_active || !_b3 || !handEl || !handEl.object3D) return false;
     ensureThreeHelpers();
-    handEl.object3D.updateWorldMatrix(true, false);
-    handEl.object3D.getWorldPosition(_tmpP);
+    handWorldPose(handEl, _tmpP, _tmpQ);
     return !!findBlockNear({ x: _tmpP.x, y: _tmpP.y, z: _tmpP.z }, null);
   }
 
@@ -525,26 +553,25 @@
           var kDef = b3.b3DefaultBodyDef();
           kDef.type = b3.b3BodyType.b3_kinematicBody;
           kDef.position = { x: _tmpP.x, y: Math.max(0.95, _tmpP.y), z: _tmpP.z };
-          kDef.rotation = identityRot();
+          kDef.rotation = quatToB3Rot(null);
           var kBody = b3.b3CreateBody(_world, kDef);
           b3.b3CreateCapsuleShape(kBody, shapeDef(b3, { friction: 0.55, restitution: 0.05 }), {
-            center1: { x: 0, y: -0.65, z: 0 },
-            center2: { x: 0, y: 0.55, z: 0 },
-            radius: 0.28
+            center1: { x: 0, y: -0.55, z: 0 },
+            center2: { x: 0, y: 0.45, z: 0 },
+            radius: 0.16
           });
           _kinematics.push({ body: kBody, el: el, kind: kinEls[k].kind });
         }
 
-        // Hands — large palm spheres so scooping contacts work
+        // Hands — palm-sized spheres at grip→palm offset
         ['leftHand', 'rightHand'].forEach(function (hid) {
           var hand = document.getElementById(hid);
           if (!hand || !hand.object3D) return;
-          hand.object3D.updateWorldMatrix(true, false);
-          hand.object3D.getWorldPosition(_tmpP);
+          handWorldPose(hand, _tmpP, _tmpQ);
           var hDef = b3.b3DefaultBodyDef();
           hDef.type = b3.b3BodyType.b3_kinematicBody;
           hDef.position = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z };
-          hDef.rotation = identityRot();
+          hDef.rotation = quatToB3Rot(_tmpQ);
           var hBody = b3.b3CreateBody(_world, hDef);
           b3.b3CreateSphereShape(hBody, shapeDef(b3, { friction: 1.2, restitution: 0.05 }), {
             center: { x: 0, y: 0, z: 0 },
@@ -585,10 +612,8 @@
       for (var i = 0; i < _kinematics.length; i++) {
         var k = _kinematics[i];
         if (!k.body || !k.el || !k.el.object3D) continue;
-        k.el.object3D.updateWorldMatrix(true, false);
-        k.el.object3D.getWorldPosition(_tmpP);
         if (k.kind === 'hand') {
-          k.el.object3D.getWorldQuaternion(_tmpQ);
+          handWorldPose(k.el, _tmpP, _tmpQ);
           setKinematicTarget(_b3, k.body, _tmpP.x, _tmpP.y, _tmpP.z, _tmpQ, dt);
           if (k.handId) {
             _handPrev[k.handId] = {
@@ -596,6 +621,8 @@
             };
           }
         } else {
+          k.el.object3D.updateWorldMatrix(true, false);
+          k.el.object3D.getWorldPosition(_tmpP);
           var by = Math.max(0.95, _tmpP.y);
           setKinematicTarget(_b3, k.body, _tmpP.x, by, _tmpP.z, null, dt);
         }
@@ -613,10 +640,15 @@
 
     stop: function () {
       if (!_active && !_world && !_group) return;
+      var game = _game;
       _active = false;
       _game = null;
       destroyWorld();
       clearVisuals();
+      // Allow deferred cup-height ease now that the kinematic floor is gone
+      if (game && typeof game._flushPendingCupHeightReset === 'function') {
+        try { game._flushPendingCupHeightReset(); } catch (e) { /* ignore */ }
+      }
     }
   };
 

@@ -1325,6 +1325,13 @@
 
     /** Ease both cups to default height. Never snaps — cancels if that cup is gripped. */
     _beginSmoothCupHeightReset: function (durationMs) {
+      // Never animate cup height while victory debris is active — kinematic floor
+      // would plow through resting blocks.
+      if (global.StacksVictoryPhysics && global.StacksVictoryPhysics.active()) {
+        this._pendingCupHeightResetMs = durationMs != null ? durationMs : CUP_HEIGHT_RESET_MS;
+        return;
+      }
+      this._pendingCupHeightResetMs = null;
       var target = this._defaultCupY != null ? this._defaultCupY : DEFAULT_CUP_Y;
       var dur = durationMs != null ? durationMs : CUP_HEIGHT_RESET_MS;
       var now = performance.now();
@@ -1348,6 +1355,14 @@
         });
       }
       this._cupHeightAnims = next;
+    },
+
+    /** After victory physics tears down, finish any deferred height ease. */
+    _flushPendingCupHeightReset: function () {
+      if (this._pendingCupHeightResetMs == null) return;
+      var ms = this._pendingCupHeightResetMs;
+      this._pendingCupHeightResetMs = null;
+      this._beginSmoothCupHeightReset(ms);
     },
 
     _cancelCupHeightAnim: function (cup) {
@@ -3099,8 +3114,13 @@
         });
       }
       this._musicIdle();
-      // Ease playfields back to default height — never snap/teleport
-      this._beginSmoothCupHeightReset(CUP_HEIGHT_RESET_MS);
+      // Festive: defer height ease until debris physics stops — resetting mid-debris
+      // lifts the kinematic floor through the stack (looks like a "ceiling" trap).
+      if (festive) {
+        this._pendingCupHeightResetMs = CUP_HEIGHT_RESET_MS;
+      } else {
+        this._beginSmoothCupHeightReset(CUP_HEIGHT_RESET_MS);
+      }
       if (festive) {
         // Defer heavy canvas/confetti one frame so the last place still paints
         setTimeout(function () {
@@ -3291,6 +3311,8 @@
         self._dualIdleTimer = null;
         if (self.matchActive) return;
         if (!self._canResumeDualIdle()) return;
+        if (global.StacksVictoryPhysics) global.StacksVictoryPhysics.stop();
+        self._flushPendingCupHeightReset();
         self._clearVictory();
         self.startOfflinePreviewMatch();
       }, delayMs == null ? 400 : delayMs);
