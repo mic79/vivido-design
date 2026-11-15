@@ -432,6 +432,49 @@
     return this.constructionHeight === 0;
   };
 
+  /**
+   * Remove one cell. If keepMesh, mesh is detached but not disposed (victory physics).
+   * Returns the cell record or null.
+   */
+  Cup.prototype.removeCellAt = function (x, y, z, keepMesh) {
+    if (!this.inBounds(x, y, z)) return null;
+    var cell = this.grid[y][z][x];
+    if (!cell) return null;
+    this.grid[y][z][x] = null;
+    if (cell.mesh) {
+      if (cell.mesh.parent) cell.mesh.parent.remove(cell.mesh);
+      if (!keepMesh) {
+        if (cell.mesh.geometry && cell.mesh.geometry.dispose) cell.mesh.geometry.dispose();
+        if (cell.mesh.material) {
+          if (Array.isArray(cell.mesh.material)) {
+            for (var mi = 0; mi < cell.mesh.material.length; mi++) {
+              if (cell.mesh.material[mi] && cell.mesh.material[mi].dispose) {
+                cell.mesh.material[mi].dispose();
+              }
+            }
+          } else if (cell.mesh.material.dispose) {
+            cell.mesh.material.dispose();
+          }
+        }
+        cell.mesh = null;
+      }
+    }
+    this._recomputeHeight();
+    return cell;
+  };
+
+  Cup.prototype.countBlocks = function () {
+    var n = 0;
+    for (var y = 0; y < this.height; y++) {
+      for (var z = 0; z < this.depth; z++) {
+        for (var x = 0; x < this.width; x++) {
+          if (this.grid[y][z][x]) n++;
+        }
+      }
+    }
+    return n;
+  };
+
   Cup.prototype.clearAll = function () {
     for (var y = 0; y < this.height; y++) this.clearLayer(y);
     this._resetGrid();

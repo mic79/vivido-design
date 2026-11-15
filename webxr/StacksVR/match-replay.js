@@ -259,6 +259,7 @@
       }
       // Host superseding another Watch (or restarting): force-clear without dual-idle flicker
       this.stop({ silent: true, force: true, keepIdle: true });
+      if (window.StacksVictoryPhysics) window.StacksVictoryPhysics.stop();
       this._remoteOnly = false;
       this._replay = replay;
       this.playing = true;

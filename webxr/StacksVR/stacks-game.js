@@ -2630,6 +2630,7 @@
       this._clearVictory();
       this._clearMatchBanner();
       this._endingMatch = false;
+      if (global.StacksVictoryPhysics) global.StacksVictoryPhysics.stop();
       // If still off default from a prior raise, ease back (no teleport into GO)
       this._beginSmoothCupHeightReset(CUP_HEIGHT_RESET_MS);
       // Leave dual-preview ownership BEFORE bag reset / bot disable so blue
@@ -3102,11 +3103,16 @@
             blueName: opts && opts.blueName,
             redName: opts && opts.redName
           });
+          // Cull tall stacks then box3d debris (Quest-safe body cap)
+          if (global.StacksVictoryPhysics && typeof global.StacksVictoryPhysics.start === 'function') {
+            global.StacksVictoryPhysics.start(selfEnd);
+          }
         }, 0);
         // Keep YOU WIN / scores on-screen long enough to read (unless START/Watch)
         this._scheduleDualIdle(VICTORY_HOLD_MS);
       } else {
         this._clearVictory();
+        if (global.StacksVictoryPhysics) global.StacksVictoryPhysics.stop();
         this._scheduleDualIdle(350);
       }
       this._endingMatch = false;
@@ -3211,6 +3217,7 @@
           clearTimeout(this._dualIdleTimer);
           this._dualIdleTimer = null;
         }
+        if (global.StacksVictoryPhysics) global.StacksVictoryPhysics.stop();
         if (this.bot) this.bot.enable(false);
         if (this.botBlue) this.botBlue.enable(false);
         this._dualBotPreview = false;
@@ -3683,6 +3690,7 @@
      */
     startOfflinePreviewMatch: function () {
       if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
+      if (global.StacksVictoryPhysics) global.StacksVictoryPhysics.stop();
       this._clearVictory();
       this._clearMatchBanner();
       this._endingMatch = false;
@@ -4701,6 +4709,9 @@
       this._tickClearPopup();
       this._tickBlockBlinks();
       this._tickCupHeightAnims();
+      if (global.StacksVictoryPhysics && global.StacksVictoryPhysics.active()) {
+        global.StacksVictoryPhysics.tick();
+      }
       this._prepareMatchHud();
       this._placeMatchHud();
 
