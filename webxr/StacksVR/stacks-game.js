@@ -799,6 +799,12 @@
         hand.addEventListener('gripdown', function (evt) {
           if (evt) evt.stopPropagation();
           if (!self._canControl()) return;
+          // Victory debris: scoop nearby blocks instead of spinning the empty cup
+          var VP = global.StacksVictoryPhysics;
+          if (VP && VP.active() && typeof VP.canScoopNear === 'function' && VP.canScoopNear(hand)) {
+            if (typeof VP.beginScoopForHand === 'function') VP.beginScoopForHand(id);
+            return;
+          }
           if (self.held && self.held.handEl === hand) return;
           if (self.held && self._handNearHeld(hand)) {
             self._transferHold(hand);
@@ -813,6 +819,8 @@
         });
         hand.addEventListener('gripup', function (evt) {
           if (evt) evt.stopPropagation();
+          var VP2 = global.StacksVictoryPhysics;
+          if (VP2 && typeof VP2.endScoopForHand === 'function') VP2.endScoopForHand(id);
           if (self._cupGrab && self._cupGrab.handEl === hand) self._endCupGrab(hand);
         });
       }
