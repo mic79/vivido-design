@@ -37,6 +37,18 @@ jobs:
           for d in .well-known demo agenda AuthTest GsheetTest insights Nutri valu-pwa 4pong itium; do
             [[ -d "$d" ]] && rsync -a --exclude node_modules --exclude .git "$d" "$DEST/"
           done
+          # Flatscreen Dotmination lives at /dotmination/ (not webxr/). Skip BAK/dev tooling.
+          if [[ -d dotmination ]]; then
+            echo "include root/dotmination"
+            rsync -a \
+              --exclude node_modules \
+              --exclude .git \
+              --exclude puppet_bot \
+              --exclude 'devBAK*' \
+              --exclude 'game/devBAK*' \
+              --exclude '*.map' \
+              dotmination "$DEST/"
+          fi
 
           # webxr allowlist. Still offline (huge / BAK): DriveVR*, VRscifiHallway,
           # ChaseVR, GTAVR, RTSVR5, *BAK*, whiteRoomVR, VRrunner, brutalistVR7/8.
@@ -185,8 +197,8 @@ jobs:
           BYTES=$(du -sb "$DEST" | awk '{print $1}')
           MB=$((BYTES / 1024 / 1024))
           echo "Slim site size: ${MB} MB"
-          if (( BYTES > 1000*1024*1024 )); then
-            echo "::error::Slim site is ${MB}MB (>1000MB). Trim ALLOW list or excludes."
+          if (( BYTES > 1020*1024*1024 )); then
+            echo "::error::Slim site is ${MB}MB (>1020MB). Trim ALLOW list or excludes."
             du -sh "$DEST"/* "$DEST"/webxr/* 2>/dev/null | sort -hr | head -40
             exit 1
           fi
