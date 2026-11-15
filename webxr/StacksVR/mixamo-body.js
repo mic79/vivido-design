@@ -1,6 +1,37 @@
 // mixamo-body.js — extracted from DodgeVR for StacksVR
 (function () {
   'use strict';
+
+  // One network+parse for YBot.fbx — 7 mixamo-body entities used to each re-download
+  // and re-parse (~2MB × N), freezing the main thread after enter-VR.
+  var _fbxShared = Object.create(null);
+
+  function loadSharedFbx(path) {
+    if (_fbxShared[path]) return _fbxShared[path];
+    _fbxShared[path] = new Promise(function (resolve, reject) {
+      if (typeof THREE === 'undefined' || !THREE.FBXLoader) {
+        reject(new Error('FBXLoader missing'));
+        return;
+      }
+      var loader = new THREE.FBXLoader();
+      loader.load(
+        path,
+        function (fbx) { resolve(fbx); },
+        undefined,
+        function (err) { reject(err || new Error('FBX load failed: ' + path)); }
+      );
+    });
+    return _fbxShared[path];
+  }
+
+  function cloneFbx(root) {
+    if (THREE.SkeletonUtils && typeof THREE.SkeletonUtils.clone === 'function') {
+      return THREE.SkeletonUtils.clone(root);
+    }
+    console.warn('[Mixamo Body] SkeletonUtils missing — using Object3D.clone (skins may break)');
+    return root.clone(true);
+  }
+
       AFRAME.registerComponent('mixamo-body', {
         schema: {
           mode: { type: 'string', default: 'player' },
@@ -172,14 +203,16 @@
             if (renderer) renderer.localClippingEnabled = true;
           });
 
-          // Load FBX model
-          const loader = new THREE.FBXLoader();
-          loader.load(
-            this.data.modelPath,
-            (fbx) => this.onModelLoaded(fbx),
-            undefined,
-            (error) => console.error('[Mixamo Body] Load error:', error)
-          );
+          // Shared FBX: player (and first claimant) parses once; others clone.
+          var self = this;
+          var path = this.data.modelPath;
+          loadSharedFbx(path).then(function (root) {
+            if (!self.el || !self.el.isConnected) return;
+            // Always clone so materials/skeleton state stay per-instance
+            self.onModelLoaded(cloneFbx(root));
+          }).catch(function (error) {
+            console.error('[Mixamo Body] Load error:', error);
+          });
         },
 
         onModelLoaded: function(fbx) {
@@ -245,6 +278,15 @@
             }
           });
           console.log('[Mixamo Body]', this.data.mode, 'body loaded');
+          try {
+            this.el.emit('mixamo-body-loaded', { mode: this.data.mode }, false);
+          } catch (e) { /* ignore */ }
+          if (!this.isBot) {
+            window.__stacksPlayerBodyReady = true;
+            try {
+              window.dispatchEvent(new CustomEvent('stacks-player-body-ready'));
+            } catch (e2) { /* ignore */ }
+          }
         },
 
         // Create Fresnel rim + emissive material using MeshStandardMaterial with onBeforeCompile
