@@ -184,9 +184,9 @@
   };
 
   Cup.prototype.setHeight = function (y) {
-    // Was 0.35–1.75 (1.4m span); at least 2× travel → ~2.8m span
-    var minY = 0.15;
-    var maxY = 3.0;
+    // Grip raise/lower — ~1m more travel each way vs prior 0.15–3.0
+    var minY = -0.85;
+    var maxY = 4.0;
     this.heightOffset = THREE.MathUtils.clamp(y, minY, maxY);
     if (this.pivot) this.pivot.position.y = this.heightOffset;
     else this.root.position.y = this.heightOffset;
