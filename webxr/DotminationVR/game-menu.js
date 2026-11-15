@@ -1,6 +1,6 @@
 // game-menu.js — VR menu, lobby queue, stats & replay browser (copied from StacksVR).
 // DotminationVR: seats come from dot-game.seatPose(), board toggle = S/L hex,
-// IDLE toggle repurposed as DUEL/RUSH (lobby splitBoards), stats labels.
+// board toggle = original Normal/Harder bot, IDLE toggle = mode DUEL/LIVE/RUSH (lobby dotMode).
 (function () {
   'use strict';
 
@@ -292,7 +292,7 @@
       this.el.sceneEl.addEventListener('xbuttondown', onMenuButton);
       this.el.sceneEl.addEventListener('lobby-state-updated', function () { self.refreshLobbyUI(); });
       this.el.sceneEl.addEventListener('board-size-changed', function () { self._setBoardButton(); });
-      this.el.sceneEl.addEventListener('split-boards-changed', function () { self._setSplitBoardsButton(); });
+      this.el.sceneEl.addEventListener('dot-mode-changed', function () { self._setDotModeButton(); });
       // Visuals follow PASS preference (AR session + opaque shell = VR look)
       this.el.sceneEl.addEventListener('enter-vr', function () {
         applyPassthroughVisuals(!!(window.StacksPassthrough && window.StacksPassthrough.enabled));
@@ -797,8 +797,8 @@
         case 'replay-latest':
           this._playLatestReplay();
           break;
-        case 'toggle-split-boards':
-          this._toggleSplitBoards();
+        case 'toggle-dot-mode':
+          this._toggleDotMode();
           break;
         case 'toggle-music':
           if (window.StacksAudio && typeof window.StacksAudio.toggleMusic === 'function') {
@@ -898,7 +898,8 @@
     },
 
     _currentBoardSize: function () {
-      var size = (window.getBoardSize && window.getBoardSize()) || 6;
+      // DotminationVR: this slot is the bot difficulty — 4 Normal (default), 6 Harder
+      var size = (window.getBoardSize && window.getBoardSize()) || 4;
       var gm = document.querySelector('[dot-game]');
       var comp = gm && gm.components && gm.components['dot-game'];
       if (comp && comp.boardSize) size = comp.boardSize;
@@ -935,17 +936,17 @@
       // Active pill slides left (4x4) or right (6x6); ascii "x" so Roboto glyph exists
       if (slider) {
         slider.setAttribute('position', (is4 ? -0.052 : 0.052) + ' 0 0.003');
-        var accent = is4 ? '#c45a12' : '#1e6ad4';
+        var accent = is4 ? '#1e6ad4' : '#c45a12';
         var canEdit = !window.isMultiplayer || !!window.isHost ||
           !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
         slider.setAttribute('material', 'color', canEdit ? accent : '#555555');
       }
       if (t4) {
-        t4.setAttribute('value', 'S');
+        t4.setAttribute('value', 'NORM');
         t4.setAttribute('color', is4 ? '#ffffff' : '#8a9bb0');
       }
       if (t6) {
-        t6.setAttribute('value', 'L');
+        t6.setAttribute('value', 'HARD');
         t6.setAttribute('color', !is4 ? '#ffffff' : '#8a9bb0');
       }
       // Keep hit targets hoverable without fighting the slider color
@@ -957,36 +958,36 @@
       });
     },
 
-    _splitBoardsOn: function () {
-      if (typeof window.getSplitBoards === 'function') return !!window.getSplitBoards();
-      if (window.lobbyState && window.lobbyState.splitBoards != null) {
-        return !!window.lobbyState.splitBoards;
-      }
-      return false;
+    /** Game mode: 'duel' | 'realtime' | 'rush' (button cycles). */
+    _dotModeOn: function () {
+      if (typeof window.getDotMode === 'function') return window.getDotMode();
+      if (window.lobbyState && window.lobbyState.dotMode != null) return window.lobbyState.dotMode;
+      return 'duel';
     },
 
-    _toggleSplitBoards: function () {
-      var next = !this._splitBoardsOn();
-      if (window.requestSplitBoards) window.requestSplitBoards(next);
-      else if (window.setSplitBoards) window.setSplitBoards(next);
-      else if (window.lobbyState) window.lobbyState.splitBoards = next;
-      this._setSplitBoardsButton();
+    _toggleDotMode: function () {
+      var order = ['duel', 'realtime', 'rush'];
+      var next = order[(order.indexOf(this._dotModeOn()) + 1) % order.length];
+      if (window.requestDotMode) window.requestDotMode(next);
+      else if (window.setDotMode) window.setDotMode(next);
+      else if (window.lobbyState) window.lobbyState.dotMode = next;
+      this._setDotModeButton();
       pulseHaptic(this._leftHandEl || document.getElementById('leftHand'), 0.35, 30);
     },
 
-    _setSplitBoardsButton: function () {
-      var btn = document.getElementById('menu-split-boards-toggle');
-      var txt = document.getElementById('menu-split-boards-text');
+    _setDotModeButton: function () {
+      var btn = document.getElementById('menu-dot-mode-toggle');
+      var txt = document.getElementById('menu-dot-mode-text');
       if (!btn) return;
-      var on = this._splitBoardsOn();
+      var on = this._dotModeOn();
       var canEdit = !window.isMultiplayer || !!window.isHost ||
         !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
-      var color = !canEdit ? '#555555' : (on ? '#8a3fd1' : '#1e6ad4');
+      var color = !canEdit ? '#555555' : (on === 'rush' ? '#8a3fd1' : (on === 'realtime' ? '#c45a12' : '#1e6ad4'));
       btn.setAttribute('material', 'color', color);
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
       if (txt) {
-        txt.setAttribute('value', on ? 'RUSH' : 'DUEL');
+        txt.setAttribute('value', on === 'rush' ? 'RUSH' : (on === 'realtime' ? 'LIVE' : 'DUEL'));
         txt.setAttribute('color', '#ffffff');
       }
     },
@@ -1226,7 +1227,7 @@
       this._setMusicButton();
       this._setPassthroughButton();
       this._setBoardButton();
-      this._setSplitBoardsButton();
+      this._setDotModeButton();
       this._setBotSpeedUI();
       if (stats) this._showStats();
 

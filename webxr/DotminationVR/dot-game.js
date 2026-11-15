@@ -3,16 +3,21 @@
 // Structure and all multiplayer / avatar / spectator / replay / victory plumbing are
 // carried over from StacksVR's stacks-game.js (methods marked "from StacksVR" are copied
 // verbatim or with only cup→board edits). The Dotmination-specific parts are new:
-// hex boards (dot-board.js), DUEL vs RUSH layouts, tap/poke input, turn handling,
-// bots (dot-bot.js) and RUSH "infection" attacks via StacksVR's attack.js buffers.
+// the original flatscreen rules (dot-rules.js), its look (dot-board.js), its bots
+// (dot-bot.js), tap/poke input, turns, levels and the three modes below.
 //
-// Modes (lobby splitBoards flag, host-synced like StacksVR's idle-junk toggle):
-//   DUEL  one shared vertical board between the players, turn-based, blue vs red.
-//   RUSH  each player gets an own board vs a purple "virus" bot (StacksVR-style stations).
-//         Clear your board first. Chain reactions of 4+ bursts infect the opponent's board.
+// Modes (lobby dotMode, host-synced like StacksVR's idle-junk toggle):
+//   DUEL      original turn-based game on one shared vertical board. Solo vs bot plays the
+//             original Levels 1–200 (same maps as the phone game); lobby vs bot = Random map;
+//             PvP = original multiplayer "half-filled" start.
+//   REALTIME  original Real-Time mode: both tap their own dots at once, 25 energy, +1 / 2 s.
+//             Host-authoritative in multiplayer.
+//   RUSH      each player gets an own board vs a purple "virus" bot (StacksVR-style stations).
+//             Clear your board first. Chains of 4+ bursts infect the opponent's board.
 (function (global) {
   'use strict';
 
+  var R = global.DotRules;
   var DB = global.DotBoard;
   var VICTORY_HOLD_MS = 30000;
   var VICTORY_CONFETTI_S = 3.6;
@@ -21,23 +26,33 @@
   var RUSH_SEAT = { x: 0.7, z: 1.77 };
   var RUSH_BOARD_Z = 1.15;
   var DUEL_TURN_MS = 25000;        // local human auto-move after this (only own client acts)
-  var DUEL_MOVE_CAP = 160;         // safety net: most dots wins
+  var DUEL_MOVE_CAP = 600;         // safety net only (original has none): higher score wins
+  var RT_START_ENERGY = 25;        // original INITIAL_RESOURCES
+  var RT_GAIN_MS = 2000;           // original RESOURCE_GAIN_INTERVAL
+  var RT_COOLDOWN_MS = 100;        // original ACTION_COOLDOWN_DURATION
+  var LEVEL_KEY = 'dotminationvr-level';
   var RUSH_MS = 180000;            // race clock (modes.js 'rush')
-  var VIRUS_DELAY_MS = 420;
+  var VIRUS_DELAY_MS = 600;
   var ATTACK_MIN_BURSTS = 4;       // chain of 4+ bursts attacks in RUSH
   var POKE_IN = 0.022;
   var POKE_OUT = 0.05;
 
   function otherSide(side) { return side === 'blue' ? 'red' : 'blue'; }
+  function normMode(m) { return m === 'realtime' || m === 'rush' ? m : 'duel'; }
+  function loadLevel() {
+    try { var v = parseInt(global.localStorage.getItem(LEVEL_KEY), 10); return v >= 1 && v <= 200 ? v : 1; }
+    catch (e) { return 1; }
+  }
+  function saveLevel(v) { try { global.localStorage.setItem(LEVEL_KEY, String(v)); } catch (e) { /* ignore */ } }
 
   /** One playfield: logic + view + turn bookkeeping. Duck-types StacksVR's cup API
    *  (serialize / applySnapshot / clearAll / pivot) so shared modules keep working. */
-  function GameBoard(key, a, b, radius) {
+  function GameBoard(key, a, b) {
     this.key = key;
     this.a = a;           // first player (blue/red)
     this.b = b;           // opponent (red or 'virus')
-    this.state = new DB.State(radius);
-    this.view = new DB.View({ radius: radius });
+    this.state = new R.State();
+    this.view = new DB.View();
     this.view.root.name = 'dot-board-' + key;
     this.turn = a;
     this.turnNo = 0;
@@ -81,7 +96,10 @@
       this.boards = {};
       this.cups = {};
       this.mode = 'duel';
-      this.radius = 4;
+      this.level = loadLevel();
+      this.res = { blue: RT_START_ENERGY, red: RT_START_ENERGY };
+      this._cool = { blue: 0, red: 0 };
+      this._recent = { blue: [], red: [], virus: [] };
       this.attackSys = new global.StacksAttack({ damageCap: 6, damageDelayMs: 2200 });
       this.modes = new global.StacksModes.ModeController({ mode: 'duel' });
       this.matchStats = global.StacksStats ? new global.StacksStats.MatchStats() : null;
@@ -158,8 +176,7 @@
 
       var size = (global.getBoardSize && global.getBoardSize()) || 6;
       this.boardSize = size === 4 ? 4 : 6;
-      var split = typeof global.getSplitBoards === 'function' ? !!global.getSplitBoards() : false;
-      this._buildBoards(split ? 'rush' : 'duel', DB.radiusForBoardSize(this.boardSize));
+      this._buildBoards(typeof global.getDotMode === 'function' ? global.getDotMode() : 'duel');
 
       // StacksVR menus/replay call bot.enable(false) — keep a harmless shim
       var shim = { enabled: false, enable: function (on) { this.enabled = !!on; } };
@@ -174,18 +191,17 @@
         var sz = e && e.detail && e.detail.boardSize;
         selfBoot.applyBoardSize(sz);
       });
-      this.el.sceneEl.addEventListener('split-boards-changed', function (e) {
-        var on = !!(e && e.detail && e.detail.splitBoards);
-        selfBoot.applyMode(on ? 'rush' : 'duel');
+      this.el.sceneEl.addEventListener('dot-mode-changed', function (e) {
+        selfBoot.applyMode(e && e.detail && e.detail.dotMode);
       });
       this.el.sceneEl.addEventListener('lobby-state-updated', function () {
         if (selfBoot._isLiveMatchPlaying() || selfBoot.matchState === 'COUNTDOWN') return;
         if (global.getBoardSize) selfBoot.applyBoardSize(global.getBoardSize());
-        if (global.getSplitBoards) selfBoot.applyMode(global.getSplitBoards() ? 'rush' : 'duel');
+        if (global.getDotMode) selfBoot.applyMode(global.getDotMode());
         selfBoot._updateNameLabels();
       });
       this._updateNameLabels();
-      console.log('[DotGame] ready mode=' + this.mode + ' radius=' + this.radius);
+      console.log('[DotGame] ready mode=' + this.mode + ' level=' + this.level);
     },
 
     // ── Layout ────────────────────────────────────────────────────────────
@@ -211,7 +227,7 @@
         };
       }
       return {
-        mode: 'duel',
+        mode: mode,
         boards: { shared: { x: 0, y: BOARD_Y, z: 0, yaw: 0 } },
         seats: {
           blue: { x: 0, y: 0, z: DUEL_SEAT_Z, ry: 0 },
@@ -232,36 +248,34 @@
       return lay.seats[side === 'red' ? 'red' : 'blue'];
     },
 
-    _buildBoards: function (mode, radius) {
-      mode = mode === 'rush' ? 'rush' : 'duel';
+    _buildBoards: function (mode) {
+      mode = normMode(mode);
       var keys = Object.keys(this.boards || {});
       for (var i = 0; i < keys.length; i++) {
         var old = this.boards[keys[i]];
         if (old.view.root.parent) old.view.root.parent.remove(old.view.root);
         if (old.label && old.label.group.parent) old.label.group.parent.remove(old.label.group);
-        old.view.root.traverse(function (o) {
-          if (o.geometry) o.geometry.dispose();
-          if (o.material) o.material.dispose();
-        });
+        old.view.dispose();
         if (old.label) { old.label.tex.dispose(); old.label.group.children[0].material.dispose(); }
       }
       this.mode = mode;
-      this.radius = radius;
       this.boards = {};
       var lay = this._layoutFor(mode);
       this._layout = lay;
-      if (mode === 'duel') {
-        this.boards.shared = new GameBoard('shared', 'blue', 'red', radius);
+      if (mode !== 'rush') {
+        this.boards.shared = new GameBoard('shared', 'blue', 'red');
         this.cups = { blue: this.boards.shared, red: this.boards.shared };
       } else {
-        this.boards.blue = new GameBoard('blue', 'blue', 'virus', radius);
-        this.boards.red = new GameBoard('red', 'red', 'virus', radius);
+        this.boards.blue = new GameBoard('blue', 'blue', 'virus');
+        this.boards.red = new GameBoard('red', 'red', 'virus');
         this.cups = { blue: this.boards.blue, red: this.boards.red };
       }
       var self = this;
       Object.keys(this.boards).forEach(function (k) {
         var b = self.boards[k];
         var p = lay.boards[k];
+        // Original pacing: 0.1 s per increment; Real-Time resolves instantly; RUSH a bit snappier
+        b.view.speed = mode === 'realtime' ? 15 : (mode === 'rush' ? 70 : 100);
         b.view.root.position.set(p.x, p.y, p.z);
         b.view.root.rotation.y = p.yaw;
         self._sceneRoot.add(b.view.root);
@@ -271,7 +285,7 @@
       this._placeStationCards();
       this._placeBotAnchors();
       this._placeOfflinePlayer();
-      this.modes.setMode(mode);
+      this.modes.setMode(mode === 'realtime' ? 'duel' : mode);
       this._refreshScores();
       this._updateNameLabels();
     },
@@ -279,7 +293,7 @@
     _placeBotAnchors: function () {
       var lay = this._layout;
       var cb = document.getElementById('cup-bot');
-      if (cb && lay) cb.setAttribute('position', lay.seats.red.x + ' 1.45 ' + (lay.seats.red.z + (this.mode === 'duel' ? -0.22 : -0.05)));
+      if (cb && lay) cb.setAttribute('position', lay.seats.red.x + ' 1.45 ' + (lay.seats.red.z + (this.mode !== 'rush' ? -0.22 : -0.05)));
       var sb = document.getElementById('spec-blue-anchor');
       if (sb && lay) sb.setAttribute('position', lay.seats.blue.x + ' 1.6 ' + lay.seats.blue.z);
     },
@@ -296,28 +310,27 @@
       player.object3D.rotation.y = THREE.MathUtils.degToRad(seat.ry || 0);
     },
 
-    /** Lobby boardSize 4 → small hex (37 dots), 6 → large hex (61 dots). */
+    /** Lobby boardSize slot (inherited from StacksVR) = bot difficulty: 4 Normal, 6 Harder. */
     applyBoardSize: function (size) {
-      size = size === 4 ? 4 : 6;
-      this.boardSize = size;
-      var r = DB.radiusForBoardSize(size);
-      if (r === this.radius) return false;
-      if (this._isLiveMatchPlaying() || this.matchState === 'COUNTDOWN') return false;
-      this._rebuildIdle(this.mode, r);
-      return true;
+      this.boardSize = size === 6 ? 6 : 4;
+      return false;
+    },
+
+    _botDifficulty: function () {
+      return this.boardSize === 6 ? 'smart' : 'random';
     },
 
     applyMode: function (mode) {
-      mode = mode === 'rush' ? 'rush' : 'duel';
+      mode = normMode(mode);
       if (mode === this.mode) return false;
       if (this._isLiveMatchPlaying() || this.matchState === 'COUNTDOWN') return false;
-      this._rebuildIdle(mode, this.radius);
+      this._rebuildIdle(mode);
       return true;
     },
 
-    _rebuildIdle: function (mode, radius) {
+    _rebuildIdle: function (mode) {
       var wasPreview = !!this._dualBotPreview;
-      this._buildBoards(mode, radius);
+      this._buildBoards(mode);
       if (wasPreview) {
         this._dualBotPreview = false;
         this.matchActive = false;
@@ -348,7 +361,7 @@
 
     _makeBoardLabel: function (board, p) {
       var lab = this._makeCanvasPlane(0.78, 0.13, 1024, 170);
-      lab.group.position.set(p.x, p.y + board.view.plateRadius + 0.1, p.z);
+      lab.group.position.set(p.x, p.y + board.view.height / 2 + 0.1, p.z);
       lab.group.rotation.y = p.yaw;
       this._sceneRoot.add(lab.group);
       return lab;
@@ -457,9 +470,7 @@
     },
 
     _sideColorCss: function (side) {
-      if (side === 'red') return '#ff6a4a';
-      if (side === 'virus') return '#c27bff';
-      return '#4aa8ff';
+      return DB.COLORS[R.code(side)] || '#9fb3c8';
     },
 
     _turnName: function (side) {
@@ -488,21 +499,26 @@
         if (!b.label) continue;
         var lines;
         var color;
+        var scoreLine = b.state.score('blue') + '  ·  ' + b.state.score('red');
         if (!this.matchActive && !this._victory) {
-          lines = ['DOTMINATION', this.mode === 'rush' ? 'RUSH · clear the virus first' : 'DUEL · take every dot'];
+          lines = ['DOTMINATION', this.mode === 'rush' ? 'RUSH · clear the virus first'
+            : (this.mode === 'realtime' ? 'REAL-TIME · tap your own dots' : 'take over the whole field')];
           color = '#9fb3c8';
         } else if (!this.matchActive) {
           var w = this.modes && this.modes.winner;
-          lines = ['GAME OVER', this.mode === 'duel'
-            ? b.state.count('blue') + '  ·  ' + b.state.count('red')
+          lines = ['DOTMINATION!', this.mode !== 'rush' ? scoreLine
             : Math.round(100 * b.state.count(b.a) / Math.max(1, b.state.count(b.a) + b.state.count('virus'))) + '% dominated'];
           color = this._sideColorCss(w === 'red' ? 'red' : 'blue');
         } else if (this.matchState === 'COUNTDOWN') {
-          lines = [this.mode === 'rush' ? 'CLEAR YOUR BOARD' : 'DOMINATE THE FIELD', 'get ready'];
+          lines = [this.mode === 'rush' ? 'CLEAR YOUR BOARD' : (this._levelMatch ? 'LEVEL ' + this._levelMatch : 'DOTMINATE THE FIELD'),
+            this.mode === 'realtime' ? 'real-time · own dots only' : 'get ready'];
           color = '#ffd56a';
+        } else if (this.mode === 'realtime') {
+          lines = ['⚡ ' + (this.res.blue | 0) + '      ⚡ ' + (this.res.red | 0), scoreLine];
+          color = this._sideColorCss(this._mySeatSide() || 'blue');
         } else if (this.mode === 'duel') {
           var t = b.turn;
-          var sub = b.state.count('blue') + '  ·  ' + b.state.count('red');
+          var sub = (this._levelMatch ? 'Level ' + this._levelMatch + '   ' : '') + scoreLine;
           if (this._isLocalHumanSide(t) && this.matchActive) {
             var left = Math.max(0, DUEL_TURN_MS - (now - b.turnStartedAt));
             if (left < 10000) sub += '   ⏱ ' + Math.ceil(left / 1000) + 's';
@@ -560,6 +576,7 @@
 
     /** Driver of the next/last move on this board. RUSH virus is run by the board owner's driver. */
     _drivesBoardActor: function (board, actor) {
+      if (this.mode === 'realtime') return this._rtHost() && !global.isMobileSpectator;
       if (actor === 'virus') return this._drivesSide(board.a);
       return this._drivesSide(actor);
     },
@@ -607,8 +624,9 @@
         if (e.repeat) return;
         if (e.key === 'n' || e.key === 'N') {
           // Desktop helper: toggle DUEL/RUSH (host or offline)
-          var want = self.mode !== 'rush';
-          if (global.requestSplitBoards) global.requestSplitBoards(want);
+          var order = ['duel', 'realtime', 'rush'];
+          var want = order[(order.indexOf(self.mode) + 1) % order.length];
+          if (global.requestDotMode) global.requestDotMode(want);
         }
       });
     },
@@ -670,8 +688,9 @@
       if (this._dualBotPreview || global.replayActive) return null;
       var side = this._localSide();
       if (!this._isLocalHumanSide(side)) return null;
-      var b = this.mode === 'duel' ? this.boards.shared : this.boards[side];
-      if (!b || b.turn !== side) return null;
+      var b = this.mode === 'rush' ? this.boards[side] : this.boards.shared;
+      if (!b) return null;
+      if (this.mode !== 'realtime' && b.turn !== side) return null; // real-time: no turns
       return b;
     },
 
@@ -682,13 +701,69 @@
         return false;
       }
       var side = this._localSide();
-      if (board.view.busy() || !board.state.canTap(side, idx)) {
+      var rt = this.mode === 'realtime';
+      var deny = !board.state.canTap(side, idx, rt) || (!rt && board.view.busy()) ||
+        (rt && ((this.res[side] | 0) < 1 || performance.now() < (this._cool[side] || 0)));
+      if (deny) {
         this._pulseHaptic(handEl, 0.2, 30);
         this._sfx('rotate', { volume: 0.15, rate: 0.6 });
         return false;
       }
       this._pulseHaptic(handEl, 0.55, 35);
+      if (rt) return this._rtTap(side, idx);
       return !!this._performMove(board, side, idx, { human: true });
+    },
+
+    // ── Original Real-Time mode (realTimeResourceMode.js). Host/offline is the referee. ──
+    _rtHost: function () {
+      return !global.isMultiplayer || !!(global.StacksLobby && global.StacksLobby.isHost);
+    },
+
+    _rtTap: function (side, idx) {
+      if (this._rtHost()) return this._rtApply(side, idx);
+      if (global.sendCupEvent) global.sendCupEvent({ kind: 'tap-req', side: side, i: idx });
+      this._cool[side] = performance.now() + RT_COOLDOWN_MS; // local echo of the cooldown
+      return true;
+    },
+
+    _rtApply: function (side, idx) {
+      var b = this.boards.shared;
+      var now = performance.now();
+      if (!b || (this.res[side] | 0) < 1 || now < (this._cool[side] || 0)) return false;
+      if (!b.state.canTap(side, idx, true)) return false;
+      this.res[side]--;
+      this._cool[side] = now + RT_COOLDOWN_MS;
+      return !!this._performMove(b, side, idx, { realtime: true });
+    },
+
+    _tickRealtime: function (now) {
+      if (this.mode !== 'realtime' || !this._rtHost()) return;
+      if (!this._rtGainAt) this._rtGainAt = now + RT_GAIN_MS;
+      if (now >= this._rtGainAt) {
+        this._rtGainAt += RT_GAIN_MS;
+        this.res.blue++;
+        this.res.red++;
+        if (global.isMultiplayer && global.sendCupEvent) global.sendCupEvent({ kind: 'energy', res: this.res });
+      }
+      if (this._endPending || this._endingMatch) return;
+      var bpm = this.botTargetBpm != null ? this.botTargetBpm : 12;
+      if (bpm <= 0) return;
+      // Original bot thinks every 200 ms (BOT SPEED 40 ≈ original pace)
+      var interval = Math.max(200, 8000 / bpm);
+      var sides = ['blue', 'red'];
+      for (var i = 0; i < sides.length; i++) {
+        var side = sides[i];
+        if (!this._isBotSide(side)) continue;
+        if (!this._rtBotAt) this._rtBotAt = {};
+        if (now < (this._rtBotAt[side] || 0)) continue;
+        this._rtBotAt[side] = now + interval * (0.75 + Math.random() * 0.5);
+        if ((this.res[side] | 0) < 1) continue;
+        var mv = global.DotBot.chooseMove(this.boards.shared.state, side, otherSide(side), 'realtime');
+        if (mv >= 0) {
+          if (side === 'red') this._botReachTo(this.boards.shared, mv, now);
+          this._rtApply(side, mv);
+        }
+      }
     },
 
     _tickPointers: function () {
@@ -743,13 +818,14 @@
     _performMove: function (board, actor, idx, opts) {
       opts = opts || {};
       var turnNo = board.turnNo;
-      var res = board.state.apply(actor, idx);
+      var res = board.state.apply(actor, idx, { ownOnly: this.mode === 'realtime' });
       if (!res) return null;
       board.turnNo++;
       board.rev++;
-      board.turn = actor === board.a ? board.b : board.a;
+      if (this.mode !== 'realtime') board.turn = actor === board.a ? board.b : board.a;
       board.moves[actor] = (board.moves[actor] || 0) + 1;
       board.turnStartedAt = performance.now();
+      board._pitch = 0;
       board.view.play(res, board.state);
       this._afterMove(board, actor, idx, res, { local: true, turnNo: turnNo });
       return res;
@@ -760,12 +836,12 @@
       var isHost = !!(global.StacksLobby && global.StacksLobby.isHost);
       var hostSim = !global.isMultiplayer || isHost;
       var playerSide = actor === 'virus' ? null : actor;
-      var explosions = res ? (res.explosions | 0) : (info.ex | 0);
+      var explosions = res ? (res.bursts | 0) : (info.ex | 0);
       if (playerSide && this.matchStats) {
         this.matchStats.onPlace(playerSide, {
           layersCleared: explosions,
           score: res ? res.captured | 0 : 0,
-          combo: res && res.waves ? res.waves.length : 0
+          combo: explosions
         }, now);
       }
       var atk = null;
@@ -783,14 +859,11 @@
         }
         if (atk && atk.sent > 0 && this.matchStats) this.matchStats.onAttack(playerSide, atk.sent, now);
       }
-      if (!this._dualBotPreview && explosions >= 3) {
+      if (!this._dualBotPreview && explosions >= 3 && this.mode !== 'realtime') {
         var txt = 'CHAIN ×' + explosions;
         if (atk && atk.sent) txt += '  ▶ ' + atk.sent;
         else if (atk && atk.cancelled) txt += '  ✚ ' + atk.cancelled;
         this._showChainPopup(board, txt, this._sideColorCss(actor));
-        if (global.StacksAudio && global.StacksAudio.clearChime) {
-          global.StacksAudio.clearChime(Math.min(8, 1 + Math.floor(explosions / 3)), 0.4);
-        }
       }
       this._refreshScores();
       if (window.matchRecorder && !this._dualBotPreview) {
@@ -805,6 +878,7 @@
           ex: explosions, snap: board.serialize(),
           scores: { blue: this.modes.scores.blue, red: this.modes.scores.red }
         };
+        if (this.mode === 'realtime') evt.res = { blue: this.res.blue, red: this.res.red };
         if (isHost && atk) { evt.attack = this.attackSys.serialize(now); evt.atk = atk; }
         global.sendCupEvent(evt);
       }
@@ -824,21 +898,15 @@
       if (this._dualBotPreview && !global.isMobileSpectator) {
         if (kind !== 'burst') return;
       }
-      var vol = this._dualBotPreview ? 0.12 : 0.35;
-      if (kind === 'grow') {
-        this._sfx('place', { volume: vol * 0.8, rate: 0.9 + 0.08 * (cells[0] ? cells[0].s : 1) });
-      } else if (kind === 'burst') {
-        if (global.StacksAudio && global.StacksAudio.ping) {
-          board._chainDepth = (board._chainDepth || 0) + 1;
-          global.StacksAudio.ping(0.85 + Math.min(1.2, board._chainDepth * 0.08), vol + 0.1);
-        }
-        var mine = this.mode === 'rush' ? this._isLocalHumanSide(board.a) : (this.mode === 'duel' && !!this._mySeatSide());
-        if (mine) {
-          var h = document.getElementById('rightHand');
-          this._pulseHaptic(h, 0.35, 25);
-        }
-      } else if (kind === 'charge') {
-        board._chainDepth = 0;
+      // Original incrementSound: sonar ping, pitch 1.0 + 0.05 per increment in the move
+      var vol = this._dualBotPreview ? 0.1 : 0.25;
+      if (global.StacksAudio && global.StacksAudio.ping && !(this.mode === 'realtime' && kind === 'grow' && Math.random() < 0.5)) {
+        board._pitch = (board._pitch || 0) + 1;
+        global.StacksAudio.ping(Math.min(3, 1.0 + 0.05 * (board._pitch - 1)), vol);
+      }
+      if (kind === 'burst') {
+        var mine = this.mode === 'rush' ? this._isLocalHumanSide(board.a) : !!this._mySeatSide();
+        if (mine) this._pulseHaptic(document.getElementById('rightHand'), 0.35, 25);
       }
     },
 
@@ -846,16 +914,19 @@
       if (this._endingMatch || this._endPending || !this.matchActive || this.matchState !== 'PLAYING') return;
       var winner = null;
       var reason = null;
-      if (this.mode === 'duel') {
+      // Original checkDotmination: after ≥2 moves, someone with no dots left lost
+      var early = this.mode !== 'realtime' && board.turnNo < 2;
+      if (this.mode !== 'rush') {
         var nb = board.state.count('blue');
         var nr = board.state.count('red');
-        if (nb === 0 && nr > 0) { winner = 'red'; reason = 'dominated'; }
-        else if (nr === 0 && nb > 0) { winner = 'blue'; reason = 'dominated'; }
+        if (!early && nb === 0 && nr > 0) { winner = 'red'; reason = 'dominated'; }
+        else if (!early && nr === 0 && nb > 0) { winner = 'blue'; reason = 'dominated'; }
         else if (board.turnNo >= DUEL_MOVE_CAP) {
-          winner = nb > nr ? 'blue' : (nr > nb ? 'red' : 'draw');
+          var sb = board.state.score('blue'), sr = board.state.score('red');
+          winner = sb > sr ? 'blue' : (sr > sb ? 'red' : 'draw');
           reason = 'moves';
         }
-      } else {
+      } else if (!early) {
         if (board.state.count('virus') === 0) { winner = board.a; reason = 'dominated'; }
         else if (board.state.count(board.a) === 0) { winner = otherSide(board.a); reason = 'overrun'; }
       }
@@ -865,7 +936,7 @@
       this._endPending = true;
       var self = this;
       // Let the winning chain finish animating before the banner
-      var wait = Math.min(2500, board.view._queue.length * 150 + 250);
+      var wait = Math.min(7000, board.view.remainingMs() + 500);
       this._endPendingAt = performance.now() + wait;
       setTimeout(function () {
         self._endPending = false;
@@ -875,9 +946,10 @@
 
     _refreshScores: function () {
       if (!this.modes) return;
-      if (this.mode === 'duel' && this.boards.shared) {
-        this.modes.scores.blue = this.boards.shared.state.count('blue');
-        this.modes.scores.red = this.boards.shared.state.count('red');
+      if (this.mode !== 'rush' && this.boards.shared) {
+        // Original score = sum of dot stages
+        this.modes.scores.blue = this.boards.shared.state.score('blue');
+        this.modes.scores.red = this.boards.shared.state.score('red');
       } else if (this.boards.blue && this.boards.red) {
         var sides = ['blue', 'red'];
         for (var i = 0; i < sides.length; i++) {
@@ -937,13 +1009,15 @@
     _botDelayMs: function () {
       var bpm = this.botTargetBpm != null ? this.botTargetBpm : 12;
       if (bpm <= 0) return Infinity;
-      if (this.mode === 'duel') return Math.max(700, Math.min(7000, 900 + 24000 / bpm));
+      // Original bot moves 1 s after its turn starts — BOT SPEED 12 (default) = 1 s
+      if (this.mode === 'duel') return Math.max(400, Math.min(6000, 12000 / bpm));
       return Math.max(600, 60000 / bpm);
     },
 
     _tickDrivers: function (now) {
       if (!this.matchActive || this.matchState !== 'PLAYING' || this._endingMatch || this._endPending) return;
       if (global.replayActive) return;
+      if (this.mode === 'realtime') { this._tickRealtime(now); this._easeBotHand(now); return; }
       var keys = Object.keys(this.boards);
       for (var i = 0; i < keys.length; i++) {
         var b = this.boards[keys[i]];
@@ -956,7 +1030,7 @@
           // Local human: duel turn clock (own client only → race-free)
           if (this.mode === 'duel' && this._isLocalHumanSide(actor) &&
               now - b.turnStartedAt > DUEL_TURN_MS) {
-            var auto = global.DotBot.chooseMove(b.state, actor, b.b === actor ? b.a : b.b, { depth: 1, noise: 3 });
+            var auto = global.DotBot.chooseMove(b.state, actor, b.b === actor ? b.a : b.b, 'random');
             if (auto >= 0) this._performMove(b, actor, auto, { auto: true });
           }
           continue;
@@ -964,7 +1038,7 @@
         if (b._schedTurn !== b.turnNo) {
           b._schedTurn = b.turnNo;
           var delay = isVirus ? VIRUS_DELAY_MS : this._botDelayMs();
-          if (this._dualBotPreview && !isVirus) delay = Math.max(900, Math.min(delay, 2600));
+          if (this._dualBotPreview && !isVirus) delay = Math.max(700, Math.min(delay, 1600));
           b._dueAt = now + delay;
           b._botPick = null;
         }
@@ -972,20 +1046,25 @@
         var opp = actor === b.a ? b.b : b.a;
         // Pick slightly early so the bot avatar can reach toward the dot
         if (b._botPick == null && now >= b._dueAt - 650) {
-          var prof = isVirus ? global.DotBot.PROFILES.virus
-            : (this.mode === 'duel' ? global.DotBot.PROFILES.duel : global.DotBot.PROFILES.rushSeat);
-          b._botPick = global.DotBot.chooseMove(b.state, actor, opp, prof);
+          // Original: levels always use the Normal bot; random/lobby use the menu difficulty
+          var diff = isVirus ? 'random' : (this._levelMatch ? 'random' : this._botDifficulty());
+          b._botPick = global.DotBot.chooseMove(b.state, actor, opp, diff, { recent: this._recent[actor] });
+          b.view.setBotChoice(b._botPick); // original bot-choice highlight
         }
         if (b._botPick != null && !isVirus && actor === 'red') this._botReach(b, b._botPick, now);
         if (now >= b._dueAt && b._botPick != null) {
           var pick = b._botPick;
           b._botPick = null;
           b._dueAt = Infinity;
+          b.view.setBotChoice(-1);
           if (pick >= 0 && b.state.canTap(actor, pick)) this._performMove(b, actor, pick, { bot: true });
           else if (pick < 0) this._checkBoardEnd(b);
         }
       }
-      // Ease bot hand back after a tap
+      this._easeBotHand(now);
+    },
+
+    _easeBotHand: function (now) {
       var rt = global.botReactionTarget;
       if (rt && rt._releaseAt && now > rt._releaseAt) {
         rt.progress = Math.max(0, rt.progress - 0.06);
@@ -994,6 +1073,16 @@
     },
 
     /** Drive mixamo-body bot idle IK hand toward the chosen dot (window.botReactionTarget). */
+    /** Real-time: quick reach without a scheduled due time. */
+    _botReachTo: function (board, idx, now) {
+      board._dueAt = now + 1;
+      this._botReach(board, idx, now);
+      if (global.botReactionTarget) {
+        global.botReactionTarget.progress = 1;
+        global.botReactionTarget._releaseAt = now + 180;
+      }
+    },
+
     _botReach: function (board, idx, now) {
       if (this._dualBotPreview || idx == null || idx < 0) return;
       var body = document.getElementById('bot-body');
@@ -1067,7 +1156,8 @@
       for (var i = 0; i < keys.length; i++) boards[keys[i]] = this.boards[keys[i]].serialize();
       return {
         mode: this.mode,
-        radius: this.radius,
+        level: this._levelMatch || 0,
+        res: { blue: this.res.blue, red: this.res.red },
         boards: boards,
         // StacksVR shape so replay-state / older consumers still read it
         blue: this.cups.blue ? this.cups.blue.serialize() : null,
@@ -1083,10 +1173,9 @@
       global.sendCupEvent({ kind: 'state', reason: reason || 'sync', snap: this._buildSnapshot() });
     },
 
-    _ensureModeFor: function (mode, radius) {
-      mode = mode === 'rush' ? 'rush' : 'duel';
-      radius = radius || this.radius;
-      if (mode !== this.mode || radius !== this.radius) this._buildBoards(mode, radius);
+    _ensureModeFor: function (mode) {
+      mode = normMode(mode);
+      if (mode !== this.mode) this._buildBoards(mode);
     },
 
     /** Merge boards from host/peer. Newer rev wins; view-only observers take any change. */
@@ -1111,9 +1200,9 @@
     /** StacksVR name kept for onRemoteReplayMsg (copied) — cups map side→board snapshot. */
     _applyNetworkCups: function (cups, opts) {
       if (!cups) return;
-      var mode = (cups.blue && cups.blue.k === 'shared') || (cups.red && cups.red.k === 'shared') ? 'duel' : 'rush';
-      var r = (cups.blue && cups.blue.r) || (cups.red && cups.red.r) || this.radius;
-      this._ensureModeFor(mode, r);
+      var shared = (cups.blue && cups.blue.k === 'shared') || (cups.red && cups.red.k === 'shared');
+      if (!shared) this._ensureModeFor('rush');
+      else if (this.mode === 'rush') this._ensureModeFor('duel');
       var snaps = {};
       if (cups.blue) snaps[cups.blue.k || 'blue'] = cups.blue;
       if (cups.red) snaps[cups.red.k || 'red'] = cups.red;
@@ -1128,7 +1217,9 @@
 
       if (evt.kind === 'state') {
         var snap = evt.snap || {};
-        if (snap.mode) this._ensureModeFor(snap.mode, snap.radius);
+        if (snap.mode) this._ensureModeFor(snap.mode);
+        if (snap.res && !this._rtHost()) this.res = { blue: snap.res.blue | 0, red: snap.res.red | 0 };
+        if (snap.level != null) this._levelMatch = snap.level || 0;
         this._applyBoardSnaps(snap.boards, {
           forceAll: this._isViewOnlyObserver() || evt.reason === 'match-start' || evt.reason === 'match-go'
         });
@@ -1143,6 +1234,19 @@
           if (evt.attack) this.attackSys.applySerialized(evt.attack, performance.now());
         }
         this._updateHUD();
+        return;
+      }
+      if (evt.kind === 'energy') {
+        if (!this._rtHost() && evt.res) this.res = { blue: evt.res.blue | 0, red: evt.res.red | 0 };
+        return;
+      }
+      if (evt.kind === 'tap-req') {
+        // Real-Time referee: only the host applies taps, and only from that seat's player
+        var mpT = global.lobbyState && global.lobbyState.matchPlayers;
+        if (isHost && this.mode === 'realtime' && this.matchActive && this.matchState === 'PLAYING' &&
+            mpT && mpT[evt.side] === evt.from && !this._endPending) {
+          this._rtApply(evt.side, evt.i | 0);
+        }
         return;
       }
       var board = evt.k ? this.boards[evt.k] : null;
@@ -1169,15 +1273,20 @@
       if (evt.kind === 'move') {
         if (this._drivesBoardActor(board, evt.actor) && !this._isViewOnlyObserver()) return;
         var res = null;
-        if (evt.turnNo === board.turnNo && board.turn === evt.actor && board.state.canTap(evt.actor, evt.i)) {
-          res = board.state.apply(evt.actor, evt.i); // animate locally (deterministic)
+        var rtMode = this.mode === 'realtime';
+        var nextRev = evt.snap && (evt.snap.rev | 0) === board.rev + 1;
+        if (evt.snap && (evt.snap.rev | 0) <= board.rev && !this._isViewOnlyObserver()) return; // stale
+        if (nextRev && (rtMode || board.turn === evt.actor) && board.state.canTap(evt.actor, evt.i, rtMode)) {
+          res = board.state.apply(evt.actor, evt.i, { ownOnly: rtMode }); // animate locally (deterministic)
         }
+        if (evt.res && !this._rtHost()) this.res = { blue: evt.res.blue | 0, red: evt.res.red | 0 };
         if (evt.snap) board.state.load(evt.snap);
         board.turn = evt.snap && evt.snap.turn ? evt.snap.turn : (evt.actor === board.a ? board.b : board.a);
         board.turnNo = evt.snap && evt.snap.turnNo != null ? evt.snap.turnNo | 0 : board.turnNo + 1;
         board.rev = evt.snap && evt.snap.rev != null ? evt.snap.rev | 0 : board.rev + 1;
         board.turnStartedAt = performance.now();
         board.moves[evt.actor] = (board.moves[evt.actor] || 0) + 1;
+        board._pitch = 0;
         if (res) board.view.play(res, board.state);
         else board.view.syncFrom(board.state);
         this._afterMove(board, evt.actor, evt.i, res, {
@@ -1190,7 +1299,9 @@
       if (!data || !data.snapshot) return;
       var snap = data.snapshot;
       var viewOnly = this._isViewOnlyObserver();
-      if (snap.mode) this._ensureModeFor(snap.mode, snap.radius);
+      if (snap.mode) this._ensureModeFor(snap.mode);
+      if (snap.res && !this._rtHost()) this.res = { blue: snap.res.blue | 0, red: snap.res.red | 0 };
+      if (snap.level != null) this._levelMatch = snap.level || 0;
       if (snap.boards) this._applyBoardSnaps(snap.boards, { forceAll: viewOnly && !this.matchActive });
       if (snap.attack && (viewOnly || !(global.StacksLobby && global.StacksLobby.isHost))) {
         this.attackSys.applySerialized(snap.attack, performance.now());
@@ -1507,40 +1618,53 @@
     // ── Match lifecycle (StacksVR flow; board setup is Dotmination) ───────
 
     _prepBoardsForMatch: function (seed) {
-      var mode = typeof global.getSplitBoards === 'function' && global.getSplitBoards() ? 'rush' : 'duel';
+      var mode = normMode(typeof global.getDotMode === 'function' ? global.getDotMode() : this.mode);
       var size = (global.getBoardSize && global.getBoardSize()) ||
-        (global.lobbyState && global.lobbyState.boardSize) || this.boardSize || 6;
-      this.boardSize = size === 4 ? 4 : 6;
-      var radius = DB.radiusForBoardSize(this.boardSize);
-      if (mode !== this.mode || radius !== this.radius || !Object.keys(this.boards).length) {
-        this._buildBoards(mode, radius);
-      }
+        (global.lobbyState && global.lobbyState.boardSize) || this.boardSize || 4;
+      this.boardSize = size === 6 ? 6 : 4;
+      if (mode !== this.mode || !Object.keys(this.boards).length) this._buildBoards(mode);
       this.bagSeed = seed >>> 0;
       if (global.lobbyState) global.lobbyState.bagSeed = this.bagSeed;
+      var mp = global.lobbyState && global.lobbyState.matchPlayers;
+      var pvp = !!(global.isMultiplayer && mp && mp.blue && mp.red && mp.blue !== '__BOT__' && mp.red !== '__BOT__');
+      var soloLevels = mode === 'duel' && !global.isMultiplayer && !this._dualBotPreview;
+      this._levelMatch = soloLevels ? this.level : 0;
+      this._recent = { blue: [], red: [], virus: [] };
       var keys = Object.keys(this.boards);
       for (var i = 0; i < keys.length; i++) {
         var b = this.boards[keys[i]];
-        // RUSH: both boards share the seed → identical start (StacksVR "mirrored bags")
-        b.state.prefill(this.bagSeed, b.a, b.b);
+        // Original start layouts. Original player--1 (the bot) = red / virus, player--2 (you) = blue.
+        if (mode === 'rush') {
+          // Both boards share the seed → identical start (StacksVR "mirrored bags")
+          b.state.populateRandom(this.bagSeed, 'virus', b.a);
+        } else if (mode === 'realtime') {
+          b.state.populateRealtime('red', 'blue');
+        } else if (soloLevels) {
+          b.state.populateLevel(this.level, 'red', 'blue');
+        } else if (pvp) {
+          b.state.populateHalf('red', 'blue'); // original multiplayer "half-filled" start
+        } else {
+          b.state.populateRandom(this.bagSeed, 'red', 'blue'); // original Random mode
+        }
         b.turnNo = 0;
         b.rev = 0;
         b.moves = {};
         b.turn = b.a;
         b._schedTurn = -1;
+        b._pitch = 0;
+        b.view.setBotChoice(-1);
         b.view.syncFrom(b.state);
       }
-      if (mode === 'duel') {
-        var mp = global.lobbyState && global.lobbyState.matchPlayers;
-        var humanVsBot = !global.isMultiplayer || (mp && (mp.red === '__BOT__') !== (mp.blue === '__BOT__'));
-        // vs bot the human opens; PvP / dual-bot: seed decides
-        if (humanVsBot && !this._dualBotPreview) {
-          this.boards.shared.turn = mp && mp.blue === '__BOT__' ? 'red' : 'blue';
-        } else {
-          this.boards.shared.turn = (this.bagSeed & 1) ? 'red' : 'blue';
-        }
+      if (mode !== 'rush') {
+        // Original: you (player--2) move first; vs a blue bot the red human opens
+        this.boards.shared.turn = mp && mp.blue === '__BOT__' && mp.red !== '__BOT__' ? 'red' : 'blue';
       }
+      this.res = { blue: RT_START_ENERGY, red: RT_START_ENERGY };
+      this._cool = { blue: 0, red: 0 };
+      this._rtGainAt = 0;
+      this._rtBotAt = {};
       this.attackSys.reset();
-      this.modes.setMode(mode);
+      this.modes.setMode(mode === 'realtime' ? 'duel' : mode);
       this.modes.mode.durationMs = mode === 'rush' ? RUSH_MS : 0;
       this._refreshScores();
     },
@@ -1684,7 +1808,7 @@
         window.matchRecorder.startRecording(startTime);
         var init = {};
         for (var k = 0; k < keys.length; k++) init[keys[k]] = this.boards[keys[k]].serialize();
-        window.matchRecorder.recordEvent('init', { mode: this.mode, radius: this.radius, boards: init });
+        window.matchRecorder.recordEvent('init', { mode: this.mode, level: this._levelMatch || 0, boards: init });
       }
       this._matchGoAt = goNow;
       this._updateHUD();
@@ -1715,7 +1839,7 @@
           map: tex, transparent: true, depthWrite: false, toneMapped: false, side: THREE.DoubleSide
         })
       );
-      mesh.position.set(0, 2.08, 0);
+      mesh.position.set(0, 2.42, 0);
       var player = document.getElementById('player');
       if (player && player.object3D) {
         var look = new THREE.Vector3();
@@ -1903,6 +2027,13 @@
         });
       }
       this._musicIdle();
+      if (festive && this._levelMatch && !global.isMultiplayer) {
+        // Original Levels mode: beating the bot unlocks the next level (200 wraps to 1)
+        if (winner === 'blue') {
+          this.level = this._levelMatch >= 200 ? 1 : this._levelMatch + 1;
+          saveLevel(this.level);
+        }
+      }
       if (festive) {
         setTimeout(function () {
           selfEnd._playVictory({
@@ -1912,6 +2043,7 @@
             blueName: opts && opts.blueName,
             redName: opts && opts.redName
           });
+          selfEnd._placeVictory();
         }, 0);
         this._scheduleDualIdle(VICTORY_HOLD_MS);
       } else if (wasPreview && winner && !opts.cancelled) {
@@ -2309,6 +2441,24 @@
       }
     },
 
+    /** Victory banner: above the shared board (DUEL/LIVE) or above your own board (RUSH). */
+    _placeVictory: function () {
+      var v = this._victory;
+      if (!v || !v.root) return;
+      var key = this.mode === 'rush' ? (this._mySeatSide() || (this.modes && this.modes.winner) || 'blue') : 'shared';
+      var b = this.boards[key] || this.boards.shared || this.boards.blue;
+      if (!b) return;
+      var p = b.view.root.position;
+      v.root.position.set(p.x, p.y + b.view.height / 2 + 0.42, p.z);
+      var player = document.getElementById('player');
+      if (player && player.object3D) {
+        var look = new THREE.Vector3();
+        player.object3D.getWorldPosition(look);
+        look.y = v.root.position.y;
+        v.root.lookAt(look);
+      }
+    },
+
     startOfflineBotMatch: function () {
       // If hosting a lobby, never stay offline-only — spectators need match-started.
       if (global.StacksLobby && global.StacksLobby.isHost && global.startLobbyMatch) {
@@ -2333,8 +2483,6 @@
       this.matchActive = true;
       this.matchState = 'PLAYING';
       this._seats = { blue: { bot: true }, red: { bot: true } };
-      var split = typeof global.getSplitBoards === 'function' && global.getSplitBoards();
-      if ((split ? 'rush' : 'duel') !== this.mode) this._buildBoards(split ? 'rush' : 'duel', this.radius);
       this._prepBoardsForMatch(DB.newSeed());
       this.modes.start(Date.now());
       this.modes.mode.durationMs = this.mode === 'rush' ? RUSH_MS : 0;
@@ -2905,14 +3053,16 @@
     },
 
     _updateThreats: function () {
+      var now = performance.now();
       if (this.mode !== 'rush') {
-        if (this.boards.shared) {
-          var t = this.boards.shared.turn;
-          this.boards.shared.view.setRim(this.matchActive ? t : 'none', 0);
-        }
+        var sh = this.boards.shared;
+        if (!sh) return;
+        // Original: field + empty dots take the current player's colour (real-time: yours)
+        var tint = this.mode === 'realtime' ? (this._mySeatSide() || 'blue') : sh.turn;
+        sh.view.setTurnColor(R.code(tint));
+        sh.view.setRim(this.matchActive ? R.code(tint) : null, 0);
         return;
       }
-      var now = performance.now();
       var sides = ['blue', 'red'];
       for (var i = 0; i < sides.length; i++) {
         var b = this.boards[sides[i]];
@@ -2925,9 +3075,12 @@
           var left = Math.max(0, minReady - now);
           urgency = Math.max(0.25, 1 - Math.min(1, left / Math.max(1, this.attackSys.damageDelayMs)));
         }
-        b.view.setRim(this.matchActive ? (b.turn === 'virus' ? 'virus' : b.a) : 'none', urgency);
+        var who = b.turn === 'virus' ? 'virus' : b.a;
+        b.view.setTurnColor(R.code(who));
+        b.view.setRim(this.matchActive ? R.code(who) : null, urgency);
       }
     },
+
 
     _packWorld: function (obj3d) {
       if (!obj3d) return null;
@@ -3105,7 +3258,8 @@
       if (!e || !e.data) return false;
       var d = e.data;
       if (e.type === 'init') {
-        this._ensureModeFor(d.mode, d.radius);
+        this._ensureModeFor(d.mode);
+        this._levelMatch = d.level || 0;
         this._applyBoardSnaps(d.boards, { forceAll: true });
         this._updateHUD();
         return true;
@@ -3113,7 +3267,9 @@
       if (e.type === 'move') {
         var b = this.boards[d.k];
         if (!b) return true;
-        var res = b.state.canTap(d.actor, d.i) ? b.state.apply(d.actor, d.i) : null;
+        var rtm = this.mode === 'realtime';
+        var res = b.state.canTap(d.actor, d.i, rtm) ? b.state.apply(d.actor, d.i, { ownOnly: rtm }) : null;
+        b._pitch = 0;
         if (d.snap) b.state.load(d.snap);
         b.turn = d.snap && d.snap.turn || b.turn;
         b.turnNo = d.snap ? d.snap.turnNo | 0 : b.turnNo + 1;
@@ -3125,9 +3281,9 @@
           this.modes.scores.red = d.scores.red;
         }
         if (d.actor !== 'virus' && this.matchStats) {
-          this.matchStats.onPlace(d.actor, { layersCleared: res ? res.explosions : 0, combo: 0, score: 0 }, performance.now());
+          this.matchStats.onPlace(d.actor, { layersCleared: res ? res.bursts : 0, combo: 0, score: 0 }, performance.now());
         }
-        if (res && res.explosions >= 3) this._showChainPopup(b, 'CHAIN ×' + res.explosions, this._sideColorCss(d.actor));
+        if (res && res.bursts >= 3 && !rtm) this._showChainPopup(b, 'CHAIN ×' + res.bursts, this._sideColorCss(d.actor));
         this._updateHUD();
         return true;
       }

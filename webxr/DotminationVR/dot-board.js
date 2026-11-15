@@ -1,704 +1,464 @@
-// dot-board.js — Dotmination rules + hex playfield (logic) and its WebXR view.
-//
-// Rules (same as the flatscreen game / earlier DotminationVR 360 build):
-//  - Hexagonal field of dots. Each dot has an owner (none / blue / red / virus) and a
-//    stage 0..5 (shown as dot size).
-//  - On your turn tap an empty dot or one of your own dots: it grows one stage.
-//  - Growing past stage 5 makes it burst: every neighbour grows one stage AND switches to
-//    your colour. Neighbours pushed past 5 burst too (chain reaction). A dot bursts at most
-//    once per chain, so every chain terminates.
-//  - BURST_LEAVES decides what a burst dot becomes. The DotminationVR 360 build emptied it
-//    ('empty'), but simulated games then swing back and forth for 300+ moves and often
-//    never finish. Leaving a stage-1 dot of the burster's colour ('own') makes chains
-//    snowball, so games end decisively (~35–55 moves per player). Flip it here if the
-//    original flatscreen rule is 'empty'.
-//  - Win by owning every coloured dot on the field (opponent has none left).
-//
-// Logic (DotBoardState) is pure + deterministic so moves can be replayed on every peer.
+// dot-board.js — VR view of the original Dotmination field.
+// Draws the phone game's look onto a canvas texture (white field, dots with CSS-style
+// halo rings per stage, empty dots tinted in the current player's colour, tap ripples,
+// floating "+1"s, 0.1s step animation) and puts it on a vertical double-sided panel.
+// Seen from behind the field is mirrored, exactly like a real glass board.
 (function (global) {
   'use strict';
 
-  var MAX_STAGE = 5;
-  var BURST_LEAVES = 'own'; // 'own' | 'empty' — see header
-  var OWNER = { none: 0, blue: 1, red: 2, virus: 3 };
-  var OWNER_NAME = ['none', 'blue', 'red', 'virus'];
-  var COLORS = {
-    0: 0x39404f,
-    1: 0x2f86ff,
-    2: 0xff4a3a,
-    3: 0xb44dff
+  var R = global.DotRules;
+  var K = 2.4;           // canvas px per original CSS px
+  var M = 26;            // margin around the field (CSS px)
+  var METERS_PER_PX = 0.00186; // 64px dot spacing ≈ 12 cm
+  var STEP_MS = 100;     // original gsap.delayedCall(0.1, incrementDotStage)
+  // Original palette (style.css --color-1/--color-2, neutral #7f7f7f)
+  var DEFAULT_COLORS = { 0: '#7f7f7f', 1: '#12DACE', 2: '#E11168', 3: '#8a4dff' };
+  // .dot.stage--N box-shadow rings: [spread px, alpha] — drawn largest first
+  var RINGS = {
+    1: [[19.2, 0.1], [14.4, 0.2], [9.6, 0.3], [4.8, 0.4]],
+    2: [[14.4, 0.1], [9.6, 0.2], [4.8, 0.3]],
+    3: [[9.6, 0.1], [4.8, 0.2]],
+    4: [[4.8, 0.1]],
+    5: []
   };
-  var ACCENT = { blue: 0x33bbff, red: 0xff6a3d, virus: 0xc070ff, none: 0x8899aa };
 
-  function ownerCode(side) {
-    if (typeof side === 'number') return side;
-    return OWNER[side] || 0;
+  function hexRgb(hex) {
+    var h = String(hex).replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function rgba(hex, a) { var c = hexRgb(hex); return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
+  // transition: 0.3s cubic-bezier(0, 1.4, 1, 1) — springy overshoot
+  function springEase(u) {
+    if (u >= 1) return 1;
+    var lo = 0, hi = 1, t = u;
+    for (var k = 0; k < 18; k++) {
+      t = (lo + hi) / 2;
+      var x = 3 * (1 - t) * t * t + t * t * t; // P1.x=0, P2.x=1
+      if (x < u) lo = t; else hi = t;
+    }
+    return 3 * (1 - t) * (1 - t) * t * 1.4 + 3 * (1 - t) * t * t + t * t * t;
   }
 
-  function ownerName(code) {
-    return OWNER_NAME[code] || 'none';
-  }
-
-  // ── Seeded RNG (mulberry32) ─────────────────────────────────────────────
-  function rng(seed) {
-    var a = (seed >>> 0) || 0x9e3779b9;
-    return function () {
-      a = (a + 0x6D2B79F5) >>> 0;
-      var t = a;
-      t = Math.imul(t ^ (t >>> 15), t | 1);
-      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-
-  function newSeed() {
-    return ((Date.now() ^ Math.floor(Math.random() * 0x100000000)) >>> 0);
-  }
-
-  // ── Hex layout (axial coords, pointy-top cells, flat-top overall hexagon) ──
-  var _layouts = {};
-  var DIRS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
-
-  function layoutFor(radius) {
-    radius = radius | 0;
-    if (_layouts[radius]) return _layouts[radius];
-    var cells = [];
-    var index = {};
-    for (var r = -radius; r <= radius; r++) {
-      var q0 = Math.max(-radius, -r - radius);
-      var q1 = Math.min(radius, -r + radius);
-      for (var q = q0; q <= q1; q++) {
-        index[q + ',' + r] = cells.length;
-        cells.push({
-          q: q,
-          r: r,
-          x: Math.sqrt(3) * (q + r / 2),
-          // +r goes DOWN the vertical board so row 0 of the array is the top row
-          y: -1.5 * r
-        });
-      }
-    }
-    var neighbors = [];
-    var mirror = [];
-    for (var i = 0; i < cells.length; i++) {
-      var c = cells[i];
-      var nb = [];
-      for (var d = 0; d < DIRS.length; d++) {
-        var k = (c.q + DIRS[d][0]) + ',' + (c.r + DIRS[d][1]);
-        if (index[k] != null) nb.push(index[k]);
-      }
-      nb.sort(function (a, b) { return a - b; });
-      neighbors.push(nb);
-      mirror.push(index[(-c.q) + ',' + (-c.r)]);
-    }
-    var lay = { radius: radius, cells: cells, neighbors: neighbors, mirror: mirror, count: cells.length };
-    _layouts[radius] = lay;
-    return lay;
-  }
-
-  /** Lobby boardSize (4 | 6, inherited from StacksVR) → hex radius. */
-  function radiusForBoardSize(size) {
-    return size === 4 ? 3 : 4;
-  }
-
-  // ── Board state ─────────────────────────────────────────────────────────
-  function DotBoardState(radius) {
-    this.layout = layoutFor(radius || 4);
-    this.radius = this.layout.radius;
-    this.owner = new Uint8Array(this.layout.count);
-    this.stage = new Uint8Array(this.layout.count);
-  }
-
-  DotBoardState.prototype.clone = function () {
-    var b = Object.create(DotBoardState.prototype);
-    b.layout = this.layout;
-    b.radius = this.radius;
-    b.owner = new Uint8Array(this.owner);
-    b.stage = new Uint8Array(this.stage);
-    return b;
-  };
-
-  DotBoardState.prototype.clear = function () {
-    this.owner.fill(0);
-    this.stage.fill(0);
-  };
-
-  DotBoardState.prototype.count = function (who) {
-    var code = ownerCode(who);
-    var n = 0;
-    for (var i = 0; i < this.owner.length; i++) if (this.owner[i] === code) n++;
-    return n;
-  };
-
-  DotBoardState.prototype.stageSum = function (who) {
-    var code = ownerCode(who);
-    var n = 0;
-    for (var i = 0; i < this.owner.length; i++) if (this.owner[i] === code) n += this.stage[i];
-    return n;
-  };
-
-  DotBoardState.prototype.canTap = function (who, i) {
-    var code = ownerCode(who);
-    if (i == null || i < 0 || i >= this.owner.length) return false;
-    var o = this.owner[i];
-    return o === 0 || o === code;
-  };
-
-  DotBoardState.prototype.legalMoves = function (who) {
-    var code = ownerCode(who);
-    var out = [];
-    for (var i = 0; i < this.owner.length; i++) {
-      if (this.owner[i] === 0 || this.owner[i] === code) out.push(i);
-    }
-    return out;
-  };
-
-  /**
-   * Apply a tap. Returns null when illegal. Otherwise:
-   *   { cell, owner, explosions, captured, waves: [[idx...]...],
-   *     steps: [[{i,o,s}...]...] }  ← per-frame display deltas for the view
-   * opts.noSteps skips step building (AI search).
-   */
-  DotBoardState.prototype.apply = function (who, i, opts) {
-    var code = ownerCode(who);
-    if (!this.canTap(code, i)) return null;
-    var wantSteps = !(opts && opts.noSteps);
-    var owner = this.owner;
-    var stage = this.stage;
-    var nbs = this.layout.neighbors;
-    var res = { cell: i, owner: code, explosions: 0, captured: 0, waves: [], steps: wantSteps ? [] : null };
-
-    stage[i] += 1;
-    owner[i] = code;
-    if (stage[i] <= MAX_STAGE) {
-      if (wantSteps) res.steps.push([{ i: i, o: code, s: stage[i], kind: 'grow' }]);
-      return res;
-    }
-    stage[i] = MAX_STAGE;
-    if (wantSteps) res.steps.push([{ i: i, o: code, s: MAX_STAGE, kind: 'charge' }]);
-
-    var n = owner.length;
-    var exploded = new Uint8Array(n);
-    var queued = new Uint8Array(n);
-    var frontier = [i];
-    queued[i] = 1;
-    while (frontier.length) {
-      frontier.sort(function (a, b) { return a - b; });
-      res.waves.push(frontier.slice());
-      var burstStep = wantSteps ? [] : null;
-      var growStep = wantSteps ? [] : null;
-      var next = [];
-      for (var w = 0; w < frontier.length; w++) {
-        var c = frontier[w];
-        exploded[c] = 1;
-        var leaveOwn = BURST_LEAVES === 'own';
-        owner[c] = leaveOwn ? code : 0;
-        stage[c] = leaveOwn ? 1 : 0;
-        res.explosions++;
-        if (wantSteps) burstStep.push({ i: c, o: owner[c], s: stage[c], kind: 'burst' });
-      }
-      for (var w2 = 0; w2 < frontier.length; w2++) {
-        var src = frontier[w2];
-        var list = nbs[src];
-        for (var k = 0; k < list.length; k++) {
-          var nb = list[k];
-          if (exploded[nb]) continue;
-          if (owner[nb] !== 0 && owner[nb] !== code) res.captured++;
-          owner[nb] = code;
-          stage[nb] += 1;
-          if (stage[nb] > MAX_STAGE) {
-            stage[nb] = MAX_STAGE;
-            if (!queued[nb]) {
-              queued[nb] = 1;
-              next.push(nb);
-            }
-          }
-          if (wantSteps) growStep.push({ i: nb, o: code, s: stage[nb], kind: 'hit', from: src });
-        }
-      }
-      if (wantSteps) {
-        res.steps.push(burstStep);
-        if (growStep.length) res.steps.push(growStep);
-      }
-      frontier = next;
-    }
-    return res;
-  };
-
-  /**
-   * RUSH attack ("infection"): flip `amount` of `victim`'s dots to `attacker` and charge
-   * them one stage. Highest stages first (most dangerous), seeded tie-break. Never takes
-   * the victim's last dot. Returns the changed cell indices.
-   */
-  DotBoardState.prototype.infect = function (victim, attacker, amount, seed) {
-    var v = ownerCode(victim);
-    var a = ownerCode(attacker);
-    var rand = rng(seed || 1);
-    var mine = [];
-    for (var i = 0; i < this.owner.length; i++) {
-      if (this.owner[i] === v) mine.push({ i: i, s: this.stage[i], t: rand() });
-    }
-    mine.sort(function (x, y) { return (y.s - x.s) || (x.t - y.t); });
-    var take = Math.min(amount | 0, Math.max(0, mine.length - 1));
-    var changed = [];
-    for (var k = 0; k < take; k++) {
-      var c = mine[k].i;
-      this.owner[c] = a;
-      this.stage[c] = Math.min(MAX_STAGE, this.stage[c] + 1);
-      changed.push(c);
-    }
-    return changed;
-  };
-
-  /**
-   * Random-mode start ("Random mode generates an infinite amount of challenges"):
-   * point-symmetric so both colours start with an identical position.
-   */
-  DotBoardState.prototype.prefill = function (seed, sideA, sideB, opts) {
+  function View(opts) {
     opts = opts || {};
-    var a = ownerCode(sideA);
-    var b = ownerCode(sideB);
-    var rand = rng(seed);
-    var empty = opts.emptyChance != null ? opts.emptyChance : 0.42;
-    var maxStart = opts.maxStage != null ? opts.maxStage : 4;
-    this.clear();
-    var mirror = this.layout.mirror;
-    var placed = 0;
-    for (var i = 0; i < this.owner.length; i++) {
-      var m = mirror[i];
-      if (m < i) continue;
-      var roll = rand();
-      var st = 1 + Math.floor(rand() * maxStart);
-      var flip = rand() < 0.5;
-      if (m === i || roll < empty) continue;
-      this.owner[i] = flip ? a : b;
-      this.owner[m] = flip ? b : a;
-      this.stage[i] = st;
-      this.stage[m] = st;
-      placed++;
-    }
-    // Guarantee a playable opening (≥3 dots each)
-    var guard = 0;
-    while (placed < 3 && guard++ < 200) {
-      var j = Math.floor(rand() * this.owner.length);
-      var mj = mirror[j];
-      if (mj === j || this.owner[j] || this.owner[mj]) continue;
-      this.owner[j] = a; this.owner[mj] = b;
-      this.stage[j] = 2; this.stage[mj] = 2;
-      placed++;
-    }
-    return this;
-  };
-
-  DotBoardState.prototype.serialize = function () {
-    var o = '';
-    var s = '';
-    for (var i = 0; i < this.owner.length; i++) {
-      o += this.owner[i];
-      s += this.stage[i];
-    }
-    return { r: this.radius, o: o, s: s };
-  };
-
-  DotBoardState.prototype.load = function (snap) {
-    if (!snap || snap.o == null) return false;
-    if (snap.r && snap.r !== this.radius) {
-      this.layout = layoutFor(snap.r);
-      this.radius = this.layout.radius;
-      this.owner = new Uint8Array(this.layout.count);
-      this.stage = new Uint8Array(this.layout.count);
-    }
-    var n = Math.min(this.owner.length, snap.o.length);
-    for (var i = 0; i < n; i++) {
-      this.owner[i] = snap.o.charCodeAt(i) - 48;
-      this.stage[i] = snap.s.charCodeAt(i) - 48;
-    }
-    return true;
-  };
-
-  // ── View (THREE) ────────────────────────────────────────────────────────
-  var STEP_MS = 150;
-
-  function DotBoardView(opts) {
-    opts = opts || {};
-    this.radius = opts.radius || 4;
-    this.layout = layoutFor(this.radius);
-    // Fit the field to ~0.82m wide regardless of radius
-    this.spacing = opts.spacing || (0.82 / (Math.sqrt(3) * (2 * this.radius + 1)));
-    this.root = new THREE.Group();
-    this.root.name = 'dot-board';
-    this.dispOwner = new Uint8Array(this.layout.count);
-    this.dispStage = new Uint8Array(this.layout.count);
-    this._pulse = new Float32Array(this.layout.count);
+    this.layout = R.layoutFor(opts.rows, opts.cols);
+    this.colors = Object.assign({}, DEFAULT_COLORS, opts.colors || {});
+    this.turnColor = this.colors[2];
+    this.rimColor = '#c8d0d8';
+    this._rimTarget = this.rimColor;
+    this._threat = 0;
+    this.speed = opts.stepMs != null ? opts.stepMs : STEP_MS;
+    var n = this.layout.count;
+    this.dispOwner = new Uint8Array(n);
+    this.dispStage = new Uint8Array(n);
+    this._size = new Float32Array(n);     // animated stage (float)
+    this._from = new Float32Array(n);
+    this._t0 = new Float64Array(n);
+    this._flash = new Float32Array(n);
+    this._hover = [-1, -1];
+    this._botChoice = -1;
     this._queue = [];
     this._stepAt = 0;
-    this._particles = [];
-    this._rimColor = new THREE.Color(ACCENT.none);
-    this._rimTarget = new THREE.Color(ACCENT.none);
-    this._threat = 0;
+    this._fx = [];       // ripples + floating texts
     this.onStep = null;
     this._build();
   }
 
-  DotBoardView.prototype._build = function () {
-    var s = this.spacing;
-    var R = this.radius;
-    var plateR = Math.sqrt(3) * R * s + s * 1.05;
-    this.plateRadius = plateR;
-
-    // Translucent dark plate — players see each other through it in DUEL
-    var plate = new THREE.Mesh(
-      new THREE.CircleGeometry(plateR, 6),
-      new THREE.MeshStandardMaterial({
-        color: 0x0b0f18, roughness: 0.25, metalness: 0.6,
-        transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false
+  View.prototype._build = function () {
+    var L = this.layout;
+    this.pxW = L.width + 2 * M;
+    this.pxH = L.height + 2 * M;
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = Math.round(this.pxW * K);
+    this.canvas.height = Math.round(this.pxH * K);
+    this.ctx = this.canvas.getContext('2d');
+    this.tex = new THREE.CanvasTexture(this.canvas);
+    this.tex.minFilter = THREE.LinearFilter;
+    this.tex.anisotropy = 4;
+    if ('colorSpace' in this.tex && THREE.SRGBColorSpace) this.tex.colorSpace = THREE.SRGBColorSpace;
+    else if (THREE.sRGBEncoding) this.tex.encoding = THREE.sRGBEncoding;
+    this.width = this.pxW * METERS_PER_PX;
+    this.height = this.pxH * METERS_PER_PX;
+    this.root = new THREE.Group();
+    this.root.name = 'dot-board';
+    this.panel = new THREE.Mesh(
+      new THREE.PlaneGeometry(this.width, this.height),
+      new THREE.MeshBasicMaterial({
+        map: this.tex, transparent: true, side: THREE.DoubleSide, toneMapped: false, depthWrite: false
       })
     );
-    plate.renderOrder = 1;
-    this.root.add(plate);
-    this.plate = plate;
-
-    var rimMat = new THREE.MeshBasicMaterial({ color: ACCENT.none, side: THREE.DoubleSide, toneMapped: false });
-    var rim = new THREE.Mesh(new THREE.RingGeometry(plateR, plateR + 0.014, 6), rimMat);
-    rim.position.z = 0.001;
-    this.root.add(rim);
-    this.rim = rim;
-
-    var n = this.layout.count;
-    // Sockets: faint ring per cell so empty spots read on both sides
-    var sockGeo = new THREE.RingGeometry(s * 0.30, s * 0.36, 24);
-    var sockMat = new THREE.MeshBasicMaterial({
-      color: 0x2a3344, side: THREE.DoubleSide, transparent: true, opacity: 0.9, toneMapped: false
-    });
-    this.sockets = new THREE.InstancedMesh(sockGeo, sockMat, n);
-    this.sockets.renderOrder = 2;
-    var m = new THREE.Matrix4();
-    for (var i = 0; i < n; i++) {
-      var c = this.layout.cells[i];
-      m.makeTranslation(c.x * s, c.y * s, 0);
-      this.sockets.setMatrixAt(i, m);
-    }
-    this.sockets.instanceMatrix.needsUpdate = true;
-    this.root.add(this.sockets);
-
-    // Dots: flattened spheres → readable from both faces of the vertical board
-    var dotGeo = new THREE.SphereGeometry(1, 20, 14);
-    var dotMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff, roughness: 0.32, metalness: 0.15,
-      emissive: 0x000000
-    });
-    // Per-instance emissive tint via onBeforeCompile would be heavier; use bright vertexless color
-    this.dots = new THREE.InstancedMesh(dotGeo, dotMat, n);
-    this.dots.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.dots.renderOrder = 3;
-    this.dots.castShadow = false;
-    var col = new THREE.Color();
-    for (var j = 0; j < n; j++) {
-      this.dots.setColorAt(j, col.setHex(COLORS[0]));
-    }
-    this.root.add(this.dots);
-
-    // Hover rings (one per hand + mouse)
-    this.hovers = [];
-    for (var h = 0; h < 2; h++) {
-      var hr = new THREE.Mesh(
-        new THREE.RingGeometry(s * 0.43, s * 0.5, 28),
-        new THREE.MeshBasicMaterial({
-          color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.85,
-          depthWrite: false, toneMapped: false
-        })
-      );
-      hr.visible = false;
-      hr.renderOrder = 5;
-      this.root.add(hr);
-      this.hovers.push(hr);
-    }
-
-    // Burst particles (pooled, instanced)
-    this._pMax = 96;
-    this.parts = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(s * 0.09, 8, 6),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }),
-      this._pMax
-    );
-    this.parts.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.parts.count = 0;
-    this.parts.renderOrder = 4;
-    this.root.add(this.parts);
-
-    this._refreshAll();
+    this.panel.renderOrder = 2;
+    this.root.add(this.panel);
+    // Thin frame so the board reads as an object in the dark arena
+    var frameMat = new THREE.MeshStandardMaterial({ color: 0xdfe5ea, roughness: 0.4, metalness: 0.2 });
+    var t = 0.012, d = 0.02;
+    var w = this.width, h = this.height;
+    [[0, h / 2 + t / 2, w + 2 * t, t], [0, -h / 2 - t / 2, w + 2 * t, t],
+      [w / 2 + t / 2, 0, t, h], [-w / 2 - t / 2, 0, t, h]].forEach(function (f) {
+      var m = new THREE.Mesh(new THREE.BoxGeometry(f[2], f[3], d), frameMat);
+      m.position.set(f[0], f[1], 0);
+      this.root.add(m);
+    }, this);
+    this._dirty = true;
+    this._draw(performance.now());
   };
 
-  DotBoardView.prototype.setRadius = function (radius) {
-    if (radius === this.radius) return;
-    var parent = this.root.parent;
-    var pos = this.root.position.clone();
-    var quat = this.root.quaternion.clone();
-    var name = this.root.name;
-    if (parent) parent.remove(this.root);
+  View.prototype.dispose = function () {
     this.root.traverse(function (o) {
       if (o.geometry) o.geometry.dispose();
-      if (o.material) o.material.dispose();
+      if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); }
     });
-    DotBoardView.call(this, { radius: radius });
-    this.root.name = name;
-    this.root.position.copy(pos);
-    this.root.quaternion.copy(quat);
-    if (parent) parent.add(this.root);
   };
 
-  DotBoardView.prototype.cellLocal = function (i, out) {
+  View.prototype.setColors = function (map) {
+    Object.assign(this.colors, map || {});
+    this._dirty = true;
+  };
+
+  /** Empty dots take the current player's colour (original .field.player--N rule). */
+  View.prototype.setTurnColor = function (code) {
+    var c = this.colors[code] || this.colors[0];
+    if (c !== this.turnColor) { this.turnColor = c; this._dirty = true; }
+  };
+
+  View.prototype.setRim = function (code, threat) {
+    var c = code == null ? '#c8d0d8' : (this.colors[code] || '#c8d0d8');
+    if (c !== this._rimTarget || (threat || 0) !== this._threat) {
+      this._rimTarget = c;
+      this._threat = threat || 0;
+      this._dirty = true;
+    }
+  };
+
+  View.prototype._px = function (i) {
+    var c = this.layout.cells[i];
+    return { x: (M + c.x) * K, y: (M + c.y) * K };
+  };
+
+  View.prototype.cellLocal = function (i, out) {
     var c = this.layout.cells[i];
     out = out || new THREE.Vector3();
-    return out.set(c.x * this.spacing, c.y * this.spacing, 0);
+    return out.set((M + c.x - this.pxW / 2) * METERS_PER_PX, (this.pxH / 2 - (M + c.y)) * METERS_PER_PX, 0);
   };
 
-  DotBoardView.prototype.cellWorld = function (i, out) {
+  View.prototype.cellWorld = function (i, out) {
     out = this.cellLocal(i, out);
     this.root.updateWorldMatrix(true, false);
     return this.root.localToWorld(out);
   };
 
-  DotBoardView.prototype._dotScale = function (stage) {
-    var s = this.spacing;
-    if (!stage) return 0.0001;
-    return s * (0.15 + 0.062 * stage);
-  };
-
-  DotBoardView.prototype._writeDot = function (i, extra) {
-    var c = this.layout.cells[i];
-    var st = this.dispStage[i];
-    var r = this._dotScale(st) * (1 + (extra || 0));
-    if (!st) r = 0.0001;
-    var m = DotBoardView._m || (DotBoardView._m = new THREE.Matrix4());
-    m.makeScale(r, r, r * 0.42);
-    m.setPosition(c.x * this.spacing, c.y * this.spacing, 0);
-    this.dots.setMatrixAt(i, m);
-  };
-
-  DotBoardView.prototype._paintDot = function (i, flash) {
-    var col = DotBoardView._c || (DotBoardView._c = new THREE.Color());
-    col.setHex(COLORS[this.dispOwner[i]] || COLORS[0]);
-    if (this.dispStage[i] >= MAX_STAGE) col.lerp(DotBoardView._white || (DotBoardView._white = new THREE.Color(0xffffff)), 0.18);
-    if (flash) col.lerp(DotBoardView._white || (DotBoardView._white = new THREE.Color(0xffffff)), Math.min(1, flash));
-    this.dots.setColorAt(i, col);
-  };
-
-  DotBoardView.prototype._refreshAll = function () {
-    for (var i = 0; i < this.layout.count; i++) {
-      this._writeDot(i, 0);
-      this._paintDot(i, 0);
+  View.prototype._setDot = function (i, o, s, now) {
+    if (this.dispStage[i] !== s) {
+      this._from[i] = this._size[i];
+      this._t0[i] = now;
     }
-    this.dots.instanceMatrix.needsUpdate = true;
-    if (this.dots.instanceColor) this.dots.instanceColor.needsUpdate = true;
+    this.dispOwner[i] = o;
+    this.dispStage[i] = s;
+    this._dirty = true;
   };
 
-  /** Snap display to logic (no animation). Cancels queued animation steps. */
-  DotBoardView.prototype.syncFrom = function (state) {
-    if (state.radius !== this.radius) this.setRadius(state.radius);
+  View.prototype.syncFrom = function (state) {
+    if (state.layout !== this.layout) {
+      // Different field size: rebuild in place
+      var parent = this.root.parent, pos = this.root.position.clone(), q = this.root.quaternion.clone();
+      if (parent) parent.remove(this.root);
+      this.dispose();
+      View.call(this, { rows: state.layout.rows, cols: state.layout.cols, colors: this.colors });
+      this.root.position.copy(pos); this.root.quaternion.copy(q);
+      if (parent) parent.add(this.root);
+    }
     this._queue = [];
-    this.dispOwner.set(state.owner);
-    this.dispStage.set(state.stage);
-    this._refreshAll();
+    this._stepAt = 0;
+    var now = performance.now();
+    for (var i = 0; i < this.layout.count; i++) {
+      this.dispOwner[i] = state.owner[i];
+      this.dispStage[i] = state.stage[i];
+      this._size[i] = state.stage[i];
+      this._t0[i] = 0;
+    }
+    this._dirty = true;
+    this._draw(now);
   };
 
-  /** Queue animation steps from DotBoardState.apply(); `finalState` re-syncs at the end. */
-  DotBoardView.prototype.play = function (res, finalState) {
-    if (!res || !res.steps) {
-      if (finalState) this.syncFrom(finalState);
-      return;
+  /** Queue the original one-increment-at-a-time animation; resync to finalState at the end. */
+  View.prototype.play = function (res, finalState, opts) {
+    opts = opts || {};
+    var now = performance.now();
+    if (res && res.steps) {
+      this._chainStep = 0;
+      this._fx.push({ kind: 'ripple', i: res.cell, t0: now });
+      for (var k = 0; k < res.steps.length; k++) this._queue.push({ step: res.steps[k], first: k === 0 });
     }
-    for (var k = 0; k < res.steps.length; k++) this._queue.push({ cells: res.steps[k] });
     if (finalState) this._queue.push({ sync: finalState.serialize() });
-    if (!this._stepAt) this._stepAt = performance.now();
+    if (!this._stepAt) this._stepAt = now;
+    if (opts.instant) this._flushQueue(now);
   };
 
-  DotBoardView.prototype.flashCells = function (cells, color) {
-    for (var i = 0; i < cells.length; i++) this._pulse[cells[i]] = 1;
-    if (color != null) this._flashColor = color;
+  View.prototype._flushQueue = function (now) {
+    while (this._queue.length) this._runStep(this._queue.shift(), now, true);
+    this._stepAt = 0;
   };
 
-  DotBoardView.prototype.busy = function () {
-    return this._queue.length > 0;
-  };
-
-  DotBoardView.prototype.setRim = function (side, threat) {
-    var hex = ACCENT[side] != null ? ACCENT[side] : ACCENT.none;
-    this._rimTarget.setHex(hex);
-    this._threat = threat || 0;
-  };
-
-  DotBoardView.prototype.setHover = function (slot, i) {
-    var hr = this.hovers[slot | 0];
-    if (!hr) return;
-    if (i == null || i < 0) { hr.visible = false; return; }
-    this.cellLocal(i, hr.position);
-    hr.position.z = 0.002;
-    hr.visible = true;
-  };
-
-  DotBoardView.prototype._spawnBurst = function (i, ownerCodeHit) {
-    var c = this.layout.cells[i];
-    var nb = this.layout.neighbors[i];
-    for (var k = 0; k < nb.length; k++) {
-      if (this._particles.length >= this._pMax) break;
-      var t = this.layout.cells[nb[k]];
-      this._particles.push({
-        x0: c.x * this.spacing, y0: c.y * this.spacing,
-        x1: t.x * this.spacing, y1: t.y * this.spacing,
-        t: 0, dur: STEP_MS * 1.1, color: ownerCodeHit
-      });
+  View.prototype._runStep = function (item, now, quiet) {
+    if (item.sync) {
+      for (var i = 0; i < this.layout.count && i < item.sync.o.length; i++) {
+        this._setDot(i, item.sync.o.charCodeAt(i) - 48, item.sync.s.charCodeAt(i) - 48, now);
+      }
+      return null;
     }
+    var st = item.step;
+    this._setDot(st.i, st.o, st.s, now);
+    if (!quiet) {
+      if (st.kind === 'grow') this._float(st.i, st.o, now);
+      else if (st.nb) for (var k = 0; k < st.nb.length; k++) this._float(st.nb[k], st.by, now);
+    }
+    this._flash[st.i] = 1;
+    if (this.onStep) this.onStep(st.kind, st, quiet);
+    return st;
   };
 
-  /** Advance animation; returns true while busy. */
-  DotBoardView.prototype.tick = function (now, dt) {
-    now = now || performance.now();
-    dt = dt || 16;
-    var dirty = false;
-    var colorDirty = false;
+  View.prototype._float = function (i, owner, now) {
+    this._fx.push({ kind: 'plus', i: i, o: owner, t0: now });
+    if (this._fx.length > 120) this._fx.splice(0, this._fx.length - 120);
+  };
 
+  View.prototype.busy = function () { return this._queue.length > 0; };
+
+  /** Rough ms left in the queued animation. */
+  View.prototype.remainingMs = function () {
+    var n = this._queue.length, done = this._chainStep || 0;
+    var slow = Math.max(0, Math.min(n, 30 - done));
+    return slow * this.speed + (n - slow) * Math.min(this.speed, 40);
+  };
+
+  View.prototype.flashCells = function (cells) {
+    var now = performance.now();
+    for (var i = 0; i < cells.length; i++) {
+      this._flash[cells[i]] = 1;
+      this._fx.push({ kind: 'ripple', i: cells[i], t0: now, warn: true });
+    }
+    this._dirty = true;
+  };
+
+  View.prototype.setHover = function (slot, i) {
+    i = i == null ? -1 : i;
+    if (this._hover[slot | 0] !== i) { this._hover[slot | 0] = i; this._dirty = true; }
+  };
+
+  /** Original bot "visual feedback": highlight the dot the bot is about to tap. */
+  View.prototype.setBotChoice = function (i) {
+    i = i == null ? -1 : i;
+    if (this._botChoice !== i) { this._botChoice = i; this._dirty = true; }
+  };
+
+  View.prototype.tick = function (now, dt) {
+    now = now || performance.now();
     while (this._queue.length && now >= this._stepAt) {
-      var step = this._queue.shift();
-      if (step.sync) {
-        for (var si = 0; si < this.layout.count && si < step.sync.o.length; si++) {
-          this.dispOwner[si] = step.sync.o.charCodeAt(si) - 48;
-          this.dispStage[si] = step.sync.s.charCodeAt(si) - 48;
-        }
-        for (var sj = 0; sj < this.layout.count; sj++) { this._writeDot(sj, 0); this._paintDot(sj, 0); }
-        dirty = colorDirty = true;
-        this._stepAt = now;
-        continue;
-      }
-      var kind = null;
-      for (var j = 0; j < step.cells.length; j++) {
-        var d = step.cells[j];
-        kind = d.kind;
-        if (d.kind === 'burst') {
-          this._spawnBurst(d.i, this.dispOwner[d.i]);
-          this._pulse[d.i] = 1;
-        } else {
-          this._pulse[d.i] = Math.max(this._pulse[d.i], d.kind === 'hit' ? 0.7 : 0.45);
-        }
-        this.dispOwner[d.i] = d.o;
-        this.dispStage[d.i] = d.s;
-      }
-      if (this.onStep) this.onStep(kind, step.cells);
-      dirty = colorDirty = true;
-      this._stepAt = now + (kind === 'grow' ? 60 : STEP_MS);
+      var item = this._queue.shift();
+      var st = this._runStep(item, now, false);
+      // Original pace (0.1 s per increment) for the first 30, then faster so even the
+      // longest chains (~150 increments) finish in about 6 s
+      this._chainStep = (this._chainStep || 0) + 1;
+      var dt2 = this._chainStep > 30 ? Math.min(this.speed, 40) : this.speed;
+      this._stepAt = st ? now + dt2 : now;
     }
     if (!this._queue.length) this._stepAt = 0;
-
-    // Pulses + stage-5 breathing
-    var breathe = 0.06 * Math.sin(now * 0.012);
+    var animating = false;
     for (var i = 0; i < this.layout.count; i++) {
-      var p = this._pulse[i];
-      if (p > 0) {
-        p = Math.max(0, p - dt / 260);
-        this._pulse[i] = p;
-        this._writeDot(i, p * 0.35);
-        this._paintDot(i, p * 0.8);
-        dirty = colorDirty = true;
-      } else if (this.dispStage[i] >= MAX_STAGE) {
-        this._writeDot(i, breathe);
-        dirty = true;
+      var target = this.dispStage[i];
+      if (this._t0[i]) {
+        var u = Math.min(1, (now - this._t0[i]) / 300);
+        this._size[i] = this._from[i] + (target - this._from[i]) * springEase(u);
+        if (u >= 1) { this._t0[i] = 0; this._size[i] = target; }
+        animating = true;
+      }
+      if (this._flash[i] > 0) {
+        this._flash[i] = Math.max(0, this._flash[i] - (dt || 16) / 350);
+        animating = true;
       }
     }
-
-    // Particles
-    var m = DotBoardView._pm || (DotBoardView._pm = new THREE.Matrix4());
-    var pc = DotBoardView._pc || (DotBoardView._pc = new THREE.Color());
-    var live = 0;
-    for (var q = 0; q < this._particles.length; q++) {
-      var pt = this._particles[q];
-      pt.t += dt;
-      var u = Math.min(1, pt.t / pt.dur);
-      if (u >= 1) continue;
-      var e = u * (2 - u);
-      m.makeScale(1 - u * 0.5, 1 - u * 0.5, 1 - u * 0.5);
-      m.setPosition(pt.x0 + (pt.x1 - pt.x0) * e, pt.y0 + (pt.y1 - pt.y0) * e, 0.012 * Math.sin(u * Math.PI));
-      this.parts.setMatrixAt(live, m);
-      this.parts.setColorAt(live, pc.setHex(COLORS[pt.color] || 0xffffff).lerp(DotBoardView._white || (DotBoardView._white = new THREE.Color(0xffffff)), 0.4));
-      this._particles[live] = pt;
-      live++;
-    }
-    this._particles.length = live;
-    this.parts.count = live;
-    if (live) {
-      this.parts.instanceMatrix.needsUpdate = true;
-      if (this.parts.instanceColor) this.parts.instanceColor.needsUpdate = true;
-    }
-
-    if (dirty) this.dots.instanceMatrix.needsUpdate = true;
-    if (colorDirty && this.dots.instanceColor) this.dots.instanceColor.needsUpdate = true;
-
-    // Rim: lerp to turn colour, throb when under attack (RUSH)
-    this._rimColor.lerp(this._rimTarget, Math.min(1, dt / 160));
-    var rc = this.rim.material.color;
-    rc.copy(this._rimColor);
-    if (this._threat > 0) {
-      var th = 0.5 + 0.5 * Math.sin(now * 0.02);
-      rc.lerp(DotBoardView._warn || (DotBoardView._warn = new THREE.Color(0xffcc33)), this._threat * th);
-    }
+    if (this._fx.length) animating = true;
+    if (this._threat > 0) animating = true;
+    if (animating || this._dirty) this._draw(now);
     return this.busy();
   };
 
-  /**
-   * Ray (world) → cell index or -1. Analytic plane hit; no per-dot raycast meshes.
-   */
-  DotBoardView.prototype.pickRay = function (origin, dir) {
-    var inv = DotBoardView._inv || (DotBoardView._inv = new THREE.Matrix4());
-    this.root.updateWorldMatrix(true, false);
-    inv.copy(this.root.matrixWorld).invert();
-    var o = (DotBoardView._o || (DotBoardView._o = new THREE.Vector3())).copy(origin).applyMatrix4(inv);
-    var e = (DotBoardView._e || (DotBoardView._e = new THREE.Vector3())).copy(origin).add(dir).applyMatrix4(inv);
-    var dz = e.z - o.z;
-    if (Math.abs(dz) < 1e-6) return { index: -1 };
-    var t = -o.z / dz;
-    if (t < 0) return { index: -1 };
-    var hx = o.x + (e.x - o.x) * t;
-    var hy = o.y + (e.y - o.y) * t;
-    var idx = this._nearest(hx, hy, 0.56);
-    return { index: idx, dist: t * dir.length(), x: hx, y: hy };
+  View.prototype._draw = function (now) {
+    var ctx = this.ctx, W = this.canvas.width, H = this.canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    // Field card (original white body + faint diagonal grid from the svg)
+    var r = 22 * K;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(r, 0); ctx.arcTo(W, 0, W, H, r); ctx.arcTo(W, H, 0, H, r); ctx.arcTo(0, H, 0, 0, r); ctx.arcTo(0, 0, W, 0, r);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fill();
+    ctx.clip();
+    ctx.strokeStyle = 'rgba(0,0,0,0.035)';
+    ctx.lineWidth = 1.5;
+    for (var g = -H; g < W + H; g += 60 * K) {
+      ctx.beginPath(); ctx.moveTo(g, 0); ctx.lineTo(g + H * 0.577, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(g, H); ctx.lineTo(g + H * 0.577, 0); ctx.stroke();
+    }
+    ctx.restore();
+    // Rim in turn colour (pulses amber when a RUSH infection is incoming)
+    var rim = this._rimTarget;
+    ctx.lineWidth = 7 * K;
+    ctx.strokeStyle = rim;
+    if (this._threat > 0) {
+      var th = 0.5 + 0.5 * Math.sin(now * 0.02);
+      ctx.strokeStyle = th * this._threat > 0.35 ? '#ffb300' : rim;
+    }
+    ctx.beginPath();
+    ctx.moveTo(r, 3.5 * K); ctx.arcTo(W - 3.5 * K, 3.5 * K, W - 3.5 * K, H, r);
+    ctx.arcTo(W - 3.5 * K, H - 3.5 * K, 0, H - 3.5 * K, r);
+    ctx.arcTo(3.5 * K, H - 3.5 * K, 3.5 * K, 0, r); ctx.arcTo(3.5 * K, 3.5 * K, W, 3.5 * K, r);
+    ctx.closePath();
+    ctx.stroke();
+
+    // Ripples under the dots
+    var keep = [];
+    for (var f = 0; f < this._fx.length; f++) {
+      var fx = this._fx[f];
+      var age = now - fx.t0;
+      if (fx.kind === 'ripple') {
+        if (age > 400) continue;
+        var p = this._px(fx.i), u = age / 400;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 50 * K * 1.5 * u, 0, Math.PI * 2);
+        ctx.fillStyle = fx.warn ? 'rgba(255,179,0,' + (0.5 * (1 - u)) + ')' : 'rgba(200,200,200,' + (0.5 * (1 - u)) + ')';
+        ctx.fill();
+      }
+      keep.push(fx);
+    }
+
+    // Dots
+    for (var i = 0; i < this.layout.count; i++) {
+      var pp = this._px(i);
+      var o = this.dispOwner[i];
+      var size = this._size[i];
+      var hovered = this._hover[0] === i || this._hover[1] === i;
+      var scale = hovered ? 1.2 : 1;
+      if (o === 0 || size <= 0.05) {
+        // Empty: 5% dot (15% on hover), tinted in the current player's colour, opacity 0.4
+        var er = 64 * (hovered ? 0.15 : 0.05) / 2 * K;
+        ctx.beginPath();
+        ctx.arc(pp.x, pp.y, Math.max(er, 1.6 * K), 0, Math.PI * 2);
+        ctx.fillStyle = rgba(this.turnColor, 0.4);
+        ctx.fill();
+        if (hovered) {
+          ctx.beginPath(); ctx.arc(pp.x, pp.y, 26 * K, 0, Math.PI * 2);
+          ctx.strokeStyle = rgba(this.turnColor, 0.5); ctx.lineWidth = 2 * K; ctx.stroke();
+        }
+        continue;
+      }
+      var col = this.colors[o] || this.colors[0];
+      var core = 64 * 0.16 * Math.max(0, size) / 2 * K * scale;
+      var rings = RINGS[this.dispStage[i]] || [];
+      for (var k = 0; k < rings.length; k++) {
+        ctx.beginPath();
+        ctx.arc(pp.x, pp.y, core + rings[k][0] * K * scale, 0, Math.PI * 2);
+        ctx.fillStyle = rgba(col, rings[k][1]);
+        ctx.fill();
+      }
+      ctx.beginPath();
+      ctx.arc(pp.x, pp.y, core, 0, Math.PI * 2);
+      ctx.fillStyle = col;
+      ctx.fill();
+      if (this._flash[i] > 0) {
+        ctx.beginPath();
+        ctx.arc(pp.x, pp.y, core, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,' + (0.55 * this._flash[i]) + ')';
+        ctx.fill();
+      }
+      if (hovered) {
+        ctx.beginPath(); ctx.arc(pp.x, pp.y, Math.max(core + 6 * K, 26 * K), 0, Math.PI * 2);
+        ctx.strokeStyle = rgba(col, 0.6); ctx.lineWidth = 2 * K; ctx.stroke();
+      }
+    }
+    if (this._botChoice >= 0) {
+      var bp = this._px(this._botChoice);
+      ctx.beginPath(); ctx.arc(bp.x, bp.y, 30 * K, 0, Math.PI * 2);
+      ctx.setLineDash([6 * K, 5 * K]);
+      ctx.strokeStyle = 'rgba(40,40,40,0.55)'; ctx.lineWidth = 2.5 * K; ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Floating "+1" (original .increment-animation: bold 1.5rem, rises 40px over 0.8s)
+    ctx.font = 'bold ' + Math.round(24 * K) + 'px Roboto, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    var keep2 = [];
+    for (var q = 0; q < keep.length; q++) {
+      var e = keep[q];
+      if (e.kind !== 'plus') { keep2.push(e); continue; }
+      var a = now - e.t0;
+      if (a > 800) continue;
+      var t = a / 800;
+      var ep = this._px(e.i);
+      var ease = 1 - (1 - t) * (1 - t);
+      ctx.globalAlpha = 1 - ease;
+      ctx.shadowColor = 'rgba(0,0,0,0.7)';
+      ctx.shadowBlur = 2 * K;
+      ctx.shadowOffsetX = ctx.shadowOffsetY = K;
+      ctx.fillStyle = this.colors[e.o] || '#ffffff';
+      ctx.fillText('+1', ep.x, ep.y - 40 * K * ease);
+      ctx.globalAlpha = 1;
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = ctx.shadowOffsetY = 0;
+      keep2.push(e);
+    }
+    this._fx = keep2;
+    this.tex.needsUpdate = true;
+    this._dirty = false;
   };
 
-  /** Fingertip poke (world point) → { index, depth } when touching the plane. */
-  DotBoardView.prototype.pokePoint = function (worldPoint) {
-    var inv = DotBoardView._inv2 || (DotBoardView._inv2 = new THREE.Matrix4());
-    this.root.updateWorldMatrix(true, false);
-    inv.copy(this.root.matrixWorld).invert();
-    var p = (DotBoardView._pp || (DotBoardView._pp = new THREE.Vector3())).copy(worldPoint).applyMatrix4(inv);
-    var idx = this._nearest(p.x, p.y, 0.5);
-    return { index: idx, depth: Math.abs(p.z), z: p.z };
+  // ── Picking ───────────────────────────────────────────────────────────
+  View.prototype._toCss = function (lx, ly) {
+    return { x: lx / METERS_PER_PX + this.pxW / 2 - M, y: this.pxH / 2 - ly / METERS_PER_PX - M };
   };
 
-  DotBoardView.prototype._nearest = function (x, y, frac) {
-    var s = this.spacing;
-    var best = -1;
-    var bestD = (s * frac) * (s * frac);
+  View.prototype._nearest = function (lx, ly, maxPx) {
+    var p = this._toCss(lx, ly);
+    var best = -1, bestD = maxPx * maxPx;
     for (var i = 0; i < this.layout.count; i++) {
       var c = this.layout.cells[i];
-      var dx = c.x * s - x;
-      var dy = c.y * s - y;
-      var d2 = dx * dx + dy * dy;
+      var dx = c.x - p.x, dy = c.y - p.y, d2 = dx * dx + dy * dy;
       if (d2 < bestD) { bestD = d2; best = i; }
     }
     return best;
   };
 
+  View.prototype.pickRay = function (origin, dir) {
+    var inv = View._inv || (View._inv = new THREE.Matrix4());
+    this.root.updateWorldMatrix(true, false);
+    inv.copy(this.root.matrixWorld).invert();
+    var o = (View._o || (View._o = new THREE.Vector3())).copy(origin).applyMatrix4(inv);
+    var e = (View._e || (View._e = new THREE.Vector3())).copy(origin).add(dir).applyMatrix4(inv);
+    var dz = e.z - o.z;
+    if (Math.abs(dz) < 1e-6) return { index: -1 };
+    var t = -o.z / dz;
+    if (t < 0) return { index: -1 };
+    var hx = o.x + (e.x - o.x) * t, hy = o.y + (e.y - o.y) * t;
+    return { index: this._nearest(hx, hy, 34), dist: t * dir.length() };
+  };
+
+  View.prototype.pokePoint = function (worldPoint) {
+    var inv = View._inv2 || (View._inv2 = new THREE.Matrix4());
+    this.root.updateWorldMatrix(true, false);
+    inv.copy(this.root.matrixWorld).invert();
+    var p = (View._pp || (View._pp = new THREE.Vector3())).copy(worldPoint).applyMatrix4(inv);
+    return { index: this._nearest(p.x, p.y, 30), depth: Math.abs(p.z), z: p.z };
+  };
+
   global.DotBoard = {
-    MAX_STAGE: MAX_STAGE,
-    BURST_LEAVES: BURST_LEAVES,
-    OWNER: OWNER,
-    COLORS: COLORS,
-    ACCENT: ACCENT,
-    ownerCode: ownerCode,
-    ownerName: ownerName,
-    rng: rng,
-    newSeed: newSeed,
-    layoutFor: layoutFor,
-    radiusForBoardSize: radiusForBoardSize,
-    State: DotBoardState,
-    View: DotBoardView
+    View: View,
+    COLORS: DEFAULT_COLORS,
+    METERS_PER_PX: METERS_PER_PX,
+    newSeed: R.newSeed // lobby.js seeds matches through DotBoard.newSeed
   };
 })(typeof window !== 'undefined' ? window : globalThis);

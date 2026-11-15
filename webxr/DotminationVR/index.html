@@ -29,21 +29,22 @@
   </script>
 
   <!-- Dotmination rules + view, AI -->
-  <script src="dot-board.js?v=1"></script>
-  <script src="dot-bot.js?v=1"></script>
+  <script src="dot-rules.js?v=2"></script>
+  <script src="dot-board.js?v=2"></script>
+  <script src="dot-bot.js?v=2"></script>
   <!-- Shared with StacksVR (copied; only namespacing/labels changed) -->
-  <script src="attack.js?v=1"></script>
-  <script src="stats.js?v=1"></script>
-  <script src="modes.js?v=1"></script>
-  <script src="lobby.js?v=1"></script>
-  <script src="match-replay.js?v=1"></script>
-  <script src="stacks-audio.js?v=1"></script>
-  <script src="game-menu.js?v=1"></script>
-  <script src="mixamo-body.js?v=1"></script>
-  <script src="locomotion.js?v=1"></script>
+  <script src="attack.js?v=2"></script>
+  <script src="stats.js?v=2"></script>
+  <script src="modes.js?v=2"></script>
+  <script src="lobby.js?v=2"></script>
+  <script src="match-replay.js?v=2"></script>
+  <script src="stacks-audio.js?v=2"></script>
+  <script src="game-menu.js?v=2"></script>
+  <script src="mixamo-body.js?v=2"></script>
+  <script src="locomotion.js?v=2"></script>
   <!-- Match component (StacksVR stacks-game.js structure, Dotmination gameplay) -->
-  <script src="dot-game.js?v=1"></script>
-  <script src="mobile-spectator.js?v=1"></script>
+  <script src="dot-game.js?v=2"></script>
+  <script src="mobile-spectator.js?v=2"></script>
 
     <style>
     html, body { margin: 0; height: 100%; background: #111; font-family: sans-serif; }
@@ -239,7 +240,7 @@
   <div id="pre-vr-overlay">
     <div>
       <h1>DOTMINATION VR</h1>
-      <p class="tagline">Chain-reaction dot battles in Virtual Reality</p>
+      <p class="tagline">The chain-reaction dot game, now in Virtual Reality</p>
       <label for="nickname-input">Nickname</label>
       <input id="nickname-input" type="text" maxlength="12" placeholder="Player" autocomplete="username" />
       <div class="pre-vr-actions">
@@ -521,7 +522,7 @@
               material="opacity: 0.95; transparent: true; shader: flat; toneMapped: false" position="0 0.22 0.001"></a-plane>
 
             <a-text value="DOTMINATION" position="0.02 0.255 0.002" align="center" width="0.44" color="#e8f4ff"></a-text>
-            <!-- Board size sliding toggle: S (37 dots) | L (61 dots). Values stay 4/6 for lobby sync. -->
+            <!-- Bot difficulty (original Normal / Harder). Lobby boardSize slot: 4 = NORM, 6 = HARD. -->
             <a-entity id="menu-board-toggle" position="-0.26 0.255 0.002">
               <a-entity geometry="primitive: box; width: 0.22; height: 0.048; depth: 0.006"
                 material="color: #152032; shader: flat"></a-entity>
@@ -531,19 +532,19 @@
               <a-entity class="menu-btn clickable" data-action="board-4" id="menu-board-4" position="-0.052 0 0.005"
                 geometry="primitive: box; width: 0.104; height: 0.040; depth: 0.002"
                 material="color: #152032; opacity: 0.01; transparent: true; shader: flat">
-                <a-text id="menu-board-4-text" value="S" align="center" width="0.28" color="#8a9bb0" position="0 0 0.004"></a-text>
+                <a-text id="menu-board-4-text" value="NORM" align="center" width="0.28" color="#8a9bb0" position="0 0 0.004"></a-text>
               </a-entity>
               <a-entity class="menu-btn clickable" data-action="board-6" id="menu-board-6" position="0.052 0 0.005"
                 geometry="primitive: box; width: 0.104; height: 0.040; depth: 0.002"
                 material="color: #152032; opacity: 0.01; transparent: true; shader: flat">
-                <a-text id="menu-board-6-text" value="L" align="center" width="0.28" color="#ffffff" position="0 0 0.004"></a-text>
+                <a-text id="menu-board-6-text" value="HARD" align="center" width="0.28" color="#ffffff" position="0 0 0.004"></a-text>
               </a-entity>
             </a-entity>
-            <!-- DUEL (shared board) / RUSH (own boards vs virus). Host-synced like board size. -->
-            <a-entity class="menu-btn clickable" data-action="toggle-split-boards" id="menu-split-boards-toggle" position="0.105 0.255 0.002"
+            <!-- Mode: DUEL (turn-based) / LIVE (original Real-Time) / RUSH (own boards). Host-synced. -->
+            <a-entity class="menu-btn clickable" data-action="toggle-dot-mode" id="menu-dot-mode-toggle" position="0.105 0.255 0.002"
               geometry="primitive: box; width: 0.10; height: 0.045; depth: 0.008"
               material="color: #1e6ad4; shader: flat">
-              <a-text id="menu-split-boards-text" value="DUEL" align="center" width="0.26" color="#ffffff" position="0 0 0.006"></a-text>
+              <a-text id="menu-dot-mode-text" value="DUEL" align="center" width="0.26" color="#ffffff" position="0 0 0.006"></a-text>
             </a-entity>
             <a-entity class="menu-btn clickable" data-action="toggle-music" id="menu-music-toggle" position="0.22 0.255 0.002"
               geometry="primitive: box; width: 0.11; height: 0.045; depth: 0.008"
@@ -577,7 +578,7 @@
 
             <a-entity id="menu-single-section" position="0 0.02 0.002">
               <a-text value="SOLO" position="-0.28 0.055 0" align="left" width="0.28" color="#33bbff"></a-text>
-              <a-text value="You vs bot · grow & burst dots" position="-0.28 0.01 0"
+              <a-text value="Levels 1-200 vs bot (phone maps)" position="-0.28 0.01 0"
                 align="left" width="0.42" color="#8a9bb0"></a-text>
               <!-- Bot moves/min (0 = frozen). DUEL: think time · RUSH: pace -->
               <a-entity id="menu-bot-speed" position="0 -0.045 0">
@@ -789,8 +790,8 @@
     <!-- attack/boom stubs point at place.mp3 — StacksAudio remaps boom/attack→soft place; never explosion -->
     <a-entity id="sfx-attack" sound="src: url(audio/place.mp3); autoplay: false; loop: false; volume: 0.22; positional: false; poolSize: 3"></a-entity>
     <a-entity id="sfx-boom" sound="src: url(audio/place.mp3); autoplay: false; loop: false; volume: 0.22; positional: false; poolSize: 2"></a-entity>
-    <!-- VRLeague / VRKnockout goal braam (not the old hissing win.mp3) -->
-    <a-entity id="sfx-win" sound="src: url(audio/win-braam.mp3); autoplay: false; loop: false; volume: 0.55; positional: false; poolSize: 2"></a-entity>
+    <!-- Original Dotmination game-over sound -->
+    <a-entity id="sfx-win" sound="src: url(audio/submarine-sonar.mp3); autoplay: false; loop: false; volume: 0.5; positional: false; poolSize: 2"></a-entity>
     <a-entity id="sfx-ui" sound="src: url(audio/click.mp3); autoplay: false; loop: false; volume: 0.3; positional: false; poolSize: 4"></a-entity>
     <a-entity id="sfx-rotate" sound="src: url(audio/click.mp3); autoplay: false; loop: false; volume: 0.32; positional: false; poolSize: 4"></a-entity>
     </a-scene>

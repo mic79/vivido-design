@@ -1,6 +1,7 @@
 // lobby.js — PeerJS lobby / queue / bot-slot / spectator shell.
 // Copied from StacksVR (DodgeVR model). DotminationVR changes: peer ids/storage keys
-// prefixed dotminationvr-, idle-junk toggle repurposed as DUEL/RUSH (splitBoards), board seed.
+// prefixed dotminationvr-, idle-junk toggle repurposed as game mode (dotMode: duel |
+// realtime | rush), board-size slot repurposed as bot difficulty (4 Normal, 6 Harder), seed.
 (function (global) {
   'use strict';
 
@@ -30,14 +31,18 @@
   };
 
   // Survives lobby teardown so offline 4×4 choice carries into a new host session
-  var preferredBoardSize = 6;
+  // DotminationVR: board-size slot = bot difficulty. 4 = Normal (original default), 6 = Harder
+  var preferredBoardSize = 4;
   // DotminationVR mode: false = DUEL (one shared vertical board), true = RUSH (own board each).
   // Default DUEL; host-authored + synced (same plumbing as StacksVR's idle-junk toggle).
-  var preferredSplitBoards = false;
+  var preferredDotMode = 'duel';
+  function normalizeDotMode(m) {
+    if (m === true) return 'rush';
+    return m === 'realtime' || m === 'rush' ? m : 'duel';
+  }
   try {
-    var storedSplit = global.localStorage && global.localStorage.getItem('dotminationvr-split-boards');
-    if (storedSplit === '0' || storedSplit === 'false') preferredSplitBoards = false;
-    else if (storedSplit === '1' || storedSplit === 'true') preferredSplitBoards = true;
+    var storedSplit = global.localStorage && global.localStorage.getItem('dotminationvr-dot-mode');
+    if (storedSplit) preferredDotMode = normalizeDotMode(storedSplit);
   } catch (e) { /* ignore */ }
 
   function createLobbyState() {
@@ -54,7 +59,7 @@
       // Playfield XZ size — 6 (classic) or 4 (compact). Host-authored; synced to all.
       boardSize: normalizeBoardSize(preferredBoardSize),
       // DUEL (false) / RUSH (true). Host-authored; synced to all.
-      splitBoards: !!preferredSplitBoards
+      dotMode: normalizeDotMode(preferredDotMode)
     };
   }
 
@@ -101,40 +106,40 @@
     return false;
   }
 
-  function setSplitBoards(on) {
-    on = !!on;
+  function setDotMode(on) {
+    on = normalizeDotMode(on);
     if (Lobby.isMultiplayer && !Lobby.isHost) return false;
-    preferredSplitBoards = on;
+    preferredDotMode = on;
     try {
       if (global.localStorage) {
-        global.localStorage.setItem('dotminationvr-split-boards', on ? '1' : '0');
+        global.localStorage.setItem('dotminationvr-dot-mode', on);
       }
     } catch (e2) { /* ignore */ }
     if (!Lobby.lobbyState) Lobby.lobbyState = createLobbyState();
-    if (!!Lobby.lobbyState.splitBoards === on) {
+    if (normalizeDotMode(Lobby.lobbyState.dotMode) === on) {
       global.lobbyState = Lobby.lobbyState;
       return true;
     }
-    Lobby.lobbyState.splitBoards = on;
+    Lobby.lobbyState.dotMode = on;
     global.lobbyState = Lobby.lobbyState;
     broadcastLobbyState();
     var scene = document.querySelector('a-scene');
-    if (scene) scene.emit('split-boards-changed', { splitBoards: on });
+    if (scene) scene.emit('dot-mode-changed', { dotMode: on });
     return true;
   }
 
-  function getSplitBoards() {
-    if (Lobby.lobbyState && Lobby.lobbyState.splitBoards != null) {
-      return !!Lobby.lobbyState.splitBoards;
+  function getDotMode() {
+    if (Lobby.lobbyState && Lobby.lobbyState.dotMode != null) {
+      return normalizeDotMode(Lobby.lobbyState.dotMode);
     }
-    return !!preferredSplitBoards;
+    return normalizeDotMode(preferredDotMode);
   }
 
-  function requestSplitBoards(on) {
-    on = !!on;
-    if (!Lobby.isMultiplayer || Lobby.isHost) return setSplitBoards(on);
+  function requestDotMode(on) {
+    on = normalizeDotMode(on);
+    if (!Lobby.isMultiplayer || Lobby.isHost) return setDotMode(on);
     if (Lobby.conn && Lobby.conn.open) {
-      Lobby.conn.send({ type: 'split-boards', enabled: on });
+      Lobby.conn.send({ type: 'dot-mode', enabled: on });
       return true;
     }
     return false;
@@ -665,7 +670,7 @@
       if (data.type === 'queue-action') handleQueueAction(fromId, data.action);
       else if (data.type === 'match-action') handleMatchAction(fromId, data.action, data.result);
       else if (data.type === 'board-size') setBoardSize(data.size);
-      else if (data.type === 'split-boards') setSplitBoards(!!data.enabled);
+      else if (data.type === 'dot-mode') setDotMode(data.enabled);
       else if (data.type === 'goodbye') {
         // Explicit leave (DodgeVR-style) — don't wait for PeerJS close which can lag/miss
         removePlayer(fromId);
@@ -748,13 +753,13 @@
     // Peer / mobile spectator
     if (data.type === 'lobby-state') {
       Lobby.lobbyState = data.state;
-      if (Lobby.lobbyState && Lobby.lobbyState.boardSize == null) Lobby.lobbyState.boardSize = 6;
+      if (Lobby.lobbyState && Lobby.lobbyState.boardSize == null) Lobby.lobbyState.boardSize = 4;
       else if (Lobby.lobbyState) Lobby.lobbyState.boardSize = normalizeBoardSize(Lobby.lobbyState.boardSize);
       if (Lobby.lobbyState) preferredBoardSize = Lobby.lobbyState.boardSize;
-      if (Lobby.lobbyState && Lobby.lobbyState.splitBoards == null) Lobby.lobbyState.splitBoards = false;
+      if (Lobby.lobbyState && Lobby.lobbyState.dotMode == null) Lobby.lobbyState.dotMode = 'duel';
       else if (Lobby.lobbyState) {
-        Lobby.lobbyState.splitBoards = !!Lobby.lobbyState.splitBoards;
-        preferredSplitBoards = Lobby.lobbyState.splitBoards;
+        Lobby.lobbyState.dotMode = normalizeDotMode(Lobby.lobbyState.dotMode);
+        preferredDotMode = Lobby.lobbyState.dotMode;
       }
       global.lobbyState = data.state;
       var mp = data.state.matchPlayers;
@@ -766,7 +771,7 @@
       if (scene) {
         scene.emit('lobby-state-updated');
         scene.emit('board-size-changed', {
-          boardSize: Lobby.lobbyState ? Lobby.lobbyState.boardSize : 6
+          boardSize: Lobby.lobbyState ? Lobby.lobbyState.boardSize : 4
         });
       }
     } else if (data.type === 'match-started') {
@@ -796,7 +801,7 @@
       } else if (data.state && data.state.boardSize != null) {
         Lobby.lobbyState.boardSize = normalizeBoardSize(data.state.boardSize);
       } else if (Lobby.lobbyState.boardSize == null) {
-        Lobby.lobbyState.boardSize = 6;
+        Lobby.lobbyState.boardSize = 4;
       }
       preferredBoardSize = Lobby.lobbyState.boardSize;
       global.lobbyState = Lobby.lobbyState;
@@ -817,7 +822,7 @@
       if (scene2) {
         scene2.emit('lobby-state-updated');
         scene2.emit('board-size-changed', {
-          boardSize: Lobby.lobbyState.boardSize || 6
+          boardSize: Lobby.lobbyState.boardSize || 4
         });
       }
     } else if (data.type === 'match-ended') {
@@ -1477,12 +1482,12 @@
   global.broadcastLobbyState = broadcastLobbyState;
   global.setBoardSize = setBoardSize;
   global.getBoardSize = getBoardSize;
-  global.setSplitBoards = setSplitBoards;
-  global.getSplitBoards = getSplitBoards;
-  global.requestSplitBoards = requestSplitBoards;
-  Lobby.setSplitBoards = setSplitBoards;
-  Lobby.getSplitBoards = getSplitBoards;
-  Lobby.requestSplitBoards = requestSplitBoards;
+  global.setDotMode = setDotMode;
+  global.getDotMode = getDotMode;
+  global.requestDotMode = requestDotMode;
+  Lobby.setDotMode = setDotMode;
+  Lobby.getDotMode = getDotMode;
+  Lobby.requestDotMode = requestDotMode;
   global.requestBoardSize = requestBoardSize;
   Lobby.setBoardSize = setBoardSize;
   Lobby.getBoardSize = getBoardSize;

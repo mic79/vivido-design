@@ -1,85 +1,141 @@
-// dot-bot.js — Dotmination AI (move choice only; timing/avatar handled by dot-game).
-// Greedy 1-ply or 1.5-ply (opponent best reply) search on DotBoardState clones.
+// dot-bot.js — original Dotmination bots (modules/botLogic.js + realTimeResourceMode.js)
+// ported from jQuery/DOM to DotRules.State. Same heuristics, constants and fallbacks:
+//   'random' = Normal bot, 'smart' = Harder bot, realtime = Real-Time mode bot.
 (function (global) {
   'use strict';
 
-  var DB = global.DotBoard;
+  var R = global.DotRules;
+  var C = {
+    SCORE_THRESHOLD: 5,
+    RECENT_MOVES_LIMIT: 3,
+    CHAIN_WEIGHT: 2,
+    DISRUPT_WEIGHT: 1.5,
+    EARLY_GAME_TURNS: 10,
+    MIN_VIABLE_TARGETS: 3,
+    HIGH_STAGE_THRESHOLD: 3
+  };
 
-  function evaluate(st, me, opp) {
-    var myN = 0, oppN = 0, myS = 0, oppS = 0, danger = 0, threat = 0;
-    var owner = st.owner;
-    var stage = st.stage;
+  function pick(arr, rand) { return arr[Math.floor(rand() * arr.length)]; }
+
+  /** Bot's own stage-5 dots that touch an opponent stage-5 dot (botActionRandom / tryStage5Hits). */
+  function s5Hits(st, me, opp) {
+    var out = [];
     var nbs = st.layout.neighbors;
-    for (var i = 0; i < owner.length; i++) {
-      var o = owner[i];
-      if (o === me) { myN++; myS += stage[i]; }
-      else if (o === opp) { oppN++; oppS += stage[i]; }
-      if (o === opp && stage[i] >= DB.MAX_STAGE) {
-        // Opp charged dot next to mine = I can lose those dots next turn
-        var list = nbs[i];
-        for (var k = 0; k < list.length; k++) if (owner[list[k]] === me) danger++;
-      } else if (o === me && stage[i] >= DB.MAX_STAGE) {
-        var list2 = nbs[i];
-        for (var k2 = 0; k2 < list2.length; k2++) if (owner[list2[k2]] === opp) threat++;
+    for (var i = 0; i < st.owner.length; i++) {
+      if (st.owner[i] !== me || st.stage[i] !== 5) continue;
+      for (var k = 0; k < nbs[i].length; k++) {
+        var j = nbs[i][k];
+        if (st.owner[j] === opp && st.stage[j] === 5) { out.push(i); break; }
       }
     }
-    if (oppN === 0 && myN > 0) return 10000;
-    if (myN === 0 && oppN > 0) return -10000;
-    return (myN - oppN) * 3 + (myS - oppS) * 0.45 - danger * 0.9 + threat * 0.5;
+    return out;
   }
 
-  /**
-   * opts: { depth: 1|2, noise: number, randomChance: 0..1, rand: fn }
-   * Returns cell index or -1.
-   */
-  function chooseMove(state, me, opp, opts) {
-    opts = opts || {};
-    me = DB.ownerCode(me);
-    opp = DB.ownerCode(opp);
-    var rand = opts.rand || Math.random;
-    var moves = state.legalMoves(me);
-    if (!moves.length) return -1;
-    if (opts.randomChance && rand() < opts.randomChance) {
-      return moves[Math.floor(rand() * moves.length)];
-    }
-    var depth = opts.depth || 1;
-    var noise = opts.noise != null ? opts.noise : 0.5;
-    var best = -1;
-    var bestScore = -Infinity;
-    for (var m = 0; m < moves.length; m++) {
-      var c = state.clone();
-      c.apply(me, moves[m], { noSteps: true });
-      var score = evaluate(c, me, opp);
-      if (depth >= 2 && score < 5000) {
-        var replies = c.legalMoves(opp);
-        var worst = Infinity;
-        for (var r = 0; r < replies.length; r++) {
-          var c2 = c.clone();
-          c2.apply(opp, replies[r], { noSteps: true });
-          var s2 = evaluate(c2, me, opp);
-          if (s2 < worst) worst = s2;
-          if (worst <= -5000) break;
-        }
-        if (worst !== Infinity) score = score * 0.25 + worst * 0.75;
+  // ── Normal ('random') ────────────────────────────────────────────────
+  function moveRandom(st, me, opp, rand) {
+    var targets = st.legalMoves(me);
+    if (!targets.length) return -1;
+    var hits = s5Hits(st, me, opp);
+    if (hits.length) return pick(hits, rand);
+    return pick(targets, rand);
+  }
+
+  // ── Harder ('smart') ─────────────────────────────────────────────────
+  function evaluateTarget(st, t, me, opp) {
+    var d = { isSafe: true, myStage: st.owner[t] === me ? st.stage[t] : 0, chain: 0, disrupt: 0, neighbors: 0 };
+    var nb = st.layout.neighbors[t];
+    for (var k = 0; k < nb.length; k++) {
+      var j = nb[k];
+      d.neighbors++;
+      var stage = st.stage[j];
+      if (st.owner[j] === opp) {
+        if (stage > d.myStage && stage >= C.HIGH_STAGE_THRESHOLD + 1 && d.myStage < 2) d.isSafe = false;
+        if (stage >= C.HIGH_STAGE_THRESHOLD) d.disrupt += stage * C.DISRUPT_WEIGHT;
+      } else if (st.owner[j] === me) {
+        if (stage >= C.HIGH_STAGE_THRESHOLD) d.chain += (5 - stage) * C.CHAIN_WEIGHT;
       }
-      score += (rand() - 0.5) * noise;
-      if (score > bestScore) { bestScore = score; best = moves[m]; }
+    }
+    return d;
+  }
+
+  function scoreOf(d, turnCount) {
+    return (d.chain * C.CHAIN_WEIGHT) + d.disrupt +
+      (d.myStage === 0 && d.neighbors < 3 ? 5 : 0) +
+      (turnCount < C.EARLY_GAME_TURNS && d.disrupt >= C.HIGH_STAGE_THRESHOLD * 2 ? 5 : 0);
+  }
+
+  function moveSmart(st, me, opp, rand, recent) {
+    recent = recent || [];
+    var targets = st.legalMoves(me);
+    if (!targets.length) return -1;
+    var hits = s5Hits(st, me, opp);
+    if (hits.length) return hits[0];
+    var turnCount = st.count(me);
+    var viable = [];
+    for (var i = 0; i < targets.length; i++) {
+      var d = evaluateTarget(st, targets[i], me, opp);
+      if (!d.isSafe) continue;
+      var sc = scoreOf(d, turnCount);
+      if (sc > C.SCORE_THRESHOLD || viable.length < C.MIN_VIABLE_TARGETS) viable.push({ i: targets[i], score: sc });
+    }
+    if (viable.length) {
+      viable.sort(function (a, b) { return b.score - a.score; });
+      return viable[0].i;
+    }
+    // Fallback: disruption / chain potential, skipping recent moves
+    var fb = [];
+    for (var f = 0; f < targets.length; f++) {
+      var t = targets[f];
+      if (recent.indexOf(t) >= 0) continue;
+      var dis = 0, ch = 0, nb = st.layout.neighbors[t];
+      for (var k = 0; k < nb.length; k++) {
+        var j = nb[k];
+        if (st.owner[j] === opp) dis = Math.max(dis, st.stage[j]);
+        else if (st.owner[j] === me) ch += (5 - st.stage[j]);
+      }
+      if (dis >= C.HIGH_STAGE_THRESHOLD || ch > 0) fb.push({ i: t, score: ch * C.CHAIN_WEIGHT + dis * C.DISRUPT_WEIGHT });
+    }
+    if (fb.length) {
+      fb.sort(function (a, b) { return b.score - a.score; });
+      return fb[0].i;
+    }
+    var pool = targets.filter(function (x) { return recent.indexOf(x) < 0; });
+    return pick(pool.length ? pool : targets, rand);
+  }
+
+  // ── Real-Time mode bot (own dots only; simplified from runSmartBotLogic) ──
+  function moveRealtime(st, me, opp, rand) {
+    var own = st.legalMoves(me, true);
+    if (!own.length) return -1;
+    var hits = s5Hits(st, me, opp);
+    if (hits.length) return pick(hits, rand);
+    // Push the strongest dot on the front line, else grow the strongest dot
+    var best = -1, bestScore = -1;
+    for (var i = 0; i < own.length; i++) {
+      var t = own[i], front = 0, nb = st.layout.neighbors[t];
+      for (var k = 0; k < nb.length; k++) if (st.owner[nb[k]] === opp) front++;
+      var sc = st.stage[t] * 2 + front * 3 + rand();
+      if (sc > bestScore) { bestScore = sc; best = t; }
     }
     return best;
   }
 
-  /** Presets used by dot-game. */
-  var PROFILES = {
-    duel: { depth: 2, noise: 0.6, randomChance: 0 },
-    // Board virus in RUSH: beatable, a little erratic
-    virus: { depth: 1, noise: 2.4, randomChance: 0.12 },
-    // Bot seat playing its own RUSH board
-    rushSeat: { depth: 1, noise: 0.8, randomChance: 0.03 }
-  };
+  /** difficulty: 'random' | 'smart' | 'realtime'. recent: array kept by caller (smart). */
+  function chooseMove(st, me, opp, difficulty, opts) {
+    opts = opts || {};
+    me = R.code(me);
+    opp = R.code(opp);
+    var rand = opts.rand || Math.random;
+    var mv;
+    if (difficulty === 'realtime') mv = moveRealtime(st, me, opp, rand);
+    else if (difficulty === 'smart') mv = moveSmart(st, me, opp, rand, opts.recent);
+    else mv = moveRandom(st, me, opp, rand);
+    if (opts.recent && mv >= 0) {
+      opts.recent.push(mv);
+      while (opts.recent.length > C.RECENT_MOVES_LIMIT) opts.recent.shift();
+    }
+    return mv;
+  }
 
-  global.DotBot = {
-    evaluate: evaluate,
-    chooseMove: chooseMove,
-    PROFILES: PROFILES
-  };
+  global.DotBot = { chooseMove: chooseMove, CONSTANTS: C };
 })(typeof window !== 'undefined' ? window : globalThis);
