@@ -87,41 +87,71 @@
     return _clearBufLoading;
   }
 
-  /** Dotmination incrementSound: sonar blip, rate rises with layers cleared. */
+  // Dotmination showIncrementAnimation / chainReactionCounter:
+  // each overtake plays one sonar at basePitch + i * pitchStep, then counter++.
+  // Classic chain steps use ~0.1s delayedCall between increments.
+  var CLEAR_BASE_PITCH = 1.0;
+  var CLEAR_PITCH_STEP = 0.05;
+  var CLEAR_STEP_S = 0.1;
+  var CLEAR_MAX_TONES = 8;
+
+  /**
+   * Play Dotmination-style rising sequence: 1 line → pitch 0 only;
+   * 2 lines → pitch 0 then pitch 1; etc. Never a single "final" pitch alone.
+   */
   function playClearChime(layers, volume) {
     if (AudioApi.sfxEnabled === false) return;
     resumeCtx();
     var ctx = getAudioCtx();
     if (!ctx) return;
-    var n = Math.max(1, layers | 0);
-    // Dotmination: basePitch 1.0 + chain * 0.05 — map layers the same way
-    var rate = Math.max(0.7, Math.min(2.2, 1.0 + (n - 1) * 0.08));
+    var n = Math.max(1, Math.min(CLEAR_MAX_TONES, layers | 0));
     var vol = volume != null ? volume : 0.45;
 
-    function fire(buf) {
+    function fireSequence(buf) {
       try {
         if (ctx.state === 'suspended') ctx.resume();
-        var src = ctx.createBufferSource();
-        src.buffer = buf;
-        src.playbackRate.value = rate;
-        var gain = ctx.createGain();
-        gain.gain.value = vol;
-        src.connect(gain);
-        gain.connect(ctx.destination);
-        src.start(0);
+        var t0 = ctx.currentTime;
+        for (var i = 0; i < n; i++) {
+          var rate = CLEAR_BASE_PITCH + i * CLEAR_PITCH_STEP;
+          var src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.playbackRate.value = rate;
+          var gain = ctx.createGain();
+          gain.gain.value = vol;
+          src.connect(gain);
+          gain.connect(ctx.destination);
+          src.start(t0 + i * CLEAR_STEP_S);
+        }
       } catch (e) {
         console.warn('[StacksAudio] clearChime play failed', e);
       }
     }
 
+    function fireSequenceFallback() {
+      // A-Frame path: schedule each tone (no recurse into clearChime)
+      var node = el('sfx-clear');
+      var sc = soundComp(node);
+      if (!sc) return;
+      var i = 0;
+      function step() {
+        if (i >= n) return;
+        try {
+          setVolume(node, vol);
+          setPlaybackRate(node, CLEAR_BASE_PITCH + i * CLEAR_PITCH_STEP);
+          sc.stopSound();
+          sc.playSound();
+        } catch (e2) { /* ignore */ }
+        i++;
+        if (i < n) setTimeout(step, CLEAR_STEP_S * 1000);
+      }
+      step();
+    }
+
     if (_clearBuf) {
-      fire(_clearBuf);
+      fireSequence(_clearBuf);
       return;
     }
-    ensureClearBuffer().then(fire).catch(function () {
-      // Last resort: A-Frame entity (may still be silent on some Quest builds)
-      AudioApi.sfx('clear', { rate: rate, volume: vol });
-    });
+    ensureClearBuffer().then(fireSequence).catch(fireSequenceFallback);
   }
 
   function fadeSound(node, fromVol, toVol, durationMs, onDone) {
