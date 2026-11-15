@@ -7,10 +7,10 @@
 
   var BOX3D_CDN = 'https://cdn.jsdelivr.net/npm/box3d.js@0.0.2/dist/box3d.inline.mjs';
   var MAX_BLOCKS_PER_CUP = 36;
-  // Visible palm ≈ 4–5cm; previous 11cm sphere shoved blocks from >10cm away
-  var HAND_RADIUS = 0.045;
-  var HAND_FORWARD = 0.08; // grip → palm along local -Z
-  var SCOOP_REACH = 0.14;
+  // CapVR-proven palm contact (grip-local). Thin box, not a fat sphere.
+  var HAND_PALM_LOCAL = { x: 0, y: -0.04, z: -0.08 };
+  var HAND_BOX = { hx: 0.045, hy: 0.018, hz: 0.055 }; // half-extents (metres)
+  var SCOOP_REACH = 0.12;
   var SCOOP_MAX = 4;
   var FLING_SCALE = 1.35;
 
@@ -97,38 +97,17 @@
 
   /**
    * Drive kinematic so dynamics get contact impulse.
-   * box3d docs: SetTargetTransform(body, { position:[x,y,z], quaternion:[x,y,z,w] }, dt, true)
+   * box3d.js@0.0.2 REQUIRES { p:{x,y,z}, q:{v:{x,y,z},s:w} } — NOT position/quaternion.
+   * Wrong shape throws "Missing field: p"; swallowing that and SetTransform-teleporting
+   * is what made floors ignore yaw and hands shove from a distance.
    */
   function setKinematicTarget(b3, body, x, y, z, q, dt) {
     if (!body || !b3) return;
     var step = Math.max(0.001, Math.min(0.05, dt || 1 / 60));
-    var qx = q ? q.x : 0, qy = q ? q.y : 0, qz = q ? q.z : 0, qw = q ? q.w : 1;
-    if (typeof b3.b3Body_SetTargetTransform === 'function') {
-      try {
-        b3.b3Body_SetTargetTransform(body, {
-          position: [x, y, z],
-          quaternion: [qx, qy, qz, qw]
-        }, step, true);
-        return;
-      } catch (e1) {
-        try {
-          b3.b3Body_SetTargetTransform(body, {
-            position: { x: x, y: y, z: z },
-            quaternion: { x: qx, y: qy, z: qz, w: qw }
-          }, step, true);
-          return;
-        } catch (e2) { /* fall through */ }
-      }
-    }
-    var prev = b3.b3Body_GetPosition(body);
-    b3.b3Body_SetTransform(body, { x: x, y: y, z: z }, quatToB3Rot(q));
-    if (b3.b3Body_SetLinearVelocity && prev) {
-      b3.b3Body_SetLinearVelocity(body, {
-        x: (x - prev.x) / step,
-        y: (y - prev.y) / step,
-        z: (z - prev.z) / step
-      });
-    }
+    b3.b3Body_SetTargetTransform(body, {
+      p: { x: x, y: y, z: z },
+      q: quatToB3Rot(q)
+    }, step, true);
   }
 
   function handWorldPose(handEl, outPos, outQuat) {
@@ -136,10 +115,10 @@
     handEl.object3D.updateWorldMatrix(true, false);
     handEl.object3D.getWorldPosition(outPos);
     handEl.object3D.getWorldQuaternion(outQuat);
-    // Collider at palm, not grip pivot (fixes phantom pushes >10cm out)
-    var fwd = new THREE.Vector3(0, 0, -HAND_FORWARD);
-    fwd.applyQuaternion(outQuat);
-    outPos.add(fwd);
+    // Grip → palm (same local offset CapVR uses for contact)
+    var off = new THREE.Vector3(HAND_PALM_LOCAL.x, HAND_PALM_LOCAL.y, HAND_PALM_LOCAL.z);
+    off.applyQuaternion(outQuat);
+    outPos.add(off);
   }
 
   function cullCup(cup, maxKeep) {
@@ -189,14 +168,19 @@
   }
 
   function addKinematicBox(b3, world, x, y, z, hx, hy, hz, q, opts) {
+    opts = opts || {};
     var def = b3.b3DefaultBodyDef();
     def.type = b3.b3BodyType.b3_kinematicBody;
     def.position = { x: x, y: y, z: z };
     def.rotation = quatToB3Rot(q);
+    // Fast cup yaw needs this or angular velocity is clamped and blocks slip
+    if (opts.allowFastRotation && def.allowFastRotation != null) {
+      def.allowFastRotation = true;
+    }
     var body = b3.b3CreateBody(world, def);
-    b3.b3CreateBoxShape(body, shapeDef(b3, opts || {
-      friction: 0.95,
-      restitution: 0.05
+    b3.b3CreateBoxShape(body, shapeDef(b3, {
+      friction: opts.friction != null ? opts.friction : 0.95,
+      restitution: opts.restitution != null ? opts.restitution : 0.05
     }), hx, hy, hz);
     return body;
   }
@@ -505,8 +489,9 @@
           if (!cup) return;
           var fp = cupFloorPose(cup);
           var body = addKinematicBox(b3, _world, fp.x, fp.y, fp.z, fp.hx, fp.hy, fp.hz, fp.q, {
-            friction: 1.05,
-            restitution: 0.02
+            friction: 1.2,
+            restitution: 0.02,
+            allowFastRotation: true
           });
           _cupFloors.push({ body: body, cup: cup, hx: fp.hx, hy: fp.hy, hz: fp.hz });
         });
@@ -538,45 +523,21 @@
           _blocks.push({ body: body, mesh: mesh, held: null });
         }
 
-        // Body / avatar capsules (thicker for contact)
-        var kinEls = [
-          { id: 'player', kind: 'player' },
-          { id: 'player-body', kind: 'avatar' },
-          { id: 'bot-body', kind: 'avatar' },
-          { id: 'spec-blue-body', kind: 'avatar' }
-        ];
-        for (var k = 0; k < kinEls.length; k++) {
-          var el = document.getElementById(kinEls[k].id);
-          if (!el || !el.object3D) continue;
-          el.object3D.updateWorldMatrix(true, false);
-          el.object3D.getWorldPosition(_tmpP);
-          var kDef = b3.b3DefaultBodyDef();
-          kDef.type = b3.b3BodyType.b3_kinematicBody;
-          kDef.position = { x: _tmpP.x, y: Math.max(0.95, _tmpP.y), z: _tmpP.z };
-          kDef.rotation = quatToB3Rot(null);
-          var kBody = b3.b3CreateBody(_world, kDef);
-          b3.b3CreateCapsuleShape(kBody, shapeDef(b3, { friction: 0.55, restitution: 0.05 }), {
-            center1: { x: 0, y: -0.55, z: 0 },
-            center2: { x: 0, y: 0.45, z: 0 },
-            radius: 0.16
-          });
-          _kinematics.push({ body: kBody, el: el, kind: kinEls[k].kind });
-        }
+        // No player/avatar body capsules — a 16cm torso capsule was shoving the
+        // pile whenever the user leaned in, while visible hands were still far away.
 
-        // Hands — palm-sized spheres at grip→palm offset
+        // Hands — thin kinematic palm boxes at CapVR grip→palm offset
         ['leftHand', 'rightHand'].forEach(function (hid) {
           var hand = document.getElementById(hid);
           if (!hand || !hand.object3D) return;
           handWorldPose(hand, _tmpP, _tmpQ);
-          var hDef = b3.b3DefaultBodyDef();
-          hDef.type = b3.b3BodyType.b3_kinematicBody;
-          hDef.position = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z };
-          hDef.rotation = quatToB3Rot(_tmpQ);
-          var hBody = b3.b3CreateBody(_world, hDef);
-          b3.b3CreateSphereShape(hBody, shapeDef(b3, { friction: 1.2, restitution: 0.05 }), {
-            center: { x: 0, y: 0, z: 0 },
-            radius: HAND_RADIUS
-          });
+          var hBody = addKinematicBox(
+            b3, _world,
+            _tmpP.x, _tmpP.y, _tmpP.z,
+            HAND_BOX.hx, HAND_BOX.hy, HAND_BOX.hz,
+            _tmpQ,
+            { friction: 1.25, restitution: 0.02 }
+          );
           _kinematics.push({ body: hBody, el: hand, kind: 'hand', handId: hid });
           _handPrev[hid] = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z, t: performance.now() };
         });
