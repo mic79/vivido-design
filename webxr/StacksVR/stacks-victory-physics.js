@@ -11,6 +11,7 @@
   var HAND_PALM_LOCAL = { x: 0, y: -0.04, z: -0.08 };
   var HAND_BOX = { hx: 0.05, hy: 0.02, hz: 0.06 }; // half-extents (metres)
   var SCOOP_REACH = 0.18;
+  var TRANSFER_REACH = 0.22; // hand-to-hand steal of held debris
   var SCOOP_MAX = 3;
   var FLING_SCALE = 1.55;
   var FLING_MAX = 10;
@@ -297,13 +298,49 @@
     if (r && r.v) entry.mesh.quaternion.set(r.v.x, r.v.y, r.v.z, r.s);
   }
 
-  function findBlockNear(handPos, ignoreSet) {
+  function otherHandId(handId) {
+    return handId === 'leftHand' ? 'rightHand' : 'leftHand';
+  }
+
+  function makeGrabRecord(entry, handPos, invQ) {
+    var bp = _b3.b3Body_GetPosition(entry.body);
+    var br = _b3.b3Body_GetRotation(entry.body);
+    _tmpOff.set(bp.x - handPos.x, bp.y - handPos.y, bp.z - handPos.z);
+    _tmpOff.applyQuaternion(invQ);
+    var blockQ = new THREE.Quaternion(
+      br && br.v ? br.v.x : 0,
+      br && br.v ? br.v.y : 0,
+      br && br.v ? br.v.z : 0,
+      br && br.s != null ? br.s : 1
+    );
+    var relQ = invQ.clone().multiply(blockQ);
+    if (_b3.b3Body_SetLinearVelocity) {
+      _b3.b3Body_SetLinearVelocity(entry.body, { x: 0, y: 0, z: 0 });
+    }
+    if (_b3.b3Body_SetAngularVelocity) {
+      _b3.b3Body_SetAngularVelocity(entry.body, { x: 0, y: 0, z: 0 });
+    }
+    return {
+      entry: entry,
+      lx: _tmpOff.x, ly: _tmpOff.y, lz: _tmpOff.z,
+      rq: { x: relQ.x, y: relQ.y, z: relQ.z, w: relQ.w }
+    };
+  }
+
+  /**
+   * @param {string|null} allowStealFrom  other hand id — include that hand's held blocks
+   */
+  function findBlockNear(handPos, ignoreSet, allowStealFrom, maxDist) {
     var best = null;
-    var bestD = SCOOP_REACH;
+    var bestD = maxDist != null ? maxDist : SCOOP_REACH;
     for (var i = 0; i < _blocks.length; i++) {
       var b = _blocks[i];
-      if (!b.body || !b.mesh || b.held) continue;
+      if (!b.body || !b.mesh) continue;
       if (ignoreSet && ignoreSet[i]) continue;
+      if (b.held) {
+        // Own holds already scooped; only steal from the other hand
+        if (!allowStealFrom || b.held !== allowStealFrom) continue;
+      }
       var p = _b3.b3Body_GetPosition(b.body);
       var dx = p.x - handPos.x;
       var dy = p.y - handPos.y;
@@ -311,10 +348,20 @@
       var d = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (d < bestD) {
         bestD = d;
-        best = { entry: b, index: i, d: d };
+        best = { entry: b, index: i, d: d, steal: !!b.held };
       }
     }
     return best;
+  }
+
+  /** Pull entry out of a hand's scoop list without flinging. */
+  function detachScoopEntry(handId, entry) {
+    var list = _scoop[handId] || [];
+    var kept = [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].entry !== entry) kept.push(list[i]);
+    }
+    _scoop[handId] = kept;
   }
 
   function beginScoop(handId) {
@@ -327,36 +374,18 @@
     handWorldPose(hand, _tmpP, _tmpQ);
     var handPos = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z };
     var invQ = _tmpQ.clone().invert();
+    var other = otherHandId(handId);
     var grabbed = [];
     var used = {};
     for (var n = 0; n < SCOOP_MAX; n++) {
-      var hit = findBlockNear(handPos, used);
+      // Prefer steal from other hand, then free debris
+      var hit = findBlockNear(handPos, used, other, TRANSFER_REACH) ||
+        findBlockNear(handPos, used, null, SCOOP_REACH);
       if (!hit) break;
       used[hit.index] = true;
+      if (hit.steal) detachScoopEntry(other, hit.entry);
       hit.entry.held = handId;
-      if (_b3.b3Body_SetLinearVelocity) {
-        _b3.b3Body_SetLinearVelocity(hit.entry.body, { x: 0, y: 0, z: 0 });
-      }
-      if (_b3.b3Body_SetAngularVelocity) {
-        _b3.b3Body_SetAngularVelocity(hit.entry.body, { x: 0, y: 0, z: 0 });
-      }
-      // Offset + relative rotation in hand-local space (rotates with wrist)
-      var bp = _b3.b3Body_GetPosition(hit.entry.body);
-      var br = _b3.b3Body_GetRotation(hit.entry.body);
-      _tmpOff.set(bp.x - handPos.x, bp.y - handPos.y, bp.z - handPos.z);
-      _tmpOff.applyQuaternion(invQ);
-      var blockQ = new THREE.Quaternion(
-        br && br.v ? br.v.x : 0,
-        br && br.v ? br.v.y : 0,
-        br && br.v ? br.v.z : 0,
-        br && br.s != null ? br.s : 1
-      );
-      var relQ = invQ.clone().multiply(blockQ);
-      grabbed.push({
-        entry: hit.entry,
-        lx: _tmpOff.x, ly: _tmpOff.y, lz: _tmpOff.z,
-        rq: { x: relQ.x, y: relQ.y, z: relQ.z, w: relQ.w }
-      });
+      grabbed.push(makeGrabRecord(hit.entry, handPos, invQ));
     }
     _scoop[handId] = grabbed;
   }
@@ -457,12 +486,16 @@
     _handPrev[handId] = { x: x, y: y, z: z, t: now };
   }
 
-  /** True if this hand could scoop a nearby debris block. */
+  /** True if this hand could scoop a nearby debris block (incl. steal). */
   function canScoopNear(handEl) {
     if (!_active || !_b3 || !handEl || !handEl.object3D) return false;
     ensureThreeHelpers();
     handWorldPose(handEl, _tmpP, _tmpQ);
-    return !!findBlockNear({ x: _tmpP.x, y: _tmpP.y, z: _tmpP.z }, null);
+    var handId = handEl.id;
+    var other = handId ? otherHandId(handId) : null;
+    var pos = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z };
+    return !!(findBlockNear(pos, null, other, TRANSFER_REACH) ||
+      findBlockNear(pos, null, null, SCOOP_REACH));
   }
 
   function bindHandScoop() {
