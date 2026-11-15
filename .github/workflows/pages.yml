@@ -39,9 +39,9 @@ jobs:
           done
 
           # webxr: allowlist only. 1GB Pages cap — keep product titles, pause demos.
-          # Offline (still in git): RTSVR5, BattleVR, MotionGuidanceVR5, DriveVR*,
-          # VRscifiHallway, ChaseVR, GTAVR, DodgeVR1*, whiteRoomVR, brutalist*,
-          # VRrunner, body-rigged*, VRdrift2, pinball/Knockout/League/ragdoll/Heli demos.
+          # Offline (still in git): RTSVR5, BattleVR, DodgeVR*, capVR, BoltVR,
+          # MotionGuidanceVR5, DriveVR*, VRscifiHallway, ChaseVR, GTAVR,
+          # whiteRoomVR, brutalist*, VRrunner, body-rigged*, shared webxr/audio.
           mkdir -p "$DEST/webxr"
           [[ -f webxr/index.html ]] && cp -a webxr/index.html "$DEST/webxr/" || true
 
@@ -50,11 +50,7 @@ jobs:
             BattleVR2
             RTSVR6
             StacksVR
-            DodgeVR
-            capVR
-            BoltVR
             VRdrift
-            audio
           )
 
           # Shared fat cuts for RTS-family trees (PCVR A/B, proofs, HQ JPEG dupes).
@@ -87,12 +83,9 @@ jobs:
             --exclude 'assets/terrain/terrain-skirmish-ue-lm.glb'
           )
 
-          # BattleVR2: keep ue-lm (lobby crater) + earthlike HDR skybox; drop Canyon pack.
+          # BattleVR2: keep ue-lm, HDR skybox, and Canyon map pack (splat + terrain-canyon).
           BATTLEVR2_EXCLUDES=(
             "${HEAVY_EXCLUDES[@]}"
-            --exclude 'assets/terrain/canyon_splat/'
-            --exclude 'assets/terrain/terrain-canyon.glb'
-            --exclude 'assets/terrain/canyon_bare_hera.glb'
           )
 
           for name in "${ALLOW[@]}"; do
