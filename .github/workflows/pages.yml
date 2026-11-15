@@ -38,10 +38,8 @@ jobs:
             [[ -d "$d" ]] && rsync -a --exclude node_modules --exclude .git "$d" "$DEST/"
           done
 
-          # webxr: allowlist only. 1GB Pages cap — keep product titles, pause demos.
-          # Offline (still in git): RTSVR5, BattleVR, DodgeVR*, capVR, BoltVR,
-          # MotionGuidanceVR5, DriveVR*, VRscifiHallway, ChaseVR, GTAVR,
-          # whiteRoomVR, brutalist*, VRrunner, body-rigged*, shared webxr/audio.
+          # webxr allowlist. Still offline (huge / BAK): DriveVR*, VRscifiHallway,
+          # ChaseVR, GTAVR, RTSVR5, *BAK*, whiteRoomVR, VRrunner, brutalistVR7/8.
           mkdir -p "$DEST/webxr"
           [[ -f webxr/index.html ]] && cp -a webxr/index.html "$DEST/webxr/" || true
 
@@ -50,10 +48,36 @@ jobs:
             BattleVR2
             RTSVR6
             StacksVR
+            DodgeVR
+            DodgeVR1
+            DodgeVR1-1
+            DodgeVR2
+            DodgeVR2v2
+            DodgeVR3
+            capVR
+            BoltVR
+            BattleVR
+            MotionGuidanceVR5
             VRdrift
+            VRdrift2
+            VRragdoll
+            VRragdoll2
+            brutalistVR6
+            pinballVR2
+            VRKnockout
+            VRLeague
+            HeliVR
+            HeliVR2
+            LiteRT
+            DotminationVR
+            body-rigged
+            body-rigged3
+            body-rigged4
+            body-rigged5
+            audio
           )
 
-          # Shared fat cuts for RTS-family trees (PCVR A/B, proofs, HQ JPEG dupes).
+          # Fat A/B cuts for RTS-family trees (PCVR kits / HQ JPEG dupes / proofs).
           HEAVY_EXCLUDES=(
             --exclude 'scripts/'
             --exclude 'verify-*/'
@@ -77,13 +101,11 @@ jobs:
             --exclude 'assets/mesa/hera-planum/_sd7/'
           )
 
-          # RTSVR6: also drop UE lightmap bake (1v1 GLB is the match default).
           RTS_EXCLUDES=(
             "${HEAVY_EXCLUDES[@]}"
             --exclude 'assets/terrain/terrain-skirmish-ue-lm.glb'
           )
 
-          # BattleVR2: keep ue-lm, HDR skybox, and Canyon map pack (splat + terrain-canyon).
           BATTLEVR2_EXCLUDES=(
             "${HEAVY_EXCLUDES[@]}"
           )
@@ -109,7 +131,57 @@ jobs:
             fi
           done
 
-          # Budget gate — fail the job before uploading a doomed artifact
+          # BattleVR2 + RTSVR6 share ~300MB of identical assets. Pages tar uses
+          # --hard-dereference so hardlinks/symlinks still double-count. Drop the
+          # duplicate bytes from RTSVR6 and rewrite those paths to ../BattleVR2/.
+          python3 - <<'PY'
+          import filecmp, os, sys
+          bvr = "_site/webxr/BattleVR2"
+          rts = "_site/webxr/RTSVR6"
+          if not (os.path.isdir(bvr) and os.path.isdir(rts)):
+              print("skip dedupe: BattleVR2/RTSVR6 missing")
+              sys.exit(0)
+          deleted = []
+          saved = 0
+          for root, _dirs, files in os.walk(os.path.join(rts, "assets")):
+              for name in files:
+                  rp = os.path.join(root, name)
+                  rel = os.path.relpath(rp, rts).replace("\\", "/")
+                  bp = os.path.join(bvr, rel)
+                  if os.path.isfile(bp) and filecmp.cmp(rp, bp, shallow=False):
+                      saved += os.path.getsize(rp)
+                      os.remove(rp)
+                      deleted.append(rel)
+          print(f"RTSVR6 dedupe: removed {len(deleted)} identical files ({saved/1024/1024:.1f} MB)")
+          if not deleted:
+              sys.exit(0)
+          # Longest paths first so nested prefixes rewrite safely
+          deleted.sort(key=len, reverse=True)
+          text_ext = {".js", ".mjs", ".html", ".htm", ".css", ".json"}
+          rewrites = 0
+          for root, _dirs, files in os.walk(rts):
+              for name in files:
+                  ext = os.path.splitext(name)[1].lower()
+                  if ext not in text_ext:
+                      continue
+                  path = os.path.join(root, name)
+                  with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                      text = f.read()
+                  orig = text
+                  for rel in deleted:
+                      repl = "../BattleVR2/" + rel
+                      text = text.replace("'" + rel + "'", "'" + repl + "'")
+                      text = text.replace('"' + rel + '"', '"' + repl + '"')
+                      text = text.replace("`" + rel + "`", "`" + repl + "`")
+                      # bare assets/... strings without webxr prefix already in rel
+                  if text != orig:
+                      with open(path, "w", encoding="utf-8", newline="\n") as f:
+                          f.write(text)
+                      rewrites += 1
+          print(f"RTSVR6 dedupe: rewrote refs in {rewrites} text files")
+          PY
+
+          # Budget gate — fail before uploading a doomed artifact
           BYTES=$(du -sb "$DEST" | awk '{print $1}')
           MB=$((BYTES / 1024 / 1024))
           echo "Slim site size: ${MB} MB"
