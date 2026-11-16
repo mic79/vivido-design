@@ -377,7 +377,8 @@
       var bp = this._px(this._botChoice);
       ctx.beginPath(); ctx.arc(bp.x, bp.y, 30 * K, 0, Math.PI * 2);
       ctx.setLineDash([6 * K, 5 * K]);
-      ctx.strokeStyle = 'rgba(40,40,40,0.55)'; ctx.lineWidth = 2.5 * K; ctx.stroke();
+      // In the moving bot's colour (it is that bot's turn); dark grey vanished on the dark field
+      ctx.strokeStyle = rgba(this.turnColor, 0.9); ctx.lineWidth = 2.5 * K; ctx.stroke();
       ctx.setLineDash([]);
     }
 

@@ -340,7 +340,7 @@
     },
 
     _drawLabel: function (lab, lines, color) {
-      var key = lines.join('|') + color;
+      var key = JSON.stringify(lines) + color;
       if (lab.last === key) return;
       lab.last = key;
       var ctx = lab.ctx;
@@ -356,9 +356,23 @@
       ctx.fillText(lines[0] || '', W / 2, lines[1] ? 58 : H / 2);
       if (lines[1]) {
         ctx.shadowBlur = 0;
-        ctx.fillStyle = color;
         ctx.font = '600 50px Arial, Helvetica, sans-serif';
-        ctx.fillText(lines[1], W / 2, 132);
+        if (typeof lines[1] === 'string') {
+          ctx.fillStyle = color;
+          ctx.fillText(lines[1], W / 2, 132);
+        } else {
+          // [{t, c}] segments: each player's points stay in that player's colour
+          var segs = lines[1], total = 0, k;
+          for (k = 0; k < segs.length; k++) total += ctx.measureText(segs[k].t).width;
+          var x = W / 2 - total / 2;
+          ctx.textAlign = 'left';
+          for (k = 0; k < segs.length; k++) {
+            ctx.fillStyle = segs[k].c || color;
+            ctx.fillText(segs[k].t, x, 132);
+            x += ctx.measureText(segs[k].t).width;
+          }
+          ctx.textAlign = 'center';
+        }
       }
       lab.tex.needsUpdate = true;
     },
@@ -423,7 +437,7 @@
         }
         y += 78;
       }
-      block('Moves', f.blocks, f.blockRate);
+      block('Moves', f.blocks, null); // no per-minute rate: StacksVR speed stat, meaningless turn-based
       block('Bursts', stats.layers | 0, null);
       block('Time', f.time, null);
       card.tex.needsUpdate = true;
@@ -463,7 +477,12 @@
       if (force) b.label.last = '';
       var lines;
       var color;
-      var scoreLine = (this.modes.scores.blue | 0) + '  ·  ' + (this.modes.scores.red | 0);
+      var NEUTRAL = '#8a9bb0';
+      var scoreSegs = [
+        { t: String(this.modes.scores.blue | 0), c: this._sideColorCss('blue') },
+        { t: '  ·  ', c: NEUTRAL },
+        { t: String(this.modes.scores.red | 0), c: this._sideColorCss('red') }
+      ];
       if (!this.matchActive && !this._victory) {
         var info = this.levelInfo();
         lines = ['DOTMINATION', info.level > 0
@@ -471,18 +490,19 @@
           : 'Random map  ·  START to play'];
         color = '#9fb3c8';
       } else if (!this.matchActive) {
-        lines = ['DOTMINATION!', this._resultLine || scoreLine];
-        color = this._sideColorCss(this.modes && this.modes.winner === 'red' ? 'red' : 'blue');
+        lines = ['DOTMINATION!', this._resultSegs ? this._resultSegs() : (this._resultLine || scoreSegs)];
+        var wn = this.modes && this.modes.winner;
+        color = (wn === 'red' || wn === 'blue') ? this._sideColorCss(wn) : '#ffd56a'; // draw: neutral gold
       } else if (this.matchState === 'COUNTDOWN') {
         lines = [this._modeTitle(), 'get ready'];
         color = '#ffd56a';
       } else {
         var t = this._shownTurn(b);
         var clock = this._dualBotPreview ? '' : '   ' + fmtTime(Date.now() - (this.modes.matchStart || Date.now()));
-        var sub = scoreLine + clock;
+        var sub = scoreSegs.concat(clock ? [{ t: clock, c: NEUTRAL }] : []);
         if (this._turnClockActive() && this._isLocalHumanSide(t)) {
           var left = Math.max(0, TURN_MS - (now - b.turnStartedAt));
-          if (left < 10000) sub += '   ⏱ ' + Math.ceil(left / 1000) + 's';
+          if (left < 10000) sub.push({ t: '   ⏱ ' + Math.ceil(left / 1000) + 's', c: '#ffd56a' });
         }
         lines = [this._turnName(t) + ' TURN', sub];
         color = this._sideColorCss(t);
@@ -1309,6 +1329,7 @@
       this._levelMatch = solo && this.level > 0 ? this.level : 0;
       this._recent = { blue: [], red: [] };
       this._resultLine = '';
+      this._resultSegs = null;
       var b = this.boards.shared;
       // Original player--1 = red (bot / host side colour teal), player--2 = blue (you, pink)
       if (this._levelMatch) {
@@ -1703,6 +1724,11 @@
         sub = 'Level ' + this._levelMatch + '  ☆☆☆  Retry';
       } else if (festive) {
         sub = fmtTime(elapsed) + '  ·  ' + (this.modes.scores.blue | 0) + ' – ' + (this.modes.scores.red | 0);
+        var selfR = this, rb = this.modes.scores.blue | 0, rr = this.modes.scores.red | 0, rt = fmtTime(elapsed);
+        this._resultSegs = function () {
+          return [{ t: rt + '   ', c: '#8a9bb0' }, { t: String(rb), c: selfR._sideColorCss('blue') },
+            { t: ' – ', c: '#8a9bb0' }, { t: String(rr), c: selfR._sideColorCss('red') }];
+        };
       }
       this._resultLine = sub || '';
       if (festive) {

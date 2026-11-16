@@ -578,6 +578,25 @@
       exitPreview.addEventListener('click', function () { location.reload(); });
     }
 
+    // Music on/off for spectators (same saved preference as the VR menu's MUSIC button)
+    var musicBtn = document.getElementById('mobile-music-toggle');
+    if (musicBtn) {
+      var paintMusic = function () {
+        var A = global.StacksAudio;
+        var on = A && A.isMusicEnabled ? A.isMusicEnabled() : global._musicEnabled !== false;
+        musicBtn.classList.toggle('off', !on);
+        musicBtn.textContent = on ? '♫ MUSIC ON' : '♫ MUSIC OFF';
+      };
+      musicBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var A = global.StacksAudio;
+        if (A && A.toggleMusic) A.toggleMusic();
+        else global._musicEnabled = global._musicEnabled === false;
+        paintMusic();
+      });
+      paintMusic();
+    }
+
     var scene = document.querySelector('a-scene');
     if (scene) {
       scene.addEventListener('lobby-state-updated', onLobbyStateUpdated);

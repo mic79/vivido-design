@@ -1450,17 +1450,18 @@
         else if (list[wi].result === 'LOSS') losses++;
       }
 
+      // DotminationVR terms only (StacksVR's MPM / Atk / Blk / Lay / Peak don't exist here)
+      var gmc = document.querySelector('[dot-game]');
+      var dg = gmc && gmc.components && gmc.components['dot-game'];
+      var lvlInfo = dg && dg.levelInfo ? dg.levelInfo() : null;
       var sumLines = [];
       if (bests && (bests.matches | 0) > 0) {
-        sumLines.push(nick + '  ' + (bests.wins | 0) + 'W-' + (bests.losses | 0) + 'L');
-        sumLines.push('Best MPM ' + (bests.bestBpm || 0).toFixed(1) +
-          '  Peak ' + (bests.peakBpm || 0).toFixed(1));
-        sumLines.push('Moves ' + (bests.bestBlocks | 0) +
-          '  Atk ' + (bests.bestAttacks | 0) +
-          '  Burst ' + (bests.bestLayers | 0));
-        sumLines.push('Chain ' + (bests.bestMaxCombo | 0) +
-          '  Long ' + fmt(bests.longestMs) +
-          '  Streak ' + (bests.bestWinStreak | 0));
+        sumLines.push(nick + '  ' + (bests.wins | 0) + 'W-' + (bests.losses | 0) + 'L' +
+          (lvlInfo ? '   Level ' + lvlInfo.max + ' unlocked' : ''));
+        sumLines.push('Most bursts ' + (bests.bestLayers | 0) +
+          '   Longest chain ' + (bests.bestMaxCombo | 0));
+        sumLines.push('Win streak ' + (bests.bestWinStreak | 0) +
+          '   Longest match ' + fmt(bests.longestMs));
       } else if (list.length) {
         sumLines.push((this.statsSubTab === 'multi' ? 'PvP' : 'vs Bot') +
           '  ' + wins + 'W-' + losses + 'L');
@@ -1502,11 +1503,10 @@
         lines.push(header);
         var p = m.player || {};
         if (p.blocks != null) {
-          lines.push('  Blk ' + (p.blocks | 0) + ' @' + (p.bpm || 0) +
-            '/m  Atk ' + (p.attacks | 0) +
-            '  Lay ' + (p.layers | 0));
-          lines.push('  Peak ' + (p.peakBpm || 0) +
-            '/m  Combo ' + (p.maxCombo | 0) +
+          lines.push('  ' + (m.level ? 'Level ' + m.level : (m.bot ? 'Random map' : 'PvP')) +
+            '  Moves ' + (p.blocks | 0) +
+            '  Bursts ' + (p.layers | 0) +
+            ((p.maxCombo | 0) > 0 ? '  Chain ' + (p.maxCombo | 0) : '') +
             '  ' + fmt(p.durationMs));
         }
         if (m.timestamp) {
