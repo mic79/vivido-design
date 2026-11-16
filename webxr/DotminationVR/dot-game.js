@@ -354,11 +354,11 @@
       ctx.shadowColor = color;
       ctx.shadowBlur = 18;
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'italic 800 78px Arial, Helvetica, sans-serif';
+      ctx.font = "700 82px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
       ctx.fillText(lines[0] || '', W / 2, lines[1] ? 58 : H / 2);
       if (lines[1]) {
         ctx.shadowBlur = 0;
-        ctx.font = '600 50px Arial, Helvetica, sans-serif';
+        ctx.font = "700 50px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
         if (typeof lines[1] === 'string') {
           ctx.fillStyle = color;
           ctx.fillText(lines[1], W / 2, 132);
@@ -423,24 +423,24 @@
       var rateX = 250;
       var y = 52;
       ctx.fillStyle = this._sideColorCss(side);
-      ctx.font = 'italic 700 44px Arial, Helvetica, sans-serif';
+      ctx.font = "700 46px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
       ctx.fillText(String(nick || ''), left, y);
       y += 52;
       ctx.fillStyle = '#ffffff';
       function block(label, main, rate) {
-        ctx.font = 'italic 600 36px Arial, Helvetica, sans-serif';
+        ctx.font = "400 36px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
         ctx.fillText(label, left, y);
         y += 52;
-        ctx.font = 'italic 700 72px Arial, Helvetica, sans-serif';
+        ctx.font = "700 72px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
         ctx.fillText(String(main), left, y);
         if (rate != null && rate !== '') {
-          ctx.font = 'italic 600 38px Arial, Helvetica, sans-serif';
+          ctx.font = "400 38px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
           ctx.fillText(String(rate) + '/min', rateX, y);
         }
         y += 78;
       }
       block('Moves', f.blocks, null); // no per-minute rate: StacksVR speed stat, meaningless turn-based
-      block('Bursts', stats.layers | 0, null);
+      block('Chains', stats.chains | 0, null);
       block('Time', f.time, null);
       card.tex.needsUpdate = true;
     },
@@ -485,7 +485,10 @@
         { t: '  ·  ', c: NEUTRAL },
         { t: String(this.modes.scores.red | 0), c: this._sideColorCss('red') }
       ];
-      if (!this.matchActive && !this._victory) {
+      if (this._tutorial) {
+        lines = ['HOW TO PLAY', this._tutorial.step <= 4 ? 'Step ' + this._tutorial.step + ' of 4' : 'Tutorial complete'];
+        color = this._sideColorCss('blue');
+      } else if (!this.matchActive && !this._victory) {
         var info = this.levelInfo();
         lines = ['DOTMINATION', info.level > 0
           ? 'Level ' + info.level + (info.best ? '  ·  best ' + info.best : '') + '  ·  START to play'
@@ -563,6 +566,8 @@
         if (!hand) { setTimeout(function () { attachHand(id); }, 200); return; }
         hand.addEventListener('triggerdown', function () {
           if (menuOpen() && id === 'rightHand') return;
+          // Cards (tutorial / welcome / end card) sit in front of the board: they win the pick
+          if (self._uiPickHand && self._uiPress(self._uiPickHand(hand), hand)) return;
           var pick = self._pickForHand(hand);
           if (pick && pick.index >= 0) self._tryHumanTap(pick.board, pick.index, hand);
         });
@@ -581,6 +586,7 @@
         var moved = Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y);
         down = null;
         if (moved > 6 || self._isPresenting() || global.isMobileSpectator) return;
+        if (self._uiPickMouse && self._uiPress(self._uiPickMouse(e), null)) return;
         var pick = self._pickFromMouse(e);
         if (pick && pick.index >= 0) self._tryHumanTap(pick.board, pick.index, null);
       });
@@ -724,9 +730,10 @@
         this._laserUp = new THREE.Vector3(0, 1, 0);
       }
       var side = this._mySeatSide();
-      var active = presenting && this.matchActive && !!side && !this._dualBotPreview && !global.replayActive;
+      var uiOn = !!(this._uiAnyInteractive && this._uiAnyInteractive());
+      var active = presenting && ((this.matchActive && !!side && !this._dualBotPreview && !global.replayActive) || uiOn);
       var board = this.boards.shared;
-      var col = side ? this._sideColorCss(side) : '#ffffff';
+      var col = this._sideColorCss(side || 'blue');
       for (var id in this._lasers) {
         var L = this._lasers[id];
         var hand = document.getElementById(id);
@@ -750,6 +757,9 @@
         }
         var p = hit && hit[id];
         var canTake = !!(mine && p && p.board === mine && mine.state.canTap(side, p.index));
+        // A card (tutorial / end / welcome) in front of the board ends the beam on it
+        var up = this._uiHits && this._uiHits[id];
+        if (up && up.dist <= len + 0.001) { len = up.dist; onBoard = true; canTake = !!up.btn; }
         L.beam.material.color.set(col);
         L.beam.material.opacity = canTake ? 0.85 : (mine ? 0.45 : 0.2);
         L.beam.position.copy(r.origin);
@@ -779,6 +789,7 @@
     },
 
     _tryHumanTap: function (board, idx, handEl) {
+      if (this._tutorial) return this._tutorialTap(board, idx, handEl);
       var mine = this._myActionBoard();
       if (!mine || mine !== board) {
         if (board && this.matchActive && !this._dualBotPreview) this._pulseHaptic(handEl, 0.15, 25);
@@ -818,8 +829,8 @@
       if (this.matchStats) {
         this.matchStats.onPlace(actor, { layersCleared: bursts, score: res ? res.captured | 0 : 0, combo: bursts }, now);
       }
-      if (!this._dualBotPreview && bursts >= 3) {
-        this._showChainPopup(board, 'CHAIN ×' + bursts, this._sideColorCss(actor));
+      if (!this._dualBotPreview && bursts >= 2) { // a chain = 2+ explosions from one move
+        this._showChainPopup(board, 'Chain ×' + bursts, this._sideColorCss(actor));
       }
       this._refreshScores();
       if (window.matchRecorder && !this._dualBotPreview) {
@@ -855,6 +866,7 @@
 
     /** Original checkDotmination: after ≥2 moves, a player with no dots left has lost. */
     _checkBoardEnd: function (board) {
+      if (this._tutorial) return;
       if (this._endingMatch || this._endPending || !this.matchActive || this.matchState !== 'PLAYING') return;
       var winner = null;
       var reason = null;
@@ -904,7 +916,7 @@
       ctx.shadowColor = color;
       ctx.shadowBlur = 24;
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'italic 900 110px Arial, Helvetica, sans-serif';
+      ctx.font = "700 112px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
       ctx.fillText(text, 450, 95);
       lab.tex.needsUpdate = true;
       var p = board.view.root;
@@ -937,6 +949,7 @@
     // ── Bot + turn clock (runs only on the client that drives that side) ──
 
     _tickDrivers: function (now) {
+      if (this._tutorial) return; // tutorial: no bot, no turn clock
       if (!this.matchActive || this.matchState !== 'PLAYING' || this._endingMatch || this._endPending) return;
       if (global.replayActive) return;
       var b = this.boards.shared;
@@ -1435,6 +1448,8 @@
 
     onMatchStarted: function (mp, startTime, isBotMatch, bagSeed) {
       if (this._dualIdleTimer) { clearTimeout(this._dualIdleTimer); this._dualIdleTimer = null; }
+      if (this._tutorial && this.endTutorial) this.endTutorial(true);
+      if (this._welcomeCard && this._uiHide) this._uiHide(this._welcomeCard);
       this._clearVictory();
       this._clearMatchBanner();
       this._endingMatch = false;
@@ -1592,8 +1607,8 @@
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 140px Arial, Helvetica, sans-serif';
-      ctx.shadowColor = '#33bbff';
+      ctx.font = "700 150px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
+      ctx.shadowColor = this._sideColorCss ? this._sideColorCss('blue') : '#E11168';
       ctx.shadowBlur = 24;
       ctx.fillText(String(text || ''), 256, 128);
       var tex = new THREE.CanvasTexture(canvas);
@@ -1798,9 +1813,13 @@
       this._musicIdle();
       var sub = null;
       var elapsed = this._matchElapsedMs || (Date.now() - (this.modes.matchStart || Date.now()));
+      var endInfo = { level: this._levelMatch | 0, time: fmtTime(elapsed) };
+      // Original stars: won · under 2:00 · under 1:00 (Levels and Random alike)
+      endInfo.stars = 1 + (elapsed < 120000 ? 1 : 0) + (elapsed < 60000 ? 1 : 0);
       if (festive && this._levelMatch && !global.isMultiplayer && winner === 'blue') {
         // Original Levels mode: time + stars, best time per level, next level unlocked
         var lw = this._recordLevelWin(this._levelMatch, elapsed);
+        endInfo.stars = lw.stars; endInfo.time = lw.time; endInfo.isBest = lw.isBest; endInfo.best = lw.best;
         sub = 'Level ' + this._levelMatch + '  ' + '★★★'.slice(0, lw.stars) + '☆☆☆'.slice(lw.stars) +
           '  ' + lw.time + (lw.isBest ? '  best!' : '  (best ' + lw.best + ')');
       } else if (festive && this._levelMatch && winner === 'red') {
@@ -1819,6 +1838,11 @@
           selfEnd._playVictory({
             winner: winner,
             sub: sub,
+            level: endInfo.level,
+            stars: endInfo.stars,
+            time: endInfo.time,
+            isBest: endInfo.isBest,
+            best: endInfo.best,
             reason: (opts && opts.reason) || (selfEnd.modes && selfEnd.modes.reason),
             wasBotMatch: opts && opts.wasBotMatch,
             blueName: opts && opts.blueName,
@@ -1826,7 +1850,8 @@
           });
           selfEnd._placeVictory();
         }, 0);
-        this._scheduleDualIdle(VICTORY_HOLD_MS);
+        // Solo: the end card stays (Retry / Next) like the app; lobbies resume the filler after a hold
+        if (global.isMultiplayer || global.isMobileSpectator) this._scheduleDualIdle(VICTORY_HOLD_MS);
       } else if (wasPreview && winner && !opts.cancelled) {
         // Dual-bot idle: short breather then a fresh board
         this._scheduleDualIdle(2500);
@@ -2099,12 +2124,12 @@
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 120px Arial, Helvetica, sans-serif';
+      ctx.font = "700 120px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
       ctx.shadowColor = '#' + ('000000' + accent.toString(16)).slice(-6);
       ctx.shadowBlur = 28;
       ctx.fillText(title, 512, 110);
       ctx.shadowBlur = 0;
-      ctx.font = '600 42px Arial, Helvetica, sans-serif';
+      ctx.font = "400 42px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
       ctx.fillStyle = '#c8d6e6';
       var sub = info.sub || (info.reason === 'dominated' ? 'Dotmination!' :
         (info.reason === 'moves' ? 'Move limit — higher score wins' : 'Match over'));
@@ -2925,6 +2950,7 @@
     /** Original: the field and empty dots take the current player's colour. */
     /** Original: the turn passes only after the chain has finished animating. */
     _shownTurn: function (b) {
+      if (this._tutorial) return 'blue';
       if (b.view && b.view.busy() && b.turnNo > 0) return b.turn === 'blue' ? 'red' : 'blue';
       return b.turn;
     },
@@ -3077,6 +3103,7 @@
       this._tickPointers();
       this._updateTurnTint();
       this._billboardNameLabels();
+      if (this._uiTick) this._uiTick(now);
       if (this.matchActive && !this._endingMatch) {
         if (this.matchState === 'COUNTDOWN') {
           this._tickCountdown(Date.now());
@@ -3127,7 +3154,7 @@
         if (this.matchStats) {
           this.matchStats.onPlace(d.actor, { layersCleared: res ? res.bursts : 0, combo: 0, score: 0 }, performance.now());
         }
-        if (res && res.bursts >= 3) this._showChainPopup(b, 'CHAIN ×' + res.bursts, this._sideColorCss(d.actor));
+        if (res && res.bursts >= 2) this._showChainPopup(b, 'Chain ×' + res.bursts, this._sideColorCss(d.actor));
         this._updateHUD();
         return true;
       }

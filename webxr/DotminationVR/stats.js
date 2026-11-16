@@ -23,6 +23,7 @@
     this.attacks = 0;
     this.score = 0;
     this.layers = 0;
+    this.chains = 0;      // Dotmination: moves that set off a chain reaction (2+ explosions)
     this.combo = 0;
     this.maxCombo = 0;
     this.perfectClears = 0;
@@ -58,6 +59,7 @@
     if (clearResult) {
       if (clearResult.layersCleared > 0) {
         this.layers += clearResult.layersCleared | 0;
+        if ((clearResult.combo | 0) >= 2) this.chains += 1;
         this.score += clearResult.score | 0;
         this.combo = clearResult.combo | 0;
         if (this.combo > this.maxCombo) this.maxCombo = this.combo;
@@ -77,6 +79,7 @@
       attacks: this.attacks | 0,
       score: this.score | 0,
       layers: this.layers | 0,
+      chains: this.chains | 0,
       maxCombo: this.maxCombo | 0,
       perfectClears: this.perfectClears | 0,
       bpm: Math.round(this.bps(now) * 10) / 10,
@@ -320,6 +323,7 @@
       if ((snap.blocks | 0) > (b.bestBlocks | 0)) b.bestBlocks = snap.blocks | 0;
       if ((snap.attacks | 0) > (b.bestAttacks | 0)) b.bestAttacks = snap.attacks | 0;
       if ((snap.layers | 0) > (b.bestLayers | 0)) b.bestLayers = snap.layers | 0;
+      if ((snap.chains | 0) > (b.bestChains | 0)) b.bestChains = snap.chains | 0;
       if ((snap.score | 0) > (b.bestScore | 0)) b.bestScore = snap.score | 0;
       if ((snap.maxCombo | 0) > (b.bestMaxCombo | 0)) b.bestMaxCombo = snap.maxCombo | 0;
       if ((snap.durationMs | 0) > (b.longestMs | 0)) b.longestMs = snap.durationMs | 0;

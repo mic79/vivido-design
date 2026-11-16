@@ -41,15 +41,36 @@ Progress is saved in `localStorage['dotminationvr-progress']` in the same shape 
 - `dot-rules.js` – the rules engine (layout, apply/bursts, level generator, random and half-filled starts, serialize).
 - `dot-bot.js` – the original `botLogic.js` (random and smart).
 - `dot-board.js` – the canvas view drawn like the app (rings per stage, spring easing, ripples, +1 floats).
+- `dot-ui.js` – brand cards (tutorial, welcome, end card) and their laser/poke/mouse buttons.
 - `dot-game.js` – the A-Frame game component. Its lobby, pointer, popup, victory, replay and spectator methods
   are verbatim copies of StacksVR's `stacks-game.js` methods; the Dotmination turn logic is new.
 - `lobby.js`, `game-menu.js`, `mixamo-body.js`, `locomotion.js`, `mobile-spectator.js`, `match-replay.js`, `stats.js`,
   `stacks-audio.js`, `modes.js` – StacksVR copies (namespaced `dotminationvr-`).
 - `scripts/test-rules.mjs` – a Node test for the rules and the bot.
 
-## Not ported yet
+## From the original app (v0.2.0)
 
-- The tutorial (5 steps).
-- Dark mode.
+- **Tutorial:**
+  - The first visit opens "Welcome to Dotmination!" with [Start Tutorial] / [Play Level 1]. Afterwards it's always available under **HOW TO PLAY** in the menu.
+  - The 5 original steps use the same boards, wording and checks: Claiming Dots, Growing Dots, Explosions & Take-overs, Chain Reactions, Tutorial Complete → Start Level 1.
+  - A step card stands beside the board with live objective progress; the dots to tap pulse.
+- **End card:** the original round "Dotmination!" card with 3 stars.
+  - **Level win:** Next Level.
+  - **Loss:** Retry.
+  - **Random map:** Retry (same map) / Next (new map).
+  - **Multiplayer:** You Win! / You Lose! with Rematch for the host.
+- **Menu:**
+  - The level list shows Random plus every unlocked level, with its number, 3 stars and best time.
+  - Bot difficulty: Normal / Harder. Start type: Blank Start / Half-Filled.
+  - **HOW TO PLAY** starts the tutorial; **CHANGE COLORS** cycles the 4 original palettes.
+  - STATS shows best and worst level time, like "View Stats".
+- **Stats:**
+  - **Chains:** moves that set off a chain reaction (2+ explosions).
+  - **Longest chain:** the most explosions from one move. Both appear per match in the history.
+- **Look:** the original's dark mode throughout (darkslategrey cards, Roboto Condensed, teal/pink), plus the two-dot logo on the start screen.
+- **Input:** every in-world button works with the VR laser + trigger, a finger poke, and the desktop mouse (`dot-ui.js`).
+
+## Not ported
+
 - The start "blink" animation.
-- A palette control in the VR menu (keyboard C only for now).
+- The app's light mode. VR uses the app's dark mode, which suits a headset.

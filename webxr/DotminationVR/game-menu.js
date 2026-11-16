@@ -31,7 +31,7 @@
     var h = String(hex || '#444').replace('#', '');
     if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
     var n = parseInt(h, 16);
-    if (isNaN(n)) return '#88aacc';
+    if (isNaN(n)) return '#b4c8c8';
     var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
     r = Math.min(255, Math.round(r + (255 - r) * amount));
     g = Math.min(255, Math.round(g + (255 - g) * amount));
@@ -518,15 +518,21 @@
           if (self._hoveredBtn === el) return;
           self._clearHover();
           self._hoveredBtn = el;
-          el.setAttribute('material', 'color', el.dataset.hoverColor);
-          el.setAttribute('scale', '1.04 1.04 1.04');
+          var tile = (el.getAttribute('data-action') || '').indexOf('level-tile-') === 0;
+          if (!tile) {
+            el.setAttribute('material', 'color', el.dataset.hoverColor);
+            el.setAttribute('scale', '1.04 1.04 1.04');
+          } else self._drawLevelStrip();
           pulseHaptic(handEl || null, 0.35, 28);
         }
         function hoverOff() {
           if (self._hoveredBtn !== el) return;
           self._hoveredBtn = null;
-          el.setAttribute('material', 'color', el.dataset.baseColor);
-          el.setAttribute('scale', '1 1 1');
+          var tile = (el.getAttribute('data-action') || '').indexOf('level-tile-') === 0;
+          if (!tile) {
+            el.setAttribute('material', 'color', el.dataset.baseColor);
+            el.setAttribute('scale', '1 1 1');
+          } else self._drawLevelStrip();
         }
 
         el.addEventListener('mouseenter', function (evt) {
@@ -555,6 +561,7 @@
       this._hoveredBtn = null;
       el.setAttribute('material', 'color', el.dataset.baseColor || '#444');
       el.setAttribute('scale', '1 1 1');
+      if ((el.getAttribute('data-action') || '').indexOf('level-tile-') === 0) this._drawLevelStrip();
     },
 
     setRaycasters: function (enabled) {
@@ -631,12 +638,12 @@
         var el = tabs[key];
         if (!el) return;
         var on = key === active;
-        var color = on ? '#1e6ad4' : '#1a2433';
+        var color = on ? '#E11168' : '#3b6161';
         el.setAttribute('material', 'color', color);
         el.dataset.baseColor = color;
         el.dataset.hoverColor = lightenHex(color, on ? 0.28 : 0.45);
         var label = el.querySelector('a-text');
-        if (label) label.setAttribute('color', on ? '#ffffff' : '#a8b8c8');
+        if (label) label.setAttribute('color', on ? '#ffffff' : '#b4c8c8');
       });
     },
 
@@ -829,13 +836,28 @@
         case 'board-6':
           this._setBoardSizeChoice(6);
           break;
-        case 'level-minus':
-        case 'level-plus': {
-          var gl = document.querySelector('[dot-game]');
-          var cl = gl && gl.components && gl.components['dot-game'];
-          if (cl && cl.setLevel) cl.setLevel(cl.level + (action === 'level-plus' ? 1 : -1));
+        case 'level-page-prev':
+        case 'level-page-next':
+          this._levelPage = (this._levelPage | 0) + (action === 'level-page-next' ? 5 : -5);
+          this._levelPageManual = true;
           this._setLevelUI();
-          pulseHaptic(this._leftHandEl || document.getElementById('leftHand'), 0.35, 30);
+          break;
+        case 'level-tile-0': case 'level-tile-1': case 'level-tile-2': case 'level-tile-3': case 'level-tile-4': {
+          var entry = this._levelTiles && this._levelTiles[parseInt(action.slice(-1), 10)];
+          var gt = document.querySelector('[dot-game]');
+          var ct = gt && gt.components && gt.components['dot-game'];
+          if (entry != null && ct && ct.setLevel) ct.setLevel(entry);
+          this._setLevelUI();
+          break;
+        }
+        case 'how-to-play': {
+          // Original main menu "How to Play" → interactive tutorial (solo)
+          var gh = document.querySelector('[dot-game]');
+          var chh = gh && gh.components && gh.components['dot-game'];
+          if (chh && chh.startTutorial && !window.isMultiplayer && !playing) {
+            chh.startTutorial();
+            if (this.menuVisible) this.toggleMenu();
+          }
           break;
         }
         case 'cycle-colors': {
@@ -872,19 +894,90 @@
       }
     },
 
-    /** SOLO level picker: R (Random map) · 1 … highest unlocked level. */
+    /**
+     * Original level list (.list--mode-regular) as a strip of 5 cards: Random first, then every
+     * unlocked level with its number, 3 stars (won · <2:00 · <1:00) and best time.
+     */
     _setLevelUI: function () {
       var gl = document.querySelector('[dot-game]');
       var cl = gl && gl.components && gl.components['dot-game'];
       var info = cl && cl.levelInfo ? cl.levelInfo() : { level: 1, max: 1, best: null };
-      var txt = document.getElementById('menu-level-text');
-      if (txt) txt.setAttribute('value', info.level > 0 ? ('Level ' + info.level + ' / ' + info.max) : 'Random map');
-      var best = document.getElementById('menu-level-best');
-      if (best) {
-        best.setAttribute('value', info.level > 0
-          ? (info.best ? 'Best ' + info.best : 'Not cleared yet')
-          : 'Bot: NORM / HARD (top left)');
+      var entries = [0];
+      for (var n = 1; n <= info.max; n++) entries.push(n);
+      var cur = entries.indexOf(info.level);
+      if (!this._levelPageManual) this._levelPage = cur - 2;
+      this._levelPageManual = false;
+      var start = Math.max(0, Math.min(entries.length - 5, this._levelPage | 0));
+      if (entries.length <= 5) start = 0;
+      this._levelPage = start;
+      this._levelTiles = entries.slice(start, start + 5);
+      while (this._levelTiles.length < 5) this._levelTiles.push(null);
+      this._drawLevelStrip(cl, info);
+    },
+
+    _drawLevelStrip: function (cl, info) {
+      var stripEl = document.getElementById('menu-level-strip');
+      var U = window.DotUI;
+      if (!stripEl || !U) return;
+      if (!cl) {
+        var gl = document.querySelector('[dot-game]');
+        cl = gl && gl.components && gl.components['dot-game'];
       }
+      info = info || (cl && cl.levelInfo ? cl.levelInfo() : { level: 1, max: 1 });
+      if (!this._stripCanvas) {
+        this._stripCanvas = document.createElement('canvas');
+        this._stripCanvas.width = 1160;
+        this._stripCanvas.height = 220;
+        this._stripTex = new THREE.CanvasTexture(this._stripCanvas);
+        if ('colorSpace' in this._stripTex && THREE.SRGBColorSpace) this._stripTex.colorSpace = THREE.SRGBColorSpace;
+      }
+      var mesh = stripEl.getObject3D('mesh');
+      if (mesh && mesh.material.map !== this._stripTex) {
+        mesh.material.map = this._stripTex;
+        mesh.material.transparent = true;
+        mesh.material.needsUpdate = true;
+      }
+      var ctx = this._stripCanvas.getContext('2d');
+      ctx.clearRect(0, 0, 1160, 220);
+      var pink = (cl && cl._sideColorCss) ? cl._sideColorCss('blue') : '#E11168';
+      var hoverIdx = -1;
+      if (this._hoveredBtn) {
+        var act = this._hoveredBtn.getAttribute('data-action') || '';
+        if (act.indexOf('level-tile-') === 0) hoverIdx = parseInt(act.slice(-1), 10);
+      }
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (var i = 0; i < 5; i++) {
+        var lv = this._levelTiles[i];
+        if (lv == null) continue;
+        var x = 12 + i * 232, y = 10, w = 208, h = 200;
+        var sel = lv === info.level, hov = i === hoverIdx;
+        ctx.save();
+        ctx.shadowColor = sel ? pink : (hov ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.4)');
+        ctx.shadowBlur = sel ? 26 : 12;
+        U.roundRect(ctx, x, y, w, h, 18);
+        ctx.fillStyle = hov ? '#466f6f' : '#3b6161';
+        ctx.fill();
+        ctx.restore();
+        if (sel) { ctx.lineWidth = 5; ctx.strokeStyle = pink; U.roundRect(ctx, x, y, w, h, 18); ctx.stroke(); }
+        var fg = sel ? pink : '#ffffff';
+        if (lv === 0) {
+          U.icon(ctx, 'shuffle', x + w / 2, y + 74, 76, fg);
+          ctx.font = '700 40px ' + U.FONT;
+          ctx.fillStyle = fg;
+          ctx.fillText('Random', x + w / 2, y + 150);
+        } else {
+          var st = cl && cl.levelStars ? cl.levelStars(lv) : { stars: 0, time: null };
+          ctx.font = '700 76px ' + U.FONT;
+          ctx.fillStyle = fg;
+          ctx.fillText(String(lv), x + w / 2, y + 62);
+          for (var k = 0; k < 3; k++) U.star(ctx, x + w / 2 + (k - 1) * 46, y + 124, 19, k < st.stars ? U.STAR_ON : U.STAR_OFF);
+          ctx.font = '400 32px ' + U.FONT;
+          ctx.fillStyle = '#b4c8c8';
+          ctx.fillText(st.time || '--:--', x + w / 2, y + 170);
+        }
+      }
+      this._stripTex.needsUpdate = true;
     },
 
     _setBotSpeedUI: function () {
@@ -893,7 +986,7 @@
       var txt = document.getElementById('menu-bot-speed-text');
       if (txt) {
         txt.setAttribute('value', bpm <= 0 ? '0 (off)' : (bpm + '/min'));
-        txt.setAttribute('color', bpm <= 0 ? '#ff8866' : '#e8f4ff');
+        txt.setAttribute('color', bpm <= 0 ? '#ff8866' : '#ffffff');
       }
 
       // Track: 0 → 40 BPM maps across full width
@@ -908,14 +1001,14 @@
         var fillW = Math.max(0.02, (x + trackHalf));
         fill.setAttribute('geometry', 'width', fillW);
         fill.setAttribute('position', (-trackHalf + fillW / 2) + ' 0 0.002');
-        var accent = bpm <= 0 ? '#555555' : (bpm < 10 ? '#3d8f5a' : (bpm > 20 ? '#c45a12' : '#1e6ad4'));
+        var accent = bpm <= 0 ? '#555555' : (bpm < 10 ? '#0f9b93' : (bpm > 20 ? '#c45a12' : '#E11168'));
         fill.setAttribute('material', 'color', accent);
       }
       ['menu-bot-speed-minus', 'menu-bot-speed-plus', 'menu-bot-speed-hit'].forEach(function (id) {
         var el = document.getElementById(id);
         if (!el) return;
-        el.dataset.baseColor = el.id === 'menu-bot-speed-hit' ? '#152032' : '#243044';
-        el.dataset.hoverColor = lightenHex('#1e6ad4', 0.4);
+        el.dataset.baseColor = el.id === 'menu-bot-speed-hit' ? '#2a4646' : '#3b6161';
+        el.dataset.hoverColor = lightenHex('#E11168', 0.4);
       });
     },
 
@@ -958,25 +1051,25 @@
       // Active pill slides left (4x4) or right (6x6); ascii "x" so Roboto glyph exists
       if (slider) {
         slider.setAttribute('position', (is4 ? -0.052 : 0.052) + ' 0 0.003');
-        var accent = is4 ? '#1e6ad4' : '#c45a12';
+        var accent = is4 ? '#E11168' : '#c45a12';
         var canEdit = !window.isMultiplayer || !!window.isHost ||
           !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
         slider.setAttribute('material', 'color', canEdit ? accent : '#555555');
       }
       if (t4) {
-        t4.setAttribute('value', 'NORM');
-        t4.setAttribute('color', is4 ? '#ffffff' : '#8a9bb0');
+        t4.setAttribute('value', 'NORMAL');
+        t4.setAttribute('color', is4 ? '#ffffff' : '#b4c8c8');
       }
       if (t6) {
-        t6.setAttribute('value', 'HARD');
-        t6.setAttribute('color', !is4 ? '#ffffff' : '#8a9bb0');
+        t6.setAttribute('value', 'HARDER');
+        t6.setAttribute('color', !is4 ? '#ffffff' : '#b4c8c8');
       }
       // Keep hit targets hoverable without fighting the slider color
       ['menu-board-4', 'menu-board-6'].forEach(function (id) {
         var el = document.getElementById(id);
         if (!el) return;
-        el.dataset.baseColor = '#152032';
-        el.dataset.hoverColor = lightenHex('#1e6ad4', 0.35);
+        el.dataset.baseColor = '#2a4646';
+        el.dataset.hoverColor = lightenHex('#E11168', 0.35);
       });
     },
 
@@ -1003,12 +1096,12 @@
       var on = this._startTypeOn();
       var canEdit = !window.isMultiplayer || !!window.isHost ||
         !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
-      var color = !canEdit ? '#555555' : (on === 'half' ? '#8a3fd1' : '#1e6ad4');
+      var color = !canEdit ? '#555555' : (on === 'half' ? '#8a3fd1' : '#E11168');
       btn.setAttribute('material', 'color', color);
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
       if (txt) {
-        txt.setAttribute('value', on === 'half' ? 'START: HALF' : 'START: BLANK');
+        txt.setAttribute('value', on === 'half' ? 'HALF-FILLED' : 'BLANK START');
         txt.setAttribute('color', '#ffffff');
       }
     },
@@ -1020,7 +1113,7 @@
       var on = window.StacksAudio
         ? window.StacksAudio.isMusicEnabled()
         : window._musicEnabled !== false;
-      var color = on ? '#1f9d45' : '#555555';
+      var color = on ? '#0f9b93' : '#555555';
       btn.setAttribute('material', 'color', color);
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
@@ -1032,13 +1125,13 @@
       var txt = document.getElementById('menu-passthrough-text');
       if (!btn) return;
       var on = !!(window.StacksPassthrough && window.StacksPassthrough.enabled);
-      var color = on ? '#2a8fbf' : '#243044';
+      var color = on ? '#0f9b93' : '#3b6161';
       btn.setAttribute('material', 'color', color);
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
       if (txt) {
         txt.setAttribute('value', on ? 'PASS ON' : 'PASS');
-        txt.setAttribute('color', on ? '#ffffff' : '#a8b8c8');
+        txt.setAttribute('color', on ? '#ffffff' : '#b4c8c8');
       }
     },
 
@@ -1053,13 +1146,13 @@
       var color;
       if (window.connectionState === 'connecting') {
         label = 'JOINING...';
-        color = '#cc8800';
+        color = '#c40f5b';
       } else if (window.isMultiplayer) {
         label = window.isHost ? 'LEAVE' : 'LEAVE';
-        color = '#cc3333';
+        color = '#c0392b';
         } else {
         label = 'JOIN';
-        color = '#22aa44';
+        color = '#0f9b93';
       }
       if (joinText) joinText.setAttribute('value', label);
       else joinBtn.setAttribute('text', 'value', label);
@@ -1080,11 +1173,11 @@
       var action = 'start-bot';
       if (playing && canControl) {
         label = 'END MATCH';
-        color = '#cc3333';
+        color = '#c0392b';
       } else if (playing && !canControl) {
         // Late joiner / spectator watching a live match — no end control
         label = 'SPECTATING';
-        color = '#445566';
+        color = '#4a6a6a';
         action = 'noop';
       } else if (this.menuMode === 'multi' && window.isMultiplayer) {
         // Only HOST can start. Seated clients used to see START MATCH but
@@ -1097,18 +1190,18 @@
             window.lobbyState.queue &&
             window.lobbyState.queue.indexOf(window.myPlayerId) >= 0);
           label = inQ ? 'START MATCH' : (qLen ? 'START (WATCH)' : 'START BOTS');
-          color = '#ff8800';
+          color = '#E11168';
         } else {
           label = 'WAIT FOR HOST';
-          color = '#445566';
+          color = '#4a6a6a';
           action = 'noop';
         }
       } else if (this.menuMode === 'multi') {
         label = 'START MATCH';
-        color = '#ff8800';
+        color = '#E11168';
       } else {
         label = 'START vs BOT';
-        color = '#ff8800';
+        color = '#E11168';
       }
       if (txt) txt.setAttribute('value', label);
       btn.setAttribute('material', 'color', color);
@@ -1140,13 +1233,13 @@
       var label = opts.label || 'Open';
       var badge = opts.badge || String(idx + 1);
       nameEl.setAttribute('value', label);
-      nameEl.setAttribute('color', filled ? (isYou ? '#ffffff' : '#d8e8f8') : '#556677');
+      nameEl.setAttribute('color', filled ? (isYou ? '#ffffff' : '#ffffff') : '#5a7a7a');
       if (numEl) {
         numEl.setAttribute('value', badge);
-        numEl.setAttribute('color', filled ? (isYou ? '#ffe08a' : '#a8c8e8') : '#667788');
+        numEl.setAttribute('color', filled ? (isYou ? '#ffe08a' : '#b4c8c8') : '#8fa6a6');
       }
-      var bgColor = !filled ? '#152032' : (isYou ? '#1e4a2a' : '#1a3048');
-      var accentColor = !filled ? '#334455' : (isYou ? '#44cc66' : (opts.accent || '#4488cc'));
+      var bgColor = !filled ? '#2a4646' : (isYou ? '#1f3636' : '#3b6161');
+      var accentColor = !filled ? '#3b5555' : (isYou ? '#12DACE' : (opts.accent || '#12DACE'));
       bg.setAttribute('material', 'color', bgColor);
       if (accent) accent.setAttribute('material', 'color', accentColor);
     },
@@ -1176,7 +1269,7 @@
           isYou: mp.blue === myId,
           label: this._nickForLobby(ls, mp.blue),
           badge: 'B',
-          accent: '#4488ff'
+          accent: '#ff4d94'
         });
         this._setQueueSlot(1, {
           filled: !!mp.red,
@@ -1201,7 +1294,7 @@
             isYou: id && id === myId,
             label: id ? this._nickForLobby(ls, id) : 'Open',
             badge: String(i + 1),
-            accent: i === 0 ? '#4488ff' : '#e25a4a'
+            accent: i === 0 ? '#ff4d94' : '#e25a4a'
           });
         }
       }
@@ -1212,17 +1305,17 @@
       var joinTxt = document.getElementById('menu-join-queue-text');
       var leaveTxt = document.getElementById('menu-leave-queue-text');
       if (joinBtn) {
-        var jc = inQ ? '#1a3a28' : '#1f9d45';
+        var jc = inQ ? '#1f3636' : '#0f9b93';
         joinBtn.setAttribute('material', 'color', jc);
         joinBtn.dataset.baseColor = jc;
         joinBtn.dataset.hoverColor = lightenHex(jc, 0.42);
         if (joinTxt) {
           joinTxt.setAttribute('value', inQ ? 'QUEUED' : 'JOIN QUEUE');
-          joinTxt.setAttribute('color', inQ ? '#88aa88' : '#ffffff');
+          joinTxt.setAttribute('color', inQ ? '#b4c8c8' : '#ffffff');
         }
       }
       if (leaveBtn) {
-        var lc = inQ ? '#b83333' : '#3a2222';
+        var lc = inQ ? '#a93226' : '#3a2222';
         leaveBtn.setAttribute('material', 'color', lc);
         leaveBtn.dataset.baseColor = lc;
         leaveBtn.dataset.hoverColor = lightenHex(lc, 0.42);
@@ -1410,12 +1503,12 @@
       var sp = document.getElementById('menu-stats-sp');
       var mp = document.getElementById('menu-stats-mp');
       if (sp) {
-        var c = this.statsSubTab === 'single' ? '#4488ff' : '#243044';
+        var c = this.statsSubTab === 'single' ? '#ff4d94' : '#3b6161';
         sp.setAttribute('material', 'color', c);
         sp.dataset.baseColor = c;
       }
       if (mp) {
-        var c2 = this.statsSubTab === 'multi' ? '#4488ff' : '#243044';
+        var c2 = this.statsSubTab === 'multi' ? '#ff4d94' : '#3b6161';
         mp.setAttribute('material', 'color', c2);
         mp.dataset.baseColor = c2;
       }
@@ -1458,10 +1551,17 @@
       if (bests && (bests.matches | 0) > 0) {
         sumLines.push(nick + '  ' + (bests.wins | 0) + 'W-' + (bests.losses | 0) + 'L' +
           (lvlInfo ? '   Level ' + lvlInfo.max + ' unlocked' : ''));
-        sumLines.push('Most bursts ' + (bests.bestLayers | 0) +
-          '   Longest chain ' + (bests.bestMaxCombo | 0));
-        sumLines.push('Win streak ' + (bests.bestWinStreak | 0) +
-          '   Longest match ' + fmt(bests.longestMs));
+        sumLines.push('Most chains ' + (bests.bestChains | 0) +
+          '   Longest chain ' + ((bests.bestMaxCombo | 0) >= 2 ? (bests.bestMaxCombo | 0) : '-') +
+          '   Win streak ' + (bests.bestWinStreak | 0));
+        // Original "View Stats": best / worst level time
+        var ex = dg && dg.levelTimeExtremes ? dg.levelTimeExtremes() : null;
+        if (ex && ex.best) {
+          sumLines.push('Best time ' + ex.best.time + ' (L' + ex.best.level + ')' +
+            '   Worst time ' + ex.worst.time + ' (L' + ex.worst.level + ')');
+        } else {
+          sumLines.push('Longest match ' + fmt(bests.longestMs));
+        }
       } else if (list.length) {
         sumLines.push((this.statsSubTab === 'multi' ? 'PvP' : 'vs Bot') +
           '  ' + wins + 'W-' + losses + 'L');
@@ -1505,8 +1605,8 @@
         if (p.blocks != null) {
           lines.push('  ' + (m.level ? 'Level ' + m.level : (m.bot ? 'Random map' : 'PvP')) +
             '  Moves ' + (p.blocks | 0) +
-            '  Bursts ' + (p.layers | 0) +
-            ((p.maxCombo | 0) > 0 ? '  Chain ' + (p.maxCombo | 0) : '') +
+            '  Chains ' + (p.chains | 0) +
+            '  Longest ' + ((p.maxCombo | 0) >= 2 ? (p.maxCombo | 0) : '-') +
             '  ' + fmt(p.durationMs));
         }
         if (m.timestamp) {
@@ -1538,7 +1638,7 @@
             if (replayBtns[slotIdx]) {
               replayBtns[slotIdx].setAttribute('visible', true);
               replayBtns[slotIdx].setAttribute('material', 'color',
-                canStopWatch ? '#cc3333' : '#555555');
+                canStopWatch ? '#c0392b' : '#555555');
             }
             if (replayTexts[slotIdx]) {
               replayTexts[slotIdx].setAttribute('value', canStopWatch ? 'Stop' : 'Watching');
@@ -1559,7 +1659,7 @@
                   liveMatch ? 'In match' : 'Watch');
               }
             } else {
-              replayBtns[slotIdx].setAttribute('material', 'color', '#4488ff');
+              replayBtns[slotIdx].setAttribute('material', 'color', '#ff4d94');
               if (replayTexts[slotIdx]) replayTexts[slotIdx].setAttribute('value', 'Watch');
             }
             if (selfStats.refreshRaycasters) selfStats.refreshRaycasters();

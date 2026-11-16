@@ -60,6 +60,7 @@
     this._flash = new Float32Array(n);
     this._hover = [-1, -1];
     this._botChoice = -1;
+    this._highlights = [];  // tutorial: pulsing "tap here" rings
     this._queue = [];
     this._stepAt = 0;
     this._fx = [];       // ripples + floating texts
@@ -326,6 +327,11 @@
   };
 
   View.prototype.busy = function () { return this._queue.length > 0; };
+
+  View.prototype.setHighlights = function (list) {
+    this._highlights = (list || []).slice();
+    this._dirty = true;
+  };
   /** Score as currently drawn (sum of displayed stages): counts along with the chain. */
   View.prototype.displayScore = function (code) {
     var t = 0;
@@ -380,7 +386,7 @@
         animating = true;
       }
     }
-    if (this._fx.length) animating = true;
+    if (this._fx.length || this._highlights.length) animating = true;
     if (this._threat > 0) animating = true;
     if (animating || this._dirty) this._draw(now);
     return this.busy();
@@ -428,7 +434,7 @@
       var age = now - fx.t0;
       if (fx.kind === 'ripple') {
         if (age > 400) continue;
-        var p = this._px(fx.i), u = age / 400;
+        var p = this._px(fx.i), u = Math.max(0, age / 400);
         ctx.beginPath();
         ctx.arc(p.x, p.y, 50 * K * 1.5 * u, 0, Math.PI * 2);
         ctx.fillStyle = fx.warn ? 'rgba(255,179,0,' + (0.5 * (1 - u)) + ')' : 'rgba(200,200,200,' + (0.5 * (1 - u)) + ')';
@@ -464,6 +470,13 @@
         ctx.beginPath(); ctx.arc(pp.x, pp.y, Math.max(core + 6 * K, 26 * K), 0, Math.PI * 2);
         ctx.strokeStyle = rgba(col, 0.6); ctx.lineWidth = 2 * K; ctx.stroke();
       }
+    }
+    // Tutorial "tap here" rings, pulsing in the current player's colour
+    for (var h = 0; h < this._highlights.length; h++) {
+      var hp = this._px(this._highlights[h]);
+      var pulse = 0.5 + 0.5 * Math.sin(now * 0.006 + h * 0.9);
+      ctx.beginPath(); ctx.arc(hp.x, hp.y, (29 + 4 * pulse) * K, 0, Math.PI * 2);
+      ctx.strokeStyle = rgba(this.turnColor, 0.45 + 0.5 * pulse); ctx.lineWidth = (2 + 1.5 * pulse) * K; ctx.stroke();
     }
     if (this._botChoice >= 0) {
       var bp = this._px(this._botChoice);
