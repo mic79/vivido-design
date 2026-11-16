@@ -199,7 +199,12 @@
     paintHudSides();
 
     var timerEl = document.getElementById('mobile-hud-timer');
-    if (timerEl && ls && isMatchPlaying(ls) && ls.matchStartTime) {
+    // Bot-vs-bot filler (after a lobby match, or Offline Preview): time that match, not the last lobby one
+    var fillerStart = comp && comp._dualBotPreview && comp.matchActive && comp.modes && comp.modes.matchStart;
+    if (timerEl && fillerStart) {
+      var fe = Math.max(0, Math.floor((Date.now() - fillerStart) / 1000));
+      timerEl.textContent = Math.floor(fe / 60) + ':' + ((fe % 60) < 10 ? '0' : '') + (fe % 60);
+    } else if (timerEl && ls && isMatchPlaying(ls) && ls.matchStartTime) {
       var elapsed = Math.max(0, Math.floor((Date.now() - ls.matchStartTime) / 1000));
       var min = Math.floor(elapsed / 60);
       var sec = elapsed % 60;
@@ -329,15 +334,8 @@
     activateSpectatorBodies();
     updateMobileHudScores();
 
-    var previewStart = Date.now();
-    setInterval(function () {
-      var elapsed = Math.floor((Date.now() - previewStart) / 1000);
-      var min = Math.floor(elapsed / 60);
-      var sec = elapsed % 60;
-      var timerEl = document.getElementById('mobile-hud-timer');
-      if (timerEl) timerEl.textContent = min + ':' + (sec < 10 ? '0' : '') + sec;
-      updateMobileHudScores();
-    }, 1000);
+    // Timer comes from the preview match itself (restarts with every new bot match)
+    if (!global._dotHudTick) global._dotHudTick = setInterval(updateMobileHudScores, 1000);
 
     var scene = document.querySelector('a-scene');
     var camComp = scene && scene.components && scene.components['mobile-spectator-cam'];
@@ -572,6 +570,13 @@
 
     var preview = document.getElementById('mobile-preview-btn');
     if (preview) preview.addEventListener('click', onPreviewClick);
+
+    if (!global._dotHudTick) {
+      global._dotHudTick = setInterval(function () {
+        var hud = document.getElementById('mobile-match-hud');
+        if (hud && hud.classList.contains('active')) updateMobileHudScores();
+      }, 1000);
+    }
 
     var exitPreview = document.getElementById('mobile-preview-exit');
     if (exitPreview) {

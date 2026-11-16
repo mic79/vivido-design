@@ -1470,6 +1470,12 @@
       this._prepBoardsForMatch(seed);
       if (this.modes.stop) this.modes.stop();
       if (this._sceneRoot) this._sceneRoot.visible = true;
+      // Preview bots never carry over into a real match
+      ['bot-body', 'spec-blue-body'].forEach(function (id) {
+        var e = document.getElementById(id);
+        if (e && e.dataset && e.dataset.previewBot === '1') this._clearRemoteAvatarEl(e);
+      }, this);
+      global.botReactionTargetBlue = null;
       this._showMatchBodies({ showBot: reallyBot && !spectating });
       if (global.isMultiplayer && global.StacksLobby && global.StacksLobby.isHost) {
         this._broadcastState('match-start');
@@ -1677,12 +1683,16 @@
       // Seat bodies (bot/spec-blue) — clear if that seat's human is gone
       var mp = global.lobbyState.matchPlayers || {};
       var playing = global.lobbyState.matchState === 'PLAYING';
-      if (!playing || !mp.blue || !live[mp.blue]) {
+      var keepPreview = function (id) {
+        var e = document.getElementById(id);
+        return !!(this._dualBotPreview && e && e.dataset && e.dataset.previewBot === '1');
+      }.bind(this);
+      if ((!playing || !mp.blue || !live[mp.blue]) && !keepPreview('spec-blue-body')) {
         this._clearRemoteAvatarEl(document.getElementById('spec-blue-body'));
       }
       if (!playing || !mp.red || mp.red === '__BOT__' || !live[mp.red]) {
-        // Keep bot-body for vs-bot matches; otherwise clear stale human pose
-        if (!(playing && mp.red === '__BOT__')) {
+        // Keep bot-body for vs-bot matches (and the bot-vs-bot filler); otherwise clear stale human pose
+        if (!(playing && mp.red === '__BOT__') && !keepPreview('bot-body')) {
           this._clearRemoteAvatarEl(document.getElementById('bot-body'));
         }
       }
@@ -2303,7 +2313,49 @@
         if (el.object3D) el.object3D.visible = true;
       };
       show('bot-body');
-      if (global.isMobileSpectator) show('spec-blue-body');
+      show('spec-blue-body');
+      this._lastPreviewBodySync = 0;
+      this._syncPreviewBotBodies(performance.now());
+    },
+
+    /**
+     * A preview bot only appears at a seat nobody is standing at: you (headset), or another
+     * lobby player's avatar. After a PvP match both humans usually stay at their seats, and a
+     * bot body there would overlap them.
+     */
+    _syncPreviewBotBodies: function (now) {
+      if (!this._dualBotPreview) return;
+      if (this._lastPreviewBodySync && now - this._lastPreviewBodySync < 300) return;
+      this._lastPreviewBodySync = now;
+      var people = [];
+      var v = new THREE.Vector3();
+      if (!global.isMobileSpectator) {
+        var cam = this.el.sceneEl && this.el.sceneEl.camera;
+        if (cam) { cam.getWorldPosition(v); people.push({ x: v.x, z: v.z }); }
+      }
+      for (var i = 0; i < 4; i++) {
+        var rb = document.getElementById('remote-body-' + i);
+        var mb = rb && rb.components && rb.components['mixamo-body'];
+        var hd = mb && mb.remoteHandData && mb.remoteHandData.head;
+        if (rb && rb.object3D && rb.object3D.visible && hd && typeof hd.x === 'number') people.push({ x: hd.x, z: hd.z });
+      }
+      var seatsToBody = { blue: 'spec-blue-body', red: 'bot-body' };
+      for (var side in seatsToBody) {
+        var el = document.getElementById(seatsToBody[side]);
+        if (!el || !el.dataset || el.dataset.previewBot !== '1') continue;
+        var seat = this.seatPose(side);
+        var taken = false;
+        for (var k = 0; k < people.length && seat; k++) {
+          var dx = people[k].x - seat.x, dz = people[k].z - seat.z;
+          if (dx * dx + dz * dz < 0.7 * 0.7) { taken = true; break; }
+        }
+        var want = !taken;
+        if (el.object3D && el.object3D.visible !== want) {
+          el.object3D.visible = want;
+          el.setAttribute('visible', want);
+          el.dataset.posed = want ? '1' : '';
+        }
+      }
     },
 
     _hidePreviewBotBodies: function () {
@@ -3030,7 +3082,10 @@
           this._tickCountdown(Date.now());
         } else {
           this._tickDrivers(now);
-          if (this._dualBotPreview) this._hidePreviewBotBodies();
+          if (this._dualBotPreview) {
+            this._hidePreviewBotBodies();
+            this._syncPreviewBotBodies(now);
+          }
           if (!this._lastStatsHud || now - this._lastStatsHud > 250) {
             this._lastStatsHud = now;
             this._updateCupStatsHUD();
