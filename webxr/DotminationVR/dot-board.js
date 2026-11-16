@@ -95,8 +95,116 @@
     this.panel.renderOrder = 2;
     this.root.add(this.panel);
     // No separate frame: the rounded rim (current player's colour) outlines the board.
+    this._build3D();
     this._dirty = true;
     this._draw(performance.now());
+  };
+
+  // ── Stereo depth: each owned dot is a stepped cone of discs ─────────────
+  // The original's halo is always ~25.6 px wide: the core grows (5.12 px per stage) while
+  // the rings shrink. Every circle sits on one shallow cone by its radius: the outermost
+  // ring lies in the glass, smaller rings step out toward the dot's OWNER and the solid
+  // core is nearest the owner. Stage 1 (small core, 4 rings) stands tallest; stage 5
+  // (core fills the halo) lies flat in the glass, ready to burst.
+  var HALO_PX = 25.6;          // outer radius of every dot's halo (CSS px)
+  var STACK_DEPTH = 0.055;     // metres from glass to the tip of a stage-1 stack
+  var MAX_RINGS = 4;
+
+  View.prototype._build3D = function () {
+    var n = this.layout.count;
+    var geo = new THREE.CircleGeometry(1, 40);
+    // Rings: one instanced layer per original ring alpha (0.1 / 0.2 / 0.3 / 0.4), normal
+    // blending. Same-colour translucent layers composite identically in any order, so this
+    // matches the app's colours from either side without sorting (additive went magenta).
+    this._ringMeshes = [];
+    for (var a = 0; a < MAX_RINGS; a++) {
+      var rm = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({
+        color: 0xffffff, transparent: true, opacity: (a + 1) / 10, depthWrite: false,
+        side: THREE.DoubleSide, toneMapped: false
+      }), n);
+      rm.renderOrder = 4;
+      rm.frustumCulled = false;
+      this._ringMeshes.push(rm);
+    }
+    // Cores: solid, write depth so rings behind a core (seen from its owner) are hidden
+    this._coreMesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 1, depthWrite: true,
+      side: THREE.DoubleSide, toneMapped: false
+    }), n);
+    // Drawn after the glass (renderOrder 2): dots behind the glass keep full brightness
+    this._coreMesh.renderOrder = 3;
+    this._coreMesh.frustumCulled = false;
+    this._m4 = new THREE.Matrix4();
+    this._q0 = new THREE.Quaternion();
+    this._v3 = new THREE.Vector3();
+    this._s3 = new THREE.Vector3();
+    this._c3 = new THREE.Color();
+    this._w3 = new THREE.Color(0xffffff);
+    var zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (var j = 0; j < n; j++) {
+      this._coreMesh.setMatrixAt(j, zero);
+      this._coreMesh.setColorAt(j, this._c3.setRGB(1, 1, 1));
+      for (var b = 0; b < MAX_RINGS; b++) {
+        this._ringMeshes[b].setMatrixAt(j, zero);
+        this._ringMeshes[b].setColorAt(j, this._c3.setRGB(1, 1, 1));
+      }
+    }
+    // Which way each owner's stacks point (board local z): blue seat (code 1) at +z
+    this.sideSign = { 1: 1, 2: -1 };
+    this.root.add(this._coreMesh);
+    for (var m = 0; m < MAX_RINGS; m++) this.root.add(this._ringMeshes[m]);
+  };
+
+  View.prototype._place = function (mesh, idx, x, y, z, r) {
+    this._v3.set(x, y, z);
+    this._s3.set(r, r, r);
+    this._m4.compose(this._v3, this._q0, this._s3);
+    mesh.setMatrixAt(idx, this._m4);
+  };
+
+  View.prototype._update3D = function () {
+    if (!this._coreMesh) return;
+    var mpp = METERS_PER_PX;
+    var zero = 0;
+    for (var i = 0; i < this.layout.count; i++) {
+      var c = this.layout.cells[i];
+      var x = (M + c.x - this.pxW / 2) * mpp;
+      var y = (this.pxH / 2 - (M + c.y)) * mpp;
+      var o = this.dispOwner[i];
+      var size = this._size[i];
+      var k;
+      if (o === 0 || size <= 0.05) {
+        this._place(this._coreMesh, i, x, y, 0, zero);
+        for (k = 0; k < MAX_RINGS; k++) this._place(this._ringMeshes[k], i, x, y, 0, zero);
+        continue;
+      }
+      var sign = this.sideSign[o] || 1;
+      var coreCss = 5.12 * Math.max(0, size);
+      var col = this.colors[o] || this.colors[0];
+      var zOf = function (rCss) { return sign * STACK_DEPTH * Math.max(0, 1 - rCss / HALO_PX); };
+      // Core (+ the original white burst flash)
+      this._c3.set(col);
+      if (this._flash[i] > 0) this._c3.lerp(this._w3, 0.55 * this._flash[i]);
+      this._coreMesh.setColorAt(i, this._c3);
+      this._place(this._coreMesh, i, x, y, zOf(coreCss) + sign * 0.0006, coreCss * mpp);
+      var rings = RINGS[this.dispStage[i]] || [];
+      var used = [false, false, false, false];
+      this._c3.set(col);
+      for (k = 0; k < rings.length; k++) {
+        var lvl = Math.max(0, Math.min(MAX_RINGS - 1, Math.round(rings[k][1] * 10) - 1)); // alpha layer
+        var rCss = coreCss + rings[k][0];
+        used[lvl] = true;
+        this._ringMeshes[lvl].setColorAt(i, this._c3);
+        this._place(this._ringMeshes[lvl], i, x, y, zOf(rCss), rCss * mpp);
+      }
+      for (k = 0; k < MAX_RINGS; k++) if (!used[k]) this._place(this._ringMeshes[k], i, x, y, 0, zero);
+    }
+    this._coreMesh.instanceMatrix.needsUpdate = true;
+    if (this._coreMesh.instanceColor) this._coreMesh.instanceColor.needsUpdate = true;
+    for (k = 0; k < MAX_RINGS; k++) {
+      this._ringMeshes[k].instanceMatrix.needsUpdate = true;
+      if (this._ringMeshes[k].instanceColor) this._ringMeshes[k].instanceColor.needsUpdate = true;
+    }
   };
 
   View.prototype.dispose = function () {
@@ -349,25 +457,9 @@
         }
         continue;
       }
+      // Owned dots are 3D stacks now (_update3D); the canvas only keeps the hover ring
       var col = this.colors[o] || this.colors[0];
       var core = 64 * 0.16 * Math.max(0, size) / 2 * K * scale;
-      var rings = RINGS[this.dispStage[i]] || [];
-      for (var k = 0; k < rings.length; k++) {
-        ctx.beginPath();
-        ctx.arc(pp.x, pp.y, core + rings[k][0] * K * scale, 0, Math.PI * 2);
-        ctx.fillStyle = rgba(col, rings[k][1]);
-        ctx.fill();
-      }
-      ctx.beginPath();
-      ctx.arc(pp.x, pp.y, core, 0, Math.PI * 2);
-      ctx.fillStyle = col;
-      ctx.fill();
-      if (this._flash[i] > 0) {
-        ctx.beginPath();
-        ctx.arc(pp.x, pp.y, core, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,255,255,' + (0.55 * this._flash[i]) + ')';
-        ctx.fill();
-      }
       if (hovered) {
         ctx.beginPath(); ctx.arc(pp.x, pp.y, Math.max(core + 6 * K, 26 * K), 0, Math.PI * 2);
         ctx.strokeStyle = rgba(col, 0.6); ctx.lineWidth = 2 * K; ctx.stroke();
@@ -410,6 +502,7 @@
     this._fx = keep2;
     this.tex.needsUpdate = true;
     this._dirty = false;
+    this._update3D();
   };
 
   // ── Picking ───────────────────────────────────────────────────────────

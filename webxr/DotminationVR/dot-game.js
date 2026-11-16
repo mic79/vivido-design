@@ -21,8 +21,8 @@
   var BOARD_Y = 1.38;
   var SEAT_Z = 0.62;
   var BOT_DELAY_MS = 1000;         // original: gsap.delayedCall(1, getBotMove)
-  var POKE_IN = 0.022;   // fingertip within 2.2 cm of the board = tap (VR poke)
-  var POKE_OUT = 0.05;   // must pull back past 5 cm before the next poke
+  var POKE_IN = 0.03;    // fingertip within 3 cm of the glass = tap (stacks stand out up to 5.5 cm)
+  var POKE_OUT = 0.07;   // pull back past 7 cm (clear of the stacks) before the next poke
   var TURN_MS = 25000;             // PvP only: your own client moves for you after this
   var MOVE_CAP = 600;              // safety net only (original has none): higher score wins
   var PROGRESS_KEY = 'dotminationvr-progress';
@@ -690,6 +690,77 @@
           var p = hit[id];
           var show = p && p.board === b && b === mine && b.state.canTap(this._localSide(), p.index);
           b.view.setHover(slots[id], show ? p.index : -1);
+        }
+      }
+      this._updateLasers(presenting, mine, hit);
+    },
+
+    /**
+     * VR laser pointers (both hands) toward the board while you play. The menu draws its own
+     * line while open, so ours hides then. Brightens when it points at a dot you can take.
+     */
+    _updateLasers: function (presenting, mine, hit) {
+      if (!this._sceneRoot) return;
+      if (!this._lasers) {
+        this._lasers = {};
+        var beamGeo = new THREE.CylinderGeometry(0.0011, 0.0011, 1, 6, 1, true);
+        beamGeo.translate(0, 0.5, 0); // base at the controller, grows along +Y
+        var dotGeo = new THREE.SphereGeometry(0.006, 12, 8);
+        var self = this;
+        ['leftHand', 'rightHand'].forEach(function (id) {
+          var beam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({
+            color: 0xffffff, transparent: true, opacity: 0.4, depthWrite: false, toneMapped: false
+          }));
+          var dot = new THREE.Mesh(dotGeo, new THREE.MeshBasicMaterial({
+            color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false
+          }));
+          beam.renderOrder = 12;
+          dot.renderOrder = 13;
+          beam.visible = dot.visible = false;
+          self._sceneRoot.add(beam);
+          self._sceneRoot.add(dot);
+          self._lasers[id] = { beam: beam, dot: dot };
+        });
+        this._laserUp = new THREE.Vector3(0, 1, 0);
+      }
+      var side = this._mySeatSide();
+      var active = presenting && this.matchActive && !!side && !this._dualBotPreview && !global.replayActive;
+      var board = this.boards.shared;
+      var col = side ? this._sideColorCss(side) : '#ffffff';
+      for (var id in this._lasers) {
+        var L = this._lasers[id];
+        var hand = document.getElementById(id);
+        var rc = hand && hand.components && hand.components.raycaster;
+        var menuLaser = !!(rc && rc.data && rc.data.enabled && rc.data.showLine);
+        var r = active && !menuLaser ? this._handRay(hand) : null;
+        if (!r || !board) { L.beam.visible = L.dot.visible = false; continue; }
+        // Length: to the board plane if the ray crosses it within the board, else 1.2 m
+        var len = 1.2, onBoard = false;
+        var bz = board.view.root.position.z;
+        if (Math.abs(r.dir.z) > 1e-4) {
+          var t = (bz - r.origin.z) / r.dir.z;
+          if (t > 0 && t < 4) {
+            var hx = r.origin.x + r.dir.x * t - board.view.root.position.x;
+            var hy = r.origin.y + r.dir.y * t - board.view.root.position.y;
+            if (Math.abs(hx) <= board.view.width / 2 && Math.abs(hy) <= board.view.height / 2) {
+              len = t;
+              onBoard = true;
+            }
+          }
+        }
+        var p = hit && hit[id];
+        var canTake = !!(mine && p && p.board === mine && mine.state.canTap(side, p.index));
+        L.beam.material.color.set(col);
+        L.beam.material.opacity = canTake ? 0.85 : (mine ? 0.45 : 0.2);
+        L.beam.position.copy(r.origin);
+        L.beam.quaternion.setFromUnitVectors(this._laserUp, r.dir);
+        L.beam.scale.set(1, len, 1);
+        L.beam.visible = true;
+        L.dot.visible = onBoard;
+        if (onBoard) {
+          L.dot.material.color.set(canTake ? '#ffffff' : col);
+          L.dot.position.copy(r.origin).addScaledVector(r.dir, len);
+          L.dot.scale.setScalar(canTake ? 1.3 : 0.8);
         }
       }
     },
@@ -1991,6 +2062,9 @@
         })
       );
       plate.position.z = -0.02;
+      // Draw after the dark glass (2) and the dot stacks (3-4); otherwise the glass,
+      // drawn on top at 80% opacity, made the card nearly invisible
+      plate.renderOrder = 10;
       root.add(plate);
       this._victory.plate = plate;
 
@@ -2002,6 +2076,7 @@
         })
       );
       rim.position.z = -0.03;
+      rim.renderOrder = 9;
       root.add(rim);
       this._victory.rim = rim;
 
@@ -2032,6 +2107,7 @@
           map: tex, transparent: true, depthWrite: false, toneMapped: false, side: THREE.DoubleSide
         })
       );
+      titleMesh.renderOrder = 11;
       root.add(titleMesh);
       this._victory.titleMesh = titleMesh;
       this._victory.titleTex = tex;
