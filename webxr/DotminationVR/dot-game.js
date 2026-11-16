@@ -21,6 +21,8 @@
   var BOARD_Y = 1.38;
   var SEAT_Z = 0.62;
   var BOT_DELAY_MS = 1000;         // original: gsap.delayedCall(1, getBotMove)
+  var POKE_IN = 0.022;   // fingertip within 2.2 cm of the board = tap (VR poke)
+  var POKE_OUT = 0.05;   // must pull back past 5 cm before the next poke
   var TURN_MS = 25000;             // PvP only: your own client moves for you after this
   var MOVE_CAP = 600;              // safety net only (original has none): higher score wins
   var PROGRESS_KEY = 'dotminationvr-progress';
