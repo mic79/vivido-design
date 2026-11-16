@@ -29,22 +29,21 @@
   </script>
 
   <!-- Dotmination rules + view, AI -->
-  <script src="dot-rules.js?v=2"></script>
-  <script src="dot-board.js?v=2"></script>
-  <script src="dot-bot.js?v=2"></script>
+  <script src="dot-rules.js?v=6"></script>
+  <script src="dot-board.js?v=6"></script>
+  <script src="dot-bot.js?v=6"></script>
   <!-- Shared with StacksVR (copied; only namespacing/labels changed) -->
-  <script src="attack.js?v=2"></script>
-  <script src="stats.js?v=2"></script>
-  <script src="modes.js?v=2"></script>
-  <script src="lobby.js?v=2"></script>
-  <script src="match-replay.js?v=2"></script>
-  <script src="stacks-audio.js?v=2"></script>
-  <script src="game-menu.js?v=2"></script>
-  <script src="mixamo-body.js?v=2"></script>
-  <script src="locomotion.js?v=2"></script>
+    <script src="stats.js?v=6"></script>
+  <script src="modes.js?v=6"></script>
+  <script src="lobby.js?v=6"></script>
+  <script src="match-replay.js?v=6"></script>
+  <script src="stacks-audio.js?v=6"></script>
+  <script src="game-menu.js?v=6"></script>
+  <script src="mixamo-body.js?v=6"></script>
+  <script src="locomotion.js?v=6"></script>
   <!-- Match component (StacksVR stacks-game.js structure, Dotmination gameplay) -->
-  <script src="dot-game.js?v=2"></script>
-  <script src="mobile-spectator.js?v=2"></script>
+  <script src="dot-game.js?v=6"></script>
+  <script src="mobile-spectator.js?v=6"></script>
 
     <style>
     html, body { margin: 0; height: 100%; background: #111; font-family: sans-serif; }
@@ -190,8 +189,8 @@
       font-size: 0.5em; font-weight: normal;
       max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
-      #mobile-hud-scores .blue-side { color: #4499ff; text-align: right; }
-      #mobile-hud-scores .red-side { color: #ff4444; text-align: left; }
+      #mobile-hud-scores .blue-side { color: #E11168; text-align: right; }
+      #mobile-hud-scores .red-side { color: #12DACE; text-align: left; }
       #mobile-hud-scores .score-sep { color: #888; font-size: 0.8em; }
       #mobile-hud-timer {
       position: absolute; top: 52px; left: 0; right: 0;
@@ -412,14 +411,14 @@
       <div id="mobile-match-hud">
         <div id="mobile-hud-top">
           <div id="mobile-hud-scores">
-            <span class="red-side">
-              <span class="red-name" id="mobile-red-name">Red</span>
-              <span id="mobile-red-score">0</span>
+            <span class="blue-side">
+              <span class="blue-name" id="mobile-blue-name">Pink</span>
+              <span id="mobile-blue-score">0</span>
             </span>
             <span class="score-sep">&ndash;</span>
-            <span class="blue-side">
-              <span id="mobile-blue-score">0</span>
-              <span class="blue-name" id="mobile-blue-name">Blue</span>
+            <span class="red-side">
+              <span id="mobile-red-score">0</span>
+              <span class="red-name" id="mobile-red-name">Teal</span>
             </span>
           </div>
         </div>
@@ -457,14 +456,11 @@
     <!-- Discreet build stamp (DodgeVR-style) — kept in sync from STACKS_VERSION -->
     <a-entity id="version-display" position="0 2.42 0"
       text="value: v0.2.46; align: center; width: 0.85; color: #5a6878"></a-entity>
-    <a-entity id="score-display" position="0 2.2 0">
-      <a-entity id="blue-score" position="-0.16 0 0"
-        text="value: 0; align: center; width: 1.35; color: #66ccff"></a-entity>
-      <a-entity position="0 0 0"
-        text="value: ·; align: center; width: 1.1; color: #667788"></a-entity>
-      <a-entity id="red-score" position="0.16 0 0"
-        text="value: 0; align: center; width: 1.35; color: #ff8866"></a-entity>
-      </a-entity>
+    <!-- Scores live on the board label (original layout); StacksVR head-high scoreboard kept hidden -->
+    <a-entity id="score-display" visible="false">
+      <a-entity id="blue-score"></a-entity>
+      <a-entity id="red-score"></a-entity>
+    </a-entity>
     <a-entity id="timer-display" visible="false"></a-entity>
     <a-entity id="control-hint" position="0 0.82 0.02"
       text="value: ; align: center; width: 1.0; color: #8899aa; side: double"></a-entity>
@@ -480,9 +476,9 @@
     <a-entity id="hud-cup-red" visible="false"></a-entity>
     <!-- Player nicknames above each cup (DodgeVR-style) -->
     <a-entity id="hud-name-blue" visible="false" position="-0.65 2.08 1.25"
-      text="value: ; align: center; width: 1.6; color: #66ccff; side: double"></a-entity>
-    <a-entity id="hud-name-red" visible="false" position="0.65 2.08 -1.25" rotation="0 180 0"
-      text="value: ; align: center; width: 1.6; color: #ff8866; side: double"></a-entity>
+      text="value: ; align: center; width: 1.6; color: #E11168"></a-entity>
+    <a-entity id="hud-name-red" visible="false" position="0.65 2.08 -1.25"
+      text="value: ; align: center; width: 1.6; color: #12DACE"></a-entity>
     <a-entity id="hud-time-blue" visible="false"></a-entity>
     <a-entity id="hud-time-red" visible="false"></a-entity>
     <a-entity id="hud-atk-blue" visible="false"></a-entity>
@@ -540,12 +536,6 @@
                 <a-text id="menu-board-6-text" value="HARD" align="center" width="0.28" color="#ffffff" position="0 0 0.004"></a-text>
               </a-entity>
             </a-entity>
-            <!-- Mode: DUEL (turn-based) / LIVE (original Real-Time) / RUSH (own boards). Host-synced. -->
-            <a-entity class="menu-btn clickable" data-action="toggle-dot-mode" id="menu-dot-mode-toggle" position="0.105 0.255 0.002"
-              geometry="primitive: box; width: 0.10; height: 0.045; depth: 0.008"
-              material="color: #1e6ad4; shader: flat">
-              <a-text id="menu-dot-mode-text" value="DUEL" align="center" width="0.26" color="#ffffff" position="0 0 0.006"></a-text>
-            </a-entity>
             <a-entity class="menu-btn clickable" data-action="toggle-music" id="menu-music-toggle" position="0.22 0.255 0.002"
               geometry="primitive: box; width: 0.11; height: 0.045; depth: 0.008"
               material="color: #1f9d45; shader: flat">
@@ -578,41 +568,33 @@
 
             <a-entity id="menu-single-section" position="0 0.02 0.002">
               <a-text value="SOLO" position="-0.28 0.055 0" align="left" width="0.28" color="#33bbff"></a-text>
-              <a-text value="Levels 1-200 vs bot (phone maps)" position="-0.28 0.01 0"
+              <a-text value="Levels 1-200 vs bot - same maps as the app" position="-0.28 0.01 0"
                 align="left" width="0.42" color="#8a9bb0"></a-text>
-              <!-- Bot moves/min (0 = frozen). DUEL: think time · RUSH: pace -->
-              <a-entity id="menu-bot-speed" position="0 -0.045 0">
-                <a-text value="BOT SPEED" position="-0.28 0.012 0" align="left" width="0.30" color="#8a9bb0"></a-text>
-                <a-text id="menu-bot-speed-text" value="12/min" position="0.28 0.012 0" align="right" width="0.32" color="#e8f4ff"></a-text>
-                <a-entity class="menu-btn clickable" data-action="bot-speed-minus" id="menu-bot-speed-minus" position="-0.22 -0.028 0"
-                  geometry="primitive: box; width: 0.05; height: 0.04; depth: 0.008"
+              <!-- Original Levels 1-200 (phone maps). R = Random map vs NORM/HARD bot. -->
+              <a-entity id="menu-level" position="0 -0.045 0">
+                <a-entity class="menu-btn clickable" data-action="level-minus" id="menu-level-minus" position="-0.22 -0.01 0"
+                  geometry="primitive: box; width: 0.06; height: 0.05; depth: 0.008"
                   material="color: #243044; shader: flat">
-                  <a-text value="-" align="center" width="0.35" color="#ffffff" position="0 0 0.006"></a-text>
+                  <a-text value="-" align="center" width="0.4" color="#ffffff" position="0 0 0.006"></a-text>
                 </a-entity>
-                <a-entity id="menu-bot-speed-track" position="0.02 -0.028 0"
-                  geometry="primitive: box; width: 0.34; height: 0.016; depth: 0.004"
-                  material="color: #1a2433; shader: flat">
-                  <a-entity id="menu-bot-speed-fill" position="-0.085 0 0.002"
-                    geometry="primitive: box; width: 0.17; height: 0.016; depth: 0.005"
-                    material="color: #1e6ad4; shader: flat"></a-entity>
-                  <a-entity id="menu-bot-speed-knob" position="0 0 0.004"
-                    geometry="primitive: box; width: 0.028; height: 0.028; depth: 0.008"
-                    material="color: #e8f4ff; shader: flat"></a-entity>
-                </a-entity>
-                <a-entity class="menu-btn clickable" data-action="bot-speed-plus" id="menu-bot-speed-plus" position="0.26 -0.028 0"
-                  geometry="primitive: box; width: 0.05; height: 0.04; depth: 0.008"
+                <a-text id="menu-level-text" value="Level 1 / 1" position="0.02 0.004 0" align="center" width="0.40" color="#e8f4ff"></a-text>
+                <a-text id="menu-level-best" value="" position="0.02 -0.032 0" align="center" width="0.30" color="#8a9bb0"></a-text>
+                <a-entity class="menu-btn clickable" data-action="level-plus" id="menu-level-plus" position="0.26 -0.01 0"
+                  geometry="primitive: box; width: 0.06; height: 0.05; depth: 0.008"
                   material="color: #243044; shader: flat">
-                  <a-text value="+" align="center" width="0.35" color="#ffffff" position="0 0 0.006"></a-text>
+                  <a-text value="+" align="center" width="0.4" color="#ffffff" position="0 0 0.006"></a-text>
                 </a-entity>
-                <!-- Hit target on the track for coarse clicks -->
-                <a-entity class="menu-btn clickable" data-action="bot-speed-track" id="menu-bot-speed-hit" position="0.02 -0.028 0.006"
-                  geometry="primitive: box; width: 0.34; height: 0.04; depth: 0.002"
-                  material="color: #152032; opacity: 0.01; transparent: true; shader: flat"></a-entity>
               </a-entity>
             </a-entity>
 
             <a-entity id="menu-lobby-section" visible="false" position="0 0.05 0.002">
               <a-text value="LOBBY" position="-0.28 0.048 0" align="left" width="0.28" color="#33bbff"></a-text>
+              <!-- Original multiplayer start: BLANK (default) / HALF(-filled). Host sets it. -->
+              <a-entity class="menu-btn clickable" data-action="toggle-start-type" id="menu-start-type-toggle" position="0.25 0.052 0"
+                geometry="primitive: box; width: 0.17; height: 0.03; depth: 0.008"
+                material="color: #1e6ad4; shader: flat">
+                <a-text id="menu-start-type-text" value="START: BLANK" align="center" width="0.30" color="#ffffff" position="0 0 0.006"></a-text>
+              </a-entity>
               <a-entity class="menu-btn clickable" data-action="lobby-minus" position="-0.02 0.01 0"
                 geometry="primitive: box; width: 0.055; height: 0.05; depth: 0.008"
                 material="color: #243044; shader: flat">
@@ -638,7 +620,7 @@
             <a-entity id="menu-queue-panel" visible="false" position="0 -0.06 0.002">
               <a-text id="menu-queue-title" value="QUEUE" position="-0.28 0.072 0"
                 align="left" width="0.28" color="#33bbff"></a-text>
-              <a-text id="menu-queue-hint" value="Join to play · host starts" position="0.28 0.072 0"
+              <a-text id="menu-queue-hint" value="Join to play - host starts" position="0.28 0.072 0"
                 align="right" width="0.38" color="#667788"></a-text>
 
               <a-entity id="menu-q-slot-0" position="-0.15 0.02 0">
@@ -748,7 +730,7 @@
               material="color: #ff8a1a; shader: flat">
               <a-text id="menu-start-match-text" value="START vs BOT" align="center" width="0.48" color="#ffffff" position="0 0 0.007"></a-text>
             </a-entity>
-            <a-text value="X close  ·  right laser select" position="0 -0.29 0.002" align="center" width="0.42" color="#4a5a6a"></a-text>
+            <a-text value="X close  |  right laser select" position="0 -0.29 0.002" align="center" width="0.42" color="#4a5a6a"></a-text>
           </a-entity>
           </a-entity>
           <a-entity id="rightHand" 
@@ -760,15 +742,15 @@
       </a-entity>
 
     <a-entity id="player-body"
-      mixamo-body="mode: player; color: #4A90E2; modelPath: assets/YBot.fbx"></a-entity>
+      mixamo-body="mode: player; color: #E11168; modelPath: assets/YBot.fbx"></a-entity>
 
     <!-- Bot avatar anchor = red seat (dot-game repositions per DUEL/RUSH layout) -->
     <a-entity id="cup-bot" position="0 1.45 -0.7"></a-entity>
     <a-entity id="spec-blue-anchor" position="0 1.6 0.62"></a-entity>
     <a-entity id="bot-body" position="0 0 -0.7" rotation="0 180 0"
-      mixamo-body="mode: bot; color: #E25A4A; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
+      mixamo-body="mode: bot; color: #12DACE; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
     <a-entity id="spec-blue-body" visible="false"
-      mixamo-body="mode: bot; color: #4A90E2; modelPath: assets/YBot.fbx; botEntitySelector: #spec-blue-anchor"></a-entity>
+      mixamo-body="mode: bot; color: #E11168; modelPath: assets/YBot.fbx; botEntitySelector: #spec-blue-anchor; facing: -z; reactionKey: botReactionTargetBlue"></a-entity>
     <!-- Lobby / spectator remotes — always stream poses so joiners see who is already here -->
     <a-entity id="remote-body-0" visible="false"
       mixamo-body="mode: bot; color: #6BCB77; modelPath: assets/YBot.fbx"></a-entity>

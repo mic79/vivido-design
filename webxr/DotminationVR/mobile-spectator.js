@@ -104,13 +104,36 @@
       if (comp.cups.blue && comp.cups.blue.pivot) comp.cups.blue.pivot.visible = true;
       if (comp.cups.red && comp.cups.red.pivot) comp.cups.red.pivot.visible = true;
     }
-    var scoreDisplay = document.getElementById('score-display');
-    if (scoreDisplay && scoreDisplay.object3D) scoreDisplay.object3D.visible = true;
     var pb = document.getElementById('player-body');
     if (pb && pb.object3D) pb.object3D.visible = false;
   }
 
+  function dotComp() {
+    var gm = document.querySelector('[dot-game]');
+    return gm && gm.components && gm.components['dot-game'];
+  }
+
+  /** Names + colours follow the board (Pink/Teal or the current palette), not StacksVR red/blue. */
+  function paintHudSides() {
+    var comp = dotComp();
+    if (!comp || !comp._sideColorCss) return;
+    var b = document.querySelector('#mobile-hud-scores .blue-side');
+    var r = document.querySelector('#mobile-hud-scores .red-side');
+    if (b) b.style.color = comp._sideColorCss('blue');
+    if (r) r.style.color = comp._sideColorCss('red');
+    var bn = document.getElementById('mobile-blue-name');
+    var rn = document.getElementById('mobile-red-name');
+    if (comp._dualBotPreview) {
+      if (bn) bn.textContent = comp._sideColorName('blue') + ' Bot';
+      if (rn) rn.textContent = comp._sideColorName('red') + ' Bot';
+    } else if (comp._sideNickname && (comp.matchActive || (global.lobbyState && global.lobbyState.matchPlayers))) {
+      if (bn) bn.textContent = comp._sideNickname('blue');
+      if (rn) rn.textContent = comp._sideNickname('red');
+    }
+  }
+
   function updateMobileHudNames() {
+    if (dotComp()) { paintHudSides(); return; }
     var ls = global.lobbyState;
     if (!ls || !ls.matchPlayers) return;
     var mp = ls.matchPlayers;
@@ -173,10 +196,7 @@
     if (bEl) bEl.textContent = String(blue);
     if (rEl) rEl.textContent = String(red);
 
-    var scoreDisplay = document.getElementById('score-display');
-    if (scoreDisplay) {
-      scoreDisplay.setAttribute('text', 'value', 'BLUE ' + blue + '  |  RED ' + red);
-    }
+    paintHudSides();
 
     var timerEl = document.getElementById('mobile-hud-timer');
     if (timerEl && ls && isMatchPlaying(ls) && ls.matchStartTime) {
@@ -296,10 +316,6 @@
     showMatchHud(_desktopSpectate || !isMobileDevice()
       ? 'Offline Preview — drag to orbit'
       : 'Offline Preview — swipe to orbit camera');
-    var redName = document.getElementById('mobile-red-name');
-    var blueName = document.getElementById('mobile-blue-name');
-    if (redName) redName.textContent = 'Red Bot';
-    if (blueName) blueName.textContent = 'Blue Bot';
     requestWakeLock();
 
     var gm = document.querySelector('[dot-game]');
@@ -597,11 +613,12 @@
       init: function () {
         // Do NOT early-return forever — flag may be set in same tick; always allow setup
         var self = this;
-        // Face-to-face cups span ~±0.85m; orbit a bit wider than old side-by-side
-        this._orbitRadius = 3.8;
-        this._orbitHeight = 2.15;
-        this._orbitAngle = Math.PI / 2;
-        this._orbitTargetAngle = Math.PI / 2;
+        // One upright board between two players: start at a 3/4 view from the pink seat
+        // (90° would look at the board edge-on), close enough to read the dots.
+        this._orbitRadius = 3.3;
+        this._orbitHeight = 2.3;
+        this._orbitAngle = Math.PI / 4;
+        this._orbitTargetAngle = Math.PI / 4;
         this._touchStartX = 0;
         this._touchStartAngle = 0;
         this._isTouching = false;
@@ -646,7 +663,7 @@
           );
         }
         if (this._rigEl) {
-          this._rigEl.object3D.rotation.set(-0.28, this._orbitAngle, 0);
+          this._rigEl.object3D.rotation.set(-0.24, this._orbitAngle, 0);
         }
 
         var lh = document.getElementById('leftHand');
@@ -728,7 +745,7 @@
           this._orbitRadius * Math.cos(this._orbitAngle)
         );
         if (this._rigEl) {
-          this._rigEl.object3D.rotation.set(-0.28, this._orbitAngle, 0);
+          this._rigEl.object3D.rotation.set(-0.24, this._orbitAngle, 0);
         }
       }
     });

@@ -1,6 +1,7 @@
 // game-menu.js — VR menu, lobby queue, stats & replay browser (copied from StacksVR).
 // DotminationVR: seats come from dot-game.seatPose(), board toggle = S/L hex,
-// board toggle = original Normal/Harder bot, IDLE toggle = mode DUEL/LIVE/RUSH (lobby dotMode).
+// board toggle = original Normal/Harder bot, IDLE toggle = multiplayer start BLANK/HALF
+// (lobby startType), BOT BPM slider = Level selector (original Levels, R = Random map).
 (function () {
   'use strict';
 
@@ -292,7 +293,7 @@
       this.el.sceneEl.addEventListener('xbuttondown', onMenuButton);
       this.el.sceneEl.addEventListener('lobby-state-updated', function () { self.refreshLobbyUI(); });
       this.el.sceneEl.addEventListener('board-size-changed', function () { self._setBoardButton(); });
-      this.el.sceneEl.addEventListener('dot-mode-changed', function () { self._setDotModeButton(); });
+      this.el.sceneEl.addEventListener('start-type-changed', function () { self._setStartTypeButton(); });
       // Visuals follow PASS preference (AR session + opaque shell = VR look)
       this.el.sceneEl.addEventListener('enter-vr', function () {
         applyPassthroughVisuals(!!(window.StacksPassthrough && window.StacksPassthrough.enabled));
@@ -797,8 +798,8 @@
         case 'replay-latest':
           this._playLatestReplay();
           break;
-        case 'toggle-dot-mode':
-          this._toggleDotMode();
+        case 'toggle-start-type':
+          this._toggleStartType();
           break;
         case 'toggle-music':
           if (window.StacksAudio && typeof window.StacksAudio.toggleMusic === 'function') {
@@ -828,15 +829,21 @@
         case 'board-6':
           this._setBoardSizeChoice(6);
           break;
-        case 'bot-speed-minus':
-          this._nudgeBotBpm(-1);
+        case 'level-minus':
+        case 'level-plus': {
+          var gl = document.querySelector('[dot-game]');
+          var cl = gl && gl.components && gl.components['dot-game'];
+          if (cl && cl.setLevel) cl.setLevel(cl.level + (action === 'level-plus' ? 1 : -1));
+          this._setLevelUI();
+          pulseHaptic(this._leftHandEl || document.getElementById('leftHand'), 0.35, 30);
           break;
-        case 'bot-speed-plus':
-          this._nudgeBotBpm(1);
+        }
+        case 'cycle-colors': {
+          var gc = document.querySelector('[dot-game]');
+          var cc = gc && gc.components && gc.components['dot-game'];
+          if (cc && cc.cycleColors) cc.cycleColors();
           break;
-        case 'bot-speed-track':
-          this._nudgeBotBpm(1);
-          break;
+        }
         case 'noop':
           break;
         default:
@@ -862,6 +869,21 @@
       } else if (comp && typeof comp.setBotSpeedScale === 'function') {
         // legacy hook
         comp.setBotSpeedScale(bpm);
+      }
+    },
+
+    /** SOLO level picker: R (Random map) · 1 … highest unlocked level. */
+    _setLevelUI: function () {
+      var gl = document.querySelector('[dot-game]');
+      var cl = gl && gl.components && gl.components['dot-game'];
+      var info = cl && cl.levelInfo ? cl.levelInfo() : { level: 1, max: 1, best: null };
+      var txt = document.getElementById('menu-level-text');
+      if (txt) txt.setAttribute('value', info.level > 0 ? ('Level ' + info.level + ' / ' + info.max) : 'Random map');
+      var best = document.getElementById('menu-level-best');
+      if (best) {
+        best.setAttribute('value', info.level > 0
+          ? (info.best ? 'Best ' + info.best : 'Not cleared yet')
+          : 'Bot: NORM / HARD (top left)');
       }
     },
 
@@ -958,36 +980,35 @@
       });
     },
 
-    /** Game mode: 'duel' | 'realtime' | 'rush' (button cycles). */
-    _dotModeOn: function () {
-      if (typeof window.getDotMode === 'function') return window.getDotMode();
-      if (window.lobbyState && window.lobbyState.dotMode != null) return window.lobbyState.dotMode;
-      return 'duel';
+    /** Original multiplayer start type: 'blank' | 'half' (host-synced). */
+    _startTypeOn: function () {
+      if (typeof window.getStartType === 'function') return window.getStartType();
+      if (window.lobbyState && window.lobbyState.startType != null) return window.lobbyState.startType;
+      return 'blank';
     },
 
-    _toggleDotMode: function () {
-      var order = ['duel', 'realtime', 'rush'];
-      var next = order[(order.indexOf(this._dotModeOn()) + 1) % order.length];
-      if (window.requestDotMode) window.requestDotMode(next);
-      else if (window.setDotMode) window.setDotMode(next);
-      else if (window.lobbyState) window.lobbyState.dotMode = next;
-      this._setDotModeButton();
+    _toggleStartType: function () {
+      var next = this._startTypeOn() === 'half' ? 'blank' : 'half';
+      if (window.requestStartType) window.requestStartType(next);
+      else if (window.setStartType) window.setStartType(next);
+      else if (window.lobbyState) window.lobbyState.startType = next;
+      this._setStartTypeButton();
       pulseHaptic(this._leftHandEl || document.getElementById('leftHand'), 0.35, 30);
     },
 
-    _setDotModeButton: function () {
-      var btn = document.getElementById('menu-dot-mode-toggle');
-      var txt = document.getElementById('menu-dot-mode-text');
+    _setStartTypeButton: function () {
+      var btn = document.getElementById('menu-start-type-toggle');
+      var txt = document.getElementById('menu-start-type-text');
       if (!btn) return;
-      var on = this._dotModeOn();
+      var on = this._startTypeOn();
       var canEdit = !window.isMultiplayer || !!window.isHost ||
         !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
-      var color = !canEdit ? '#555555' : (on === 'rush' ? '#8a3fd1' : (on === 'realtime' ? '#c45a12' : '#1e6ad4'));
+      var color = !canEdit ? '#555555' : (on === 'half' ? '#8a3fd1' : '#1e6ad4');
       btn.setAttribute('material', 'color', color);
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
       if (txt) {
-        txt.setAttribute('value', on === 'rush' ? 'RUSH' : (on === 'realtime' ? 'LIVE' : 'DUEL'));
+        txt.setAttribute('value', on === 'half' ? 'START: HALF' : 'START: BLANK');
         txt.setAttribute('color', '#ffffff');
       }
     },
@@ -1170,7 +1191,7 @@
         if (title) title.setAttribute('value', 'QUEUE  ' + qLen + '/2');
         if (hint) {
           hint.setAttribute('value',
-            qLen >= 2 ? 'Ready · host starts' :
+            qLen >= 2 ? 'Ready | host starts' :
             (qLen === 1 ? '1 more or vs bot' : 'Join to play'));
         }
         for (var i = 0; i < 2; i++) {
@@ -1227,8 +1248,8 @@
       this._setMusicButton();
       this._setPassthroughButton();
       this._setBoardButton();
-      this._setDotModeButton();
-      this._setBotSpeedUI();
+      this._setStartTypeButton();
+      this._setLevelUI();
       if (stats) this._showStats();
 
       var status = document.getElementById('menu-lobby-status');
@@ -1239,7 +1260,7 @@
         if (window.connectionState === 'connecting' && live) {
           msg = live;
         } else if (!window.isMultiplayer) {
-          msg = live || 'Not connected — pick lobby & JOIN';
+          msg = live || 'Not connected - pick lobby & JOIN';
         } else if (!ls) {
           msg = live || 'Connecting...';
         } else {
@@ -1250,8 +1271,8 @@
           }
           var role = window.isHost ? 'HOST' : (window.isMobileSpectator ? 'WATCH' : 'JOINED');
           // One line only — queue names live in the slots below
-          msg = role + ' · ' + vrCount + ' in lobby';
-          if (live && live.indexOf(role) < 0) msg = live + ' · ' + msg;
+          msg = role + ' | ' + vrCount + ' in lobby';
+          if (live && live.indexOf(role) < 0) msg = live + ' | ' + msg;
         }
         status.setAttribute('value', msg);
       }
@@ -1346,7 +1367,7 @@
       }
 
       // Body tint: cup seat color, else default blue for lobby wait
-      this._setLocalBodyColor(isRed ? '#E25A4A' : '#4A90E2');
+      this._setLocalBodyColor(isRed ? '#12DACE' : '#E11168'); // original colours: blue seat = player--2 pink
 
       if (key === this._poseKey) return;
       this._poseKey = key;

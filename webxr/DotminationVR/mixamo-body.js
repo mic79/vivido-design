@@ -38,6 +38,10 @@
           color: { type: 'color', default: '#4A90E2' },
           modelPath: { type: 'string', default: 'assets/YBot.fbx' },
           botEntitySelector: { type: 'string', default: '#cup-bot' },
+          // DotminationVR: a bot can sit on either side of the board ('+z' = StacksVR default)
+          facing: { type: 'string', default: '+z' },
+          // window[reactionKey] = { handTarget, progress } drives this bot's reach
+          reactionKey: { type: 'string', default: 'botReactionTarget' },
           emissiveIntensity: { type: 'number', default: 0.3 },
           rimIntensity: { type: 'number', default: 1.2 },
           rimPower: { type: 'number', default: 2.5 }
@@ -657,14 +661,16 @@
           var isPrimaryBot = id === 'bot-body';
           var isRemotePool = id && String(id).indexOf('remote-body-') === 0;
           var isSeatBody = isPrimaryBot || id === 'spec-blue-body';
+          // DotminationVR: the game marks seat bodies it wants as preview bots (idle + reach)
+          var isPreviewBot = !!(this.el.dataset && this.el.dataset.previewBot === '1');
           // Dual-bot pad preview: no Mixamo seats (would ghost the last human pose)
-          if (isSeatBody && window.offlinePreview) {
+          if (isSeatBody && window.offlinePreview && !isPreviewBot) {
             this.remoteHandData = null;
             if (this.el.object3D) this.el.object3D.visible = false;
             this.el.setAttribute('visible', false);
             return;
           }
-          if (!this.remoteHandData && !isPrimaryBot) return;
+          if (!this.remoteHandData && !isPrimaryBot && !isPreviewBot) return;
           if (isRemotePool && !this.remoteHandData) return;
 
           // --- Multiplayer: use real remote player tracking data ---
@@ -1257,8 +1263,10 @@
           // Head is ~0.3m above the body center
           headPos = new THREE.Vector3(bodyCenter.x, bodyCenter.y + 0.3, bodyCenter.z);
 
-          // Head facing +Z (toward player)
-          headQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+          // Head facing +Z (toward player); facing '-z' turns the whole idle pose around
+          const fs = this.data.facing === '-z' ? -1 : 1;
+          const faceYaw = fs > 0 ? Math.PI : 0;
+          headQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), faceYaw);
 
           // Idle hand animation with subtle sway
           const swayX = Math.sin(this.idleTime * 1.5) * 0.03;
@@ -1269,25 +1277,25 @@
           // Note: positions are mirrored because the model has double rotation
           // (FBX PI + entity PI), so the IK solver's left/right is flipped
           leftHandPos = new THREE.Vector3(
-            bodyCenter.x + 0.3 - swayX,
+            bodyCenter.x + fs * (0.3 - swayX),
             bodyCenter.y - 0.2 + swayY,
-            bodyCenter.z + 0.25 + swayZ
+            bodyCenter.z + fs * (0.25 + swayZ)
           );
           rightHandPos = new THREE.Vector3(
-            bodyCenter.x - 0.3 + swayX,
+            bodyCenter.x + fs * (-0.3 + swayX),
             bodyCenter.y - 0.2 + swayY,
-            bodyCenter.z + 0.25 - swayZ
+            bodyCenter.z + fs * (0.25 - swayZ)
           );
 
           // Hand orientations (palms facing inward)
-          leftHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
-          rightHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
+          leftHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, faceYaw, 0));
+          rightHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, faceYaw, 0));
 
-          var rt = window.botReactionTarget;
+          var rt = window[this.data.reactionKey];
           if (rt && rt.handTarget && rt.progress > 0) {
             var ht = rt.handTarget;
             var p = rt.progress;
-            if (ht.x >= bodyCenter.x) {
+            if ((ht.x - bodyCenter.x) * fs >= 0) {
               leftHandPos.lerp(new THREE.Vector3(ht.x, ht.y, ht.z), p);
             } else {
               rightHandPos.lerp(new THREE.Vector3(ht.x, ht.y, ht.z), p);
@@ -1304,8 +1312,8 @@
           if (!this.previousHeadPosInitialized) this.previousHeadPosInitialized = true;
           this.previousHeadPos.copy(headPos);
 
-          // Torso faces +Z (toward player)
-          const targetRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+          // Torso faces +Z (toward player), or -Z for a bot on the other side
+          const targetRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), faceYaw);
           this.torsoRotation.slerp(targetRotation, this.smoothingFactor);
 
           // Position body so chest (model local y~1.25) aligns with bot entity center

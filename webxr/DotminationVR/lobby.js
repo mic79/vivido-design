@@ -1,7 +1,8 @@
 // lobby.js — PeerJS lobby / queue / bot-slot / spectator shell.
 // Copied from StacksVR (DodgeVR model). DotminationVR changes: peer ids/storage keys
-// prefixed dotminationvr-, idle-junk toggle repurposed as game mode (dotMode: duel |
-// realtime | rush), board-size slot repurposed as bot difficulty (4 Normal, 6 Harder), seed.
+// prefixed dotminationvr-, idle-junk toggle repurposed as the original multiplayer start type
+// (startType: 'blank' | 'half'), board-size slot = bot difficulty (4 Normal, 6 Harder),
+// board seed, and matchNo so the starting player alternates every match (original rematch).
 (function (global) {
   'use strict';
 
@@ -33,16 +34,15 @@
   // Survives lobby teardown so offline 4×4 choice carries into a new host session
   // DotminationVR: board-size slot = bot difficulty. 4 = Normal (original default), 6 = Harder
   var preferredBoardSize = 4;
-  // DotminationVR mode: false = DUEL (one shared vertical board), true = RUSH (own board each).
-  // Default DUEL; host-authored + synced (same plumbing as StacksVR's idle-junk toggle).
-  var preferredDotMode = 'duel';
-  function normalizeDotMode(m) {
-    if (m === true) return 'rush';
-    return m === 'realtime' || m === 'rush' ? m : 'duel';
+  // Original multiplayer start: 'blank' (default) or 'half' (half-filled). Host-authored + synced
+  // (same plumbing as StacksVR's idle-junk toggle).
+  var preferredStartType = 'blank';
+  function normalizeStartType(m) {
+    return m === 'half' ? 'half' : 'blank';
   }
   try {
-    var storedSplit = global.localStorage && global.localStorage.getItem('dotminationvr-dot-mode');
-    if (storedSplit) preferredDotMode = normalizeDotMode(storedSplit);
+    var storedSplit = global.localStorage && global.localStorage.getItem('dotminationvr-start-type');
+    if (storedSplit) preferredStartType = normalizeStartType(storedSplit);
   } catch (e) { /* ignore */ }
 
   function createLobbyState() {
@@ -59,7 +59,7 @@
       // Playfield XZ size — 6 (classic) or 4 (compact). Host-authored; synced to all.
       boardSize: normalizeBoardSize(preferredBoardSize),
       // DUEL (false) / RUSH (true). Host-authored; synced to all.
-      dotMode: normalizeDotMode(preferredDotMode)
+      startType: normalizeStartType(preferredStartType)
     };
   }
 
@@ -106,40 +106,40 @@
     return false;
   }
 
-  function setDotMode(on) {
-    on = normalizeDotMode(on);
+  function setStartType(on) {
+    on = normalizeStartType(on);
     if (Lobby.isMultiplayer && !Lobby.isHost) return false;
-    preferredDotMode = on;
+    preferredStartType = on;
     try {
       if (global.localStorage) {
-        global.localStorage.setItem('dotminationvr-dot-mode', on);
+        global.localStorage.setItem('dotminationvr-start-type', on);
       }
     } catch (e2) { /* ignore */ }
     if (!Lobby.lobbyState) Lobby.lobbyState = createLobbyState();
-    if (normalizeDotMode(Lobby.lobbyState.dotMode) === on) {
+    if (normalizeStartType(Lobby.lobbyState.startType) === on) {
       global.lobbyState = Lobby.lobbyState;
       return true;
     }
-    Lobby.lobbyState.dotMode = on;
+    Lobby.lobbyState.startType = on;
     global.lobbyState = Lobby.lobbyState;
     broadcastLobbyState();
     var scene = document.querySelector('a-scene');
-    if (scene) scene.emit('dot-mode-changed', { dotMode: on });
+    if (scene) scene.emit('start-type-changed', { startType: on });
     return true;
   }
 
-  function getDotMode() {
-    if (Lobby.lobbyState && Lobby.lobbyState.dotMode != null) {
-      return normalizeDotMode(Lobby.lobbyState.dotMode);
+  function getStartType() {
+    if (Lobby.lobbyState && Lobby.lobbyState.startType != null) {
+      return normalizeStartType(Lobby.lobbyState.startType);
     }
-    return normalizeDotMode(preferredDotMode);
+    return normalizeStartType(preferredStartType);
   }
 
-  function requestDotMode(on) {
-    on = normalizeDotMode(on);
-    if (!Lobby.isMultiplayer || Lobby.isHost) return setDotMode(on);
+  function requestStartType(on) {
+    on = normalizeStartType(on);
+    if (!Lobby.isMultiplayer || Lobby.isHost) return setStartType(on);
     if (Lobby.conn && Lobby.conn.open) {
-      Lobby.conn.send({ type: 'dot-mode', enabled: on });
+      Lobby.conn.send({ type: 'start-type', enabled: on });
       return true;
     }
     return false;
@@ -434,6 +434,8 @@
     Lobby.lobbyState.matchState = 'PLAYING';
     Lobby.lobbyState.matchScore = { blue: 0, red: 0 };
     Lobby.lobbyState.matchGameState = 'PLAYING';
+    // Original rematch: the starting player alternates every match
+    Lobby.lobbyState.matchNo = (Lobby.lobbyState.matchNo | 0) + 1;
     var startTime = Date.now();
     Lobby.lobbyState.matchStartTime = startTime;
     // Unique per-match bag seed — both seats share the same piece sequence
@@ -670,7 +672,7 @@
       if (data.type === 'queue-action') handleQueueAction(fromId, data.action);
       else if (data.type === 'match-action') handleMatchAction(fromId, data.action, data.result);
       else if (data.type === 'board-size') setBoardSize(data.size);
-      else if (data.type === 'dot-mode') setDotMode(data.enabled);
+      else if (data.type === 'start-type') setStartType(data.enabled);
       else if (data.type === 'goodbye') {
         // Explicit leave (DodgeVR-style) — don't wait for PeerJS close which can lag/miss
         removePlayer(fromId);
@@ -756,10 +758,10 @@
       if (Lobby.lobbyState && Lobby.lobbyState.boardSize == null) Lobby.lobbyState.boardSize = 4;
       else if (Lobby.lobbyState) Lobby.lobbyState.boardSize = normalizeBoardSize(Lobby.lobbyState.boardSize);
       if (Lobby.lobbyState) preferredBoardSize = Lobby.lobbyState.boardSize;
-      if (Lobby.lobbyState && Lobby.lobbyState.dotMode == null) Lobby.lobbyState.dotMode = 'duel';
+      if (Lobby.lobbyState && Lobby.lobbyState.startType == null) Lobby.lobbyState.startType = 'blank';
       else if (Lobby.lobbyState) {
-        Lobby.lobbyState.dotMode = normalizeDotMode(Lobby.lobbyState.dotMode);
-        preferredDotMode = Lobby.lobbyState.dotMode;
+        Lobby.lobbyState.startType = normalizeStartType(Lobby.lobbyState.startType);
+        preferredStartType = Lobby.lobbyState.startType;
       }
       global.lobbyState = data.state;
       var mp = data.state.matchPlayers;
@@ -1049,7 +1051,7 @@
     global.isLobbyBotMatch = false;
     global.lobbyState = null;
     syncWindowState();
-    setStatus(why === 'host-left' ? 'Host left — lobby closed' : 'Disconnected from lobby');
+    setStatus(why === 'host-left' ? 'Host left - lobby closed' : 'Disconnected from lobby');
 
     if (wasPlaying && Lobby.onMatchEnded) {
       try {
@@ -1199,7 +1201,7 @@
       Lobby.isHost = true;
       Lobby.connectionState = 'connected';
       syncWindowState();
-      setStatus('HOSTING Lobby ' + lobbyNum + ' — waiting for players');
+      setStatus('HOSTING Lobby ' + lobbyNum + ' - waiting for players');
       broadcastLobbyState();
     });
 
@@ -1217,7 +1219,7 @@
       newConn.on('open', function () {
         Lobby.connections.push(entry);
         newConn.send({ type: 'lobby-state', state: Lobby.lobbyState });
-        setStatus('HOSTING Lobby ' + lobbyNum + ' — ' + Lobby.connections.length + ' connected');
+        setStatus('HOSTING Lobby ' + lobbyNum + ' - ' + Lobby.connections.length + ' connected');
       });
       newConn.on('data', function (data) {
         if (data && data.type === 'mobile-spectator') entry.isMobileSpectator = true;
@@ -1226,13 +1228,13 @@
       newConn.on('close', function () {
         Lobby.connections = Lobby.connections.filter(function (c) { return c.id !== peerId; });
         removePlayer(peerId);
-        setStatus('HOSTING Lobby ' + lobbyNum + ' — ' + Lobby.connections.length + ' connected');
+        setStatus('HOSTING Lobby ' + lobbyNum + ' - ' + Lobby.connections.length + ' connected');
       });
       // DodgeVR: data-channel error ≡ disconnect — don't leave ghosts in queue/seats
       newConn.on('error', function () {
         Lobby.connections = Lobby.connections.filter(function (c) { return c.id !== peerId; });
         removePlayer(peerId);
-        setStatus('HOSTING Lobby ' + lobbyNum + ' — ' + Lobby.connections.length + ' connected');
+        setStatus('HOSTING Lobby ' + lobbyNum + ' - ' + Lobby.connections.length + ' connected');
       });
     });
 
@@ -1260,7 +1262,7 @@
     Lobby.isMobileSpectator = !!asMobile;
     Lobby.isSpectator = !!asMobile;
     syncWindowState();
-    setStatus(asMobile ? 'Spectating — opening peer...' : 'Joining lobby ' + lobbyNum + '...');
+    setStatus(asMobile ? 'Spectating - opening peer...' : 'Joining lobby ' + lobbyNum + '...');
 
     var ice = await getIceServers();
     Lobby.peer = new Peer(Lobby.myPlayerId, {
@@ -1482,12 +1484,12 @@
   global.broadcastLobbyState = broadcastLobbyState;
   global.setBoardSize = setBoardSize;
   global.getBoardSize = getBoardSize;
-  global.setDotMode = setDotMode;
-  global.getDotMode = getDotMode;
-  global.requestDotMode = requestDotMode;
-  Lobby.setDotMode = setDotMode;
-  Lobby.getDotMode = getDotMode;
-  Lobby.requestDotMode = requestDotMode;
+  global.setStartType = setStartType;
+  global.getStartType = getStartType;
+  global.requestStartType = requestStartType;
+  Lobby.setStartType = setStartType;
+  Lobby.getStartType = getStartType;
+  Lobby.requestStartType = requestStartType;
   global.requestBoardSize = requestBoardSize;
   Lobby.setBoardSize = setBoardSize;
   Lobby.getBoardSize = getBoardSize;

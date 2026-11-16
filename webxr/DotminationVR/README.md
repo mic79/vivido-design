@@ -1,72 +1,55 @@
 # DotminationVR
 
-The flatscreen/mobile **Dotmination** (Dotmination-v1/dotmination-v3/www) rebuilt for
-WebXR on the StacksVR stack: same lobby/networking, Mixamo body IK, VR wrist menu,
-mobile/desktop spectating, stats + replays. The earlier sphere prototype lives in
-`../DotminationVR360`.
+Dotmination — the original flatscreen/mobile game (vivido-design.com/dotmination, Google Play) — brought to WebXR.
+It uses the same rules, maps and colours as the app, on one vertical board standing between two players.
+Everything around the game (lobby, PeerJS networking, spectating, Mixamo body IK, locomotion, replays, stats, menu)
+is copied from **StacksVR**, not rewritten.
 
-## Faithful to the original
+The earlier sphere prototype now lives in `../DotminationVR360`.
 
-`dot-rules.js` and `dot-bot.js` are direct ports of the phone game's `script.js`,
-`modules/botLogic.js` and `modules/realTimeResourceMode.js`:
+## Rules (ported 1:1 from `dotmination-v3/www`)
 
-* Same field: 9 rows, alternating 4/5 dots (40 dots), 6 touching neighbours.
-* Tap an empty dot or your own: +1 stage. A dot always takes the colour of whoever grows it.
-* Growing a stage-5 dot bursts it: it empties and every neighbour gets +1. Increments run
-  one at a time, lowest dot first (0.1 s each, like the original). Burst dots can be refilled
-  by the same chain.
-* Score = sum of your dot stages. After 2 moves, whoever has no dots left loses —
-  "Dotmination!".
-* **Levels 1–200** use the original pi-based generator, so the maps are identical to
-  the phone game. Winning unlocks the next level (saved). The bot is the original
-  **Normal** bot in levels, like the original.
-* **Random** maps, the **Normal** / **Harder** bots, and the multiplayer **half-filled**
-  start.
-* **Real-Time** mode: own dots only, 25 energy, +1 every 2 s, 0.1 s cooldown, starts
-  from one stage-5 dot each.
-* The look: white field, teal `#12DACE` vs pink `#E11168`, dots grow with the original
-  halo rings, empty dots tinted in the current player's colour, tap ripples, floating
-  "+1", rising sonar pitch per increment, sonar on game over.
+- **Board:** 9 rows that alternate 5 and 4 dots, 40 dots in total. Neighbours are the dots that touch.
+- **Turns:** on your turn, tap an empty dot or one of your own. It grows one stage (0–5) and takes your colour.
+- **Bursts:** tapping a stage-5 dot makes it burst. It empties, and every neighbour gets +1 and turns your colour.
+  The increments run one at a time, lowest index first, at 0.1 s each, exactly like the original's animation.
+- **Winning:** from move 2 on, the first player with no dots left loses. That is *Dotmination!*
+  The score shown is the sum of stages.
+- **Colours:** you are pink `#E11168` (the original player--2) and the bot is teal `#12DACE`. **C** cycles the 4 original palettes.
 
-## Modes (wrist menu, host-synced)
+## Modes
 
-| Button | What |
-|---|---|
-| **DUEL** | Turn-based on one vertical board; each player sees it from their own side. Solo vs bot = Levels; lobby vs bot = Random map; PvP = half-filled start. |
-| **LIVE** | Original Real-Time mode on the shared board. In multiplayer the host referees every tap. |
-| **RUSH** | VR extra: own board each vs a purple "virus" (original Normal bot) on an identical Random map. First to clear their board wins (3:00 clock: higher % wins). Chains of 4+ bursts flip the opponent's strongest dots to virus. Your own chains first cancel incoming infections (StacksVR attack buffer). |
+| Menu | What it is | Original equivalent |
+| --- | --- | --- |
+| SOLO · Level 1–200 | The app's pi-generated level maps vs the bot (Normal). Stars: win, under 2:00, under 1:00. Best time is saved, and a win unlocks the next level. | Level mode |
+| SOLO · Random map | A random stage and owner for each dot, vs a **NORM** or **HARD** bot (the board-size toggle). | Random mode |
+| MULTIPLAYER (lobby) | Turn-based PvP across the one shared vertical board. Start type: **BLANK** (default) or **HALF**-filled. The first player alternates each rematch. 25 s turn timer. | Multiplayer |
+| Preview | Bot vs bot on the menu screen. | – |
 
-**NORM / HARD** = original bot difficulty (lobby/random games; levels always use Normal).
-**BOT SPEED** = bot pace (12 = the original 1 s think time; 40 = original real-time pace).
+The experimental Real-Time mode of the original is deliberately not included.
+
+Progress is saved in `localStorage['dotminationvr-progress']` in the same shape the app uses:
+`{level, levels:{levelN:{time}}}`.
 
 ## Controls
 
-* **VR:** point with either controller + trigger, or poke a dot with the controller tip.
-  Left **X** = wrist menu.
-* **Desktop:** click a dot. `B` = start vs bot, `M` = menu, `N` = cycle DUEL/LIVE/RUSH.
-* **Phone / `?spectate=1`:** Watch a lobby or Offline Preview with an orbit camera.
-
-## VR-only choices (not in the original)
-
-* DUEL turn clock: after 25 s your own client plays a Normal-bot move for you, so
-  multiplayer can't stall.
-* Long chains keep the original 0.1 s pace for 30 increments, then speed up. The longest
-  chains (~150 increments) take ~6 s instead of ~15 s.
-* 600-move safety cap: higher score wins (never reached in simulations).
+- **VR:** point and trigger, or poke a dot with your finger. The left-hand menu has the level picker (− / +), NORM/HARD, and BLANK/HALF.
+- **Desktop/mobile:** click or tap a dot. **[ ]** change level, **C** changes the palette. Spectators get the orbit camera.
 
 ## Files
 
-New: `dot-rules.js` (rules/levels/maps), `dot-bot.js` (bots), `dot-board.js` (VR board
-view), `dot-game.js` (match component — lifecycle/network/avatar/spectator code copied
-from StacksVR's `stacks-game.js`), `scripts/test-rules.mjs` (`node scripts/test-rules.mjs`).
+- `dot-rules.js` – the rules engine (layout, apply/bursts, level generator, random and half-filled starts, serialize).
+- `dot-bot.js` – the original `botLogic.js` (random and smart).
+- `dot-board.js` – the canvas view drawn like the app (rings per stage, spring easing, ripples, +1 floats).
+- `dot-game.js` – the A-Frame game component. Its lobby, pointer, popup, victory, replay and spectator methods
+  are verbatim copies of StacksVR's `stacks-game.js` methods; the Dotmination turn logic is new.
+- `lobby.js`, `game-menu.js`, `mixamo-body.js`, `locomotion.js`, `mobile-spectator.js`, `match-replay.js`, `stats.js`,
+  `stacks-audio.js`, `modes.js` – StacksVR copies (namespaced `dotminationvr-`).
+- `scripts/test-rules.mjs` – a Node test for the rules and the bot.
 
-Copied from StacksVR, kept diff-able so fixes can be synced: `lobby.js`, `game-menu.js`,
-`mixamo-body.js`, `locomotion.js`, `mobile-spectator.js`, `match-replay.js`, `stats.js`,
-`attack.js`, `modes.js`, `stacks-audio.js`. Changes are limited to:
-* `dotminationvr-` peer ids / storage / IndexedDB names
-* `[dot-game]`
-* the IDLE toggle → mode and the board-size slot → bot difficulty
-* seat positions from `dot-game.seatPose()`
-* labels, an audio `ping()` and a replay hook
+## Not ported yet
 
-`ice-servers.json` (TURN credentials) is only in the local backup copy, same as StacksVR.
+- The tutorial (5 steps).
+- Dark mode.
+- The start "blink" animation.
+- A palette control in the VR menu (keyboard C only for now).

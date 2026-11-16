@@ -11,8 +11,9 @@
   var M = 26;            // margin around the field (CSS px)
   var METERS_PER_PX = 0.00186; // 64px dot spacing ≈ 12 cm
   var STEP_MS = 100;     // original gsap.delayedCall(0.1, incrementDotStage)
-  // Original palette (style.css --color-1/--color-2, neutral #7f7f7f)
-  var DEFAULT_COLORS = { 0: '#7f7f7f', 1: '#12DACE', 2: '#E11168', 3: '#8a4dff' };
+  // Original palette (style.css). Owner code 1 = blue seat = you = original player--2 (#E11168),
+  // code 2 = red seat = bot / opponent = original player--1 (#12DACE). Neutral #7f7f7f.
+  var DEFAULT_COLORS = { 0: '#7f7f7f', 1: '#E11168', 2: '#12DACE' };
   // .dot.stage--N box-shadow rings: [spread px, alpha] — drawn largest first
   var RINGS = {
     1: [[19.2, 0.1], [14.4, 0.2], [9.6, 0.3], [4.8, 0.4]],
@@ -46,7 +47,7 @@
     this.layout = R.layoutFor(opts.rows, opts.cols);
     this.colors = Object.assign({}, DEFAULT_COLORS, opts.colors || {});
     this.turnColor = this.colors[2];
-    this.rimColor = '#c8d0d8';
+    this.rimColor = '#3c4756';
     this._rimTarget = this.rimColor;
     this._threat = 0;
     this.speed = opts.stepMs != null ? opts.stepMs : STEP_MS;
@@ -75,7 +76,9 @@
     this.canvas.height = Math.round(this.pxH * K);
     this.ctx = this.canvas.getContext('2d');
     this.tex = new THREE.CanvasTexture(this.canvas);
-    this.tex.minFilter = THREE.LinearFilter;
+    // Mipmaps: the board is seen from far away by spectators; plain linear filtering shimmers
+    this.tex.minFilter = THREE.LinearMipmapLinearFilter;
+    this.tex.generateMipmaps = true;
     this.tex.anisotropy = 4;
     if ('colorSpace' in this.tex && THREE.SRGBColorSpace) this.tex.colorSpace = THREE.SRGBColorSpace;
     else if (THREE.sRGBEncoding) this.tex.encoding = THREE.sRGBEncoding;
@@ -91,16 +94,7 @@
     );
     this.panel.renderOrder = 2;
     this.root.add(this.panel);
-    // Thin frame so the board reads as an object in the dark arena
-    var frameMat = new THREE.MeshStandardMaterial({ color: 0xdfe5ea, roughness: 0.4, metalness: 0.2 });
-    var t = 0.012, d = 0.02;
-    var w = this.width, h = this.height;
-    [[0, h / 2 + t / 2, w + 2 * t, t], [0, -h / 2 - t / 2, w + 2 * t, t],
-      [w / 2 + t / 2, 0, t, h], [-w / 2 - t / 2, 0, t, h]].forEach(function (f) {
-      var m = new THREE.Mesh(new THREE.BoxGeometry(f[2], f[3], d), frameMat);
-      m.position.set(f[0], f[1], 0);
-      this.root.add(m);
-    }, this);
+    // No separate frame: the rounded rim (current player's colour) outlines the board.
     this._dirty = true;
     this._draw(performance.now());
   };
@@ -124,7 +118,7 @@
   };
 
   View.prototype.setRim = function (code, threat) {
-    var c = code == null ? '#c8d0d8' : (this.colors[code] || '#c8d0d8');
+    var c = code == null ? '#3c4756' : (this.colors[code] || '#3c4756'); // idle: dim slate, not white
     if (c !== this._rimTarget || (threat || 0) !== this._threat) {
       this._rimTarget = c;
       this._threat = threat || 0;
@@ -187,7 +181,6 @@
     opts = opts || {};
     var now = performance.now();
     if (res && res.steps) {
-      this._chainStep = 0;
       this._fx.push({ kind: 'ripple', i: res.cell, t0: now });
       for (var k = 0; k < res.steps.length; k++) this._queue.push({ step: res.steps[k], first: k === 0 });
     }
@@ -225,12 +218,16 @@
   };
 
   View.prototype.busy = function () { return this._queue.length > 0; };
+  /** Score as currently drawn (sum of displayed stages): counts along with the chain. */
+  View.prototype.displayScore = function (code) {
+    var t = 0;
+    for (var i = 0; i < this.dispOwner.length; i++) if (this.dispOwner[i] === code) t += this.dispStage[i];
+    return t;
+  };
 
-  /** Rough ms left in the queued animation. */
+  /** ms left in the queued animation. */
   View.prototype.remainingMs = function () {
-    var n = this._queue.length, done = this._chainStep || 0;
-    var slow = Math.max(0, Math.min(n, 30 - done));
-    return slow * this.speed + (n - slow) * Math.min(this.speed, 40);
+    return this._queue.length * this.speed;
   };
 
   View.prototype.flashCells = function (cells) {
@@ -258,11 +255,7 @@
     while (this._queue.length && now >= this._stepAt) {
       var item = this._queue.shift();
       var st = this._runStep(item, now, false);
-      // Original pace (0.1 s per increment) for the first 30, then faster so even the
-      // longest chains (~150 increments) finish in about 6 s
-      this._chainStep = (this._chainStep || 0) + 1;
-      var dt2 = this._chainStep > 30 ? Math.min(this.speed, 40) : this.speed;
-      this._stepAt = st ? now + dt2 : now;
+      this._stepAt = st ? now + this.speed : now; // original: 0.1 s per increment
     }
     if (!this._queue.length) this._stepAt = 0;
     var animating = false;
@@ -288,16 +281,17 @@
   View.prototype._draw = function (now) {
     var ctx = this.ctx, W = this.canvas.width, H = this.canvas.height;
     ctx.clearRect(0, 0, W, H);
-    // Field card (original white body + faint diagonal grid from the svg)
+    // Field card: dark glass (original dark mode) instead of the app's white body, so it
+    // doesn't glare in a headset; faint diagonal grid from the svg kept as a hint of the surface.
     var r = 22 * K;
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(r, 0); ctx.arcTo(W, 0, W, H, r); ctx.arcTo(W, H, 0, H, r); ctx.arcTo(0, H, 0, 0, r); ctx.arcTo(0, 0, W, 0, r);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fillStyle = 'rgba(8,12,18,0.8)';
     ctx.fill();
     ctx.clip();
-    ctx.strokeStyle = 'rgba(0,0,0,0.035)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.lineWidth = 1.5;
     for (var g = -H; g < W + H; g += 60 * K) {
       ctx.beginPath(); ctx.moveTo(g, 0); ctx.lineTo(g + H * 0.577, H); ctx.stroke();
