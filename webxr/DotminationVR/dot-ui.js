@@ -91,6 +91,11 @@
     }
     ctx.restore();
   }
+  function lighten(hex, amt) {
+    var c = new THREE.Color(hex);
+    c.lerp(new THREE.Color('#ffffff'), amt);
+    return '#' + c.getHexString();
+  }
   // Largest font size (≤ size) at which text fits maxW
   function fit(ctx, text, weight, size, maxW) {
     var sz = size;
@@ -193,7 +198,7 @@
     }
     this._welcomeCard = this._uiCard('welcome', 0.56, 0.36, this._drawWelcome.bind(this), this._onWelcome.bind(this));
     this._tutCard = this._uiCard('tutorial', 0.34, 0.5, this._drawTutorialCard.bind(this), this._onTutorial.bind(this));
-    this._endCard = this._uiCard('end', 0.46, 0.46, this._drawEndCard.bind(this), this._onEndCard.bind(this));
+    this._endCard = this._uiCard('end', 0.58, 0.58, this._drawEndCard.bind(this), this._onEndCard.bind(this));
     this._endCard.round = true;
     // First visit (original checkStartTutorial): welcome card, solo only
     setTimeout(function () { self._maybeWelcome(); }, 1500);
@@ -269,7 +274,7 @@
     ctx.shadowColor = hov ? pink : 'rgba(0,0,0,0.45)';
     ctx.shadowBlur = hov ? 28 : 12;
     roundRect(ctx, b.x, b.y, b.w, b.h, 18);
-    ctx.fillStyle = b.primary ? (hov ? '#f0207a' : pink) : (hov ? '#466f6f' : SLATE_BTN);
+    ctx.fillStyle = b.primary ? (hov ? lighten(pink, 0.18) : pink) : (hov ? '#466f6f' : SLATE_BTN);
     ctx.fill();
     ctx.restore();
     var fg = b.primary ? '#ffffff' : (hov ? pink : '#ffffff');
@@ -305,6 +310,29 @@
         if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) { btn = b; break; }
       }
       if (!best || h.distance < best.dist) best = { card: c, btn: btn, dist: h.distance, point: h.point };
+    }
+    return best;
+  };
+
+  C._uiPokeAt = function (pos) {
+    if (!this._uiCards) return null;
+    var best = null;
+    var local = new THREE.Vector3();
+    for (var i = 0; i < this._uiCards.length; i++) {
+      var c = this._uiCards[i];
+      if (!c.group.visible || !c.buttons.length) continue;
+      c.mesh.updateMatrixWorld(true);
+      local.copy(pos);
+      c.mesh.worldToLocal(local);
+      var sx = c.group.scale.x || 1;
+      var dist = Math.abs(local.z) * sx;
+      var px = (local.x / c.w + 0.5) * c.cw, py = (0.5 - local.y / c.h) * c.ch;
+      for (var k = 0; k < c.buttons.length; k++) {
+        var b = c.buttons[k];
+        if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) {
+          if (!best || dist < best.dist) best = { card: c, btn: b, dist: dist };
+        }
+      }
     }
     return best;
   };
@@ -366,14 +394,19 @@
         self._uiHits = self._uiHits || {};
         self._uiHits[id] = p;
         if (p && p.btn) hovers[p.card.id] = p.btn.id;
-        // Finger poke on a button
-        var tip = hand && self._handRay(hand);
-        if (tip && p && p.btn) {
-          var d = tip.origin.distanceTo(p.point);
-          var st = self._uiPoke[id];
-          if (d > POKE_UI * 2.5) st.armed = true;
-          if (st.armed && d < POKE_UI) { st.armed = false; self._uiPress(p, hand); }
+        // Hover tick on the hand that is pointing (same feel as the menu buttons)
+        self._uiHoverKey = self._uiHoverKey || {};
+        var key = p && p.btn ? p.card.id + ':' + p.btn.id : '';
+        if (key !== (self._uiHoverKey[id] || '')) {
+          self._uiHoverKey[id] = key;
+          if (key) self._pulseHaptic(hand, 0.35, 28);
         }
+        // Finger poke with the index fingertip (not the controller/laser origin)
+        var tipPos = hand && self._fingerTip(hand);
+        var pk = tipPos && self._uiPokeAt(tipPos);
+        var st = self._uiPoke[id];
+        if (!pk || pk.dist > POKE_UI * 2.5) st.armed = true;
+        if (pk && pk.btn && st.armed && pk.dist < POKE_UI) { st.armed = false; self._uiPress(pk, hand); }
       });
     } else if (this._mouseEvt && !global.isMobileSpectator) {
       var pm = this._uiPickMouse(this._mouseEvt);
@@ -383,7 +416,7 @@
       var c = this._uiCards[i];
       if (!c.group.visible) continue;
       var hv = hovers[c.id] || null;
-      if (hv !== c.hover) { c.hover = hv; c.dirty = true; if (hv && presenting) this._pulseHaptic(null, 0, 0); }
+      if (hv !== c.hover) { c.hover = hv; c.dirty = true; }
       // Face the viewer (yaw only), like the name labels
       c.group.rotation.set(0, Math.atan2(camPos.x - c.group.position.x, camPos.z - c.group.position.z), 0);
       // Original end-card entrance: scale 0 → 1, elastic.out(1, 0.3) over ~2 s
@@ -740,22 +773,23 @@
     var W = card.cw, H = card.ch, cx = W / 2, cy = H / 2;
     var col = (e.winner === 'red' || e.winner === 'blue') ? this._sideColorCss(e.winner) : '#FFC94D';
     var R = W / 2 - 12;
-    // Halo rings (the card's ::before box-shadow: neutral rings, like a dot)
-    var rings = [[R, 0.1], [R * 0.93, 0.2], [R * 0.86, 0.3]];
+    // Halo rings (the card's ::before box-shadow: neutral rings, like a dot) — thin, so the
+    // card itself gets most of the space
+    var rings = [[R, 0.1], [R * 0.96, 0.2], [R * 0.92, 0.3]];
     rings.forEach(function (r) {
       ctx.beginPath(); ctx.arc(cx, cy, r[0], 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(127,127,127,' + (r[1] * 0.5) + ')'; ctx.fill();
     });
     ctx.save();
     ctx.shadowColor = col; ctx.shadowBlur = 40;
-    ctx.beginPath(); ctx.arc(cx, cy, R * 0.79, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.88, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(47,79,79,0.97)'; ctx.fill();
     ctx.restore();
     ctx.lineWidth = 6; ctx.strokeStyle = col;
-    ctx.beginPath(); ctx.arc(cx, cy, R * 0.79, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.88, 0, Math.PI * 2); ctx.stroke();
     // Title in the winner's colour (original .overlay.end.player--N colour)
     var hasStars = e.stars != null;
-    var inner = R * 0.79;
+    var inner = R * 0.88;
     ctx.fillStyle = col;
     fit(ctx, e.title, '700', 76, inner * 1.6);
     ctx.fillText(e.title, cx, cy - (hasStars ? 118 : 74));

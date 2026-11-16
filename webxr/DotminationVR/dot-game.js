@@ -202,6 +202,10 @@
       this._placeStationCards();
       this._placeBotAnchors();
       this._placeOfflinePlayer();
+      // Remembered colour scheme (original "Change Colors")
+      var savedPal = 0;
+      try { savedPal = parseInt(localStorage.getItem('dotminationvr-palette') || '0', 10) || 0; } catch (e) { /* ignore */ }
+      if (savedPal) this.applyPalette(savedPal);
 
       // StacksVR menus/replay call bot.enable(false) — keep a harmless shim
       this.bot = { enabled: false, enable: function (on) { this.enabled = !!on; } };
@@ -304,14 +308,57 @@
     },
 
     cycleColors: function () {
+      return this.applyPalette(((this._palette || 0) + 1) % 4);
+    },
+
+    /**
+     * The 4 original colour schemes. Applied consistently: board + 3D stacks, rim, labels, HUD,
+     * stats cards, lasers, UI cards, the menu accents and every seat's Mixamo body.
+     */
+    applyPalette: function (idx) {
       var pals = [['#12DACE', '#E11168'], ['#1100FF', '#FF3F00'], ['#FF00FF', '#0000FF'], ['#5158af', '#af5160']];
-      this._palette = ((this._palette || 0) + 1) % pals.length;
-      var pal = pals[this._palette];
+      idx = ((idx | 0) % pals.length + pals.length) % pals.length;
+      this._palette = idx;
+      try { localStorage.setItem('dotminationvr-palette', String(idx)); } catch (e) { /* private mode */ }
+      var pal = pals[idx];
       DB.COLORS[1] = pal[1];
       DB.COLORS[2] = pal[0];
-      this.boards.shared.view.setColors({ 1: pal[1], 2: pal[0] });
+      var b = this.boards && this.boards.shared;
+      if (b) b.view.setColors({ 1: pal[1], 2: pal[0] });
+      this._recolorBodies();
+      this._updateNameLabels && this._updateNameLabels();
+      if (this._stationCards) for (var k in this._stationCards) this._stationCards[k].last = '';
+      if (this.matchStats) this._updateCupStatsHUD(true); // repaint now, not at the next second
+      if (this._uiCards) this._uiCards.forEach(function (c) { c.dirty = true; });
+      if (b && b.label) b.label.last = '';
       this._updateBoardLabels(performance.now(), true);
-      return this._palette;
+      try { global.dispatchEvent(new CustomEvent('dot-palette-changed', { detail: { you: pal[1], opp: pal[0] } })); } catch (e2) {}
+      return idx;
+    },
+
+    /** Seat bodies take their seat's dot colour (your body = your seat). */
+    _recolorBodies: function () {
+      var mySide = this._mySeatSide() || 'blue';
+      this._tintBody(document.getElementById('player-body'), this._sideColorCss(mySide));
+      this._tintBody(document.getElementById('bot-body'), this._sideColorCss('red'));
+      this._tintBody(document.getElementById('spec-blue-body'), this._sideColorCss('blue'));
+    },
+
+    /** Full body tint: base colour AND the Fresnel emissive (the glow kept the old hue before). */
+    _tintBody: function (el, hex) {
+      if (!el) return;
+      var mb = el.components && el.components['mixamo-body'];
+      if (mb && mb.data) mb.data.color = hex;
+      var col = new THREE.Color(hex);
+      var root = (mb && mb.model) || el.object3D;
+      if (!root) return;
+      root.traverse(function (o) {
+        if (!o.isMesh || !o.material) return;
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach(function (m) {
+          if (m.color) m.color.copy(col);
+          if (m.emissive) m.emissive.copy(col);
+        });
+      });
     },
 
     _makeCanvasPlane: function (w, h, cw, ch) {
@@ -608,6 +655,28 @@
       return out;
     },
 
+    /**
+     * Tip of the index finger of your own Mixamo hand (the poke should come from the finger you
+     * point with, not the controller/laser origin near the thumb). Falls back to the laser origin.
+     */
+    _fingerTip: function (hand) {
+      var body = document.getElementById('player-body');
+      var mb = body && body.components && body.components['mixamo-body'];
+      var left = hand && hand.id === 'leftHand';
+      var b3 = mb && mb.bones && mb.bones[left ? 'leftHandIndex3' : 'rightHandIndex3'];
+      var b2 = mb && mb.bones && mb.bones[left ? 'leftHandIndex2' : 'rightHandIndex2'];
+      if (b3 && b2 && body.object3D && body.object3D.visible) {
+        var p3 = new THREE.Vector3(), p2 = new THREE.Vector3();
+        b3.getWorldPosition(p3);
+        b2.getWorldPosition(p2);
+        var seg = p3.clone().sub(p2);
+        var len = seg.length();
+        if (len > 0.004 && len < 0.08) return p3.addScaledVector(seg.normalize(), Math.min(0.026, len * 0.9));
+      }
+      var r = this._handRay(hand);
+      return r ? r.origin.addScaledVector(r.dir, 0.035) : null;
+    },
+
     _handRay: function (hand) {
       if (!hand || !hand.object3D) return null;
       hand.object3D.updateWorldMatrix(true, false);
@@ -668,10 +737,9 @@
           hit[id] = pick;
           // Finger poke: controller tip pushed through the board plane
           if (mine && !mine.view.busy()) {
-            var tip = self._handRay(hand);
-            if (tip) {
-              tip.origin.addScaledVector(tip.dir, 0.035);
-              var pk = mine.view.pokePoint(tip.origin);
+            var tipPos = self._fingerTip(hand);
+            if (tipPos) {
+              var pk = mine.view.pokePoint(tipPos);
               var st = self._poke[id];
               if (pk.depth > POKE_OUT) st.armed = true;
               if (st.armed && pk.depth < POKE_IN && pk.index >= 0) {
@@ -684,7 +752,7 @@
           var now = pick && pick.board === mine ? pick.index : -1;
           if (now !== prev) {
             self._hover[id] = now;
-            if (now >= 0) self._pulseHaptic(hand, 0.08, 10);
+            if (now >= 0) self._pulseHaptic(hand, 0.3, 22); // same tick as menu-button hovers
           }
         });
       } else if (this._mouseEvt && !global.isMobileSpectator) {
@@ -3104,6 +3172,8 @@
       this._updateTurnTint();
       this._billboardNameLabels();
       if (this._uiTick) this._uiTick(now);
+      // Bodies load / get re-seated asynchronously: keep them in their seat's palette colour
+      if (!this._bodyTintAt || now - this._bodyTintAt > 1500) { this._bodyTintAt = now; this._recolorBodies(); }
       if (this.matchActive && !this._endingMatch) {
         if (this.matchState === 'COUNTDOWN') {
           this._tickCountdown(Date.now());

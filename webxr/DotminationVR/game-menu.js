@@ -26,6 +26,22 @@
     { x: -2.4, y: 0, z: -1.8, ry: -125 }
   ];
 
+  // ── Theme = current Dotmination colour scheme (follows "Change Colors") ──
+  function darkenHex(hex, amount) {
+    var h = String(hex || '#444').replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16);
+    if (isNaN(n)) return '#3b6161';
+    var k = 1 - (amount == null ? 0.3 : amount);
+    var r = Math.round(((n >> 16) & 255) * k), g = Math.round(((n >> 8) & 255) * k), b = Math.round((n & 255) * k);
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+  }
+  function themeYou() { return (window.DotBoard && window.DotBoard.COLORS[1]) || '#E11168'; }
+  function themeOpp() { return (window.DotBoard && window.DotBoard.COLORS[2]) || '#12DACE'; }
+  function themeYouLight() { return lightenHex(themeYou(), 0.3); }
+  function themeYouDark() { return darkenHex(themeYou(), 0.15); }
+  function themeOppDark() { return darkenHex(themeOpp(), 0.3); }
+
   function lightenHex(hex, amount) {
     amount = amount == null ? 0.35 : amount;
     var h = String(hex || '#444').replace('#', '');
@@ -461,6 +477,7 @@
       this._refsReady = true;
       this._attachMenuToLeftHand();
       this._bindClicks();
+      this._bindTheme();
       this.setRaycasters(false);
       this.botTargetBpm = loadBotBpm();
       this.refreshLobbyUI();
@@ -500,6 +517,24 @@
       if (!window.isMultiplayer) return true;
       if (window.isMobileSpectator) return false;
       return !!window.isHost;
+    },
+
+    _bindTheme: function () {
+      if (this._themeBound) return;
+      this._themeBound = true;
+      var self = this;
+      this._themePrev = { you: '#E11168', opp: '#12DACE' };
+      window.addEventListener('dot-palette-changed', function (e) {
+        var prev = self._themePrev;
+        self._themePrev = { you: e.detail.you, opp: e.detail.opp };
+        self._applyTheme(prev);
+      });
+      // A remembered scheme may have been applied before the menu existed
+      if (themeYou().toLowerCase() !== '#e11168' || themeOpp().toLowerCase() !== '#12dace') {
+        var prev0 = this._themePrev;
+        this._themePrev = { you: themeYou(), opp: themeOpp() };
+        this._applyTheme(prev0);
+      }
     },
 
     _bindClicks: function () {
@@ -638,7 +673,7 @@
         var el = tabs[key];
         if (!el) return;
         var on = key === active;
-        var color = on ? '#E11168' : '#3b6161';
+        var color = on ? themeYou() : '#3b6161';
         el.setAttribute('material', 'color', color);
         el.dataset.baseColor = color;
         el.dataset.hoverColor = lightenHex(color, on ? 0.28 : 0.45);
@@ -939,7 +974,7 @@
       }
       var ctx = this._stripCanvas.getContext('2d');
       ctx.clearRect(0, 0, 1160, 220);
-      var pink = (cl && cl._sideColorCss) ? cl._sideColorCss('blue') : '#E11168';
+      var pink = (cl && cl._sideColorCss) ? cl._sideColorCss('blue') : themeYou();
       var hoverIdx = -1;
       if (this._hoveredBtn) {
         var act = this._hoveredBtn.getAttribute('data-action') || '';
@@ -1001,14 +1036,14 @@
         var fillW = Math.max(0.02, (x + trackHalf));
         fill.setAttribute('geometry', 'width', fillW);
         fill.setAttribute('position', (-trackHalf + fillW / 2) + ' 0 0.002');
-        var accent = bpm <= 0 ? '#555555' : (bpm < 10 ? '#0f9b93' : (bpm > 20 ? '#c45a12' : '#E11168'));
+        var accent = bpm <= 0 ? '#555555' : (bpm < 10 ? themeOppDark() : (bpm > 20 ? '#c45a12' : themeYou()));
         fill.setAttribute('material', 'color', accent);
       }
       ['menu-bot-speed-minus', 'menu-bot-speed-plus', 'menu-bot-speed-hit'].forEach(function (id) {
         var el = document.getElementById(id);
         if (!el) return;
         el.dataset.baseColor = el.id === 'menu-bot-speed-hit' ? '#2a4646' : '#3b6161';
-        el.dataset.hoverColor = lightenHex('#E11168', 0.4);
+        el.dataset.hoverColor = lightenHex(themeYou(), 0.4);
       });
     },
 
@@ -1051,7 +1086,7 @@
       // Active pill slides left (4x4) or right (6x6); ascii "x" so Roboto glyph exists
       if (slider) {
         slider.setAttribute('position', (is4 ? -0.052 : 0.052) + ' 0 0.003');
-        var accent = is4 ? '#E11168' : '#c45a12';
+        var accent = is4 ? themeYou() : '#c45a12';
         var canEdit = !window.isMultiplayer || !!window.isHost ||
           !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
         slider.setAttribute('material', 'color', canEdit ? accent : '#555555');
@@ -1069,7 +1104,7 @@
         var el = document.getElementById(id);
         if (!el) return;
         el.dataset.baseColor = '#2a4646';
-        el.dataset.hoverColor = lightenHex('#E11168', 0.35);
+        el.dataset.hoverColor = lightenHex(themeYou(), 0.35);
       });
     },
 
@@ -1096,7 +1131,7 @@
       var on = this._startTypeOn();
       var canEdit = !window.isMultiplayer || !!window.isHost ||
         !!(window.StacksLobby && window.StacksLobby.conn && window.StacksLobby.conn.open);
-      var color = !canEdit ? '#555555' : (on === 'half' ? '#8a3fd1' : '#E11168');
+      var color = !canEdit ? '#555555' : (on === 'half' ? '#8a3fd1' : themeYou());
       btn.setAttribute('material', 'color', color);
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
@@ -1113,7 +1148,7 @@
       var on = window.StacksAudio
         ? window.StacksAudio.isMusicEnabled()
         : window._musicEnabled !== false;
-      var color = on ? '#0f9b93' : '#555555';
+      var color = on ? themeOppDark() : '#555555';
       btn.setAttribute('material', 'color', color);
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
@@ -1125,7 +1160,7 @@
       var txt = document.getElementById('menu-passthrough-text');
       if (!btn) return;
       var on = !!(window.StacksPassthrough && window.StacksPassthrough.enabled);
-      var color = on ? '#0f9b93' : '#3b6161';
+      var color = on ? themeOppDark() : '#3b6161';
       btn.setAttribute('material', 'color', color);
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
@@ -1146,13 +1181,13 @@
       var color;
       if (window.connectionState === 'connecting') {
         label = 'JOINING...';
-        color = '#c40f5b';
+        color = themeYouDark();
       } else if (window.isMultiplayer) {
         label = window.isHost ? 'LEAVE' : 'LEAVE';
         color = '#c0392b';
         } else {
         label = 'JOIN';
-        color = '#0f9b93';
+        color = themeOppDark();
       }
       if (joinText) joinText.setAttribute('value', label);
       else joinBtn.setAttribute('text', 'value', label);
@@ -1190,7 +1225,7 @@
             window.lobbyState.queue &&
             window.lobbyState.queue.indexOf(window.myPlayerId) >= 0);
           label = inQ ? 'START MATCH' : (qLen ? 'START (WATCH)' : 'START BOTS');
-          color = '#E11168';
+          color = themeYou();
         } else {
           label = 'WAIT FOR HOST';
           color = '#4a6a6a';
@@ -1198,10 +1233,10 @@
         }
       } else if (this.menuMode === 'multi') {
         label = 'START MATCH';
-        color = '#E11168';
+        color = themeYou();
       } else {
         label = 'START vs BOT';
-        color = '#E11168';
+        color = themeYou();
       }
       if (txt) txt.setAttribute('value', label);
       btn.setAttribute('material', 'color', color);
@@ -1239,7 +1274,7 @@
         numEl.setAttribute('color', filled ? (isYou ? '#ffe08a' : '#b4c8c8') : '#8fa6a6');
       }
       var bgColor = !filled ? '#2a4646' : (isYou ? '#1f3636' : '#3b6161');
-      var accentColor = !filled ? '#3b5555' : (isYou ? '#12DACE' : (opts.accent || '#12DACE'));
+      var accentColor = !filled ? '#3b5555' : (isYou ? themeOpp() : (opts.accent || themeOpp()));
       bg.setAttribute('material', 'color', bgColor);
       if (accent) accent.setAttribute('material', 'color', accentColor);
     },
@@ -1269,7 +1304,7 @@
           isYou: mp.blue === myId,
           label: this._nickForLobby(ls, mp.blue),
           badge: 'B',
-          accent: '#ff4d94'
+          accent: themeYouLight()
         });
         this._setQueueSlot(1, {
           filled: !!mp.red,
@@ -1294,7 +1329,7 @@
             isYou: id && id === myId,
             label: id ? this._nickForLobby(ls, id) : 'Open',
             badge: String(i + 1),
-            accent: i === 0 ? '#ff4d94' : '#e25a4a'
+            accent: i === 0 ? themeYouLight() : '#e25a4a'
           });
         }
       }
@@ -1305,7 +1340,7 @@
       var joinTxt = document.getElementById('menu-join-queue-text');
       var leaveTxt = document.getElementById('menu-leave-queue-text');
       if (joinBtn) {
-        var jc = inQ ? '#1f3636' : '#0f9b93';
+        var jc = inQ ? '#1f3636' : themeOppDark();
         joinBtn.setAttribute('material', 'color', jc);
         joinBtn.dataset.baseColor = jc;
         joinBtn.dataset.hoverColor = lightenHex(jc, 0.42);
@@ -1324,6 +1359,45 @@
           leaveTxt.setAttribute('color', inQ ? '#ffffff' : '#886666');
         }
       }
+    },
+
+    /**
+     * "Change Colors": static menu parts drawn in the previous scheme's colours are moved to the
+     * new one (materials, hover colours, texts), then every dynamic button is re-coloured.
+     */
+    _applyTheme: function (prev) {
+      var root = document.getElementById('vr-menu-root');
+      var map = {};
+      var put = function (from, to) { if (from) map[String(from).toLowerCase()] = to; };
+      put(prev.you, themeYou());
+      put(lightenHex(prev.you, 0.3), themeYouLight());
+      put(darkenHex(prev.you, 0.15), themeYouDark());
+      put(prev.opp, themeOpp());
+      put(darkenHex(prev.opp, 0.3), themeOppDark());
+      // The markup's hand-picked brand shades (first change away from the default scheme)
+      if (String(prev.you).toLowerCase() === '#e11168') {
+        put('#ff4d94', themeYouLight());
+        put('#c40f5b', themeYouDark());
+        put('#f0207a', themeYouLight());
+      }
+      if (String(prev.opp).toLowerCase() === '#12dace') put('#0f9b93', themeOppDark());
+      if (root) {
+        root.querySelectorAll('[material]').forEach(function (el) {
+          var m = el.getAttribute('material');
+          var c = m && m.color && String(m.color).toLowerCase();
+          if (c && map[c]) el.setAttribute('material', 'color', map[c]);
+          if (el.dataset.baseColor && map[el.dataset.baseColor.toLowerCase()]) {
+            el.dataset.baseColor = map[el.dataset.baseColor.toLowerCase()];
+            el.dataset.hoverColor = lightenHex(el.dataset.baseColor, 0.42);
+          }
+        });
+        // a-text and primitives (a-plane …) carry a plain color attribute
+        root.querySelectorAll('[color]').forEach(function (el) {
+          var c = String(el.getAttribute('color') || '').toLowerCase();
+          if (map[c]) el.setAttribute('color', map[c]);
+        });
+      }
+      this.refreshLobbyUI();
     },
 
     refreshLobbyUI: function () {
@@ -1460,7 +1534,10 @@
       }
 
       // Body tint: cup seat color, else default blue for lobby wait
-      this._setLocalBodyColor(isRed ? '#12DACE' : '#E11168'); // original colours: blue seat = player--2 pink
+      // Seat colour from the current palette (original colours: blue seat = player--2 pink)
+      var gpc = document.querySelector('[dot-game]');
+      var cpc = gpc && gpc.components && gpc.components['dot-game'];
+      this._setLocalBodyColor(cpc && cpc._sideColorCss ? cpc._sideColorCss(isRed ? 'red' : 'blue') : (isRed ? themeOpp() : themeYou()));
 
       if (key === this._poseKey) return;
       this._poseKey = key;
@@ -1477,6 +1554,9 @@
     _setLocalBodyColor: function (hex) {
       var body = document.getElementById('player-body');
       if (!body) return;
+      var gtc = document.querySelector('[dot-game]');
+      var ctc = gtc && gtc.components && gtc.components['dot-game'];
+      if (ctc && ctc._tintBody) { ctc._tintBody(body, hex); return; } // colour + glow
       try {
         body.setAttribute('mixamo-body', 'color', hex);
       } catch (e) { /* ignore */ }
@@ -1503,12 +1583,12 @@
       var sp = document.getElementById('menu-stats-sp');
       var mp = document.getElementById('menu-stats-mp');
       if (sp) {
-        var c = this.statsSubTab === 'single' ? '#ff4d94' : '#3b6161';
+        var c = this.statsSubTab === 'single' ? themeYouLight() : '#3b6161';
         sp.setAttribute('material', 'color', c);
         sp.dataset.baseColor = c;
       }
       if (mp) {
-        var c2 = this.statsSubTab === 'multi' ? '#ff4d94' : '#3b6161';
+        var c2 = this.statsSubTab === 'multi' ? themeYouLight() : '#3b6161';
         mp.setAttribute('material', 'color', c2);
         mp.dataset.baseColor = c2;
       }
@@ -1659,7 +1739,7 @@
                   liveMatch ? 'In match' : 'Watch');
               }
             } else {
-              replayBtns[slotIdx].setAttribute('material', 'color', '#ff4d94');
+              replayBtns[slotIdx].setAttribute('material', 'color', themeYouLight());
               if (replayTexts[slotIdx]) replayTexts[slotIdx].setAttribute('value', 'Watch');
             }
             if (selfStats.refreshRaycasters) selfStats.refreshRaycasters();
