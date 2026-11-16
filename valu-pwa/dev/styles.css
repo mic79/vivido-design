@@ -5002,10 +5002,32 @@ html[data-theme="light"] .valu-orb-sm .sphere { mix-blend-mode: multiply; }
   flex-shrink: 0;
 }
 
+/* Own vertical scroll so the sticky header row actually sticks (overflow-x on
+   .balance-table-wrap alone makes sticky bind to that box, which never scrolls
+   vertically with the page). */
+.forecast-table-wrap {
+  max-height: min(65vh, 560px);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.forecast-table-wrap::-webkit-scrollbar { display: block; height: 6px; width: 6px; }
+.forecast-table-wrap::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
 .forecast-table td,
 .forecast-table th {
   white-space: nowrap;
   font-size: 12px;
+}
+.forecast-table thead th {
+  z-index: 2;
+}
+.forecast-table thead th.balance-table-sticky {
+  z-index: 3;
+  top: 0;
+  left: 0;
 }
 .forecast-projected td {
   opacity: 0.6;

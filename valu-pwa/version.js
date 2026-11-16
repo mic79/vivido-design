@@ -7,5 +7,5 @@
  * (The /dev copy uses a "-dev" suffix so its caches never collide with the stable app's caches.)
  */
 (function (root) {
-  root.VALU_VERSION = 'v203';
+  root.VALU_VERSION = 'v204';
 })(typeof self !== 'undefined' ? self : this);

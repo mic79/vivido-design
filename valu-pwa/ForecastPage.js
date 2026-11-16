@@ -529,7 +529,7 @@ export default {
           <!-- Data Table -->
           <div class="card mb-16" v-if="displayRows.length > 0">
             <div class="card-header"><h3>{{ viewMode === 'yearly' ? 'Yearly' : 'Monthly' }} Data</h3></div>
-            <div class="balance-table-wrap">
+            <div class="balance-table-wrap forecast-table-wrap">
               <table class="balance-table forecast-table">
                 <thead>
                   <tr>
