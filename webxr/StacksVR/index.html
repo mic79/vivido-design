@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below). -->
-  <meta name="stacks-version" content="0.2.49" />
+  <meta name="stacks-version" content="0.2.50" />
   <title>StacksVR</title>
   <script>
     (function () {
@@ -36,7 +36,7 @@
   <script src="modes.js?v=20"></script>
   <script src="lobby.js?v=59"></script>
   <script src="match-replay.js?v=29"></script>
-  <script src="stacks-audio.js?v=9"></script>
+  <script src="stacks-audio.js?v=10"></script>
   <script src="stacks-victory-physics.js?v=9"></script>
   <script src="game-menu.js?v=65"></script>
   <script src="mixamo-body.js?v=25"></script>
@@ -776,7 +776,7 @@
       mixamo-body="mode: bot; color: #4D96FF; modelPath: assets/YBot.fbx"></a-entity>
 
     <!-- Audio: lobby ambient + match action + one-shot SFX (project-local) -->
-    <a-entity id="sfx-bg-music" sound="src: url(audio/bg-music.mp3); autoplay: false; loop: true; volume: 0.12; positional: false"></a-entity>
+    <a-entity id="sfx-bg-music" sound="src: url(audio/bg-music.mp3); autoplay: false; loop: true; volume: 0.06; positional: false"></a-entity>
     <a-entity id="sfx-match-music" sound="src: url(audio/match-music.mp3); autoplay: false; loop: true; volume: 0; positional: false"></a-entity>
     <a-entity id="sfx-grab" sound="src: url(audio/click.mp3); autoplay: false; loop: false; volume: 0.35; positional: false; poolSize: 4"></a-entity>
     <a-entity id="sfx-place" sound="src: url(audio/place.mp3); autoplay: false; loop: false; volume: 0.55; positional: false; poolSize: 4"></a-entity>

@@ -217,8 +217,8 @@
 
   var AudioApi = {
     // Keep beds under dialogue/SFX — users reported prior 0.28/0.32 as too loud
-    bgVol: 0.12,
-    matchVol: 0.14,
+    bgVol: 0.06,
+    matchVol: 0.07,
     sfxEnabled: true,
     musicEnabled: loadMusicPref(),
 
