@@ -1487,6 +1487,7 @@
   global.setStartType = setStartType;
   global.getStartType = getStartType;
   global.requestStartType = requestStartType;
+  global.getIceServers = getIceServers; // flat-compat.js (cross-play) reuses the TURN lookup
   Lobby.setStartType = setStartType;
   Lobby.getStartType = getStartType;
   Lobby.requestStartType = requestStartType;

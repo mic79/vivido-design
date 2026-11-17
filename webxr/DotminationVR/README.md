@@ -25,6 +25,24 @@ The earlier sphere prototype now lives in `../DotminationVR360`.
 | SOLO · Random map | A random stage and owner for each dot, vs a **NORM** or **HARD** bot (the board-size toggle). | Random mode |
 | MULTIPLAYER (lobby) | Turn-based PvP across the one shared vertical board. Start type: **BLANK** (default) or **HALF**-filled. The first player alternates each rematch. 25 s turn timer. | Multiplayer |
 | Preview | Bot vs bot on the menu screen. | – |
+| MULTIPLAYER · CROSS-PLAY | Play against the original flatscreen / mobile game (web, itch.io, Google Play), which is unchanged. Uses the lobby's BLANK/HALF toggle. Desktop key: **X**. | Multiplayer |
+
+## Cross-play with the original game (`flat-compat.js`)
+
+The original game is not modified. DotminationVR acts as an original client:
+
+- **Matchmaking:** the same PeerJS cloud (`0.peerjs.com`) and slot ids as the original:
+  `dot-host-{blank|half-filled}-{1..10}` and `dot-peer-…`. The first free host slot makes you host. A slot with a host and no peer is joined.
+- **Protocol:** the original messages, unchanged: `ready`, `move{dotIndex}`, `gameState{currentPlayer, moveAmount, mapString, fieldClasses, startType, matchStarter}`, `gameOver{winner, mapString}`, `rematchReady`, `modeSwitch`.
+  The host's board is the one that counts: it sends `gameState` after every turn and `gameOver` at the end.
+- **Sides:** `player--1` is the host (teal, VR `red`). `player--2` is the joiner (pink, VR `blue`).
+  `mapString` has one hex digit per dot: 0 is empty, 1–5 are player--1 stages, 6–A are player--2 stages.
+- **Rematch:** both sides press Rematch, and the starting player alternates, as in the original.
+- **Quirks of the original that VR works around:**
+  - An original host whose opponent left ignores every new joiner, because its `hasConnected` flag is never reset.
+    VR gives up after 8 s, skips that slot for 10 minutes, and searches again.
+  - A VR host above slot 1 re-checks lower slots every 15 s, because originals always scan from slot 1.
+- **Not carried over:** spectators, avatars, replays to the opponent, and the 25 s turn timer. The original has none of these.
 
 The experimental Real-Time mode of the original is deliberately not included.
 

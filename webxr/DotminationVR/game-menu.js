@@ -721,6 +721,8 @@
             this.refreshLobbyUI();
             break;
           }
+          // A bot / lobby match replaces cross-play
+          if (window.FlatCompat && window.FlatCompat.active && this.menuMode !== 'multi') window.FlatCompat.stop();
           // Host starting a match interrupts any lobby Watch
           if (window.replayActive || window.replaySpectator) {
             if (window.stopMatchReplay) window.stopMatchReplay({ force: true });
@@ -775,6 +777,7 @@
             if (this._joinCooldownUntil && performance.now() < this._joinCooldownUntil) {
               break;
             }
+            if (window.FlatCompat && window.FlatCompat.active) window.FlatCompat.stop();
             this._joinCooldownUntil = 0;
             window.connectToLobby(this.lobbyNumber);
           }
@@ -842,6 +845,14 @@
           break;
         case 'toggle-start-type':
           this._toggleStartType();
+          break;
+        case 'cross-play':
+          // Play the original flatscreen / mobile Dotmination (flat-compat.js)
+          if (window.FlatCompat) {
+            if (window.FlatCompat.active) window.FlatCompat.stop();
+            else window.FlatCompat.start(this._startTypeOn());
+          }
+          this.refreshLobbyUI();
           break;
         case 'toggle-music':
           if (window.StacksAudio && typeof window.StacksAudio.toggleMusic === 'function') {
@@ -1141,6 +1152,19 @@
       }
     },
 
+    /** CROSS-PLAY on/off (original flatscreen / mobile Dotmination, flat-compat.js). */
+    _setCrossPlayButton: function () {
+      var btn = document.getElementById('menu-cross-play');
+      var txt = document.getElementById('menu-cross-play-text');
+      if (!btn) return;
+      var on = !!(window.FlatCompat && window.FlatCompat.active);
+      var color = on ? '#c0392b' : themeOppDark();
+      btn.setAttribute('material', 'color', color);
+      btn.dataset.baseColor = color;
+      btn.dataset.hoverColor = lightenHex(color, 0.42);
+      if (txt) txt.setAttribute('value', on ? 'LEAVE X-PLAY' : 'CROSS-PLAY');
+    },
+
     _setMusicButton: function () {
       var btn = document.getElementById('menu-music-toggle');
       var txt = document.getElementById('menu-music-text');
@@ -1416,6 +1440,7 @@
       this._setPassthroughButton();
       this._setBoardButton();
       this._setStartTypeButton();
+      this._setCrossPlayButton();
       this._setLevelUI();
       if (stats) this._showStats();
 
@@ -1424,7 +1449,9 @@
         var live = window.StacksLobbyStatus || '';
         var ls = window.lobbyState;
         var msg;
-        if (window.connectionState === 'connecting' && live) {
+        if (window.FlatCompat && (window.FlatCompat.active || window.FlatCompat.status) && !window.isMultiplayer) {
+          msg = 'CROSS-PLAY | ' + (window.FlatCompat.status || 'off');
+        } else if (window.connectionState === 'connecting' && live) {
           msg = live;
         } else if (!window.isMultiplayer) {
           msg = live || 'Not connected - pick lobby & JOIN';
