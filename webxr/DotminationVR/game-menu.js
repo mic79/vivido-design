@@ -1359,6 +1359,24 @@
       }
 
       var inQ = !!(ls && myId && (ls.queue || []).indexOf(myId) >= 0);
+      // Quick rematch (1–2 VR players): JOIN QUEUE reads PLAY AGAIN; the host
+      // starts by itself once everyone is ready
+      var rm = !playing ? this._rematchMenuInfo(ls, myId) : null;
+      if (rm) {
+        if (title) title.setAttribute('value', 'PLAY AGAIN  ' + rm.info.ready.length + '/' + rm.info.players.length);
+        if (hint) hint.setAttribute('value', rm.hint);
+        for (var ri = 0; ri < 2; ri++) {
+          var rid = rm.info.players[ri];
+          var rReady = !!rid && rm.info.ready.indexOf(rid) >= 0;
+          this._setQueueSlot(ri, {
+            filled: rReady,
+            isYou: rid && rid === myId,
+            label: rid ? this._nickForLobby(ls, rid) + (rReady ? '  READY' : '') : 'Bot',
+            badge: String(ri + 1),
+            accent: rReady ? '#44cc66' : '#667788'
+          });
+        }
+      }
       var joinBtn = document.getElementById('menu-join-queue');
       var leaveBtn = document.getElementById('menu-leave-queue');
       var joinTxt = document.getElementById('menu-join-queue-text');
@@ -1369,7 +1387,7 @@
         joinBtn.dataset.baseColor = jc;
         joinBtn.dataset.hoverColor = lightenHex(jc, 0.42);
         if (joinTxt) {
-          joinTxt.setAttribute('value', inQ ? 'QUEUED' : 'JOIN QUEUE');
+          joinTxt.setAttribute('value', rm ? (inQ ? 'READY' : 'PLAY AGAIN') : (inQ ? 'QUEUED' : 'JOIN QUEUE'));
           joinTxt.setAttribute('color', inQ ? '#b4c8c8' : '#ffffff');
         }
       }
@@ -1422,6 +1440,22 @@
         });
       }
       this.refreshLobbyUI();
+    },
+
+    /** lobby.js rematchInfo() for this player + a one-line status, or null. */
+    _rematchMenuInfo: function (ls, myId) {
+      if (!window.isMultiplayer || window.isMobileSpectator) return null;
+      var info = typeof window.rematchInfo === 'function' ? window.rematchInfo() : null;
+      if (!info || !myId || info.players.indexOf(myId) < 0) return null;
+      var meReady = info.ready.indexOf(myId) >= 0;
+      var others = info.players.filter(function (id) { return id !== myId; });
+      var otherReady = others.some(function (id) { return info.ready.indexOf(id) >= 0; });
+      var name = others.length ? this._nickForLobby(ls, others[0]) : '';
+      var hint;
+      if (!others.length) hint = 'Play again vs bot';
+      else if (meReady) hint = otherReady ? 'Starting...' : 'Waiting for ' + name;
+      else hint = otherReady ? name + ' is ready!' : 'Both ready = next match';
+      return { info: info, hint: hint, meReady: meReady };
     },
 
     refreshLobbyUI: function () {

@@ -313,10 +313,16 @@
 
     var mp = Lobby.lobbyState.matchPlayers;
     var q = Lobby.lobbyState.queue;
+    // Quick rematch: a ready player waits on the side they just played
+    var pref = Lobby.lobbyState.rematchOpen ? Lobby.lobbyState.lastSeats : null;
     for (var i = 0; i < q.length; i++) {
       var nextId = q[i];
       if (mp.blue === nextId || mp.red === nextId) continue;
-      if (seatOpen(mp.blue)) {
+      if (pref && pref.red === nextId && seatOpen(mp.red)) {
+        mp.red = nextId;
+      } else if (pref && pref.blue === nextId && seatOpen(mp.blue)) {
+        mp.blue = nextId;
+      } else if (seatOpen(mp.blue)) {
         mp.blue = nextId;
       } else if (seatOpen(mp.red)) {
         mp.red = nextId;
@@ -325,6 +331,64 @@
       }
       clearSpectatorSlot(nextId);
     }
+  }
+
+  // ── Quick rematch (1–2 VR players) ───────────────────────────────────────
+  // After a finished lobby match, when the lobby holds only one or two VR players
+  // (mobile / flat watchers don't count — they can't play), "Play again" simply
+  // joins the queue and the host starts the next match as soon as every VR player
+  // is ready. No rejoining the queue + waiting for the host to press START.
+  var REMATCH_MAX_VR = 2;
+
+  function vrPlayerIds() {
+    var ls = Lobby.lobbyState;
+    var live = Lobby.isHost ? livePlayerIds() : null;
+    var out = [];
+    var ps = (ls && ls.players) || [];
+    for (var i = 0; i < ps.length; i++) {
+      var p = ps[i];
+      if (!p || !p.id || p.mobile || p.id === '__BOT__') continue;
+      if (live && !live[p.id]) continue;
+      if (out.indexOf(p.id) < 0) out.push(p.id);
+    }
+    return out;
+  }
+
+  /** null when no quick rematch is on offer; else { players, ready, allReady }. */
+  function rematchInfo() {
+    var ls = Lobby.lobbyState;
+    if (!ls || !ls.rematchOpen || ls.matchState === 'PLAYING') return null;
+    var ids = vrPlayerIds();
+    if (ids.length < 1 || ids.length > REMATCH_MAX_VR) return null;
+    var q = ls.queue || [];
+    var ready = ids.filter(function (id) { return q.indexOf(id) >= 0; });
+    return { players: ids, ready: ready, allReady: ready.length === ids.length };
+  }
+
+  /** Host: everyone (1–2 VR players) said Play again → start right away. */
+  function maybeAutoStartRematch() {
+    if (!Lobby.isHost) return false;
+    var info = rematchInfo();
+    if (!info || !info.allReady) return false;
+    // Same prep as the menu START: stop a lobby Watch / the dual-bot filler
+    try {
+      if ((global.replayActive || global.replaySpectator) && global.stopMatchReplay) {
+        global.stopMatchReplay({ force: true });
+      }
+      var gEl = document.querySelector('[dot-game],[stacks-game]');
+      var gc = gEl && gEl.components && (gEl.components['dot-game'] || gEl.components['stacks-game']);
+      if (gc && typeof gc.stopLocalPreview === 'function' && gc._dualBotPreview) gc.stopLocalPreview();
+    } catch (e) { /* ignore */ }
+    // Rematch keeps everyone on the side they just played (seats fill in queue order)
+    var last = Lobby.lobbyState.lastSeats;
+    if (last) {
+      var rank = function (id) { return id === last.blue ? 0 : (id === last.red ? 1 : 2); };
+      Lobby.lobbyState.queue = (Lobby.lobbyState.queue || []).slice().sort(function (a, b) { return rank(a) - rank(b); });
+      var mpS = Lobby.lobbyState.matchPlayers;
+      if (mpS) { mpS.blue = null; if (mpS.red !== '__BOT__') mpS.red = null; }
+    }
+    startLobbyMatch();
+    return true;
   }
 
   function handleQueueAction(playerId, action) {
@@ -336,6 +400,7 @@
         Lobby.lobbyState.queue.push(playerId);
       }
       tryAssignMatchPlayers();
+      if (maybeAutoStartRematch()) return;
     } else if (action === 'leave') {
       // Only this player leaves — never clear the whole queue
       Lobby.lobbyState.queue = Lobby.lobbyState.queue.filter(function (id) { return id !== playerId; });
@@ -424,6 +489,7 @@
     }
 
     Lobby.lobbyState.matchState = 'PLAYING';
+    Lobby.lobbyState.rematchOpen = false;
     Lobby.lobbyState.matchScore = { blue: 0, red: 0 };
     Lobby.lobbyState.matchGameState = 'PLAYING';
     var startTime = Date.now();
@@ -501,6 +567,9 @@
       blueName: result.blueName || null,
       redName: result.redName || null
     };
+    // A finished match offers a quick rematch (see rematchInfo); END / leave doesn't
+    Lobby.lobbyState.rematchOpen = !endMsg.cancelled;
+    Lobby.lobbyState.lastSeats = { blue: oldBlue || null, red: oldRed || null };
     for (var i = 0; i < Lobby.connections.length; i++) {
       if (Lobby.connections[i].conn.open) {
         Lobby.connections[i].conn.send(endMsg);
@@ -1470,6 +1539,8 @@
   global.sendPlayerPose = sendPlayerPose;
   global.createLobbyState = createLobbyState;
   global.startLobbyMatch = startLobbyMatch;
+  global.rematchInfo = rematchInfo;
+  Lobby.rematchInfo = rematchInfo;
   global.endLobbyMatch = endLobbyMatch;
   global.broadcastLobbyState = broadcastLobbyState;
   global.setBoardSize = setBoardSize;

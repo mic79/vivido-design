@@ -3279,6 +3279,11 @@
       }
     },
 
+    _rematchHolds: function () {
+      if (!global.isMultiplayer || global.isMobileSpectator) return false;
+      return !!(typeof global.rematchInfo === 'function' && global.rematchInfo());
+    },
+
     _scheduleDualIdle: function (delayMs) {
       if (!this._canResumeDualIdle()) return;
       if (typeof this.startOfflinePreviewMatch !== 'function') return;
@@ -3288,6 +3293,12 @@
         self._dualIdleTimer = null;
         if (self.matchActive) return;
         if (!self._canResumeDualIdle()) return;
+        // Quick rematch on offer (1–2 VR players): keep the result up instead of the
+        // bot filler until the next match starts or the offer lapses
+        if (self._rematchHolds()) {
+          self._scheduleDualIdle(2000);
+          return;
+        }
         if (global.StacksVictoryPhysics) global.StacksVictoryPhysics.stop();
         self._flushPendingCupHeightReset();
         self._clearVictory();

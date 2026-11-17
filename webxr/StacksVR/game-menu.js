@@ -288,7 +288,29 @@
 
       function onMenuButton() { self.requestToggleMenu(); }
       this.el.sceneEl.addEventListener('xbuttondown', onMenuButton);
-      this.el.sceneEl.addEventListener('lobby-state-updated', function () { self.refreshLobbyUI(); });
+      this.el.sceneEl.addEventListener('lobby-state-updated', function () {
+        self.refreshLobbyUI();
+        // StacksVR has no end card: pop the menu (multiplayer tab) when a quick
+        // rematch is first offered so PLAY AGAIN is one click away
+        var myId = window.myPlayerId || (window.StacksLobby && window.StacksLobby.myPlayerId);
+        var rm = self._rematchMenuInfo(window.lobbyState, myId);
+        if (rm && !self._rematchOffered && !rm.meReady) {
+          self.menuMode = 'multi';
+          if (!self.menuVisible) {
+            self.toggleMenu();
+            self._rematchAutoOpened = true;
+          } else {
+            self.refreshLobbyUI();
+          }
+        }
+        // ...and put it away again once that next match is under way
+        if (!rm && self._rematchAutoOpened) {
+          self._rematchAutoOpened = false;
+          var lsNow = window.lobbyState;
+          if (lsNow && lsNow.matchState === 'PLAYING' && self.menuVisible) self.closeMenu();
+        }
+        self._rematchOffered = !!rm;
+      });
       this.el.sceneEl.addEventListener('board-size-changed', function () { self._setBoardButton(); });
       this.el.sceneEl.addEventListener('idle-junk-changed', function () { self._setIdleJunkButton(); });
       // Visuals follow PASS preference (AR session + opaque shell = VR look)
@@ -1183,6 +1205,24 @@
       }
 
       var inQ = !!(ls && myId && (ls.queue || []).indexOf(myId) >= 0);
+      // Quick rematch (1–2 VR players): JOIN QUEUE reads PLAY AGAIN; the host
+      // starts by itself once everyone is ready
+      var rm = !playing ? this._rematchMenuInfo(ls, myId) : null;
+      if (rm) {
+        if (title) title.setAttribute('value', 'PLAY AGAIN  ' + rm.info.ready.length + '/' + rm.info.players.length);
+        if (hint) hint.setAttribute('value', rm.hint);
+        for (var ri = 0; ri < 2; ri++) {
+          var rid = rm.info.players[ri];
+          var rReady = !!rid && rm.info.ready.indexOf(rid) >= 0;
+          this._setQueueSlot(ri, {
+            filled: rReady,
+            isYou: rid && rid === myId,
+            label: rid ? this._nickForLobby(ls, rid) + (rReady ? '  READY' : '') : 'Bot',
+            badge: String(ri + 1),
+            accent: rReady ? '#44cc66' : '#667788'
+          });
+        }
+      }
       var joinBtn = document.getElementById('menu-join-queue');
       var leaveBtn = document.getElementById('menu-leave-queue');
       var joinTxt = document.getElementById('menu-join-queue-text');
@@ -1193,7 +1233,7 @@
         joinBtn.dataset.baseColor = jc;
         joinBtn.dataset.hoverColor = lightenHex(jc, 0.42);
         if (joinTxt) {
-          joinTxt.setAttribute('value', inQ ? 'QUEUED' : 'JOIN QUEUE');
+          joinTxt.setAttribute('value', rm ? (inQ ? 'READY' : 'PLAY AGAIN') : (inQ ? 'QUEUED' : 'JOIN QUEUE'));
           joinTxt.setAttribute('color', inQ ? '#88aa88' : '#ffffff');
         }
       }
@@ -1207,6 +1247,22 @@
           leaveTxt.setAttribute('color', inQ ? '#ffffff' : '#886666');
         }
       }
+    },
+
+    /** lobby.js rematchInfo() for this player + a one-line status, or null. */
+    _rematchMenuInfo: function (ls, myId) {
+      if (!window.isMultiplayer || window.isMobileSpectator) return null;
+      var info = typeof window.rematchInfo === 'function' ? window.rematchInfo() : null;
+      if (!info || !myId || info.players.indexOf(myId) < 0) return null;
+      var meReady = info.ready.indexOf(myId) >= 0;
+      var others = info.players.filter(function (id) { return id !== myId; });
+      var otherReady = others.some(function (id) { return info.ready.indexOf(id) >= 0; });
+      var name = others.length ? this._nickForLobby(ls, others[0]) : '';
+      var hint;
+      if (!others.length) hint = 'Play again vs bot';
+      else if (meReady) hint = otherReady ? 'Starting...' : 'Waiting for ' + name;
+      else hint = otherReady ? name + ' is ready!' : 'Both ready = next match';
+      return { info: info, hint: hint, meReady: meReady };
     },
 
     refreshLobbyUI: function () {

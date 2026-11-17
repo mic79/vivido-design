@@ -1531,6 +1531,8 @@
       global.botReactionTarget = null;
 
       var liveMp = mp || (global.lobbyState && global.lobbyState.matchPlayers);
+      // Seats of this match survive endLobbyMatch (which clears them before the end card)
+      this._lastMatchSeats = liveMp ? { blue: liveMp.blue || null, red: liveMp.red || null } : null;
       var reallyBot = !!(liveMp && liveMp.red === '__BOT__') ||
         (!!isBotMatch && !(liveMp && liveMp.red && liveMp.red !== '__BOT__'));
       global.isLobbyBotMatch = reallyBot;
@@ -2085,6 +2087,11 @@
       }
     },
 
+    _rematchHolds: function () {
+      if (!global.isMultiplayer || global.isMobileSpectator) return false;
+      return !!(typeof global.rematchInfo === 'function' && global.rematchInfo());
+    },
+
     _scheduleDualIdle: function (delayMs) {
       if (!this._canResumeDualIdle()) return;
       if (typeof this.startOfflinePreviewMatch !== 'function') return;
@@ -2094,6 +2101,12 @@
         self._dualIdleTimer = null;
         if (self.matchActive) return;
         if (!self._canResumeDualIdle()) return;
+        // Quick rematch on offer (1–2 VR players): keep the result up instead of the
+        // bot filler until the next match starts or the offer lapses
+        if (self._rematchHolds()) {
+          self._scheduleDualIdle(2000);
+          return;
+        }
         self._clearVictory();
         self.startOfflinePreviewMatch();
       }, delayMs == null ? 400 : delayMs);

@@ -719,6 +719,12 @@
     if (!this._uiReady) this._uiInit();
     var winner = info.winner || (this.modes && this.modes.winner) || 'draw';
     var mySide = this._mySeatSide();
+    // The lobby has already cleared the seats by now: use the seats this match had
+    if (!mySide && global.isMultiplayer && !global.isMobileSpectator && this._lastMatchSeats) {
+      var meId = (global.StacksLobby && global.StacksLobby.myPlayerId) || global.myPlayerId;
+      if (meId && this._lastMatchSeats.blue === meId) mySide = 'blue';
+      else if (meId && this._lastMatchSeats.red === meId) mySide = 'red';
+    }
     var solo = !global.isMultiplayer && !this._dualBotPreview;
     var host = !!(global.StacksLobby && global.StacksLobby.isHost);
     var e = {
@@ -752,11 +758,76 @@
       e.sub = info.time || '';
       e.buttons = [{ id: 'retry', label: 'Retry', icon: 'undo' }, { id: 'next-map', label: 'Next', icon: 'shuffle', primary: true }];
     }
+    // 1–2 VR players in the lobby: everyone gets Play again (no queue / host START)
+    var rm = this._rematchOffer();
+    e._player = !!(global.isMultiplayer && mySide);
+    if (rm) { e.buttons = rm.buttons; e.sub = rm.sub; e._rematch = true; }
+    this._listenRematch();
     this._endInfo = e;
     this._victory = { root: this._endCard.group, t0: performance.now(), endCard: true };
     this._uiShow(this._endCard, this._uiFrontPos(0.04));
     this._endCard.shownAt = performance.now();
     this._sfx('win', { volume: 0.5 });
+  };
+
+  // ── Quick rematch (lobby.js rematchInfo) ───────────────────────────────────
+  C._lobbyNick = function (id) {
+    var ps = (global.lobbyState && global.lobbyState.players) || [];
+    for (var i = 0; i < ps.length; i++) {
+      if (ps[i] && ps[i].id === id) return String(ps[i].nickname || 'Player').slice(0, 12);
+    }
+    return 'Opponent';
+  };
+
+  /** End-card buttons + status for this player, or null when no quick rematch applies. */
+  C._rematchOffer = function () {
+    if (!global.isMultiplayer || global.isMobileSpectator || this._xplay) return null;
+    var info = typeof global.rematchInfo === 'function' ? global.rematchInfo() : null;
+    var Lobby = global.StacksLobby;
+    var me = (Lobby && Lobby.myPlayerId) || global.myPlayerId;
+    if (!info || !me || info.players.indexOf(me) < 0) return null;
+    var meReady = info.ready.indexOf(me) >= 0;
+    var others = info.players.filter(function (id) { return id !== me; });
+    var otherReady = others.some(function (id) { return info.ready.indexOf(id) >= 0; });
+    var name = others.length ? this._lobbyNick(others[0]) : '';
+    var buttons = [{ id: 'play-again', label: 'Play again', icon: 'undo', primary: true }];
+    var sub = '';
+    if (!others.length) {
+      // Alone (or the opponent left after you readied): the next match is vs the bot
+      if (meReady) buttons = [{ id: 'play-again', label: 'Play vs Bot', icon: 'arrow', primary: true }];
+    } else if (meReady) {
+      buttons = [];
+      sub = 'Waiting for ' + name + '...';
+    } else if (otherReady) {
+      sub = name + ' is ready!';
+    }
+    return { buttons: buttons, sub: sub };
+  };
+
+  C._listenRematch = function () {
+    if (this._rematchListening || !this.el || !this.el.sceneEl) return;
+    this._rematchListening = true;
+    var self = this;
+    this.el.sceneEl.addEventListener('lobby-state-updated', function () { self._refreshRematchCard(); });
+  };
+
+  C._refreshRematchCard = function () {
+    var e = this._endInfo;
+    if (!e || !this._endCard || this._xplay) return;
+    var rm = this._rematchOffer();
+    if (rm) {
+      e.buttons = rm.buttons; e.sub = rm.sub; e._rematch = true;
+    } else if (e._rematch) {
+      // Offer withdrawn (a 3rd VR player joined): back to the host-driven Rematch
+      e._rematch = false;
+      var host = !!(global.StacksLobby && global.StacksLobby.isHost);
+      var mine = e._player;
+      e.buttons = host && mine ? [{ id: 'rematch', label: 'Rematch', icon: 'undo', primary: true }] : [];
+      e.sub = !host && mine ? 'Waiting for the host' : '';
+    } else {
+      return;
+    }
+    this._endCard.dirty = true;
   };
 
   C._placeVictory = function () { /* the end card places itself (_uiFrontPos) */ };
@@ -812,6 +883,12 @@
   };
 
   C._onEndCard = function (id) {
+    if (id === 'play-again') {
+      // Ready up = join the queue; the host starts once every VR player is ready
+      if (typeof global.sendQueueAction === 'function') global.sendQueueAction('join');
+      this._refreshRematchCard();
+      return;
+    }
     var lvl = this._levelMatch | 0;          // the match that just ended
     var seed = this.bagSeed;
     this._clearVictory();
