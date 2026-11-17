@@ -746,7 +746,7 @@
       function updateMultiplayerStatus(text) {
         const versionDisplay = document.getElementById('version-display');
         if (versionDisplay) {
-          versionDisplay.setAttribute('text', 'value', `v0.20 | ${text}`);
+          versionDisplay.setAttribute('text', 'value', `v0.21 | ${text}`);
         }
       }
 
@@ -2918,6 +2918,13 @@
                   state.rhqx = rq.x; state.rhqy = rq.y; state.rhqz = rq.z; state.rhqw = rq.w;
                 }
               }
+              // Finger curls [thumb,index,middle,ring,pinky] from the local avatar
+              const _pbEl = document.getElementById('player-body');
+              const _pmb = _pbEl && _pbEl.components && _pbEl.components['mixamo-body'];
+              if (_pmb && _pmb.packCurls) {
+                if (state.lhx !== undefined) state.lc = _pmb.packCurls('left');
+                if (state.rhx !== undefined) state.rc = _pmb.packCurls('right');
+              }
 
               sendPlayerState(state);
             }
@@ -3035,6 +3042,7 @@
                 };
               }
 
+              rd.lc = rs.lc; rd.rc = rs.rc;
               mb.remoteHandData = rd;
             }
           } // end stale else
@@ -3121,6 +3129,7 @@
                   }
                   if (lbs.lhx !== undefined) { lbrd.leftHand = { x: lbs.lhx, y: lbs.lhy, z: lbs.lhz }; if (lbs.lhqx !== undefined) { lbrd.leftHand.qx = lbs.lhqx; lbrd.leftHand.qy = lbs.lhqy; lbrd.leftHand.qz = lbs.lhqz; lbrd.leftHand.qw = lbs.lhqw; } }
                   if (lbs.rhx !== undefined) { lbrd.rightHand = { x: lbs.rhx, y: lbs.rhy, z: lbs.rhz }; if (lbs.rhqx !== undefined) { lbrd.rightHand.qx = lbs.rhqx; lbrd.rightHand.qy = lbs.rhqy; lbrd.rightHand.qz = lbs.rhqz; lbrd.rightHand.qw = lbs.rhqw; } }
+                  lbrd.lc = lbs.lc; lbrd.rc = lbs.rc;
                   specBlueBody.components['mixamo-body'].remoteHandData = lbrd;
                 }
               }
@@ -3145,6 +3154,7 @@
                 }
                 if (lrs.lhx !== undefined) { lrrd.leftHand = { x: -lrs.rhx, y: lrs.rhy, z: -lrs.rhz }; if (lrs.rhqx !== undefined) { var lrlq = new THREE.Quaternion(lrs.rhqx, lrs.rhqy, lrs.rhqz, lrs.rhqw).multiply(yFlipLobby); lrrd.leftHand.qx = lrlq.x; lrrd.leftHand.qy = lrlq.y; lrrd.leftHand.qz = lrlq.z; lrrd.leftHand.qw = lrlq.w; } }
                 if (lrs.rhx !== undefined) { lrrd.rightHand = { x: -lrs.lhx, y: lrs.lhy, z: -lrs.lhz }; if (lrs.lhqx !== undefined) { var lrrq = new THREE.Quaternion(lrs.lhqx, lrs.lhqy, lrs.lhqz, lrs.lhqw).multiply(yFlipLobby); lrrd.rightHand.qx = lrrq.x; lrrd.rightHand.qy = lrrq.y; lrrd.rightHand.qz = lrrq.z; lrrd.rightHand.qw = lrrq.w; } }
+                lrrd.lc = lrs.rc; lrrd.rc = lrs.lc; // hands are swapped above
                 botBody.components['mixamo-body'].remoteHandData = lrrd;
               }
             } else if (!localIsMatchPlayer && !remotePlayerState && !arenaBots.redBotActive && !(window._lastArenaBotState && window._lastArenaBotState.rbd)) {
@@ -3257,6 +3267,7 @@
                   rq.premultiply(yFlipSpec);
                   rd.rightHand = { x: -rs.rhx, y: rs.rhy, z: -rs.rhz, qx: rq.x, qy: rq.y, qz: rq.z, qw: rq.w };
                 }
+                rd.lc = rs.lc; rd.rc = rs.rc;
                 botBody.components['mixamo-body'].remoteHandData = rd;
               }
             }
@@ -3276,6 +3287,7 @@
                 if (bs.rhx !== undefined) {
                   rd.rightHand = { x: bs.rhx, y: bs.rhy, z: bs.rhz, qx: bs.rhqx, qy: bs.rhqy, qz: bs.rhqz, qw: bs.rhqw };
                 }
+                rd.lc = bs.lc; rd.rc = bs.rc;
                 specBlueBody.components['mixamo-body'].remoteHandData = rd;
               }
             }
@@ -3392,6 +3404,7 @@
                     if (_ss.hqx !== undefined) { _srd.head.qx = _ss.hqx; _srd.head.qy = _ss.hqy; _srd.head.qz = _ss.hqz; _srd.head.qw = _ss.hqw; }
                     if (_ss.lhx !== undefined) { _srd.leftHand = { x: _ss.lhx, y: _ss.lhy, z: _ss.lhz }; if (_ss.lhqx !== undefined) { _srd.leftHand.qx = _ss.lhqx; _srd.leftHand.qy = _ss.lhqy; _srd.leftHand.qz = _ss.lhqz; _srd.leftHand.qw = _ss.lhqw; } }
                     if (_ss.rhx !== undefined) { _srd.rightHand = { x: _ss.rhx, y: _ss.rhy, z: _ss.rhz }; if (_ss.rhqx !== undefined) { _srd.rightHand.qx = _ss.rhqx; _srd.rightHand.qy = _ss.rhqy; _srd.rightHand.qz = _ss.rhqz; _srd.rightHand.qw = _ss.rhqw; } }
+                    _srd.lc = _ss.lc; _srd.rc = _ss.rc;
                     _sbEnt.components['mixamo-body'].remoteHandData = _srd;
                   }
                 }
@@ -7876,6 +7889,34 @@
           this.targetCurls[hand] = curls;
         },
 
+        // ---- Networked finger curls ----
+        // Wire format: lc/rc = [thumb, index, middle, ring, pinky], 2 decimals.
+        packCurls: function(hand) {
+          const c = this.currentCurls && this.currentCurls[hand];
+          if (!c) return undefined;
+          return ['thumb', 'index', 'middle', 'ring', 'pinky'].map(function(f) {
+            return Math.round((c[f] || 0) * 100) / 100;
+          });
+        },
+
+        applyRemoteCurls: function(rd) {
+          const FINGERS = ['thumb', 'index', 'middle', 'ring', 'pinky'];
+          const RELAXED = { thumb: 0.15, index: 0.2, middle: 0.25, ring: 0.3, pinky: 0.3 };
+          ['left', 'right'].forEach(hand => {
+            const src = hand === 'left' ? rd.lc : rd.rc;
+            const tgt = this.targetCurls[hand];
+            FINGERS.forEach((f, i) => {
+              let v = RELAXED[f];
+              if (Array.isArray(src)) v = src[i];
+              else if (src && typeof src === 'object') v = src[f];
+              tgt[f] = (typeof v === 'number' && isFinite(v)) ? v : RELAXED[f];
+              const cur = this.currentCurls[hand][f];
+              this.currentCurls[hand][f] = cur + (tgt[f] - cur) * this.fingerSmoothingFactor;
+            });
+            this.applyFingerCurls(hand, this.currentCurls[hand]);
+          });
+        },
+
         applyFingerCurls: function(hand, curls) {
           const fingerBones = {
             thumb: hand === 'left' ? [this.bones.leftHandThumb1, this.bones.leftHandThumb2, this.bones.leftHandThumb3] :
@@ -8079,6 +8120,9 @@
             this.el.object3D.quaternion.copy(this.torsoRotation);
 
             this.updateBones(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
+
+            // Networked finger curls (lc/rc); senders without them keep a relaxed hand
+            this.applyRemoteCurls(rd);
 
             // Position remote player's rackets directly at hand positions (bypasses IK)
             if (this.botRackets) {
@@ -9491,7 +9535,7 @@
       <!-- Add game manager entity with score display -->
       <a-entity id="game-manager" game-manager>
         <!-- Smaller version display moved closer to ceiling -->
-        <a-entity id="version-display" position="0 3.6 0" text="value: v0.20; align: center; width: 1.5; color: #ffffff"></a-entity>
+        <a-entity id="version-display" position="0 3.6 0" text="value: v0.21; align: center; width: 1.5; color: #ffffff"></a-entity>
         
         <!-- Large colored score display -->
         <a-entity id="score-display" position="0 3.3 0">

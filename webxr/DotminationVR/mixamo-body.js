@@ -505,6 +505,34 @@
           this.targetCurls[hand] = curls;
         },
 
+        // ---- Networked finger curls ----
+        // Wire format: lc/rc = [thumb, index, middle, ring, pinky], 2 decimals.
+        packCurls: function(hand) {
+          const c = this.currentCurls && this.currentCurls[hand];
+          if (!c) return undefined;
+          return ['thumb', 'index', 'middle', 'ring', 'pinky'].map(function(f) {
+            return Math.round((c[f] || 0) * 100) / 100;
+          });
+        },
+
+        applyRemoteCurls: function(rd) {
+          const FINGERS = ['thumb', 'index', 'middle', 'ring', 'pinky'];
+          const RELAXED = { thumb: 0.15, index: 0.2, middle: 0.25, ring: 0.3, pinky: 0.3 };
+          ['left', 'right'].forEach(hand => {
+            const src = hand === 'left' ? rd.lc : rd.rc;
+            const tgt = this.targetCurls[hand];
+            FINGERS.forEach((f, i) => {
+              let v = RELAXED[f];
+              if (Array.isArray(src)) v = src[i];
+              else if (src && typeof src === 'object') v = src[f];
+              tgt[f] = (typeof v === 'number' && isFinite(v)) ? v : RELAXED[f];
+              const cur = this.currentCurls[hand][f];
+              this.currentCurls[hand][f] = cur + (tgt[f] - cur) * this.fingerSmoothingFactor;
+            });
+            this.applyFingerCurls(hand, this.currentCurls[hand]);
+          });
+        },
+
         applyFingerCurls: function(hand, curls) {
           const fingerBones = {
             thumb: hand === 'left' ? [this.bones.leftHandThumb1, this.bones.leftHandThumb2, this.bones.leftHandThumb3] :
@@ -732,6 +760,9 @@
             this.el.object3D.quaternion.copy(this.torsoRotation);
 
             this.updateBones(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
+
+            // Networked finger curls (lc/rc); senders without them keep a relaxed hand
+            this.applyRemoteCurls(rd);
 
             // Position remote player's rackets directly at hand positions (bypasses IK)
             if (this.botRackets) {

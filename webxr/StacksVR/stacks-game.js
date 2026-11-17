@@ -2565,7 +2565,9 @@
         return {
           head: data.head,
           leftHand: data.leftHand || null,
-          rightHand: data.rightHand || null
+          rightHand: data.rightHand || null,
+          lc: data.lc || null,
+          rc: data.rc || null
         };
       }
       // DodgeVR flat format
@@ -2576,7 +2578,9 @@
             qx: data.hqx, qy: data.hqy, qz: data.hqz, qw: data.hqw
           },
           leftHand: null,
-          rightHand: null
+          rightHand: null,
+          lc: data.lc || null,
+          rc: data.rc || null
         };
         if (typeof data.lhx === 'number') {
           rd.leftHand = {
@@ -4628,6 +4632,14 @@
       if (left && (left.x * left.x + left.y * left.y + left.z * left.z) < 0.001) left = null;
       if (right && (right.x * right.x + right.y * right.y + right.z * right.z) < 0.001) right = null;
 
+      var curls = { lc: undefined, rc: undefined };
+      var pb = document.getElementById('player-body');
+      var pmb = pb && pb.components && pb.components['mixamo-body'];
+      if (pmb && pmb.packCurls) {
+        curls.lc = pmb.packCurls('left');
+        curls.rc = pmb.packCurls('right');
+      }
+
       // Nested + flat fields so any consumer can read the pose
       global.sendPlayerPose({
         head: head,
@@ -4648,7 +4660,10 @@
         rhqx: right ? right.qx : undefined,
         rhqy: right ? right.qy : undefined,
         rhqz: right ? right.qz : undefined,
-        rhqw: right ? right.qw : undefined
+        rhqw: right ? right.qw : undefined,
+        // Finger curls [thumb,index,middle,ring,pinky] from the local avatar
+        lc: left ? curls.lc : undefined,
+        rc: right ? curls.rc : undefined
       });
       this._poseSendCount = (this._poseSendCount || 0) + 1;
 

@@ -232,7 +232,9 @@
       mb.remoteHandData = {
         head: data.head || head,
         leftHand: data.leftHand || null,
-        rightHand: data.rightHand || null
+        rightHand: data.rightHand || null,
+        lc: data.lc || null,
+        rc: data.rc || null
       };
     }
   }
