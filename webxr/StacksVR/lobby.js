@@ -736,6 +736,12 @@
         // Explicit leave (DodgeVR-style) — don't wait for PeerJS close which can lag/miss
         removePlayer(fromId);
       }
+      else if (data.type === 'vp') {
+        // Victory debris: a peer's scoop / release for the host's simulation
+        if (global.StacksVictoryPhysics && global.StacksVictoryPhysics.onNet) {
+          global.StacksVictoryPhysics.onNet(fromId, data);
+        }
+      }
       else if (data.type === 'cup-event') {
         if (!data.from) data.from = fromId;
         // Rebroadcast to other peers, then apply locally on host
@@ -913,6 +919,11 @@
       }
     } else if (data.type === 'host-leaving') {
       handleHostGone((data && data.reason) || 'host-left');
+    } else if (data.type === 'vp') {
+      // Victory debris stream from the host
+      if (global.StacksVictoryPhysics && global.StacksVictoryPhysics.onNet) {
+        global.StacksVictoryPhysics.onNet(fromId, data);
+      }
     } else if (data.type === 'cup-event' || data.type === 'cup-snapshot') {
       if (Lobby.onCupEvent) Lobby.onCupEvent(data);
       if (data.type === 'cup-snapshot' && Lobby.onCupSnapshot) Lobby.onCupSnapshot(data);
@@ -1470,6 +1481,23 @@
     }
   }
 
+  /**
+   * Victory debris (stacks-victory-physics.js). Host → all peers (or one peer when
+   * toId is given); peer → host.
+   */
+  function sendVictoryPhys(msg, toId) {
+    var out = Object.assign({ type: 'vp' }, msg);
+    if (Lobby.isHost) {
+      for (var i = 0; i < Lobby.connections.length; i++) {
+        var c = Lobby.connections[i];
+        if (toId && c.id !== toId) continue;
+        if (c.conn && c.conn.open) c.conn.send(out);
+      }
+    } else if (Lobby.conn && Lobby.conn.open) {
+      Lobby.conn.send(out);
+    }
+  }
+
   function sendCupSnapshot(snap) {
     var msg = { type: 'cup-snapshot', snapshot: snap, from: Lobby.myPlayerId };
     if (Lobby.isHost) {
@@ -1534,6 +1562,7 @@
   global.sendQueueAction = sendQueueAction;
   global.sendMatchAction = sendMatchAction;
   global.sendCupEvent = sendCupEvent;
+  global.sendVictoryPhys = sendVictoryPhys;
   global.sendCupSnapshot = sendCupSnapshot;
   global.sendReplayMsg = sendReplayMsg;
   global.sendPlayerPose = sendPlayerPose;

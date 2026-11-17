@@ -2535,6 +2535,10 @@
 
       var rd = this._normalizeRemotePose(data);
       if (!rd || !rd.head) return;
+      // Host: every player's palms push / scoop the victory debris
+      if (global.StacksVictoryPhysics && global.StacksVictoryPhysics.onRemotePose) {
+        global.StacksVictoryPhysics.onRemotePose(fromId, rd);
+      }
 
       var body = this._bodyForRemotePlayer(fromId);
       if (!body) return;

@@ -37,6 +37,55 @@
   var _boundHands = false;
   var _tmpOff = null;
 
+  // ── Multiplayer: host simulates, everyone else mirrors ─────────────────────
+  // 'local' = offline / solo, 'host' = lobby host (simulates + streams),
+  // 'mirror' = lobby peer / mobile watcher (renders the host's blocks).
+  var _mode = 'local';
+  var SNAP_MS = 66;           // ~15 Hz block stream
+  var SNAP_FULL_MS = 1000;    // full refresh so a dropped delta can't stick
+  var HOST_WAIT_MS = 4000;    // peer falls back to a local pile if the host never streams
+  var _lastSnapAt = 0;
+  var _lastFullAt = 0;
+  var _snapSeq = 0;
+  var _sent = [];             // last streamed pose per block (host)
+  var _remoteHands = {};      // 'peerId|leftHand' -> { x,y,z, q, t, body } (host)
+  var _awaitHostTimer = null; // peer waiting for the host's 'start'
+  var _pendingStart = null;   // host 'start' that arrived before our own match end
+  var _localHeld = { leftHand: [], rightHand: [] }; // mirror: blocks riding my hands
+  var REMOTE_HAND_STALE_MS = 1500;
+
+  function isLocalKey(key) { return key === 'leftHand' || key === 'rightHand'; }
+  function splitKey(key) {
+    var sep = key.lastIndexOf('|');
+    return sep < 0 ? { peer: null, hand: key } : { peer: key.slice(0, sep), hand: key.slice(sep + 1) };
+  }
+  function r3(v) { return Math.round(v * 1000) / 1000; }
+
+  function lobbyHost() { return !!(global.StacksLobby && global.StacksLobby.isHost); }
+  function inLobby() { return !!(global.isMultiplayer || global.isMobileSpectator); }
+
+  function net(msg, toId) {
+    if (typeof global.sendVictoryPhys === 'function') {
+      try { global.sendVictoryPhys(msg, toId); } catch (e) { /* ignore */ }
+    }
+  }
+
+  /** World pose of a hand's palm by key (local controller or a remote player's pose). */
+  function handPoseByKey(key, outPos, outQuat) {
+    ensureThreeHelpers();
+    if (isLocalKey(key)) {
+      var el = document.getElementById(key);
+      if (!el || !el.object3D) return false;
+      handWorldPose(el, outPos, outQuat);
+      return true;
+    }
+    var rh = _remoteHands[key];
+    if (!rh || performance.now() - rh.t > REMOTE_HAND_STALE_MS) return false;
+    outQuat.copy(rh.q);
+    outPos.set(rh.x, rh.y, rh.z);
+    return true;
+  }
+
   function ensureThreeHelpers() {
     if (!_tmpQ && global.THREE) {
       _tmpQ = new THREE.Quaternion();
@@ -124,6 +173,12 @@
     var off = new THREE.Vector3(HAND_PALM_LOCAL.x, HAND_PALM_LOCAL.y, HAND_PALM_LOCAL.z);
     off.applyQuaternion(outQuat);
     outPos.add(off);
+  }
+
+  function palmFromGrip(x, y, z, q, outPos) {
+    ensureThreeHelpers();
+    _tmpOff.set(HAND_PALM_LOCAL.x, HAND_PALM_LOCAL.y, HAND_PALM_LOCAL.z).applyQuaternion(q);
+    outPos.set(x + _tmpOff.x, y + _tmpOff.y, z + _tmpOff.z);
   }
 
   function cullCup(cup, maxKeep) {
@@ -251,7 +306,7 @@
   /** Any held=true block not in an active scoop list is frozen — repair. */
   function repairOrphanHolds() {
     var inScoop = [];
-    ['leftHand', 'rightHand'].forEach(function (hid) {
+    Object.keys(_scoop).forEach(function (hid) {
       var list = _scoop[hid] || [];
       for (var i = 0; i < list.length; i++) {
         if (list[i].entry) inScoop.push(list[i].entry);
@@ -299,7 +354,9 @@
   }
 
   function otherHandId(handId) {
-    return handId === 'leftHand' ? 'rightHand' : 'leftHand';
+    var k = splitKey(handId);
+    var other = k.hand === 'leftHand' ? 'rightHand' : 'leftHand';
+    return k.peer ? k.peer + '|' + other : other;
   }
 
   function makeGrabRecord(entry, handPos, invQ) {
@@ -368,10 +425,8 @@
     if (!_active || !_b3) return;
     // Already holding — do NOT re-grab (prevents orphan held freezes).
     if (_scoop[handId] && _scoop[handId].length) return;
-    var hand = document.getElementById(handId);
-    if (!hand || !hand.object3D) return;
     ensureThreeHelpers();
-    handWorldPose(hand, _tmpP, _tmpQ);
+    if (!handPoseByKey(handId, _tmpP, _tmpQ)) return;
     var handPos = { x: _tmpP.x, y: _tmpP.y, z: _tmpP.z };
     var invQ = _tmpQ.clone().invert();
     var other = otherHandId(handId);
@@ -384,10 +439,28 @@
       if (!hit) break;
       used[hit.index] = true;
       if (hit.steal) detachScoopEntry(other, hit.entry);
+      // Taken from someone else's hand on another headset: tell them to let go
+      if (hit.entry.held && !isLocalKey(hit.entry.held) && hit.entry.held !== handId) {
+        var prev = splitKey(hit.entry.held);
+        net({ op: 'drop', hand: prev.hand, idx: [hit.index] }, prev.peer);
+      }
       hit.entry.held = handId;
       grabbed.push(makeGrabRecord(hit.entry, handPos, invQ));
     }
     _scoop[handId] = grabbed;
+    // A remote player's grab: hand them the offsets so the blocks ride their own
+    // hand with no network lag (the host keeps simulating the authoritative copy)
+    if (!isLocalKey(handId) && grabbed.length) {
+      var rk = splitKey(handId);
+      net({
+        op: 'grab',
+        hand: rk.hand,
+        items: grabbed.map(function (g) {
+          return { i: _blocks.indexOf(g.entry), lx: r3(g.lx), ly: r3(g.ly), lz: r3(g.lz),
+            rq: [r3(g.rq.x), r3(g.rq.y), r3(g.rq.z), r3(g.rq.w)] };
+        })
+      }, rk.peer);
+    }
   }
 
   function endScoop(handId) {
@@ -426,11 +499,20 @@
 
   function onTriggerDown(handId) {
     _triggerScoop[handId] = true;
+    if (_active && _mode === 'mirror') {
+      net({ op: 'scoop', hand: handId, down: true });
+      return;
+    }
     if (_active) beginScoop(handId);
   }
 
   function onTriggerUp(handId) {
     _triggerScoop[handId] = false;
+    if (_mode === 'mirror') {
+      releaseLocalHeld(handId);
+      if (_active) net({ op: 'scoop', hand: handId, down: false });
+      return;
+    }
     endScoop(handId);
   }
 
@@ -438,16 +520,16 @@
     if (!_b3) return;
     ensureThreeHelpers();
     var step = Math.max(0.001, dt || 1 / 60);
-    ['leftHand', 'rightHand'].forEach(function (handId) {
+    var keys = Object.keys(_triggerScoop);
+    Object.keys(_scoop).forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
+    keys.forEach(function (handId) {
       // While trigger held with empty hand, keep trying to pick up
       if (_triggerScoop[handId] && (!_scoop[handId] || !_scoop[handId].length)) {
         beginScoop(handId);
       }
       var list = _scoop[handId];
       if (!list || !list.length) return;
-      var hand = document.getElementById(handId);
-      if (!hand || !hand.object3D) return;
-      handWorldPose(hand, _tmpP, _tmpQ);
+      if (!handPoseByKey(handId, _tmpP, _tmpQ)) return;
       for (var i = 0; i < list.length; i++) {
         var g = list[i];
         _tmpOff.set(g.lx, g.ly, g.lz).applyQuaternion(_tmpQ);
@@ -512,8 +594,10 @@
 
   function destroyWorld() {
     _triggerScoop = { leftHand: false, rightHand: false };
-    endScoop('leftHand');
-    endScoop('rightHand');
+    Object.keys(_scoop).forEach(function (k) { endScoop(k); });
+    Object.keys(_remoteHands).forEach(function (k) { _remoteHands[k].body = null; });
+    _localHeld = { leftHand: [], rightHand: [] };
+    _sent = [];
     if (_b3 && _world && typeof _b3.b3DestroyWorld === 'function') {
       try { _b3.b3DestroyWorld(_world); } catch (e) { /* ignore */ }
     }
@@ -543,8 +627,235 @@
     }
   }
 
+  // ── Host: remote hands + block stream ──────────────────────────────────────
+  function tickRemoteHands(dt) {
+    var now = performance.now();
+    Object.keys(_remoteHands).forEach(function (key) {
+      var rh = _remoteHands[key];
+      var fresh = now - rh.t <= REMOTE_HAND_STALE_MS;
+      if (!rh.body) {
+        if (!fresh) return;
+        rh.body = addKinematicBox(_b3, _world, rh.x, rh.y, rh.z,
+          HAND_BOX.hx, HAND_BOX.hy, HAND_BOX.hz, rh.q, { friction: 1.25, restitution: 0.02 });
+      }
+      if (fresh) {
+        setKinematicTarget(_b3, rh.body, rh.x, rh.y, rh.z, rh.q, dt);
+      } else {
+        // Player left / stopped tracking: park the palm far below the arena
+        setKinematicTarget(_b3, rh.body, 0, -20, 0, null, dt);
+        if (_triggerScoop[key]) { _triggerScoop[key] = false; endScoop(key); }
+      }
+    });
+  }
+
+  function packBlock(i) {
+    var b = _blocks[i];
+    var p = b.mesh.position, q = b.mesh.quaternion;
+    return [i, r3(p.x), r3(p.y), r3(p.z), r3(q.x), r3(q.y), r3(q.z), r3(q.w)];
+  }
+
+  function maybeSendSnap(now) {
+    if (now - _lastSnapAt < SNAP_MS) return;
+    _lastSnapAt = now;
+    var full = now - _lastFullAt >= SNAP_FULL_MS;
+    if (full) _lastFullAt = now;
+    var d = [];
+    for (var i = 0; i < _blocks.length; i++) {
+      if (!_blocks[i].mesh) continue;
+      var rec = packBlock(i);
+      var last = _sent[i];
+      if (!full && last) {
+        var moved = Math.abs(rec[1] - last[1]) + Math.abs(rec[2] - last[2]) + Math.abs(rec[3] - last[3]);
+        var turned = Math.abs(rec[4] - last[4]) + Math.abs(rec[5] - last[5]) +
+          Math.abs(rec[6] - last[6]) + Math.abs(rec[7] - last[7]);
+        if (moved < 0.002 && turned < 0.004) continue;
+      }
+      _sent[i] = rec;
+      for (var k = 0; k < rec.length; k++) d.push(rec[k]);
+    }
+    if (!d.length) return;
+    net({ op: 'snap', seq: ++_snapSeq, full: full, d: d });
+  }
+
+  // ── Peer: mirror the host's pile ───────────────────────────────────────────
+  function releaseLocalHeld(handId) {
+    var list = _localHeld[handId] || [];
+    for (var i = 0; i < list.length; i++) {
+      var e = _blocks[list[i].i];
+      if (e) e.localHold = null;
+    }
+    _localHeld[handId] = [];
+  }
+
+  function gameComponent() {
+    var el = document.querySelector('[stacks-game]');
+    return el && el.components && el.components['stacks-game'];
+  }
+
+  function startMirror(game, msg) {
+    if (!game || !game.cups || !msg || !msg.blocks) return false;
+    if (_awaitHostTimer) { clearTimeout(_awaitHostTimer); _awaitHostTimer = null; }
+    _pendingStart = null;
+    if (_active || _world || _group) Api.stop();
+    ensureThreeHelpers();
+    _game = game;
+    var cups = [game.cups.blue, game.cups.red];
+    // Keep exactly the cells the host kept (its cull is random)
+    var keep = [{}, {}];
+    msg.blocks.forEach(function (b) { keep[b[0]][b[1] + ',' + b[2] + ',' + b[3]] = true; });
+    var template = null;
+    cups.forEach(function (cup, side) {
+      collectCupBlocks(cup).forEach(function (item) {
+        if (!template) template = item.cell.mesh;
+        if (!keep[side][item.x + ',' + item.y + ',' + item.z]) cup.removeCellAt(item.x, item.y, item.z, false);
+      });
+    });
+    _group = new THREE.Group();
+    _group.name = 'stacks-victory-phys';
+    var sceneObj = (game.el && game.el.sceneEl && game.el.sceneEl.object3D) ||
+      (document.querySelector('a-scene') && document.querySelector('a-scene').object3D);
+    if (sceneObj) sceneObj.add(_group);
+    var size = (msg.half || 0.055) * 2 / 0.92;
+    _blocks = [];
+    msg.blocks.forEach(function (b) {
+      var cup = cups[b[0]];
+      var cell = cup && cup.inBounds && cup.inBounds(b[1], b[2], b[3]) ? cup.grid[b[2]][b[3]][b[1]] : null;
+      var mesh = null;
+      if (cell && cell.mesh) {
+        mesh = cell.mesh;
+        mesh.updateWorldMatrix(true, false);
+        mesh.getWorldPosition(_tmpP);
+        mesh.getWorldQuaternion(_tmpQ);
+        cup.removeCellAt(b[1], b[2], b[3], true);
+        mesh.position.copy(_tmpP);
+        mesh.quaternion.copy(_tmpQ);
+      } else {
+        // Our board missed this cell: stand in a block of the host's colour
+        var mat = template && template.material && !Array.isArray(template.material)
+          ? template.material.clone() : new THREE.MeshStandardMaterial();
+        if (mat.color) mat.color.setHex(b[4] != null ? b[4] : 0x888888);
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(size * 0.92, size * 0.92, size * 0.92), mat);
+        mesh.position.set(0, -20, 0);
+        mesh.visible = false; // until the first snapshot places it
+      }
+      mesh.scale.set(1, 1, 1);
+      _group.add(mesh);
+      _blocks.push({ body: null, mesh: mesh, held: null, tp: null, tq: null, localHold: null });
+    });
+    _mode = 'mirror';
+    _active = true;
+    _lastStep = performance.now();
+    bindHandScoop();
+    if (msg.d) applySnap(msg.d, true);
+    return true;
+  }
+
+  function applySnap(d, snapNow) {
+    for (var j = 0; j + 7 < d.length; j += 8) {
+      var e = _blocks[d[j]];
+      if (!e || !e.mesh) continue;
+      if (!e.tp) { e.tp = new THREE.Vector3(); e.tq = new THREE.Quaternion(); }
+      e.tp.set(d[j + 1], d[j + 2], d[j + 3]);
+      e.tq.set(d[j + 4], d[j + 5], d[j + 6], d[j + 7]).normalize();
+      if (snapNow || !e.mesh.visible) {
+        e.mesh.position.copy(e.tp);
+        e.mesh.quaternion.copy(e.tq);
+        e.mesh.visible = true;
+      }
+    }
+  }
+
+  function tickMirror(dt) {
+    ensureThreeHelpers();
+    // Blocks I hold ride my own hand (no round trip)
+    ['leftHand', 'rightHand'].forEach(function (hid) {
+      var list = _localHeld[hid];
+      if (!list || !list.length) return;
+      if (!handPoseByKey(hid, _tmpP, _tmpQ)) return;
+      for (var i = 0; i < list.length; i++) {
+        var g = list[i];
+        var e = _blocks[g.i];
+        if (!e || !e.mesh) continue;
+        _tmpOff.set(g.lx, g.ly, g.lz).applyQuaternion(_tmpQ);
+        e.mesh.position.set(_tmpP.x + _tmpOff.x, _tmpP.y + _tmpOff.y, _tmpP.z + _tmpOff.z);
+        _tmpQ2.set(g.rq[0], g.rq[1], g.rq[2], g.rq[3]).premultiply(_tmpQ);
+        e.mesh.quaternion.copy(_tmpQ2);
+      }
+    });
+    var k = 1 - Math.exp(-dt * 18);
+    for (var j = 0; j < _blocks.length; j++) {
+      var e2 = _blocks[j];
+      if (!e2.mesh || !e2.tp || e2.localHold) continue;
+      e2.mesh.position.lerp(e2.tp, k);
+      e2.mesh.quaternion.slerp(e2.tq, k);
+    }
+  }
+
   var Api = {
     active: function () { return _active; },
+
+    /** stacks-game onRemotePlayerPose → host keeps every player's palms in the sim. */
+    onRemotePose: function (fromId, rd) {
+      if (!fromId || !rd || !lobbyHost()) return;
+      ensureThreeHelpers();
+      if (!_tmpOff) return;
+      var now = performance.now();
+      ['leftHand', 'rightHand'].forEach(function (hid) {
+        var h = rd[hid];
+        if (!h || typeof h.x !== 'number') return;
+        var key = fromId + '|' + hid;
+        var rh = _remoteHands[key] || (_remoteHands[key] = { q: new THREE.Quaternion(), body: null, t: 0 });
+        rh.q.set(h.qx || 0, h.qy || 0, h.qz || 0, h.qw == null ? 1 : h.qw);
+        palmFromGrip(h.x, h.y, h.z, rh.q, _tmpP);
+        rh.x = _tmpP.x; rh.y = _tmpP.y; rh.z = _tmpP.z;
+        rh.t = now;
+        updateHandVelocity(key, rh.x, rh.y, rh.z, now);
+      });
+    },
+
+    /** lobby.js 'vp' messages (host ⇄ peers). */
+    onNet: function (fromId, data) {
+      if (!data || !data.op) return;
+      if (lobbyHost()) {
+        if (data.op !== 'scoop' || !_active || _mode !== 'host') return;
+        if (data.hand !== 'leftHand' && data.hand !== 'rightHand') return;
+        var key = fromId + '|' + data.hand;
+        if (data.down) { _triggerScoop[key] = true; beginScoop(key); }
+        else { _triggerScoop[key] = false; endScoop(key); }
+        return;
+      }
+      if (data.op === 'start') {
+        var game = _game || gameComponent();
+        // Only take the host's pile once our own match has ended
+        // Waiting for it (or already on the local fallback pile): take it now.
+        // Otherwise keep it for our own match end, which may still be a frame away.
+        if (game && !game.matchActive && (_awaitHostTimer || (_active && _mode === 'local'))) {
+          startMirror(game, data);
+        } else {
+          _pendingStart = { msg: data, t: performance.now() };
+        }
+      } else if (data.op === 'snap') {
+        if (_active && _mode === 'mirror' && data.d) applySnap(data.d, false);
+      } else if (data.op === 'grab') {
+        if (!_active || _mode !== 'mirror' || !_triggerScoop[data.hand]) return;
+        var other = data.hand === 'leftHand' ? 'rightHand' : 'leftHand';
+        var items = data.items || [];
+        var taken = items.map(function (it) { return it.i; });
+        _localHeld[other] = (_localHeld[other] || []).filter(function (g) { return taken.indexOf(g.i) < 0; });
+        _localHeld[data.hand] = items;
+        items.forEach(function (it) { if (_blocks[it.i]) _blocks[it.i].localHold = data.hand; });
+      } else if (data.op === 'drop') {
+        var idx = data.idx || [];
+        _localHeld[data.hand] = (_localHeld[data.hand] || []).filter(function (g) {
+          if (idx.indexOf(g.i) < 0) return true;
+          if (_blocks[g.i]) _blocks[g.i].localHold = null;
+          return false;
+        });
+      } else if (data.op === 'stop') {
+        _pendingStart = null;
+        if (_mode === 'mirror' && _active) Api.stop();
+      }
+    },
 
     /** Used by stacks-game grip to prefer scoop over cup-turn during victory. */
     canScoopNear: function (handEl) {
@@ -563,10 +874,27 @@
       return loadBox3D().catch(function () { /* ignore */ });
     },
 
-    start: function (game) {
+    start: function (game, opts) {
       if (!game || !game.cups) return Promise.resolve(false);
+      opts = opts || {};
+      // Lobby peer / watcher: the host owns the pile — mirror its stream
+      if (!opts.forceLocal && inLobby() && !lobbyHost()) {
+        if (_pendingStart && performance.now() - _pendingStart.t < 15000) {
+          return Promise.resolve(startMirror(game, _pendingStart.msg));
+        }
+        if (_active) Api.stop();
+        _game = game;
+        if (_awaitHostTimer) clearTimeout(_awaitHostTimer);
+        _awaitHostTimer = setTimeout(function () {
+          _awaitHostTimer = null;
+          // Host on an older build (or box3d failed there): simulate our own pile
+          if (!_active && _game === game && !game.matchActive) Api.start(game, { forceLocal: true });
+        }, HOST_WAIT_MS);
+        return Promise.resolve(false);
+      }
       if (_active) Api.stop();
       _game = game;
+      _mode = (inLobby() && lobbyHost() && !opts.forceLocal) ? 'host' : 'local';
 
       var blue = game.cups.blue;
       var red = game.cups.red;
@@ -609,10 +937,14 @@
 
         var half = (blue && blue.cellSize ? blue.cellSize : 0.12) * 0.46;
         var kept = collectCupBlocks(blue).concat(collectCupBlocks(red));
+        var meta = [];
         for (var i = 0; i < kept.length; i++) {
           var item = kept[i];
           var mesh = item.cell.mesh;
           if (!mesh) continue;
+          var col = mesh.material && !Array.isArray(mesh.material) && mesh.material.color
+            ? mesh.material.color.getHex() : null;
+          meta.push([item.cup === blue ? 0 : 1, item.x, item.y, item.z, col]);
           mesh.updateWorldMatrix(true, false);
           mesh.getWorldPosition(_tmpP);
           mesh.getWorldQuaternion(_tmpQ);
@@ -650,7 +982,18 @@
         _active = true;
         _lastStep = performance.now();
         console.log('[StacksVictoryPhysics] started', _blocks.length, 'blocks',
-          '(culled from', beforeB + beforeR + ')');
+          '(culled from', beforeB + beforeR + ')', _mode);
+        if (_mode === 'host') {
+          // Peers rebuild the same pile from these cells, then follow the stream
+          var d0 = [];
+          for (var bi = 0; bi < _blocks.length; bi++) {
+            var rec = packBlock(bi);
+            _sent[bi] = rec;
+            for (var ri = 0; ri < rec.length; ri++) d0.push(rec[ri]);
+          }
+          _lastSnapAt = _lastFullAt = performance.now();
+          net({ op: 'start', half: r3(half), blocks: meta, d: d0 });
+        }
         return true;
       }).catch(function (err) {
         console.warn('[StacksVictoryPhysics] start failed', err);
@@ -660,11 +1003,19 @@
     },
 
     tick: function () {
+      if (_active && _mode === 'mirror') {
+        var nowM = performance.now();
+        var dtM = Math.min(0.1, Math.max(0.001, (nowM - _lastStep) / 1000));
+        _lastStep = nowM;
+        tickMirror(dtM);
+        return;
+      }
       if (!_active || !_b3 || !_world) return;
       var now = performance.now();
       var dt = Math.min(0.033, Math.max(0.001, (now - _lastStep) / 1000));
       _lastStep = now;
       ensureThreeHelpers();
+      if (_mode === 'host') tickRemoteHands(dt);
 
       // Cup floors follow raise / rotate (kinematic → blocks react)
       for (var c = 0; c < _cupFloors.length; c++) {
@@ -700,10 +1051,14 @@
       for (var j = 0; j < _blocks.length; j++) {
         syncMeshFromBody(_b3, _blocks[j]);
       }
+      if (_mode === 'host') maybeSendSnap(now);
     },
 
     stop: function () {
+      if (_awaitHostTimer) { clearTimeout(_awaitHostTimer); _awaitHostTimer = null; }
       if (!_active && !_world && !_group) return;
+      if (_mode === 'host') net({ op: 'stop' });
+      _mode = 'local';
       var game = _game;
       _active = false;
       _game = null;
