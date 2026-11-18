@@ -9,10 +9,13 @@
  *
  *   - drives #leftHand / #rightHand from the hand's grip pose (same frame tracked-controls uses);
  *   - points their raycaster along the hand's target ray (the system pointer ray);
- *   - pinch (thumb + index)        → triggerdown / triggerup  (grab, place, menu click);
+ *   - pinch (the headset's own pinch = WebXR select; joint distance as fallback)
+ *                                  → triggerdown / triggerup  (grab, place, menu click);
  *   - fist (middle, ring, pinky)   → gripdown / gripup         (StacksVR cup);
  *   - a watch button on the back of the left wrist, tapped with the right index finger
  *                                  → xbuttondown on #leftHand (menu);
+ *   - the menu opens as a panel in front of you (not on the wrist) and its buttons can be
+ *     pressed with either index fingertip, as well as with laser + pinch;
  *   - shows the tracked hand mesh and hides your own avatar body (others still see it);
  *   - exposes real finger curls so the networked finger sync follows your fingers.
  *
@@ -44,8 +47,13 @@
   // Total bend (radians) that counts as fully curled
   var FULL_BEND = { thumb: 1.5, index: 3.6, middle: 3.8, ring: 3.8, pinky: 3.6 };
 
-  var PINCH_ON = 0.018;   // thumb tip ↔ index tip (m)
-  var PINCH_OFF = 0.032;
+  // Fallback pinch from joints, only used when the runtime sends no select events. Tip joints
+  // sit inside the fingertips, so touching fingers still measure ~1.5-2.5 cm apart.
+  var PINCH_ON = 0.026;   // thumb tip <-> index tip (m)
+  var PINCH_OFF = 0.04;
+  var BTN_PRESS = 0.004;  // fingertip past a menu button's face (m)
+  var BTN_REARM = 0.015;
+  var BTN_HOVER = 0.05;
   var GRAB_ON = 0.62;     // mean curl of middle/ring/pinky
   var GRAB_OFF = 0.42;
   var WATCH_PRESS = 0.026; // right index tip ↔ watch button centre (m)
@@ -61,7 +69,10 @@
       grab: false,
       curls: { thumb: 0.15, index: 0.2, middle: 0.25, ring: 0.3, pinky: 0.3 },
       savedRay: null,      // controller raycaster origin/direction to restore
-      hiddenMeshes: []
+      hiddenMeshes: [],
+      sysSelect: false,    // runtime sends select events for this hand -> use them for pinch
+      btnArmed: true,      // fingertip menu-button press
+      btnHover: null
     };
   }
 
@@ -94,6 +105,16 @@
     }
   };
   global.HandInput = api;
+
+  function visibleChain(el) {
+    var node = el;
+    while (node && node.object3D) {
+      if (!node.object3D.visible) return false;
+      if (node.isScene) return true;
+      node = node.parentNode;
+    }
+    return true;
+  }
 
   function rigParent(side) {
     var el = document.getElementById(ENTITY[side]);
@@ -130,8 +151,83 @@
       this.bodyHidden = false;
       var self = this;
       this.el.addEventListener('exit-vr', function () { self.deactivateAll(); });
-      this.el.addEventListener('loaded', function () { self.ensureMeshes(); });
-      if (this.el.hasLoaded) this.ensureMeshes();
+      this.el.addEventListener('loaded', function () { self.ensureMeshes(); self.patchMenu(); });
+      if (this.el.hasLoaded) { this.ensureMeshes(); this.patchMenu(); }
+      this._session = null;
+      this._onSelectStart = function (e) { self.onSelect(e, true); };
+      this._onSelectEnd = function (e) { self.onSelect(e, false); };
+    },
+
+    // Pinch from the headset's own gesture recogniser (WebXR select events)
+    bindSession: function (session) {
+      if (!session || session === this._session || !session.addEventListener) return;
+      if (this._session && this._session.removeEventListener) {
+        this._session.removeEventListener('selectstart', this._onSelectStart);
+        this._session.removeEventListener('selectend', this._onSelectEnd);
+      }
+      this._session = session;
+      session.addEventListener('selectstart', this._onSelectStart);
+      session.addEventListener('selectend', this._onSelectEnd);
+    },
+
+    onSelect: function (e, down) {
+      var src = e && e.inputSource;
+      if (!src || !src.hand) return;
+      var side = src.handedness;
+      var st = api.sides[side];
+      if (!st || !st.active) return;
+      st.sysSelect = true;
+      var hand = document.getElementById(ENTITY[side]);
+      if (!hand) return;
+      if (down && !st.pinch && !st.grab) {
+        st.pinch = true;
+        hand.emit('triggerdown', { handInput: true });
+      } else if (!down && st.pinch) {
+        st.pinch = false;
+        hand.emit('triggerup', { handInput: true });
+      }
+    },
+
+    // Menu: in hands-only mode it opens as a panel in front of you
+    patchMenu: function () {
+      var menuEl = document.querySelector('[vr-menu]');
+      var comp = menuEl && menuEl.components && menuEl.components['vr-menu'];
+      if (!comp) { setTimeout(this.patchMenu.bind(this), 500); return; }
+      if (comp._handInputPatched || typeof comp._attachMenuToLeftHand !== 'function') return;
+      comp._handInputPatched = true;
+      this.menu = comp;
+      var self = this;
+      var orig = comp._attachMenuToLeftHand;
+      comp._attachMenuToLeftHand = function () {
+        if (api.anyHand()) return self.placeMenuInFront();
+        // Back on controllers: put the 3D object back on the left hand before the normal attach
+        var root = document.getElementById('vr-menu-root');
+        var left = document.getElementById('leftHand');
+        if (root && left && root.object3D && root.object3D.parent !== left.object3D) left.object3D.add(root.object3D);
+        return orig.apply(this, arguments);
+      };
+    },
+
+    placeMenuInFront: function () {
+      var root = document.getElementById('vr-menu-root');
+      var cam = this.el.camera;
+      if (!root || !cam) return;
+      // Move only the 3D object into world space. Moving the element in the DOM makes A-Frame
+      // re-initialise every component of the menu (its text then throws on update).
+      if (root.object3D.parent !== this.el.object3D) this.el.object3D.add(root.object3D);
+      var head = new THREE.Vector3();
+      cam.getWorldPosition(head);
+      var fwd = new THREE.Vector3();
+      cam.getWorldDirection(fwd);
+      fwd.y = 0;
+      if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
+      fwd.normalize();
+      var pos = head.clone().addScaledVector(fwd, 0.45);
+      pos.y -= 0.16;
+      var yaw = Math.atan2(-fwd.x, -fwd.z) * 180 / Math.PI;
+      root.setAttribute('position', { x: pos.x, y: pos.y, z: pos.z });
+      root.setAttribute('rotation', { x: -22, y: yaw, z: 0 });
+      root.setAttribute('scale', '0.55 0.55 0.55');
     },
 
     // Tracked hand mesh (A-Frame hand-tracking-controls). It only shows while that hand is the
@@ -173,6 +269,7 @@
       var ref = api._testRef || this.referenceSpace();
       var session = frame.session;
       if (!ref || !session) return;
+      this.bindSession(session);
 
       var sources = session.inputSources || [];
       for (var k = 0; k < SIDES.length; k++) {
@@ -190,6 +287,7 @@
 
       this.updateBody();
       this.updateWatch(time);
+      this.updateMenuPoke();
     },
 
     activate: function (side) {
@@ -232,6 +330,9 @@
       st.pinch = false;
       st.grab = false;
       st.savedRay = null;
+      st.sysSelect = false;
+      if (st.btnHover) { st.btnHover.emit('mouseleave'); st.btnHover = null; }
+      st.btnArmed = true;
       this.el.emit('hand-input-changed', { side: side, active: false });
     },
 
@@ -328,6 +429,7 @@
         st.grab = false;
         hand.emit('gripup', { handInput: true });
       }
+      if (st.sysSelect) return; // the headset reports pinches itself (onSelect)
       if (!st.pinch && !st.grab && pinchDist < PINCH_ON) {
         st.pinch = true;
         hand.emit('triggerdown', { handInput: true });
@@ -351,6 +453,46 @@
         model.visible = true;
         this.bodyHidden = false;
       }
+    },
+
+    // Press menu buttons with an index fingertip (either hand)
+    updateMenuPoke: function () {
+      var menu = this.menu;
+      var root = document.getElementById('vr-menu-root');
+      var open = !!(menu && menu.menuVisible && root && visibleChain(root));
+      SIDES.forEach(function (side) {
+        var st = api.sides[side];
+        var tip = open && st.active && st.tracked ? api.jointWorld(side, 'index-finger-tip', new THREE.Vector3()) : null;
+        var best = null;
+        if (tip) {
+          var btns = root.querySelectorAll('.menu-btn');
+          for (var i = 0; i < btns.length; i++) {
+            var el = btns[i];
+            if (!el.object3D || !visibleChain(el)) continue;
+            var g = el.getAttribute('geometry');
+            if (!g || !g.width || !g.height) continue;
+            el.object3D.updateWorldMatrix(true, false);
+            var local = el.object3D.worldToLocal(tip.clone());
+            if (Math.abs(local.x) > g.width / 2 + 0.004 || Math.abs(local.y) > g.height / 2 + 0.004) continue;
+            el.object3D.getWorldScale(_v2);
+            var dz = (local.z - (g.depth || 0) / 2) * _v2.z; // metres in front of the face
+            if (dz > BTN_HOVER || dz < -0.04) continue;
+            if (!best || Math.abs(dz) < Math.abs(best.dz)) best = { el: el, dz: dz };
+          }
+        }
+        var hand = document.getElementById(ENTITY[side]);
+        var hoverEl = best ? best.el : null;
+        if (hoverEl !== st.btnHover) {
+          if (st.btnHover) st.btnHover.emit('mouseleave');
+          if (hoverEl) hoverEl.emit('mouseenter', { cursorEl: hand });
+          st.btnHover = hoverEl;
+        }
+        if (!best || best.dz > BTN_REARM) st.btnArmed = true;
+        if (best && st.btnArmed && best.dz < BTN_PRESS) {
+          st.btnArmed = false;
+          best.el.emit('click', { cursorEl: hand, handInput: true });
+        }
+      });
     },
 
     // Watch button on the back of the left wrist → menu (replaces the X button)
