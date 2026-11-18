@@ -12,6 +12,8 @@
  *   - pinch (the headset's own pinch = WebXR select; joint distance as fallback)
  *                                  → triggerdown / triggerup  (grab, place, menu click);
  *   - fist (middle, ring, pinky)   → gripdown / gripup         (StacksVR cup);
+ *     while that grip pose is held (also pointing with index + thumb out) the hand's laser is
+ *     hidden and stops hovering, since pinching isn't possible then;
  *   - a watch button on the back of the left wrist, tapped with the right index finger
  *                                  → xbuttondown on #leftHand (menu);
  *   - the menu opens as a panel in front of you (not on the wrist) and its buttons can be
@@ -72,7 +74,8 @@
       hiddenMeshes: [],
       sysSelect: false,    // runtime sends select events for this hand -> use them for pinch
       btnArmed: true,      // fingertip menu-button press
-      btnHover: null
+      btnHover: null,
+      pointerHidden: false // laser hidden while in the grip / pointing pose
     };
   }
 
@@ -84,6 +87,12 @@
       side = side === 'leftHand' ? 'left' : side === 'rightHand' ? 'right' : side;
       var s = this.sides[side];
       return !!(s && s.active);
+    },
+    /** True while this hand's laser pointer should be hidden (grip / pointing pose). */
+    pointerHidden: function (side) {
+      side = side === 'leftHand' ? 'left' : side === 'rightHand' ? 'right' : side;
+      var s = this.sides[side];
+      return !!(s && s.active && s.grab);
     },
     /** Any hand-only input active. */
     anyHand: function () { return this.sides.left.active || this.sides.right.active; },
@@ -283,6 +292,7 @@
         if (isHand && !st.active) this.activate(side);
         else if (!isHand && st.active) this.deactivate(side);
         if (isHand) this.updateSide(side, src, frame, ref);
+        this.updatePointer(side);
       }
 
       this.updateBody();
@@ -323,6 +333,7 @@
           if (rc.updateOriginDirection) rc.updateOriginDirection();
         }
       }
+      if (st.pointerHidden) { st.grab = false; this.updatePointer(side); }
       st.hiddenMeshes.forEach(function (o) { o.visible = true; });
       st.hiddenMeshes = [];
       st.active = false;
@@ -437,6 +448,20 @@
         st.pinch = false;
         hand.emit('triggerup', { handInput: true });
       }
+    },
+
+    // Hide the menu laser (A-Frame raycaster line) and stop its hovering while the hand is in the
+    // grip / pointing pose. Games that draw their own lasers ask HandInput.pointerHidden().
+    updatePointer: function (side) {
+      var st = api.sides[side];
+      var hand = document.getElementById(ENTITY[side]);
+      var rc = hand && hand.components && hand.components.raycaster;
+      var hide = api.pointerHidden(side);
+      if (!hide && !st.pointerHidden) return;
+      if (rc && rc.raycaster && rc.data) rc.raycaster.far = hide ? 0.0001 : rc.data.far;
+      var line = hand && hand.getObject3D && hand.getObject3D('line');
+      if (line) line.visible = hide ? false : !!(rc && rc.data && rc.data.showLine);
+      st.pointerHidden = hide;
     },
 
     // Your own avatar model is hidden while you play with hands (other players still see you).

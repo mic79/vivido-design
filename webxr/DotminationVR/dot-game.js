@@ -688,6 +688,8 @@
 
     _handRay: function (hand) {
       if (!hand || !hand.object3D) return null;
+      // Hands-only: no laser while the hand is in the grip / pointing pose (can't pinch then)
+      if (global.HandInput && global.HandInput.pointerHidden && global.HandInput.pointerHidden(hand.id)) return null;
       hand.object3D.updateWorldMatrix(true, false);
       var rc = hand.components && hand.components.raycaster;
       var o = new THREE.Vector3();
