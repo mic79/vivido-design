@@ -14,6 +14,10 @@
  *   - fist (middle, ring, pinky)   → gripdown / gripup         (StacksVR cup);
  *     while that grip pose is held (also pointing with index + thumb out) the hand's laser is
  *     hidden and stops hovering, since pinching isn't possible then;
+ *   - a full fist in the air (index curled too, not grabbing the StacksVR cup) grabs the world:
+ *     move that hand to pull yourself along; with both fists, also turn by rotating your
+ *     hands around each other (replaces the thumbsticks). In StacksVR the controllers' grip
+ *     button does the same when it isn't turning the cup (the thumbsticks still work);
  *   - a watch button on the back of the left wrist, tapped with the right index finger
  *                                  → xbuttondown on #leftHand (menu);
  *   - the menu opens as a panel in front of you (not on the wrist) and its buttons can be
@@ -58,6 +62,8 @@
   var BTN_HOVER = 0.05;
   var GRAB_ON = 0.62;     // mean curl of middle/ring/pinky
   var GRAB_OFF = 0.42;
+  var DRAG_INDEX_ON = 0.55;  // index curl that turns a grip into a full fist (air grab)
+  var DRAG_INDEX_OFF = 0.4;
   var WATCH_PRESS = 0.026; // right index tip ↔ watch button centre (m)
   var WATCH_REARM = 0.06;
   var WATCH_COOLDOWN_MS = 600;
@@ -75,7 +81,11 @@
       sysSelect: false,    // runtime sends select events for this hand -> use them for pinch
       btnArmed: true,      // fingertip menu-button press
       btnHover: null,
-      pointerHidden: false // laser hidden while in the grip / pointing pose
+      pointerHidden: false, // laser hidden while in the grip / pointing pose
+      ctrlGrip: false,     // controller grip button held (StacksVR grip-to-move)
+      drag: false,         // grabbing the air to move yourself
+      anchor: null,        // world point the fist holds on to
+      cur: null
     };
   }
 
@@ -125,6 +135,19 @@
     return true;
   }
 
+  // Grip-to-move with controllers: StacksVR only (grip already is an action there; in
+  // DotminationVR the grip button is unused and resting on it could slide you around)
+  function ctrlDragEnabled() {
+    return !!document.querySelector('[stacks-game]');
+  }
+
+  // StacksVR: a grip at the cup turns the cup — that hand is not grabbing the air
+  function gripTaken(hand) {
+    var sg = document.querySelector('[stacks-game]');
+    var c = sg && sg.components && sg.components['stacks-game'];
+    return !!(c && c._cupGrab && c._cupGrab.handEl === hand);
+  }
+
   function rigParent(side) {
     var el = document.getElementById(ENTITY[side]);
     return el && el.object3D && el.object3D.parent;
@@ -162,9 +185,33 @@
       this.el.addEventListener('exit-vr', function () { self.deactivateAll(); });
       this.el.addEventListener('loaded', function () { self.ensureMeshes(); self.patchMenu(); });
       if (this.el.hasLoaded) { this.ensureMeshes(); this.patchMenu(); }
+      this.bindControllerGrip();
       this._session = null;
       this._onSelectStart = function (e) { self.onSelect(e, true); };
       this._onSelectEnd = function (e) { self.onSelect(e, false); };
+    },
+
+    // Controller grip button (not our synthetic hand events) for grip-to-move in StacksVR
+    bindControllerGrip: function () {
+      var self = this;
+      SIDES.forEach(function (side) {
+        (function bind() {
+          var hand = document.getElementById(ENTITY[side]);
+          if (!hand) { setTimeout(bind, 300); return; }
+          hand.addEventListener('gripdown', function (e) {
+            if (e && e.detail && e.detail.handInput) return;
+            api.sides[side].ctrlGrip = true;
+          });
+          hand.addEventListener('gripup', function (e) {
+            if (e && e.detail && e.detail.handInput) return;
+            api.sides[side].ctrlGrip = false;
+          });
+        })();
+      });
+      this.el.addEventListener('exit-vr', function () {
+        SIDES.forEach(function (side) { api.sides[side].ctrlGrip = false; });
+        void self;
+      });
     },
 
     // Pinch from the headset's own gesture recogniser (WebXR select events)
@@ -294,6 +341,7 @@
         if (isHand) this.updateSide(side, src, frame, ref);
         this.updatePointer(side);
       }
+      this.updateDrag();
 
       this.updateBody();
       this.updateWatch(time);
@@ -342,6 +390,8 @@
       st.grab = false;
       st.savedRay = null;
       st.sysSelect = false;
+      st.drag = false;
+      st.anchor = null;
       if (st.btnHover) { st.btnHover.emit('mouseleave'); st.btnHover = null; }
       st.btnArmed = true;
       this.el.emit('hand-input-changed', { side: side, active: false });
@@ -462,6 +512,63 @@
       var line = hand && hand.getObject3D && hand.getObject3D('line');
       if (line) line.visible = hide ? false : !!(rc && rc.data && rc.data.showLine);
       st.pointerHidden = hide;
+    },
+
+    // Grab the air to move yourself (hands-only replacement for the thumbsticks).
+    // The fist's world point stays put and #player moves so your hand stays on it.
+    updateDrag: function () {
+      if (global.isMobileSpectator) return;
+      var player = document.getElementById('player');
+      if (!player || !player.object3D || player.object3D.parent !== this.el.object3D) return;
+      var dragging = [];
+      for (var k = 0; k < SIDES.length; k++) {
+        var side = SIDES[k];
+        var st = api.sides[side];
+        var hand = document.getElementById(ENTITY[side]);
+        var p = null;
+        if (st.active) {
+          // Hands: a full fist (index curled too) that isn't holding the cup
+          var wantHand = st.tracked && st.grab && !gripTaken(hand) &&
+            st.curls.index > (st.drag ? DRAG_INDEX_OFF : DRAG_INDEX_ON);
+          if (wantHand) p = api.jointWorld(side, 'wrist', new THREE.Vector3());
+        } else if (st.ctrlGrip && hand && hand.object3D && ctrlDragEnabled() && !gripTaken(hand) &&
+          (this.el.is('vr-mode') || this.el.is('ar-mode'))) {
+          // Controllers (StacksVR): grip button in the air
+          hand.object3D.updateWorldMatrix(true, false);
+          p = hand.object3D.getWorldPosition(new THREE.Vector3());
+        }
+        if (p) {
+          if (!st.drag) { st.drag = true; st.anchor = p.clone(); }
+          st.cur = p;
+          dragging.push(st);
+        } else if (st.drag) {
+          st.drag = false;
+          st.anchor = null;
+        }
+      }
+      if (!dragging.length) return;
+      var po = player.object3D;
+      if (dragging.length === 1) {
+        var d = dragging[0];
+        po.position.x += d.anchor.x - d.cur.x;
+        po.position.z += d.anchor.z - d.cur.z;
+      } else {
+        var a = dragging[0], b = dragging[1];
+        var angA = Math.atan2(b.anchor.x - a.anchor.x, b.anchor.z - a.anchor.z);
+        var angC = Math.atan2(b.cur.x - a.cur.x, b.cur.z - a.cur.z);
+        var dyaw = angA - angC;
+        while (dyaw > Math.PI) dyaw -= 2 * Math.PI;
+        while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+        var cx = (a.cur.x + b.cur.x) / 2, cz = (a.cur.z + b.cur.z) / 2;
+        var ax = (a.anchor.x + b.anchor.x) / 2, az = (a.anchor.z + b.anchor.z) / 2;
+        // Turn around the hands' midpoint, then move that midpoint back onto the anchors
+        var rx = po.position.x - cx, rz = po.position.z - cz;
+        var cs = Math.cos(dyaw), sn = Math.sin(dyaw);
+        po.position.x = cx + rx * cs + rz * sn + (ax - cx);
+        po.position.z = cz - rx * sn + rz * cs + (az - cz);
+        po.rotation.y += dyaw;
+      }
+      po.updateMatrixWorld(true);
     },
 
     // Your own avatar model is hidden while you play with hands (other players still see you).
