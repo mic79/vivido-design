@@ -2111,6 +2111,13 @@ async function startMultiplayerConnection() { // Added async
   }
 }
 
+// PeerJS ids for a lobby slot. Inside Discord (modules/discord.js) the room is the
+// Activity instance, so the two people in the same Activity session always meet.
+function mpId(role, startType, slot) {
+  if (window.DOT_DISCORD) return `dot-${role}-dc-${window.DOT_DISCORD.room}`;
+  return `dot-${role}-${startType}-${slot}`;
+}
+
 async function checkPeerAvailability(id) {
   return new Promise((resolve) => {
     const tempPeer = new Peer(id, { host: "0.peerjs.com", port: 443, secure: true });
@@ -2150,8 +2157,8 @@ async function findAvailableSlot(desiredStartType) { // <<< Accept desiredStartT
     // Check if previous session matches desired start type
     if (previousSession.startType === desiredStartType) {
       const slotNumber = previousSession.slotNumber;
-      const hostId = `dot-host-${desiredStartType}-${slotNumber}`;
-      const peerId = `dot-peer-${desiredStartType}-${slotNumber}`;
+      const hostId = mpId('host', desiredStartType, slotNumber);
+      const peerId = mpId('peer', desiredStartType, slotNumber);
 
       // Verify if the previous slot is still valid for the desired type
       if (previousSession.role === 'host') {
@@ -2176,9 +2183,10 @@ async function findAvailableSlot(desiredStartType) { // <<< Accept desiredStartT
   }
 
   // If no valid previous session, search for new slot
-  for (let i = 1; i <= MAX_LOBBIES; i++) {
-    const hostId = `dot-host-${desiredStartType}-${i}`; // ID for host with desired type
-    const peerId = `dot-peer-${desiredStartType}-${i}`; // ID for peer with desired type
+  const maxLobbies = window.DOT_DISCORD ? 1 : MAX_LOBBIES; // Discord: one room per Activity session
+  for (let i = 1; i <= maxLobbies; i++) {
+    const hostId = mpId('host', desiredStartType, i); // ID for host with desired type
+    const peerId = mpId('peer', desiredStartType, i); // ID for peer with desired type
     
     // Check if a host for the desired type already exists
     const hostAvailable = await checkPeerAvailability(hostId);
@@ -2205,7 +2213,7 @@ async function setupPeer(slotNumber) { // Added async
   isHost = false;
   isMultiplayer = true;
   // Generate ID based on the chosen start type
-  sessionID = `dot-peer-${multiplayerStartType}-${slotNumber}`; 
+  sessionID = mpId('peer', multiplayerStartType, slotNumber);
   let iceServersConfig;
   let fetchSuccess = false;
 
@@ -2247,7 +2255,7 @@ async function setupPeer(slotNumber) { // Added async
     }
 
     // Connect to the host ID matching the chosen start type
-    const hostID = `dot-host-${multiplayerStartType}-${slotNumber}`; 
+    const hostID = mpId('host', multiplayerStartType, slotNumber);
     conn = peer.connect(hostID);
 
     conn.on("open", function() {
@@ -2278,7 +2286,7 @@ async function setupHost(slotNumber) { // Added async
   isHost = true;
   isMultiplayer = true;
   // Generate ID based on the chosen start type
-  sessionID = `dot-host-${multiplayerStartType}-${slotNumber}`; 
+  sessionID = mpId('host', multiplayerStartType, slotNumber);
   let iceServersConfig;
   let fetchSuccess = false;
 
@@ -3124,7 +3132,7 @@ $('.mode-modal .wrapper').on('click', '.btn-level', function(e) {
 // --- END REFACTORED MODE MODAL HANDLERS ---
 
 // Register Service Worker for PWA
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && !window.DOT_DISCORD) { // no offline cache inside Discord's proxy
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js')
       .then(registration => {
