@@ -163,8 +163,10 @@
       if (!ENABLED) return;
       var scene = this.el;
       var frame = api._testFrame || scene.frame;
-      var inVR = api._testFrame ? true : scene.is('vr-mode');
-      if (!inVR || !frame) {
+      // The games enter XR as immersive-ar on Quest (so passthrough can toggle live): A-Frame
+      // then sets 'ar-mode', not 'vr-mode'. Either one means we're in a headset session.
+      var inXR = scene.is('vr-mode') || scene.is('ar-mode') || (!!api._testFrame && !api._testNoForce);
+      if (!inXR || !frame) {
         if (api.anyHand()) this.deactivateAll();
         return;
       }
