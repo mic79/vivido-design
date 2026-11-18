@@ -1432,3 +1432,17 @@ footer .rts {
   color: #ccc;
 }
 }
+
+/* Discord Activity: "Friends only" matchmaking toggle (only visible inside Discord) */
+.dc-friends-only { display: none; }
+html.in-discord .dc-friends-only {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  margin-top: 1.25rem;
+  font-size: .9rem;
+  opacity: .8;
+  cursor: pointer;
+  user-select: none;
+}
+html.in-discord .dc-friends-only input { width: 1rem; height: 1rem; cursor: pointer; }

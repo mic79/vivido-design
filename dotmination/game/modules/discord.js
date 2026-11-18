@@ -5,6 +5,8 @@
 // request must go through Discord's proxy (URL mappings set in the Developer Portal),
 // so we patch fetch/WebSocket to the mapped paths, and we pair the two players by the
 // Activity instance: everyone who joins the same Activity session shares instanceId.
+// Matchmaking (script.js) tries that Activity room first, then the public lobbies
+// shared with the web game, the app and DotminationVR (crossplay).
 //
 // Outside Discord this module does nothing.
 import { DiscordSDK, patchUrlMappings } from '../lib/discord-sdk.mjs';
@@ -31,6 +33,19 @@ if (inDiscord) {
 
   window.DOT_DISCORD = { sdk, instanceId, room, platform: params.get('platform') || 'desktop', ready: false };
   document.documentElement.classList.add('in-discord');
+
+  // "Only play with people in this call" toggle (index.html, multiplayer start options).
+  // Off by default: matchmaking checks this Activity first, then the public crossplay lobbies.
+  const initFriendsToggle = () => {
+    const box = document.getElementById('dcFriendsOnly');
+    if (!box) return;
+    try { box.checked = localStorage.getItem('dotDiscordFriendsOnly') === '1'; } catch (e) {}
+    box.addEventListener('change', () => {
+      try { localStorage.setItem('dotDiscordFriendsOnly', box.checked ? '1' : '0'); } catch (e) {}
+    });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initFriendsToggle);
+  else initFriendsToggle();
 
   sdk.ready()
     .then(() => {

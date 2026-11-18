@@ -2111,12 +2111,20 @@ async function startMultiplayerConnection() { // Added async
   }
 }
 
-// PeerJS ids for a lobby slot. Inside Discord (modules/discord.js) the room is the
-// Activity instance, so the two people in the same Activity session always meet.
+// PeerJS ids for a lobby slot. Slots 1..MAX_LOBBIES are the public lobbies shared by the
+// web game, the app and DotminationVR. Slot 0 (DC_SLOT) is the private room of a Discord
+// Activity session (modules/discord.js), so people in the same Activity always find each other.
+const DC_SLOT = 0;
 function mpId(role, startType, slot) {
-  if (window.DOT_DISCORD) return `dot-${role}-dc-${window.DOT_DISCORD.room}`;
+  if (slot === DC_SLOT && window.DOT_DISCORD) return `dot-${role}-dc-${window.DOT_DISCORD.room}`;
   return `dot-${role}-${startType}-${slot}`;
 }
+
+// Discord: "Friends only" keeps matchmaking inside the Activity (no public lobbies)
+function dcFriendsOnly() {
+  try { return localStorage.getItem('dotDiscordFriendsOnly') === '1'; } catch { return false; }
+}
+let dcAliasPeer = null; // Discord host: second PeerJS id (the Activity room) next to the public one
 
 async function checkPeerAvailability(id) {
   return new Promise((resolve) => {
@@ -2182,9 +2190,20 @@ async function findAvailableSlot(desiredStartType) { // <<< Accept desiredStartT
     }
   }
 
-  // If no valid previous session, search for new slot
-  const maxLobbies = window.DOT_DISCORD ? 1 : MAX_LOBBIES; // Discord: one room per Activity session
-  for (let i = 1; i <= maxLobbies; i++) {
+  // Discord: a friend already waiting in this Activity comes first
+  if (window.DOT_DISCORD) {
+    const dcHostFree = await checkPeerAvailability(mpId('host', desiredStartType, DC_SLOT));
+    if (!dcHostFree && await checkPeerAvailability(mpId('peer', desiredStartType, DC_SLOT))) {
+      console.log('[Discord] Friend waiting in this Activity, joining them');
+      return { slotNumber: DC_SLOT, role: 'peer' };
+    }
+    if (dcFriendsOnly()) {
+      return dcHostFree ? { slotNumber: DC_SLOT, role: 'host' } : null;
+    }
+  }
+
+  // If no valid previous session, search for new slot (public lobbies, crossplay)
+  for (let i = 1; i <= MAX_LOBBIES; i++) {
     const hostId = mpId('host', desiredStartType, i); // ID for host with desired type
     const peerId = mpId('peer', desiredStartType, i); // ID for peer with desired type
     
@@ -2327,7 +2346,8 @@ async function setupHost(slotNumber) { // Added async
     }
     saveSessionInfo(slotNumber, 'host');
 
-    peer.on("connection", function(newConn) {
+    const hostPeer = peer;
+    const onHostConnection = function(newConn, viaPeer, viaSlot) {
       console.log("Received connection attempt");
       
       if (conn) {
@@ -2335,6 +2355,17 @@ async function setupHost(slotNumber) { // Added async
         newConn.close();
       } else {
         conn = newConn;
+        // Discord host listening on two ids: keep the one this player used, drop the other
+        if (dcAliasPeer) {
+          const other = viaPeer === dcAliasPeer ? hostPeer : dcAliasPeer;
+          peer = viaPeer;
+          dcAliasPeer = null;
+          if (viaSlot !== slotNumber) {
+            sessionID = mpId('host', multiplayerStartType, viaSlot);
+            saveSessionInfo(viaSlot, 'host');
+          }
+          setTimeout(() => { try { other.destroy(); } catch (e) {} }, 0);
+        }
         conn.on("open", function() {
           if (hasConnected) return;
           hasConnected = true;
@@ -2343,7 +2374,25 @@ async function setupHost(slotNumber) { // Added async
           setupConnectionHandlers(conn);
         });
       }
-    });
+    };
+    hostPeer.on("connection", (c) => onHostConnection(c, hostPeer, slotNumber));
+
+    // Discord + public lobby: also wait under this Activity's room id, so a friend who
+    // opens the Activity later still finds us while strangers can take the public seat.
+    if (window.DOT_DISCORD && slotNumber !== DC_SLOT && !dcAliasPeer) {
+      const alias = new Peer(mpId('host', multiplayerStartType, DC_SLOT), {
+        host: "0.peerjs.com", port: 443, secure: true,
+        config: { 'iceServers': iceServersConfig }
+      });
+      dcAliasPeer = alias;
+      alias.on("open", (id) => console.log("[Discord] Also waiting for friends as", id));
+      alias.on("connection", (c) => onHostConnection(c, alias, DC_SLOT));
+      alias.on("error", (err) => {
+        console.warn("[Discord] Activity room id unavailable:", err && err.type);
+        if (dcAliasPeer === alias) dcAliasPeer = null;
+        try { alias.destroy(); } catch (e) {}
+      });
+    }
   });
 
   peer.on("error", function(err) {
@@ -2363,6 +2412,10 @@ function cleanup() {
   if (peer) {
     peer.destroy();
     peer = null;
+  }
+  if (dcAliasPeer) {
+    try { dcAliasPeer.destroy(); } catch (e) {}
+    dcAliasPeer = null;
   }
   hasConnected = false;
   connectionState = CONNECTION_STATES.DISCONNECTED;
