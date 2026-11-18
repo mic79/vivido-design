@@ -120,6 +120,7 @@
       this._lastPoseSend = 0;
       this._hover = { leftHand: -1, rightHand: -1 };
       this._poke = { leftHand: { armed: true }, rightHand: { armed: true } };
+      this._lastPokeAt = { leftHand: 0, rightHand: 0 };
       this._tmp = new THREE.Vector3();
       this._tmp2 = new THREE.Vector3();
       this._tmpQ = new THREE.Quaternion();
@@ -611,8 +612,11 @@
       function attachHand(id) {
         var hand = document.getElementById(id);
         if (!hand) { setTimeout(function () { attachHand(id); }, 200); return; }
-        hand.addEventListener('triggerdown', function () {
+        hand.addEventListener('triggerdown', function (evt) {
           if (menuOpen() && id === 'rightHand') return;
+          // Hands-only: a pinch right after a finger poke is the same intent — don't tap twice
+          if (evt && evt.detail && evt.detail.handInput &&
+              performance.now() - (self._lastPokeAt[id] || 0) < 600) return;
           // Cards (tutorial / welcome / end card) sit in front of the board: they win the pick
           if (self._uiPickHand && self._uiPress(self._uiPickHand(hand), hand)) return;
           var pick = self._pickForHand(hand);
@@ -660,6 +664,11 @@
      * point with, not the controller/laser origin near the thumb). Falls back to the laser origin.
      */
     _fingerTip: function (hand) {
+      // Hands-only: poke with your real index fingertip
+      if (global.HandInput && hand && global.HandInput.isHand(hand.id)) {
+        var real = global.HandInput.jointWorld(hand.id, 'index-finger-tip', new THREE.Vector3());
+        if (real) return real;
+      }
       var body = document.getElementById('player-body');
       var mb = body && body.components && body.components['mixamo-body'];
       var left = hand && hand.id === 'leftHand';
@@ -744,6 +753,7 @@
               if (pk.depth > POKE_OUT) st.armed = true;
               if (st.armed && pk.depth < POKE_IN && pk.index >= 0) {
                 st.armed = false;
+                self._lastPokeAt[id] = performance.now();
                 self._tryHumanTap(mine, pk.index, hand);
               }
             }
@@ -2987,7 +2997,9 @@
       if (hint) {
         var msg = '';
         if (this._myActionBoard()) {
-          msg = this._isPresenting() ? 'Point + trigger, or poke a dot' : 'Click a dot';
+          msg = !this._isPresenting() ? 'Click a dot'
+            : (global.HandInput && global.HandInput.anyHand()) ? 'Point + pinch, or poke a dot'
+            : 'Point + trigger, or poke a dot';
         }
         hint.setAttribute('text', 'value', msg);
       }

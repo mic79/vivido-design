@@ -447,7 +447,13 @@
           const leftGamepad = this.leftController.components['tracked-controls']?.controller?.gamepad;
           const rightGamepad = this.rightController.components['tracked-controls']?.controller?.gamepad;
 
-          if (leftGamepad && leftGamepad.buttons) {
+          // Hands-only (hand-input.js): curls come from the real finger joints
+          const HI = window.HandInput;
+          const handCurls = { left: HI && HI.curls('left'), right: HI && HI.curls('right') };
+          if (handCurls.left) this.targetCurls.left = Object.assign({}, handCurls.left);
+          if (handCurls.right) this.targetCurls.right = Object.assign({}, handCurls.right);
+
+          if (!handCurls.left && leftGamepad && leftGamepad.buttons) {
             const trigger = leftGamepad.buttons[0]?.value || 0;
             const grip = leftGamepad.buttons[1]?.value || 0;
             let anyThumbTouch = 0;
@@ -457,7 +463,7 @@
             this.updateTargetCurls('left', trigger, grip, anyThumbTouch);
           }
 
-          if (rightGamepad && rightGamepad.buttons) {
+          if (!handCurls.right && rightGamepad && rightGamepad.buttons) {
             const trigger = rightGamepad.buttons[0]?.value || 0;
             const grip = rightGamepad.buttons[1]?.value || 0;
             let anyThumbTouch = 0;
