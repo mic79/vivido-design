@@ -1,0 +1,16 @@
+{
+  "name": "Dotmination VR",
+  "short_name": "Dotmination VR",
+  "description": "The chain-reaction dot game in Virtual Reality. Take over the board with chain reactions, against the bot, other VR players, or cross-play with the flatscreen and mobile Dotmination.",
+  "start_url": "./index.html?launch=quest-app",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#111111",
+  "theme_color": "#1d3434",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -9,6 +9,9 @@
 //                  ready · move{dotIndex} · gameState{currentPlayer, moveAmount, mapString,
 //                  fieldClasses, startType, matchStarter} · gameOver{winner, mapString} ·
 //                  rematchReady · modeSwitch
+//                Newer 2D builds also send/understand (older ones ignore them):
+//                  ready{resume:true} (reconnected: continue the same board) · away · back ·
+//                  leaving (closed the game: don't wait for a return) · declined (host said "Not now")
 //                The host is authoritative (sends gameState after every turn, gameOver at the end).
 //   Board        identical 9-row / 40-dot field and dot order (dot-rules.js is a 1:1 port).
 //                mapString: one hex char per dot, 0 empty, 1-5 player--1 stage, 6-A player--2.
@@ -22,7 +25,11 @@
   var PEER_SERVER = { host: '0.peerjs.com', port: 443, secure: true };
   var MAX_LOBBIES = 10;           // original MAX_LOBBIES
   var CHECK_TIMEOUT_MS = 2000;    // original checkPeerAvailability timeout
-  var HOST_REPLY_MS = 8000;       // joined host must send its board within this
+  var HOST_REPLY_MS = 15000;      // joined host must send its board within this (a 2D host
+                                  // playing while it waits first asks its player, up to 6 s)
+  var RETURN_WAIT_MS = 60000;     // link died silently: wait this long for the opponent
+  var AWAY_WAIT_MS = 180000;      // either player switched away: wait this long
+  var ASK_SECONDS = 6;            // "Opponent joined!" prompt auto-starts after this
   var DEAD_SLOT_MS = 10 * 60000;  // skip an unresponsive host's slot this long
   var P1 = 'player--1';
   var P2 = 'player--2';
@@ -117,6 +124,11 @@
     matchStarter: P1,
     myRematch: false,
     oppRematch: false,
+    resume: null,         // { until, timer } while waiting for a dropped opponent / reconnecting
+    oppAway: false,       // opponent said it switched away
+    linkDropped: false,   // the link died silently (not a clean close)
+    declined: false,      // the host we joined said "Not now"
+    retired: [],          // host: old PeerJS objects still carrying a running link
     _gen: 0,
     _deadSlots: {}  // 'blank-1' → time. An original host whose peer left ignores new joiners
                     // (its hasConnected flag is never reset), so such a slot stays occupied.
@@ -144,6 +156,7 @@
     if (X.active) return;
     if (global.isMultiplayer && typeof global.endMultiplayer === 'function') global.endMultiplayer();
     var gen = ++X._gen;
+    X.declined = false;
     X.active = true;
     X.role = null;
     X.slot = 0;
@@ -197,16 +210,55 @@
       setStatus('Waiting for an opponent (slot ' + slot + ')');
       if (slot > 1) watchLowerSlots(slot, gen);
     });
-    peer.on('connection', function (c) {
+    X._onConn = function (c) {
       if (gen !== X._gen) { try { c.close(); } catch (e) { /* ignore */ } return; }
-      if (X.conn && X.conn.open) {
+      if (X.conn && X.conn.open && X.connected) {
         console.log(LOG, 'already connected, rejecting', c.peer);
         try { c.close(); } catch (e2) { /* ignore */ }
         return;
       }
+      if (X.conn) { var stale = X.conn; X.conn = null; try { stale.close(); } catch (e3) { /* ignore */ } }
       attach(c, gen);
-    });
+    };
+    peer.on('connection', X._onConn);
     peer.on('error', function (err) { onPeerError(err, gen); });
+  }
+
+  // Host: the matchmaking server can drop us (headset asleep, network blip) while the game
+  // link keeps working. Sign in again with a fresh PeerJS object under the same id, so the
+  // opponent can find us if their link drops later. (PeerJS 1.4.7's reconnect() makes every
+  // later join arrive twice, which breaks reconnecting.)
+  var signalPending = null;
+  function rejoinSignal() {
+    if (!X.active || !X.isHost() || signalPending || !X.peer || X.peer.destroyed || !X.peer.disconnected) return;
+    var gen = X._gen;
+    var old = X.peer;
+    var id = 'dot-host-' + X.startType + '-' + X.slot;
+    getIce().then(function (ice) {
+      if (gen !== X._gen || X.peer !== old || signalPending) return;
+      var np = new Peer(id, Object.assign({ config: { iceServers: ice } }, PEER_SERVER));
+      signalPending = np;
+      np.on('open', function () {
+        signalPending = null;
+        if (gen !== X._gen || X.peer !== old) { try { np.destroy(); } catch (e) { /* ignore */ } return; }
+        console.log(LOG, 'signed back in to the matchmaking server as', id);
+        X.retired.push(old);
+        X.peer = np;
+        np.on('connection', function (c) { if (X._onConn) X._onConn(c); });
+      });
+      np.on('error', function (err) {
+        console.warn(LOG, 'matchmaking sign-in failed, retrying:', err && err.type);
+        if (signalPending === np) signalPending = null;
+        try { np.destroy(); } catch (e) { /* ignore */ }
+      });
+    });
+  }
+  setInterval(rejoinSignal, 5000);
+
+  function destroyRetired() {
+    var list = X.retired;
+    X.retired = [];
+    list.forEach(function (p) { if (p !== X.peer) { try { p.destroy(); } catch (e) { /* ignore */ } } });
   }
 
   /** Hosting above slot 1: originals scan from slot 1 up, so join one that waits lower down. */
@@ -257,7 +309,7 @@
       // No opening board in time → that host is stuck; remember the slot and search again
       var st = X.startType, key = st + '-' + slot;
       setTimeout(function () {
-        if (gen !== X._gen || X.initialSync) return;
+        if (gen !== X._gen || X.initialSync || X.resume) return;
         X._deadSlots[key] = Date.now();
         teardown("That game didn't respond - searching again", false);
         setTimeout(function () { if (!X.active) X.start(st); }, 300);
@@ -269,6 +321,7 @@
   function onPeerError(err, gen) {
     if (gen !== X._gen) return;
     console.warn(LOG, 'peer error', err && err.type, err);
+    if (X.resume) return;   // reconnecting: the host may not be back yet; keep trying
     // Transient signalling hiccups while a game is running: keep the data channel
     if (X.connected && err && (err.type === 'network' || err.type === 'server-error')) return;
     var t = err && err.type;
@@ -312,6 +365,13 @@
       if (gen !== X._gen || X.conn !== c) return;
       if (X.connected) return;
       X.connected = true;
+      X.linkDropped = false;
+      if (!X.isHost() && X.resume) {
+        // Back after a drop: ask the host to continue the same board
+        send({ type: 'ready', resume: true });
+        resumed();
+        return;
+      }
       setStatus('Connected - ' + (X.isHost() ? 'you are host (teal)' : 'you joined (pink)'));
       if (!X.isHost()) send({ type: 'ready' });   // original: peer announces itself
     }
@@ -328,6 +388,7 @@
     c.on('open', function () {
       watchLink(c, function () {
         if (gen !== X._gen || X.conn !== c) return;
+        X.linkDropped = true;
         try { c.close(); } catch (e) { /* ignore */ }
         if (X.conn === c) onClose();
       });
@@ -341,11 +402,42 @@
     if (!g) return;
     switch (d.type) {
       case 'ready':
-        // Host answers the first ready with the opening board (original setupConnectionHandlers)
-        if (X.isHost() && !X.hasSentGameState) {
-          X.hasSentGameState = true;
-          hostStartMatch();
+        if (!X.isHost()) break;
+        // The opponent came back after a drop: continue the same board
+        if (d.resume && X.resume && g._xplay && g.matchActive) {
+          X.hostSendState(g.boards.shared);
+          resumed();
+          break;
         }
+        if (X.resume) {   // they reloaded instead: the old match is over, start a new one
+          clearResume();
+          X.hasSentGameState = false;
+          g.xAbort('');
+        }
+        // Host answers the first ready with the opening board (original setupConnectionHandlers)
+        if (!X.hasSentGameState) {
+          X.hasSentGameState = true;
+          if (g._xIsPlayingSolo()) {
+            // Playing a level / the bot while waiting: ask first
+            g._xAskJoin(function () { if (X.connected) hostStartMatch(); }, declineJoin);
+          } else {
+            hostStartMatch();
+          }
+        }
+        break;
+      case 'away':
+      case 'back':
+        X.oppAway = d.type === 'away';
+        if (!X.resume && g._xplay && g.matchActive) {
+          g._showNotice(X.oppAway ? 'Your opponent switched away from the game' : 'Your opponent is back', X.oppAway ? 6000 : 2500);
+        }
+        break;
+      case 'leaving':
+        // Closed the game on purpose: no point waiting for a return
+        X._oppLeft = true;
+        break;
+      case 'declined':
+        X.declined = true;
         break;
       case 'gameState':
         if (X.isHost()) break;
@@ -377,8 +469,8 @@
         else setStatus('Opponent wants a rematch');
         break;
       case 'modeSwitch':
-        // Original host left multiplayer
-        teardown('Opponent left the match', false);
+        // Original host left multiplayer (or said "Not now" to our join)
+        teardown(X.declined ? "That player can't start a match right now" : 'Opponent left the match', false);
         break;
       default:
         console.log(LOG, 'ignored message', d);
@@ -389,6 +481,15 @@
     var g = game();
     X.connected = false;
     X.conn = null;
+    var left = X._oppLeft;
+    X._oppLeft = false;
+    // The player who joined left before the host answered the "Opponent joined!" prompt
+    if (g && g._xAsk) { g._xAskClose(); X.hasSentGameState = false; setStatus('Waiting for an opponent (slot ' + X.slot + ')'); return; }
+    // A running match whose link ended without a goodbye: wait for the opponent to come back
+    if (!left && g && g._xplay && g.matchActive && X.active) {
+      startResume(g);
+      return;
+    }
     if (X.isHost() && X.peer && !X.peer.destroyed) {
       // Original peers reconnect to the same slot; keep hosting
       X.hasSentGameState = false;
@@ -398,6 +499,103 @@
       teardown('Your opponent left the match', false);
     }
   }
+
+  // ── Reconnecting after a drop (same rules as the 2D game) ──────────────────
+  var lastVisibleAt = Date.now();
+  var wasHiddenAt = 0;
+  function meAway() {
+    return (global.document && global.document.hidden) || X._xrHidden ||
+      (wasHiddenAt && Date.now() - lastVisibleAt < 20000);
+  }
+  function returnWait() {
+    if (X.oppAway || meAway()) return AWAY_WAIT_MS;
+    if (X.linkDropped) return RETURN_WAIT_MS;
+    return X.isHost() ? 30000 : 15000;
+  }
+  function clearResume() {
+    if (X.resume) { clearTimeout(X.resume.timer); clearInterval(X.resume.loop); }
+    X.resume = null;
+  }
+  function startResume(g) {
+    clearResume();
+    var ms = returnWait();
+    var away = X.oppAway;
+    X.resume = { until: Date.now() + ms, timer: setTimeout(giveUpResume, ms), loop: null, nextTry: 0 };
+    var msg = X.isHost()
+      ? (away ? 'Your opponent switched away. Waiting for them to come back...' : 'Your opponent disconnected. Waiting for them to come back...')
+      : (away ? 'Your opponent switched away. Reconnecting when they are back...' : 'Lost the connection. Reconnecting...');
+    g._showNotice(msg, ms);
+    setStatus(msg);
+    if (X.isHost()) {
+      destroyRetired();
+      rejoinSignal();
+    } else {
+      // Keep trying to reach the same host until it answers or the wait runs out
+      X.resume.loop = setInterval(function () {
+        if (!X.resume || X.connected) return;
+        if (Date.now() < X.resume.nextTry) return;
+        X.resume.nextTry = Date.now() + 10000;
+        try { if (X.peer) X.peer.destroy(); } catch (e) { /* ignore */ }
+        X.peer = null;
+        setupPeer(X.slot, X._gen);
+      }, 1000);
+    }
+  }
+  function resumed() {
+    clearResume();
+    X.oppAway = false;
+    var g = game();
+    if (g) { g._clearNotice(); g._showNotice('Reconnected', 2500); }
+    setStatus('Playing - you are ' + (X.isHost() ? 'teal (host, slot ' : 'pink (slot ') + X.slot + ')');
+  }
+  function giveUpResume() {
+    clearResume();
+    var g = game();
+    if (X.isHost()) {
+      X.hasSentGameState = false;
+      if (g) { g._clearNotice(); g.xAbort('Your opponent left the match'); }
+      setStatus('Opponent left - waiting (slot ' + X.slot + ')');
+    } else {
+      teardown('Your opponent left the match', false);
+    }
+  }
+
+  // Host said "Not now" to a joining player: tell them, stop hosting
+  function declineJoin() {
+    send({ type: 'declined' });
+    send({ type: 'modeSwitch' });
+    teardown('Stopped waiting for cross-play opponents', true);
+    var g = game();
+    if (g) g._showNotice('Stopped waiting for cross-play opponents', 4000);
+  }
+
+  // Tell the opponent when this player switches away (tab hidden, headset off, system menu)
+  function sayVisibility(away) {
+    if (away) wasHiddenAt = Date.now(); else lastVisibleAt = Date.now();
+    if (X.connected) send({ type: away ? 'away' : 'back' });
+    if (!away) rejoinSignal();
+  }
+  if (global.document) {
+    global.document.addEventListener('visibilitychange', function () { sayVisibility(global.document.hidden); });
+  }
+  function watchXrSession() {
+    var scene = global.document && global.document.querySelector('a-scene');
+    if (!scene) return;
+    scene.addEventListener('enter-vr', function () {
+      var xr = scene.renderer && scene.renderer.xr;
+      var session = xr && xr.getSession && xr.getSession();
+      if (!session || session.__dotVis) return;
+      session.__dotVis = true;
+      session.addEventListener('visibilitychange', function () {
+        var hidden = session.visibilityState === 'hidden';
+        if (hidden === !!X._xrHidden) return;
+        X._xrHidden = hidden;
+        sayVisibility(hidden);
+      });
+    });
+  }
+  if (global.document && global.document.readyState !== 'loading') watchXrSession();
+  else if (global.document) global.document.addEventListener('DOMContentLoaded', watchXrSession);
 
   function hostStartMatch() {
     var g = game();
@@ -465,11 +663,18 @@
   /** Leave cross-play. A host tells the flat peer (original modeSwitch → back to its menu). */
   X.stop = function () {
     if (!X.active) return;
-    if (X.isHost() && X.connected) send({ type: 'modeSwitch' });
+    if (X.connected) send({ type: X.isHost() ? 'modeSwitch' : 'leaving' });
     teardown('Cross-play off', true);
   };
 
   function teardown(msg, polite) {
+    clearResume();
+    destroyRetired();
+    X.oppAway = false;
+    X.declined = false;
+    X._oppLeft = false;
+    var gp = game();
+    if (gp && gp._xAskClose) gp._xAskClose();
     X._gen++;
     var peer = X.peer, conn = X.conn;
     X.peer = null;
@@ -778,6 +983,60 @@
     this._sfx('win', { volume: 0.5 });
   });
 
+  /** A level / bot game of the player's own (not the idle preview, not cross-play). */
+  C._xIsPlayingSolo = function () {
+    if (this._xplay || this._dualBotPreview) return !!this._tutorial;
+    return !!(this.matchActive || this._tutorial || (this._victory && !this._victory.xask));
+  };
+
+  /** Someone joined while this player plays solo: Play now (countdown) / Not now. */
+  C._xAskJoin = function (onYes, onNo) {
+    if (!this._sceneRoot) { onYes(); return; }
+    if (!this._uiReady) this._uiInit();
+    var self = this;
+    var left = ASK_SECONDS;
+    this._xAsk = { yes: onYes, no: onNo, timer: null };
+    var draw = function () {
+      self._endInfo = {
+        winner: 'draw',
+        title: 'Opponent joined!',
+        stars: null,
+        sub: 'Cross-play ' + (X.startType === 'half-filled' ? 'Half-Filled' : 'Blank') + ' match. Your current game will end.',
+        buttons: [{ id: 'xask-no', label: 'Not now' }, { id: 'xask-yes', label: 'Play now (' + left + ')', primary: true }]
+      };
+      self._endCard.dirty = true;
+    };
+    draw();
+    this._xAskPrevVictory = this._victory;
+    this._victory = { root: this._endCard.group, t0: performance.now(), endCard: true, xask: true };
+    this._uiShow(this._endCard, this._uiFrontPos(0.04));
+    this._endCard.shownAt = performance.now();
+    this._sfx('win', { volume: 0.4 });
+    this._xAsk.timer = setInterval(function () {
+      left--;
+      if (left <= 0) { self._xAskAnswer(true); return; }
+      draw();
+    }, 1000);
+  };
+  C._xAskAnswer = function (yes) {
+    var a = this._xAsk;
+    if (!a) return;
+    this._xAskClose();
+    if (yes) a.yes(); else a.no();
+  };
+  C._xAskClose = function () {
+    var a = this._xAsk;
+    if (!a) return;
+    clearInterval(a.timer);
+    this._xAsk = null;
+    if (this._victory && this._victory.xask) {
+      this._uiHide(this._endCard);
+      this._endInfo = null;
+      this._victory = this._xAskPrevVictory || null;
+    }
+    this._xAskPrevVictory = null;
+  };
+
   C._xEndSub = function () {
     if (!X.connected) return 'Opponent left';
     if (X.myRematch) return 'Waiting for opponent...';
@@ -793,6 +1052,10 @@
   };
 
   wrap('_onEndCard', function (orig, a) {
+    if (a[0] === 'xask-yes' || a[0] === 'xask-no') {
+      this._xAskAnswer(a[0] === 'xask-yes');
+      return;
+    }
     if (a[0] === 'xrematch') {
       if (this._xplay) X.rematch();
       this._xRefreshEndCard();

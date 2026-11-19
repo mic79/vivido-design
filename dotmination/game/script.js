@@ -2829,8 +2829,19 @@ function cleanup() {
 // Add window unload handler
 // iOS often skips beforeunload: also close on pagehide so the opponent is told right away
 // Closing the game on purpose: tell the opponent first, so they don't wait for a return
+// PeerJS 1.4.7 packs messages into a Blob and converts it asynchronously before sending, so a
+// message sent while the page closes never leaves. Pack 'leaving' ahead of time and hand the
+// bytes straight to the data channel, which sends synchronously.
+let leavingBytes = null;
+try {
+  window.peerjs.util.pack({ type: 'leaving' }).arrayBuffer().then((b) => { leavingBytes = b; });
+} catch (e) { /* older browser: fall back to conn.send */ }
 function sayLeaving() {
-  try { if (conn && conn.open && hasConnected) conn.send({ type: 'leaving' }); } catch (e) { /* ignore */ }
+  try {
+    if (!(conn && conn.open && hasConnected)) return;
+    if (leavingBytes && conn.dataChannel && conn.dataChannel.readyState === 'open') conn.dataChannel.send(leavingBytes);
+    else conn.send({ type: 'leaving' });
+  } catch (e) { /* ignore */ }
 }
 window.addEventListener('pagehide', () => { sayLeaving(); try { cleanup(); } catch (e) { /* ignore */ } });
 window.addEventListener('beforeunload', () => {

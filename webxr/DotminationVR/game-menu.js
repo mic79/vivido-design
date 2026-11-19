@@ -305,7 +305,7 @@
         window.VividoHub.init('dotminationvr');
         var hubState = function () {
           var FC = window.FlatCompat;
-          if (FC && FC.connected) return 'playing';
+          if (FC && (FC.connected || FC.resume)) return 'playing';
           // Cross-play host signed in: flatscreen players can join this one right now
           if (FC && FC.active) {
             var hostOpen = FC.isHost() && FC.peer && FC.peer.open && !FC.peer.disconnected;
@@ -326,6 +326,7 @@
         window.VividoHub.onChange(function (c) {
           var el = document.getElementById('menu-live-text');
           if (el) el.setAttribute('value', c ? window.VividoHub.liveText(c) : '');
+          self._refreshHubJoin(c);
         });
       }
 
@@ -753,8 +754,13 @@
             this.refreshLobbyUI();
             break;
           }
-          // A bot / lobby match replaces cross-play
-          if (window.FlatCompat && window.FlatCompat.active && this.menuMode !== 'multi') window.FlatCompat.stop();
+          // A bot / lobby match replaces a running cross-play match. A cross-play host that is
+          // still waiting keeps waiting while this game runs, and is asked when someone joins.
+          var FCw = window.FlatCompat;
+          if (FCw && FCw.active && this.menuMode !== 'multi') {
+            if (FCw.connected || FCw.resume || !FCw.isHost()) FCw.stop();
+            else if (comp) setTimeout(function () { comp._showNotice("Still waiting for a cross-play opponent. You'll be asked when someone joins", 5000); }, 1200);
+          }
           // Host starting a match interrupts any lobby Watch
           if (window.replayActive || window.replaySpectator) {
             if (window.stopMatchReplay) window.stopMatchReplay({ force: true });
@@ -877,6 +883,15 @@
           break;
         case 'toggle-start-type':
           this._toggleStartType();
+          break;
+        case 'hub-join':
+          // Join the waiting player (cross-play matchmaking finds their slot)
+          if (this._hubJoinType && window.FlatCompat && !window.FlatCompat.active) {
+            window.FlatCompat.start(this._hubJoinType);
+            this.closeMenu();
+          }
+          this._refreshHubJoin(window.VividoHub && window.VividoHub.counts);
+          this.refreshLobbyUI();
           break;
         case 'cross-play':
           // Play the original flatscreen / mobile Dotmination (flat-compat.js)
@@ -1182,6 +1197,23 @@
         txt.setAttribute('value', on === 'half' ? 'HALF-FILLED' : 'BLANK START');
         txt.setAttribute('color', '#ffffff');
       }
+    },
+
+    /** JOIN: someone (2D, Google Play, Discord or another VR player) hosts a match you can join now. */
+    _refreshHubJoin: function (c) {
+      var btn = document.getElementById('menu-hub-join');
+      var txt = document.getElementById('menu-hub-join-text');
+      if (!btn || !window.VividoHub) return;
+      var FC = window.FlatCompat;
+      var busy = (FC && FC.active) || window.isMultiplayer || this._isRealMatchPlaying();
+      var open = c ? window.VividoHub.joinable(c) : {};
+      var types = Object.keys(open).sort(function (a, b) { return open[b] - open[a]; });
+      var t = busy ? null : types[0];
+      this._hubJoinType = t || null;
+      btn.setAttribute('visible', !!t);
+      if (txt && t) txt.setAttribute('value', 'JOIN ' + (t === 'half-filled' ? 'HALF-FILLED' : 'BLANK') + ' MATCH');
+      var live = document.getElementById('menu-live-text');
+      if (live) live.setAttribute('position', t ? '-0.12 -0.262 0.002' : '0 -0.262 0.002');
     },
 
     /** CROSS-PLAY on/off (original flatscreen / mobile Dotmination, flat-compat.js). */

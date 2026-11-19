@@ -10,8 +10,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below).
        Meta name kept from StacksVR so the shared modules read window.STACKS_VERSION. -->
-  <meta name="stacks-version" content="0.2.14" />
+  <meta name="stacks-version" content="0.2.15" />
   <title>DotminationVR</title>
+  <!-- Installable web app; also the base of the Meta Quest store package (Bubblewrap / TWA) -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#1d3434" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <script>
     (function () {
       var m = document.querySelector('meta[name="stacks-version"]');
@@ -43,7 +48,7 @@
   <script src="lobby.js?v=20"></script>
   <script src="match-replay.js?v=20"></script>
   <script src="stacks-audio.js?v=20"></script>
-  <script src="game-menu.js?v=21"></script>
+  <script src="game-menu.js?v=22"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=20"></script>
   <script src="hand-input.js?v=5"></script>
@@ -51,7 +56,7 @@
   <!-- Match component (StacksVR stacks-game.js structure, Dotmination gameplay) -->
   <script src="dot-game.js?v=20"></script>
   <script src="dot-ui.js?v=20"></script>
-  <script src="flat-compat.js?v=21"></script>
+  <script src="flat-compat.js?v=22"></script>
   <script src="mobile-spectator.js?v=20"></script>
 
     <style>
@@ -430,6 +435,29 @@
         startBtn.textContent = _vrSupported ? 'Start VR (avatar still loading)' : 'No VR headset';
         startBtn.removeAttribute('aria-busy');
       }, 20000);
+
+      // Meta Quest store app (packaged web app): start straight in VR, like a native app.
+      // Launching from the app library counts as the user gesture WebXR needs. If the headset
+      // still refuses, this start screen stays with its Start VR button.
+      var launchedAsApp = /[?&]launch=quest-app\b/.test(location.search) ||
+        (document.referrer || '').indexOf('android-app://') === 0;
+      var autoTried = false;
+      function maybeAutoEnter() {
+        if (!launchedAsApp || autoTried || !_bodyReady || !_vrSupported) return;
+        autoTried = true;
+        if (startBtn) startBtn.textContent = 'Starting VR…';
+        setTimeout(enterVr, 50);
+        setTimeout(function () {
+          var sc = document.querySelector('a-scene');
+          if (sc && !sc.is('vr-mode') && !sc.is('ar-mode')) syncStartBtn();
+        }, 5000);
+      }
+      window.addEventListener('stacks-player-body-ready', maybeAutoEnter);
+      var autoPoll = setInterval(function () {
+        if (autoTried || !launchedAsApp) { clearInterval(autoPoll); return; }
+        maybeAutoEnter();
+      }, 250);
+      setTimeout(function () { clearInterval(autoPoll); }, 60000);
 
       detectVr();
       // Re-check after scene loads (OpenXR grant can appear late on desktop)
@@ -814,6 +842,12 @@
               <a-text id="menu-start-match-text" value="START vs BOT" align="center" width="0.48" color="#ffffff" position="0 0 0.007"></a-text>
             </a-entity>
             <a-text id="menu-live-text" value="" position="0 -0.262 0.002" align="center" width="0.5" color="#12DACE"></a-text>
+            <!-- JOIN: someone hosts a match you can join now (vivido-hub live activity) -->
+            <a-entity class="menu-btn clickable" data-action="hub-join" id="menu-hub-join" visible="false" position="0.22 -0.262 0.004"
+              geometry="primitive: box; width: 0.2; height: 0.026; depth: 0.008"
+              material="color: #E11168; shader: flat">
+              <a-text id="menu-hub-join-text" value="JOIN" align="center" width="0.26" color="#ffffff" position="0 0 0.006"></a-text>
+            </a-entity>
             <a-text value="X / wrist button close  |  right laser select" position="0 -0.29 0.002" align="center" width="0.42" color="#8fa6a6"></a-text>
           </a-entity>
           </a-entity>
