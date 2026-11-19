@@ -629,6 +629,13 @@
         var hand = document.getElementById(id);
         if (!hand) { setTimeout(function () { attachHand(id); }, 200); return; }
         hand.addEventListener('triggerdown', function (evt) {
+          // One trigger pull = one press. Each hand entity has several controller components
+          // (hand-controls, oculus-touch-controls, laser-controls) that each emit triggerdown
+          // for the same pull; without this, card buttons (e.g. keyboard keys) fired twice.
+          var tNow = performance.now();
+          self._lastTriggerAt = self._lastTriggerAt || {};
+          if (tNow - (self._lastTriggerAt[id] || 0) < 150) return;
+          self._lastTriggerAt[id] = tNow;
           if (menuOpen() && id === 'rightHand') return;
           // Hands-only: a pinch right after a finger poke is the same intent — don't tap twice
           if (evt && evt.detail && evt.detail.handInput &&
