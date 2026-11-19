@@ -147,6 +147,16 @@ a:hover {
 <p>When you play an online match, your device connects directly to your opponent's device (peer-to-peer, using WebRTC). To set up that connection, a random game ID and the network address of your device are exchanged through the PeerJS matchmaking server, and if a direct connection is not possible the match is relayed through a TURN server (Metered.ca). Only game moves are sent; we do not store them.</p>
 <p>When you play Dotmination as a Discord Activity, Discord loads the game inside Discord and tells it which Activity session it runs in, so players in the same session can be matched. Dotmination does not ask for, read or store your Discord username, messages, friends list or any other Discord account data.</p>
 
+<h2>Live activity and World Rankings</h2>
+<p>To show how many people are online or waiting for an opponent, and to keep the World Rankings, the game sends a few things to our small server (a Cloudflare Worker run by Vivido Design):</p>
+<ul>
+<li>a random player ID created on your device (not linked to your name, account or device),</li>
+<li>which game you are in and whether you are in the menu, waiting for an opponent or playing,</li>
+<li>for the rankings: the levels you finish, your time, and the name you choose to show (optional; otherwise "Player" plus a few characters of your ID).</li>
+</ul>
+<p>Online status is forgotten after about two minutes without activity. Ranking entries are kept so the rankings stay meaningful. We don't sell or share this data. To have your ranking entries removed, ask us on the <a href="https://discord.gg/vvuzWnTWKE" target="_blank">Dotmination Discord</a> and include your player name.</p>
+<p>If this service is unavailable, the game keeps working normally without it.</p>
+
 <h2>Third-Party Services</h2>
 <p>This website uses some 3rd-party services in order to provide us and yourself some additional features.</p>
 
@@ -170,6 +180,10 @@ a:hover {
 <h3>Discord</h3>
 <p>Used to run Dotmination as an Activity inside Discord and for our community server.</p>
 <p><a href="https://discord.com/terms" target="_blank">Terms of service</a> & <a href="https://discord.com/privacy" target="_blank">Privacy policy</a>.</p>
+
+<h3>Cloudflare</h3>
+<p>Hosts the server for live activity and the World Rankings, and the connection-relay helper for online matches.</p>
+<p><a href="https://www.cloudflare.com/privacypolicy/" target="_blank">Cloudflare privacy policy</a>.</p>
 
 <h3>PeerJS and Metered.ca</h3>
 <p>Used to connect players for online matches (matchmaking and connection relay).</p>

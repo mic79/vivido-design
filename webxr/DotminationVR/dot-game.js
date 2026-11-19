@@ -281,6 +281,22 @@
       return n;
     },
 
+    /** Send a level time to the world rankings; the end card shows "World #N" when it's back. */
+    _submitWorldTime: function (level, elapsedMs) {
+      this._worldRank = null;
+      if (!global.VividoHub) return;
+      var self = this;
+      global.VividoHub.submitScore(level, elapsedMs).then(function (r) {
+        if (!r || !r.rank) return;
+        self._worldRank = { level: level, rank: r.rank, total: r.total };
+        var e = self._endInfo;
+        if (e && e._level === level && String(e.sub || '').indexOf('World #') < 0) {
+          e.sub = (e.sub || '') + '  ·  World #' + r.rank;
+          if (self._endCard) self._endCard.dirty = true;
+        }
+      });
+    },
+
     _recordLevelWin: function (level, elapsedMs) {
       var t = fmtTime(elapsedMs);
       var key = 'level' + level;
@@ -1992,6 +2008,7 @@
       if (festive && this._levelMatch && !global.isMultiplayer && winner === 'blue') {
         // Original Levels mode: time + stars, best time per level, next level unlocked
         var lw = this._recordLevelWin(this._levelMatch, elapsed);
+        this._submitWorldTime(this._levelMatch, elapsed);
         endInfo.stars = lw.stars; endInfo.time = lw.time; endInfo.isBest = lw.isBest; endInfo.best = lw.best;
         sub = 'Level ' + this._levelMatch + '  ' + '★★★'.slice(0, lw.stars) + '☆☆☆'.slice(lw.stars) +
           '  ' + lw.time + (lw.isBest ? '  best!' : '  (best ' + lw.best + ')');

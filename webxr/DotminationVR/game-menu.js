@@ -297,6 +297,33 @@
       this._joinCooldownUntil = 0;
       var self = this;
 
+      // Live activity + world rankings (optional; vivido-hub.js). Hidden when unavailable.
+      if (window.VividoHub && !window.isMobileSpectator) {
+        var nick = '';
+        try { nick = localStorage.getItem('dotminationvr-nickname') || ''; } catch (eN) { /* storage blocked */ }
+        if (nick && !window.VividoHub.getNick()) { try { localStorage.setItem('vividoHub.nick', nick.slice(0, 16)); } catch (eS) { /* ignore */ } }
+        window.VividoHub.init('dotminationvr');
+        var hubState = function () {
+          var FC = window.FlatCompat;
+          if (FC && FC.connected) return 'playing';
+          if (FC && FC.active) return 'searching';
+          var L = window.StacksLobby;
+          if (window.isMultiplayer && L && L.lobbyState) {
+            var ls = L.lobbyState, me = L.myPlayerId;
+            var mp = ls.matchPlayers || {};
+            if (ls.matchState === 'PLAYING' && me && (mp.blue === me || mp.red === me)) return 'playing';
+            if (ls.queue && me && ls.queue.indexOf(me) >= 0) return 'searching';
+            return 'lobby';
+          }
+          return 'solo';
+        };
+        setInterval(function () { window.VividoHub.setState(hubState()); }, 2000);
+        window.VividoHub.onChange(function (c) {
+          var el = document.getElementById('menu-live-text');
+          if (el) el.setAttribute('value', c ? window.VividoHub.liveText(c) : '');
+        });
+      }
+
       this.el.sceneEl.addEventListener('loaded', function () {
         self.cacheRefs();
         if (window.StacksPassthrough && window.StacksPassthrough.enabled) {

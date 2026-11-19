@@ -747,6 +747,8 @@
       if (winner === 'blue') {
         e.stars = info.stars || 1;
         e.sub = info.time ? (info.time + (info.isBest ? '  ·  best!' : '  ·  best ' + info.best)) : '';
+        e._level = info.level;
+        if (this._worldRank && this._worldRank.level === info.level) e.sub += '  ·  World #' + this._worldRank.rank;
         e.buttons = [{ id: 'next-level', label: 'Next Level', icon: 'arrow', primary: true }];
       } else {
         e.stars = 0;

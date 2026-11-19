@@ -1,0 +1,13 @@
+{
+  // Cloudflare Worker for live activity + global rankings (Dotmination, DotminationVR).
+  // FREE plan only: SQLite-backed Durable Object, no paid products, self-limited (see src/index.js).
+  "name": "vivido-hub",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "Hub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
+  "observability": { "enabled": false }
+}

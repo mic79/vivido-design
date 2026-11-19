@@ -22,6 +22,7 @@ if (inDiscord) {
   patchUrlMappings([
     { prefix: '/peerjs', target: '0.peerjs.com' },
     { prefix: '/turn', target: 'dotmination-turn-proxy.odd-bird-4c2c.workers.dev' },
+    { prefix: '/hub', target: 'vivido-hub.odd-bird-4c2c.workers.dev' },
   ]);
 
   const sdk = new DiscordSDK(DISCORD_CLIENT_ID);

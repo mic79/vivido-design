@@ -1483,3 +1483,29 @@ html.in-discord .dc-friends-only input { width: 1rem; height: 1rem; cursor: poin
 }
 .game-notice-btn.secondary { background: #e9ecef; color: #333; }
 .dark-mode .game-notice-btn.secondary { background: #4a6262; color: white; }
+
+/* Live activity + World Rankings */
+.hub-live { margin: -6px 0 12px; text-align: center; font-size: 0.85rem; opacity: 0.75; }
+.multiplayer-start-options .hub-live { margin: 0 0 10px; }
+.hub-invite { margin: 0 0 12px; padding: 8px 12px; border-radius: 0.5rem; background: rgba(225, 17, 104, 0.12);
+  color: #e11168; font-size: 0.9rem; text-align: center; }
+.world-rank { margin: 6px 0 2px; font-size: 0.95rem; opacity: 0.85; }
+.rankings-modal .rank-tabs { display: flex; gap: 8px; justify-content: center; margin-bottom: 10px; }
+.rankings-modal .rank-tab { border: 0; border-radius: 999px; padding: 6px 12px; background: #e9ecef; color: #333; font-size: 0.85rem; cursor: pointer; }
+.rankings-modal .rank-tab.active { background: #e11168; color: #fff; }
+.rankings-modal .rank-level-nav { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 6px; }
+.rankings-modal .rank-level-nav button { border: 0; background: none; font-size: 1rem; cursor: pointer; color: inherit; padding: 4px 8px; }
+.rankings-modal .rank-list { list-style: none; margin: 0; padding: 0; min-height: 40px; }
+.rankings-modal .rank-list li { display: flex; gap: 10px; padding: 5px 4px; border-bottom: 1px solid rgba(0, 0, 0, 0.06); font-size: 0.95rem; }
+.rankings-modal .rank-list li.me { font-weight: 700; color: #e11168; }
+.rankings-modal .rank-list li.gap { margin-top: 6px; border-top: 1px dashed rgba(0, 0, 0, 0.2); }
+.rankings-modal .rank-pos { width: 3em; opacity: 0.7; }
+.rankings-modal .rank-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rankings-modal .rank-val { font-variant-numeric: tabular-nums; }
+.rankings-modal .rank-status { margin: 8px 0; text-align: center; opacity: 0.75; }
+.rankings-modal .rank-nick label { display: block; font-size: 0.8rem; opacity: 0.7; margin-bottom: 4px; }
+.rankings-modal .rank-nick-row { display: flex; gap: 8px; }
+.rankings-modal .rank-nick-row input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid #ccc; border-radius: 0.5rem; font-size: 0.95rem; }
+.rankings-modal .rank-nick-row button { border: 0; border-radius: 0.5rem; padding: 7px 14px; background: #e11168; color: #fff; cursor: pointer; }
+.dark-mode .rankings-modal .rank-tab:not(.active) { background: #4a6262; color: #fff; }
+.dark-mode .rankings-modal .rank-list li { border-bottom-color: rgba(255, 255, 255, 0.1); }

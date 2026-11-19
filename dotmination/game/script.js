@@ -787,6 +787,7 @@ function checkDotmination() {
                 '</div>';
               console.log("Appending overlay HTML...");
               $("body .container").append(overlayHTML);
+              submitWorldTime(level, moment.duration('00:' + $('#time').html()).asMilliseconds());
               console.log("Overlay HTML appended. Overlay card count:", $('.overlay > .card').length);
               
               // Use gsap for animation if TweenMax is being phased out, otherwise ensure TweenMax is loaded and working
@@ -1341,6 +1342,9 @@ $('.main-menu-modal .btn-main-menu').on('click', function() {
         }
       }
     }, 100); // Adjust delay if needed
+  } else if (action === 'rankings') {
+    $('.main-menu-modal').removeClass('active');
+    setTimeout(openRankings, 100);
   } else if (action === 'colors') {
     // Trigger color change directly without closing the modal
     changeColors();
@@ -3522,4 +3526,118 @@ try {
 } catch (e) {
     console.error("Error initializing or starting tutorial module:", e);
     // Handle error appropriately, maybe show a message to the user
+}
+
+// ========================================
+// Live activity + World Rankings (optional extras via lib/vivido-hub.js).
+// If the service is unreachable or paused, these simply stay hidden.
+// ========================================
+var Hub = window.VividoHub || null;
+
+function hubState() {
+  if (isMultiplayer && hasConnected) return 'playing';
+  if (isMultiplayer || $('.connecting-overlay:visible').length) return 'searching';
+  return 'solo';
+}
+
+function submitWorldTime(lvl, ms) {
+  if (!Hub || !(ms > 0)) return;
+  Hub.submitScore(lvl, ms).then(function (r) {
+    if (!r || !r.rank) return;
+    var $card = $('.end.overlay > .card').last();
+    if (!$card.length) return;
+    $card.find('.world-rank').remove();
+    $('<p class="world-rank"></p>')
+      .text('World rank #' + r.rank + ' of ' + r.total + ' on level ' + lvl)
+      .insertAfter($card.find('.level-goals').first());
+  });
+}
+
+var rankTab = 'level';
+var rankLevel = 1;
+
+function renderRankList(rows, mine, fmtRow) {
+  var $list = $('.rankings-modal .rank-list').empty();
+  rows.forEach(function (r, i) {
+    $('<li></li>').toggleClass('me', !!r.me)
+      .append($('<span class="rank-pos"></span>').text('#' + (i + 1)))
+      .append($('<span class="rank-name"></span>').text(r.nick || 'Player'))
+      .append($('<span class="rank-val"></span>').text(fmtRow(r)))
+      .appendTo($list);
+  });
+  if (mine && !rows.some(function (r) { return r.me; })) {
+    $('<li class="me gap"></li>')
+      .append($('<span class="rank-pos"></span>').text('#' + mine.rank))
+      .append($('<span class="rank-name"></span>').text('You'))
+      .append($('<span class="rank-val"></span>').text(fmtRow(mine)))
+      .appendTo($list);
+  }
+}
+
+function loadRankings() {
+  var $status = $('.rankings-modal .rank-status').text('Loading…');
+  $('.rankings-modal .rank-list').empty();
+  $('.rankings-modal .rank-level-nav').toggle(rankTab === 'level');
+  $('.rankings-modal .rank-level-label').text('Level ' + rankLevel);
+  if (!Hub) { $status.text("World rankings aren't available right now."); return; }
+  var req = rankTab === 'level' ? Hub.top(rankLevel) : Hub.overall();
+  req.then(function (j) {
+    if (!j) {
+      $status.text(Hub.paused
+        ? 'World rankings are resting until tomorrow (free daily limit reached).'
+        : "World rankings aren't available right now. Try again later.");
+      return;
+    }
+    if (rankTab === 'level') {
+      renderRankList(j.top || [], j.me, function (r) { return Hub.fmtMs(r.ms); });
+      $status.text(j.total ? (j.total + (j.total === 1 ? ' player has' : ' players have') + ' finished this level')
+        : 'No times yet for this level. Be the first!');
+    } else {
+      renderRankList(j.top || [], j.me, function (r) { return r.levels + (r.levels === 1 ? ' level' : ' levels'); });
+      $status.text(j.players ? (j.players + ' players in the rankings') : 'No one in the rankings yet. Win a level to get in!');
+    }
+  });
+}
+
+function openRankings() {
+  $('.modal').removeClass('active');
+  rankLevel = Math.max(1, Math.min(200, (typeof level === 'number' && level) || 1));
+  $('#rank-nick-input').val(Hub ? Hub.getNick() : '');
+  $('.rankings-modal').addClass('active');
+  $('body').addClass('modal-open');
+  loadRankings();
+}
+
+$('.rankings-modal .rank-tab').on('click', function () {
+  rankTab = $(this).data('tab');
+  $('.rankings-modal .rank-tab').removeClass('active');
+  $(this).addClass('active');
+  loadRankings();
+});
+$('.rankings-modal .rank-prev').on('click', function () { if (rankLevel > 1) { rankLevel--; loadRankings(); } });
+$('.rankings-modal .rank-next').on('click', function () { if (rankLevel < 200) { rankLevel++; loadRankings(); } });
+$('.rankings-modal .rank-nick-save').on('click', function () {
+  if (!Hub) return;
+  var n = String($('#rank-nick-input').val() || '').trim();
+  if (n.length < 2) { $('.rankings-modal .rank-status').text('Use at least 2 characters.'); return; }
+  Hub.setNick(n).then(function (r) {
+    $('.rankings-modal .rank-status').text(r ? 'Saved. Your name shows in the rankings.' : 'Saved on this device; it will be sent with your next time.');
+    if (r) loadRankings();
+  });
+});
+$('.rankings-modal .backdrop').on('click', function () {
+  $('.rankings-modal').removeClass('active');
+  $('body').removeClass('modal-open');
+});
+
+if (Hub) {
+  Hub.init('dotmination');
+  setInterval(function () { Hub.setState(hubState()); }, 2000);
+  Hub.onChange(function (c) {
+    var text = c ? Hub.liveText(c) : '';
+    $('.hub-live').text(text).prop('hidden', !text);
+    var mine = 0;
+    try { mine = hubState() === 'searching' ? 1 : 0; } catch (e) { /* state not ready yet */ }
+    $('.hub-invite').prop('hidden', !(c && c.searching > mine));
+  });
 }
