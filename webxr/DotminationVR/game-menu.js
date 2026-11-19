@@ -330,6 +330,15 @@
         });
       }
 
+      // NAME button shows the current player name (set on the start screen or in VR)
+      var setNameBtn = function () {
+        var t = document.getElementById('menu-name-text');
+        var n = (window.playerNickname || '').trim();
+        if (t) t.setAttribute('value', n && n !== 'Player' ? n.toUpperCase().slice(0, 12) : 'SET NAME');
+      };
+      this.el.sceneEl.addEventListener('player-name-changed', setNameBtn);
+      setTimeout(setNameBtn, 500);
+
       this.el.sceneEl.addEventListener('loaded', function () {
         self.cacheRefs();
         if (window.StacksPassthrough && window.StacksPassthrough.enabled) {
@@ -883,6 +892,13 @@
           break;
         case 'toggle-start-type':
           this._toggleStartType();
+          break;
+        case 'world-rankings':
+          // World Rankings card in front of the board (dot-player.js)
+          if (comp && comp._rkOpen) { this.closeMenu(); comp._rkOpen(); }
+          break;
+        case 'edit-name':
+          if (comp && comp._nameOpen) { this.closeMenu(); comp._nameOpen(); }
           break;
         case 'hub-join':
           // Join the waiting player (cross-play matchmaking finds their slot)

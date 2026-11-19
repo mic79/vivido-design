@@ -10,7 +10,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below).
        Meta name kept from StacksVR so the shared modules read window.STACKS_VERSION. -->
-  <meta name="stacks-version" content="0.2.15" />
+  <meta name="stacks-version" content="0.2.16" />
   <title>DotminationVR</title>
   <!-- Installable web app; also the base of the Meta Quest store package (Bubblewrap / TWA) -->
   <link rel="manifest" href="manifest.webmanifest" />
@@ -48,7 +48,7 @@
   <script src="lobby.js?v=20"></script>
   <script src="match-replay.js?v=20"></script>
   <script src="stacks-audio.js?v=20"></script>
-  <script src="game-menu.js?v=22"></script>
+  <script src="game-menu.js?v=23"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=20"></script>
   <script src="hand-input.js?v=5"></script>
@@ -56,6 +56,7 @@
   <!-- Match component (StacksVR stacks-game.js structure, Dotmination gameplay) -->
   <script src="dot-game.js?v=20"></script>
   <script src="dot-ui.js?v=20"></script>
+  <script src="dot-player.js?v=1"></script>
   <script src="flat-compat.js?v=22"></script>
   <script src="mobile-spectator.js?v=20"></script>
 
@@ -679,16 +680,26 @@
                   <a-text value=">" align="center" width="0.36" color="#ffffff" position="0 0 0.005"></a-text>
                 </a-entity>
               </a-entity>
-              <!-- Original main menu: How to Play (tutorial) · Change Colors -->
-              <a-entity class="menu-btn clickable" data-action="how-to-play" id="menu-how-to-play" position="-0.13 -0.118 0.002"
-                geometry="primitive: box; width: 0.25; height: 0.046; depth: 0.008"
+              <!-- Original main menu: How to Play (tutorial) · Change Colors · World Rankings · your name -->
+              <a-entity class="menu-btn clickable" data-action="how-to-play" id="menu-how-to-play" position="-0.246 -0.118 0.002"
+                geometry="primitive: box; width: 0.155; height: 0.046; depth: 0.008"
                 material="color: #3b6161; shader: flat">
-                <a-text value="HOW TO PLAY" align="center" width="0.36" color="#ffffff" position="0 0 0.006"></a-text>
+                <a-text value="HOW TO PLAY" align="center" width="0.3" color="#ffffff" position="0 0 0.006"></a-text>
               </a-entity>
-              <a-entity class="menu-btn clickable" data-action="cycle-colors" id="menu-colors" position="0.13 -0.118 0.002"
-                geometry="primitive: box; width: 0.25; height: 0.046; depth: 0.008"
+              <a-entity class="menu-btn clickable" data-action="cycle-colors" id="menu-colors" position="-0.082 -0.118 0.002"
+                geometry="primitive: box; width: 0.155; height: 0.046; depth: 0.008"
                 material="color: #3b6161; shader: flat">
-                <a-text value="CHANGE COLORS" align="center" width="0.36" color="#ffffff" position="0 0 0.006"></a-text>
+                <a-text value="COLORS" align="center" width="0.3" color="#ffffff" position="0 0 0.006"></a-text>
+              </a-entity>
+              <a-entity class="menu-btn clickable" data-action="world-rankings" id="menu-rankings" position="0.082 -0.118 0.002"
+                geometry="primitive: box; width: 0.155; height: 0.046; depth: 0.008"
+                material="color: #0f9b93; shader: flat">
+                <a-text value="RANKINGS" align="center" width="0.3" color="#ffffff" position="0 0 0.006"></a-text>
+              </a-entity>
+              <a-entity class="menu-btn clickable" data-action="edit-name" id="menu-name" position="0.246 -0.118 0.002"
+                geometry="primitive: box; width: 0.155; height: 0.046; depth: 0.008"
+                material="color: #3b6161; shader: flat">
+                <a-text id="menu-name-text" value="NAME" align="center" width="0.26" color="#ffffff" position="0 0 0.006"></a-text>
               </a-entity>
             </a-entity>
 
