@@ -1716,6 +1716,81 @@
       this._matchBanner = { mesh: mesh, tex: tex };
     },
 
+    /**
+     * Readable message above the board (disconnects etc.). Unlike the countdown banner it fits
+     * longer text (auto-sized, up to two lines) and clears itself after `ms`.
+     */
+    _showNotice: function (text, ms) {
+      this._clearNotice();
+      if (!this._sceneRoot || !THREE || !text) return;
+      var W = 1024, H = 256;
+      var canvas = document.createElement('canvas');
+      canvas.width = W;
+      canvas.height = H;
+      var ctx = canvas.getContext('2d');
+      var family = "'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
+      var words = String(text).split(/\s+/);
+      var size = 96, lines = [String(text)];
+      for (; size >= 40; size -= 4) {
+        ctx.font = '700 ' + size + 'px ' + family;
+        if (ctx.measureText(String(text)).width <= W - 60) { lines = [String(text)]; break; }
+        // try two balanced lines
+        var best = null;
+        for (var i = 1; i < words.length; i++) {
+          var a = words.slice(0, i).join(' '), b = words.slice(i).join(' ');
+          var w = Math.max(ctx.measureText(a).width, ctx.measureText(b).width);
+          if (!best || w < best.w) best = { a: a, b: b, w: w };
+        }
+        if (best && best.w <= W - 60 && size * 2.3 <= H) { lines = [best.a, best.b]; break; }
+      }
+      ctx.font = '700 ' + size + 'px ' + family;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      // soft dark pill for contrast on any background
+      ctx.fillStyle = 'rgba(10, 18, 24, 0.72)';
+      var pad = 28, boxH = Math.min(H - 8, lines.length * size * 1.15 + pad * 2);
+      var boxW = 0;
+      lines.forEach(function (l) { boxW = Math.max(boxW, ctx.measureText(l).width); });
+      boxW = Math.min(W - 8, boxW + pad * 3);
+      var x0 = (W - boxW) / 2, y0 = (H - boxH) / 2, r = 40;
+      ctx.beginPath();
+      ctx.moveTo(x0 + r, y0); ctx.lineTo(x0 + boxW - r, y0); ctx.quadraticCurveTo(x0 + boxW, y0, x0 + boxW, y0 + r);
+      ctx.lineTo(x0 + boxW, y0 + boxH - r); ctx.quadraticCurveTo(x0 + boxW, y0 + boxH, x0 + boxW - r, y0 + boxH);
+      ctx.lineTo(x0 + r, y0 + boxH); ctx.quadraticCurveTo(x0, y0 + boxH, x0, y0 + boxH - r);
+      ctx.lineTo(x0, y0 + r); ctx.quadraticCurveTo(x0, y0, x0 + r, y0);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      var lh = size * 1.15, y = H / 2 - (lines.length - 1) * lh / 2;
+      lines.forEach(function (l, k) { ctx.fillText(l, W / 2, y + k * lh); });
+      var tex = new THREE.CanvasTexture(canvas);
+      var mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.0, 0.25),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false, toneMapped: false, side: THREE.DoubleSide })
+      );
+      mesh.renderOrder = 999;
+      mesh.position.set(0, 2.2, 0);
+      var player = document.getElementById('player');
+      if (player && player.object3D) {
+        var look = new THREE.Vector3();
+        player.object3D.getWorldPosition(look);
+        look.y = mesh.position.y;
+        mesh.lookAt(look);
+      }
+      this._sceneRoot.add(mesh);
+      var self = this;
+      this._notice = { mesh: mesh, tex: tex, text: String(text), timer: setTimeout(function () { self._clearNotice(); }, ms || 6000) };
+    },
+
+    _clearNotice: function () {
+      var n = this._notice;
+      if (!n) return;
+      if (n.timer) clearTimeout(n.timer);
+      if (n.mesh && n.mesh.parent) n.mesh.parent.remove(n.mesh);
+      if (n.tex) n.tex.dispose();
+      if (n.mesh && n.mesh.material) n.mesh.material.dispose();
+      this._notice = null;
+    },
+
     _clearMatchBanner: function () {
       var b = this._matchBanner;
       if (!b) return;
@@ -1830,6 +1905,12 @@
      */
     onHostDisconnected: function (opts) {
       opts = opts || {};
+      // Someone else's host went away (not your own leave): say so
+      if (!opts.voluntary && !global.isMobileSpectator) {
+        this._showNotice(opts.reason === 'host-left'
+          ? 'The host left, so the lobby closed'
+          : 'Lost the connection to the lobby', 6500);
+      }
       this._clearAllRemoteAvatars();
       if (this.matchActive) {
         this.onMatchEnded({
@@ -1845,6 +1926,12 @@
 
     onMatchEnded: function (opts) {
       opts = opts || {};
+      if (opts.cancelled && !opts.voluntary && opts.reason === 'opponent-left' && !global.isMobileSpectator) {
+        var meId = global.myPlayerId || (global.StacksLobby && global.StacksLobby.myPlayerId);
+        var seats = this._lastMatchSeats || {};
+        var played = !!meId && (seats.blue === meId || seats.red === meId);
+        this._showNotice(played ? 'Your opponent left the match' : 'A player left the match', 6500);
+      }
       if (!this.matchActive && this.matchState === 'WAITING' && !this._pendingMatch) {
         if (!opts.hostLeft) {
           var sceneEarly = this.el && this.el.sceneEl;

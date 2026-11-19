@@ -259,7 +259,7 @@
       setTimeout(function () {
         if (gen !== X._gen || X.initialSync) return;
         X._deadSlots[key] = Date.now();
-        teardown('Host in slot ' + slot + ' not responding - searching again', false);
+        teardown("That game didn't respond - searching again", false);
         setTimeout(function () { if (!X.active) X.start(st); }, 300);
       }, HOST_REPLY_MS);
     });
@@ -271,7 +271,35 @@
     console.warn(LOG, 'peer error', err && err.type, err);
     // Transient signalling hiccups while a game is running: keep the data channel
     if (X.connected && err && (err.type === 'network' || err.type === 'server-error')) return;
-    teardown('Connection error (' + (err && err.type) + ')', false);
+    var t = err && err.type;
+    teardown(t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed'
+      ? "Can't reach the matchmaking server - check your internet"
+      : "Couldn't connect to the other player", false);
+  }
+
+  // A peer that vanishes without closing (tab killed, phone asleep, network gone) never sends
+  // 'close'. Watch the WebRTC link itself: 'failed', or 'disconnected' for 8 s, counts as gone.
+  // Works with any client version (no extra messages on the wire).
+  function watchLink(c, onGone) {
+    var pc = c && c.peerConnection;
+    if (!pc || pc.__dotWatch) return;
+    pc.__dotWatch = true;
+    var timer = null;
+    var fired = false;
+    function gone() {
+      if (fired) return;
+      fired = true;
+      if (timer) clearTimeout(timer);
+      onGone();
+    }
+    pc.addEventListener('iceconnectionstatechange', function () {
+      var st = pc.iceConnectionState;
+      if (st === 'failed' || st === 'closed') gone();
+      else if (st === 'disconnected') {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function () { if (pc.iceConnectionState === 'disconnected') gone(); }, 8000);
+      } else if (timer) { clearTimeout(timer); timer = null; }
+    });
   }
 
   function attach(c, gen) {
@@ -297,6 +325,13 @@
       onClose();
     });
     c.on('error', function (e) { console.warn(LOG, 'conn error', e); });
+    c.on('open', function () {
+      watchLink(c, function () {
+        if (gen !== X._gen || X.conn !== c) return;
+        try { c.close(); } catch (e) { /* ignore */ }
+        if (X.conn === c) onClose();
+      });
+    });
     if (c.open) onOpen();
   }
 
@@ -357,10 +392,10 @@
     if (X.isHost() && X.peer && !X.peer.destroyed) {
       // Original peers reconnect to the same slot; keep hosting
       X.hasSentGameState = false;
-      if (g) g.xAbort('Opponent disconnected');
+      if (g) g.xAbort('Your opponent left the match');
       setStatus('Opponent left - waiting (slot ' + X.slot + ')');
     } else {
-      teardown('Host disconnected', false);
+      teardown('Your opponent left the match', false);
     }
   }
 
@@ -455,7 +490,16 @@
   X._toMapString = toMapString;
   X._fromMapString = fromMapString;
 
-  global.addEventListener('beforeunload', function () { if (X.active) X.stop(); });
+  // Leaving the page: close at once (stop() defers the close, which never runs on unload),
+  // so the other player is told immediately instead of after a network timeout.
+  function closeNow() {
+    if (!X.active) return;
+    try { if (X.isHost() && X.connected) send({ type: 'modeSwitch' }); } catch (e) { /* ignore */ }
+    try { if (X.conn) X.conn.close(); } catch (e2) { /* ignore */ }
+    try { if (X.peer) X.peer.destroy(); } catch (e3) { /* ignore */ }
+  }
+  global.addEventListener('pagehide', closeNow);
+  global.addEventListener('beforeunload', closeNow);
   global.FlatCompat = X;
 
   // ── dot-game component hooks ──────────────────────────────────────────────
@@ -627,11 +671,7 @@
       this._clearVictory();
       this._scheduleDualIdle(400);
     }
-    if (msg) {
-      this._showMatchBanner(msg);
-      var self = this;
-      setTimeout(function () { if (!self.matchActive || self._dualBotPreview) self._clearMatchBanner(); }, 2500);
-    }
+    if (msg) this._showNotice(msg, 6500);
     this._updateNameLabels();
     this._updateBoardLabels(performance.now(), true);
   };

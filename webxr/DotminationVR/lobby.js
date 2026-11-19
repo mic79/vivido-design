@@ -727,7 +727,7 @@
     if (Lobby.lobbyState.matchPlayers.red === peerId) Lobby.lobbyState.matchPlayers.red = null;
     // Always prune any other ghosts while we're here
     pruneDisconnectedPlayers();
-    if (wasPlaying) endLobbyMatch();
+    if (wasPlaying) endLobbyMatch({ cancelled: true, reason: 'opponent-left' });
     else {
       tryAssignMatchPlayers();
       broadcastLobbyState();
@@ -1160,6 +1160,30 @@
     }
   }
 
+  // A player whose game vanishes (tab closed, headset asleep, network gone) never sends 'close'.
+  // Watch the WebRTC link itself: 'failed', or 'disconnected' for 8 s, counts as gone.
+  function watchLink(c, onGone) {
+    var pc = c && c.peerConnection;
+    if (!pc || pc.__dotWatch) return;
+    pc.__dotWatch = true;
+    var timer = null;
+    var fired = false;
+    function gone() {
+      if (fired) return;
+      fired = true;
+      if (timer) clearTimeout(timer);
+      onGone();
+    }
+    pc.addEventListener('iceconnectionstatechange', function () {
+      var st = pc.iceConnectionState;
+      if (st === 'failed' || st === 'closed') gone();
+      else if (st === 'disconnected') {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function () { if (pc.iceConnectionState === 'disconnected') gone(); }, 8000);
+      } else if (timer) { clearTimeout(timer); timer = null; }
+    });
+  }
+
   function endMultiplayer() {
     var epoch = ++leaveEpoch;
     var wasHost = Lobby.isHost;
@@ -1211,7 +1235,8 @@
           victory: false,
           winner: null,
           reason: wasHost ? 'host-left' : 'left-lobby',
-          hostLeft: !!wasHost
+          hostLeft: !!wasHost,
+          voluntary: true
         });
       } catch (e3) { /* ignore */ }
     }
@@ -1286,6 +1311,13 @@
         isMobileSpectator: peerId.indexOf('dotminationvr-mspec-') === 0
       };
       newConn.on('open', function () {
+        watchLink(newConn, function () {
+          try { newConn.close(); } catch (e) { /* ignore */ }
+          if (!Lobby.connections.some(function (c) { return c.id === peerId; })) return;
+          Lobby.connections = Lobby.connections.filter(function (c) { return c.id !== peerId; });
+          removePlayer(peerId);
+          setStatus('HOSTING Lobby ' + lobbyNum + ' - ' + Lobby.connections.length + ' connected');
+        });
         Lobby.connections.push(entry);
         newConn.send({ type: 'lobby-state', state: Lobby.lobbyState });
         setStatus('HOSTING Lobby ' + lobbyNum + ' - ' + Lobby.connections.length + ' connected');
@@ -1384,6 +1416,13 @@
           ok();
         });
         Lobby.conn.on('data', function (data) { handleData(hostId, data, false); });
+        var hostConn = Lobby.conn;
+        hostConn.on('open', function () {
+          watchLink(hostConn, function () {
+            if (Lobby.conn !== hostConn) return;
+            handleHostGone('connection-lost');
+          });
+        });
         Lobby.conn.on('error', function () {
           clearTimeout(timer);
           if (!settled) {
@@ -1540,6 +1579,17 @@
   global.connectToLobby = connectToLobby;
   global.connectAsMobileSpectator = connectAsMobileSpectator;
   global.endMultiplayer = endMultiplayer;
+
+  // Closing the page / app: tell the others right away instead of letting them time out
+  function closeOnExit() {
+    if (!Lobby.isMultiplayer) return;
+    try { if (Lobby.isHost) broadcastHostLeaving(); } catch (e) { /* ignore */ }
+    try { (Lobby.connections || []).forEach(function (c) { try { c.conn.close(); } catch (e2) { /* ignore */ } }); } catch (e3) { /* ignore */ }
+    try { if (Lobby.conn) Lobby.conn.close(); } catch (e4) { /* ignore */ }
+    try { if (Lobby.peer) Lobby.peer.destroy(); } catch (e5) { /* ignore */ }
+  }
+  global.addEventListener('pagehide', closeOnExit);
+  global.addEventListener('beforeunload', closeOnExit);
   global.cleanupMultiplayer = cleanupMultiplayer;
   global.sendQueueAction = sendQueueAction;
   global.sendMatchAction = sendMatchAction;
