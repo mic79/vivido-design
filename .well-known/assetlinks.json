@@ -8,5 +8,15 @@
         "94:9A:73:4B:55:C2:F4:02:41:D4:F4:96:04:7E:DB:FC:D6:02:25:C9:B5:E0:ED:54:04:F0:84:8A:8A:AB:B9:60"
       ]
     }
+  },
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.dotminationvr",
+      "sha256_cert_fingerprints": [
+        "00:E6:BD:BF:AA:50:94:10:83:26:72:8D:B0:9F:64:96:96:0E:43:EB:2E:26:F7:E4:A2:E7:C7:0C:E2:5C:34:43"
+      ]
+    }
   }
 ]
