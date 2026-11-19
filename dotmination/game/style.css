@@ -1483,6 +1483,21 @@ html.in-discord .dc-friends-only input { width: 1rem; height: 1rem; cursor: poin
 }
 .game-notice-btn.secondary { background: #e9ecef; color: #333; }
 .dark-mode .game-notice-btn.secondary { background: #4a6262; color: white; }
+.opponent-away {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9000;
+  max-width: calc(100% - 32px);
+  padding: 8px 14px;
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.75);
+  color: white;
+  font-size: 0.85rem;
+  text-align: center;
+  pointer-events: none;
+}
 
 /* Live activity + World Rankings */
 .hub-live { margin: -6px 0 12px; text-align: center; font-size: 0.85rem; opacity: 0.75; }

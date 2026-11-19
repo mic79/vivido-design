@@ -35,6 +35,123 @@ window.showNotice = showNotice;
 // ── Opponent disconnects: say what happened and offer clear next steps ──
 var dropTimer = null;
 var reconnectingAfterDrop = false;
+var resumeMatch = false;      // peer: next 'ready' asks the host to continue the same board
+var opponentAway = false;     // opponent switched to another tab/app (they told us)
+var RETURN_WAIT_MS = 60000;   // a dropped opponent gets this long to come back
+var AWAY_WAIT_MS = 180000;    // …or this long when they said they switched away
+
+var linkDropped = false;      // the game link died silently (network / device asleep), not a clean close
+var lastVisibleAt = Date.now();
+var wasHiddenAt = 0;
+
+// How long to wait for the opponent to come back after the link ended:
+// - either of us switched away (tab/app in the background): long
+// - the link died silently (network drop, phone asleep): medium
+// - clean close (page reload / tab closed without saying goodbye): short, as before
+function returnWait() {
+  var meAway = document.hidden || (wasHiddenAt && Date.now() - lastVisibleAt < 20000);
+  if (opponentAway || meAway) return AWAY_WAIT_MS;
+  if (linkDropped) return RETURN_WAIT_MS;
+  return isHost ? 30000 : 15000;
+}
+
+function isSignallingError(t) {
+  return t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed' || t === 'disconnected';
+}
+
+// The matchmaking server link (not the game link) can drop while a tab is in the background
+// (timers are slowed, heartbeats stop). The match itself keeps running; the host just signs
+// back in so the opponent can find it again if their link drops later.
+// Not with PeerJS's peer.reconnect(): in 1.4.7 that makes every later connection attempt arrive
+// twice, which breaks reconnecting. A fresh Peer under the same id is clean; the old one keeps
+// the running game link until that ends.
+var signalRetry = null;
+var signalPending = null;
+var hostSignal = null;        // { onConnection(c, viaPeer), config } set by setupHost
+var retiredPeers = [];
+function reconnectSignalling() {
+  if (signalRetry) return;
+  signalRetry = setTimeout(function () {
+    signalRetry = null;
+    // Peers sign in fresh on every reconnect attempt; only a host needs to stay reachable
+    if (!isHost || !hostSignal || signalPending) return;
+    if (!peer || peer.destroyed || !peer.disconnected) return;
+    var old = peer;
+    var np = new Peer(sessionID, { host: "0.peerjs.com", port: 443, secure: true, config: hostSignal.config });
+    signalPending = np;
+    np.on('open', function () {
+      signalPending = null;
+      if (peer !== old) { try { np.destroy(); } catch (e) {} return; }  // match ended meanwhile
+      console.log('Signed back in to the matchmaking server as', sessionID);
+      peer = np;
+      retiredPeers.push(old);   // still carries the running game link
+      wireHostSignal(np);
+    });
+    np.on('error', function (err) {
+      // 'unavailable-id': the server still holds our id from the dropped link; it frees it shortly
+      console.warn('Matchmaking sign-in failed, retrying:', err && err.type);
+      if (signalPending === np) signalPending = null;
+      try { np.destroy(); } catch (e) {}
+    });
+  }, 1500);
+}
+
+function wireHostSignal(p) {
+  p.on('connection', function (c) { if (hostSignal) hostSignal.onConnection(c, p); });
+  p.on('disconnected', function () { if (peer === p) reconnectSignalling(); });
+  p.on('error', function (err) {
+    console.warn('Matchmaking server error:', err && err.type);
+    if (peer === p) reconnectSignalling();
+  });
+}
+
+function destroyRetiredPeers() {
+  var list = retiredPeers;
+  retiredPeers = [];
+  list.forEach(function (p) { if (p !== peer) { try { p.destroy(); } catch (e) {} } });
+}
+
+// Connection-setup messages; while reconnecting, the "trying to reconnect" message stays put
+function setupStatus(msg) {
+  if (!reconnectingAfterDrop) updateConnectingOverlay(msg);
+}
+
+// Peer reconnecting: try again every few seconds until the host answers or the wait runs out.
+// A loop (not error callbacks) because an attempt made while offline can stall without an error.
+var peerRetryAt = 0;
+var peerRetryTimer = null;
+function peerRetryLoop(slotNumber) {
+  if (peerRetryTimer) clearInterval(peerRetryTimer);
+  peerRetryAt = 0;
+  peerRetryTimer = setInterval(function () {
+    if (!reconnectingAfterDrop || hasConnected) { clearInterval(peerRetryTimer); peerRetryTimer = null; return; }
+    if (Date.now() < peerRetryAt) return;
+    peerRetryAt = Date.now() + 10000;   // give each attempt up to 10 s
+    setupPeer(slotNumber);
+  }, 1000);
+}
+
+// Safety net: during a match (or while waiting for the opponent to return) keep re-joining the
+// matchmaking server whenever it dropped us, even if an attempt stalled without any event
+setInterval(function () {
+  if (hostSignal && peer && !peer.destroyed && peer.disconnected) reconnectSignalling();
+}, 5000);
+
+function showOpponentAway(on) {
+  $('.opponent-away').remove();
+  if (on) $('body').append('<div class="opponent-away" role="status">Your opponent switched away from the game. Waiting for them to come back…</div>');
+}
+
+// Tell the opponent when this tab goes to the background / comes back, and re-join the
+// matchmaking server if it dropped us meanwhile
+document.addEventListener('visibilitychange', function () {
+  var away = document.hidden;
+  if (away) wasHiddenAt = Date.now(); else lastVisibleAt = Date.now();
+  if (conn && conn.open && hasConnected) {
+    try { conn.send({ type: away ? 'away' : 'back' }); } catch (e) { /* link already gone */ }
+  }
+  if (!away) reconnectSignalling();
+});
 
 function friendlyConnectionError(type) {
   switch (type) {
@@ -61,7 +178,8 @@ function clearDropWatch() {
   reconnectingAfterDrop = false;
 }
 
-// Give the opponent `ms` to come back, then tell the player they left
+// Give the opponent `ms` to come back (longer when they said they switched away), then tell
+// the player they left
 function watchForReturn(ms) {
   if (dropTimer) clearTimeout(dropTimer);
   reconnectingAfterDrop = true;
@@ -72,6 +190,9 @@ function opponentGone() {
   if (!reconnectingAfterDrop) return;
   var startType = multiplayerStartType;
   clearDropWatch();
+  resumeMatch = false;
+  opponentAway = false;
+  showOpponentAway(false);
   hasConnected = false;
   resetMultiplayerState();
   $('.connecting-overlay').remove();
@@ -2349,7 +2470,9 @@ async function findAvailableSlot(desiredStartType) { // <<< Accept desiredStartT
   return null; // No slots available
 }
 
+let setupPeerGen = 0;
 async function setupPeer(slotNumber) { // Added async
+  const gen = ++setupPeerGen;
   cleanup();
   isHost = false;
   isMultiplayer = true;
@@ -2359,8 +2482,11 @@ async function setupPeer(slotNumber) { // Added async
   let fetchSuccess = false;
 
   try {
-    updateConnectingOverlay("Fetching network configuration...");
-    const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev");
+    setupStatus("Fetching network configuration...");
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const abortT = setTimeout(() => { if (ctrl) ctrl.abort(); }, 6000);
+    const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev", ctrl ? { signal: ctrl.signal } : undefined)
+      .finally(() => clearTimeout(abortT));
     if (!response.ok) {
       throw new Error(`Metered.ca API Error: ${response.status} ${response.statusText}`);
     }
@@ -2369,13 +2495,16 @@ async function setupPeer(slotNumber) { // Added async
     fetchSuccess = true;
   } catch (error) {
     console.error("Failed to fetch ICE servers from Metered.ca:", error);
-    updateConnectingOverlay(`Network config error. Using fallback.`);
+    setupStatus(`Network config error. Using fallback.`);
     // Fallback to default STUN servers if Metered.ca fails
     iceServersConfig = [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun.cloudflare.com:3478' }
     ];
   }
+  // A newer attempt started while this one waited: let that one continue alone
+  if (gen !== setupPeerGen) return;
+  cleanup();
 
   peer = new Peer(sessionID, {
     host: "0.peerjs.com",
@@ -2389,8 +2518,8 @@ async function setupPeer(slotNumber) { // Added async
   peer.on("open", function() {
     // if (hasConnected) return; // This hasConnected check might be too early or managed by cleanup()
 
-    console.log("Peer PeerJS object opened with ID:", sessionID);
-    updateConnectingOverlay(`Connecting to host...`);
+    console.log("Peer PeerJS object opened with ID:", sessionID, "attempt", gen);
+    setupStatus(`Connecting to host...`);
     if (!fetchSuccess) {
         console.warn("Using fallback STUN servers for P2P connection.");
     }
@@ -2404,18 +2533,27 @@ async function setupPeer(slotNumber) { // Added async
       hasConnected = true;
       connectionState = CONNECTION_STATES.CONNECTED;
       // Remove the overlay immediately upon successful connection
-      $('.connecting-overlay').remove(); 
+      $('.connecting-overlay').remove();
       saveSessionInfo(slotNumber, 'peer');
+      // Coming back after a drop: ask the host to continue the same board
+      const resume = resumeMatch;
+      resumeMatch = false;
       setupConnectionHandlers(conn);
       // Send ready signal to host
-      conn.send({ type: 'ready' });
+      conn.send(resume ? { type: 'ready', resume: true } : { type: 'ready' });
     });
     // It's good practice to also handle conn.on('error') here if specific error handling for data connection is needed
   });
 
+  peer.on("disconnected", function () { if (hasConnected) reconnectSignalling(); });
+
   peer.on("error", function(err) {
     console.error("Peer peer error:", err);
-    if (reconnectingAfterDrop && err && err.type === 'peer-unavailable') { opponentGone(); return; }
+    const t = err && err.type;
+    // Mid-match: only the matchmaking server link dropped, the game link still works
+    if (hasConnected && !reconnectingAfterDrop && isSignallingError(t)) { reconnectSignalling(); return; }
+    // Reconnecting: the host may not be back yet, or the server still holds our old id. Keep trying.
+    if (reconnectingAfterDrop) { peerRetryAt = Math.min(peerRetryAt, Date.now() + 3000); return; }
     updateConnectingOverlay(friendlyConnectionError(err && err.type));
     cleanup();
     clearSessionInfo();
@@ -2433,7 +2571,7 @@ async function setupHost(slotNumber) { // Added async
   let fetchSuccess = false;
 
   try {
-    updateConnectingOverlay("Fetching network configuration...");
+    setupStatus("Fetching network configuration...");
     const response = await fetch("https://dotmination-turn-proxy.odd-bird-4c2c.workers.dev/");
     if (!response.ok) {
       throw new Error(`Metered.ca API Error: ${response.status} ${response.statusText}`);
@@ -2443,7 +2581,7 @@ async function setupHost(slotNumber) { // Added async
     fetchSuccess = true;
   } catch (error) {
     console.error("Failed to fetch ICE servers from Metered.ca:", error);
-    updateConnectingOverlay(`Network config error. Using fallback.`);
+    setupStatus(`Network config error. Using fallback.`);
     iceServersConfig = [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun.cloudflare.com:3478' }
@@ -2471,12 +2609,20 @@ async function setupHost(slotNumber) { // Added async
 
     const hostPeer = peer;
     const onHostConnection = function(newConn, viaPeer, viaSlot) {
-      console.log("Received connection attempt");
+      console.log("Received connection attempt", newConn.peer, newConn.connectionId);
       
-      if (conn) {
+      if (conn && conn.open && hasConnected) {
         console.log("Already connected, rejecting new connection");
         newConn.close();
       } else {
+        // A previous attempt that never finished opening (e.g. sent while the player was
+        // offline) must not block the player's newer attempt
+        if (conn) {
+          console.log("Replacing a connection attempt that never opened");
+          const stale = conn;
+          conn = null;
+          try { stale.close(); } catch (e) { /* ignore */ }
+        }
         conn = newConn;
         // Discord host listening on two ids: keep the one this player used, drop the other
         if (dcAliasPeer) {
@@ -2499,6 +2645,7 @@ async function setupHost(slotNumber) { // Added async
       }
     };
     hostPeer.on("connection", (c) => onHostConnection(c, hostPeer, slotNumber));
+    hostSignal = { config: { 'iceServers': iceServersConfig }, onConnection: (c, via) => onHostConnection(c, via, slotNumber) };
 
     // Discord + public lobby: also wait under this Activity's room id, so a friend who
     // opens the Activity later still finds us while strangers can take the public seat.
@@ -2518,9 +2665,15 @@ async function setupHost(slotNumber) { // Added async
     }
   });
 
+  const firstPeer = peer;
+  peer.on("disconnected", function () { if (peer === firstPeer && hostSignal) reconnectSignalling(); });
+
   peer.on("error", function(err) {
     console.error("Host peer error:", err);
-    if (reconnectingAfterDrop && err && err.type === 'peer-unavailable') { opponentGone(); return; }
+    const t = err && err.type;
+    // Once signed in (waiting, playing, or waiting for a return): a server hiccup must not end it
+    if (peer === firstPeer && hostSignal && (isSignallingError(t) || t === 'peer-unavailable')) { reconnectSignalling(); return; }
+    if (peer !== firstPeer && retiredPeers.indexOf(firstPeer) >= 0) return; // old link's sign-in, replaced
     updateConnectingOverlay(friendlyConnectionError(err && err.type));
     cleanup();
     clearSessionInfo();
@@ -2529,6 +2682,9 @@ async function setupHost(slotNumber) { // Added async
 }
 
 function cleanup() {
+  hostSignal = null;
+  if (signalPending) { try { signalPending.destroy(); } catch (e) {} signalPending = null; }
+  destroyRetiredPeers();
   if (conn) {
     conn.close();
     conn = null;
@@ -2547,8 +2703,13 @@ function cleanup() {
 
 // Add window unload handler
 // iOS often skips beforeunload: also close on pagehide so the opponent is told right away
-window.addEventListener('pagehide', () => { try { cleanup(); } catch (e) { /* ignore */ } });
+// Closing the game on purpose: tell the opponent first, so they don't wait for a return
+function sayLeaving() {
+  try { if (conn && conn.open && hasConnected) conn.send({ type: 'leaving' }); } catch (e) { /* ignore */ }
+}
+window.addEventListener('pagehide', () => { sayLeaving(); try { cleanup(); } catch (e) { /* ignore */ } });
 window.addEventListener('beforeunload', () => {
+  sayLeaving();
   // Don't clear session info on page reload
   cleanup();
 });
@@ -2609,8 +2770,12 @@ function watchLink(c, onGone) {
 
 function setupConnectionHandlers(connection) {
   clearDropWatch();
+  opponentAway = false;
+  showOpponentAway(false);
+  linkDropped = false;
   watchLink(connection, function () {
     if (conn !== connection) return;
+    linkDropped = true;
     try { connection.close(); } catch (e) { /* ignore */ }
     // close() normally fires 'close' → handleDisconnection; make sure it happens once
     setTimeout(function () { if (conn === connection) handleDisconnection(); }, 300);
@@ -2641,8 +2806,41 @@ function setupConnectionHandlers(connection) {
   conn.on("data", function(data) {
     console.log("Received data:", data);
 
+    if (data.type === 'leaving') {
+      // Opponent closed the game: no point waiting for a return
+      console.log("Opponent closed the game");
+      if (conn === connection) { conn = null; try { connection.close(); } catch (e) { /* ignore */ } }
+      reconnectingAfterDrop = true;
+      opponentGone();
+      return;
+    }
+
+    if (data.type === 'away' || data.type === 'back') {
+      opponentAway = data.type === 'away';
+      showOpponentAway(opponentAway && !reconnectingAfterDrop);
+      return;
+    }
+
     if (data.type === 'ready') {
       console.log("Received ready signal");
+
+      // Opponent came back after a drop: continue the same board instead of starting over
+      if (isHost && data.resume && hasSentGameState) {
+        console.log("Opponent returned, resuming the match");
+        conn.send({
+          type: 'gameState',
+          currentPlayer: currentPlayer,
+          moveAmount: moveAmount,
+          mapString: generateMapString(),
+          fieldClasses: $('.field').attr('class'),
+          startType: multiplayerStartType,
+          matchStarter: matchStarter
+        });
+        $('.connecting-overlay').remove();
+        updatePlayerScoresUI();
+        updateTurnIndicator();
+        return;
+      }
 
       // Only handle ready signal if we're the host and haven't sent game state yet
       if (isHost && !hasSentGameState) {
@@ -2713,8 +2911,9 @@ function setupConnectionHandlers(connection) {
       // <<< END EXPLICIT VISUAL RESET >>>
 
       // Restore game state (handles initial sync, rematch, and post-host-turn sync)
-      multiplayerStartType = data.startType; // <<< Store start type from host
-      matchStarter = data.matchStarter; // <<< Store who started this match
+      // Per-turn syncs don't carry these; keep the known values (the reconnect address uses the start type)
+      if (data.startType) multiplayerStartType = data.startType;
+      if (data.matchStarter) matchStarter = data.matchStarter;
       currentPlayer = data.currentPlayer;
       moveAmount = data.moveAmount;
       buildMapFromString(data.mapString);
@@ -2811,12 +3010,33 @@ function setupConnectionHandlers(connection) {
 
   conn.on("close", function() {
     console.log("Connection closed");
+    if (conn !== connection) return; // an old link we already replaced or closed ourselves
     handleDisconnection(); // Existing disconnection logic
   });
 }
 
 // Add this at the top with other state variables
 let hasSentGameState = false;
+
+// Host: keep our game id and the board, and wait for the opponent to reconnect. The original
+// 'connection' listener from setupHost accepts them once conn is free and hasConnected is reset.
+function hostWaitForReturn() {
+  connectionState = CONNECTION_STATES.CONNECTING;
+  showOpponentAway(false);
+  showConnectingOverlay();
+  updateConnectingOverlay(opponentAway
+    ? "Your opponent switched away from the game. Waiting for them to come back…"
+    : "Your opponent disconnected. Waiting for them to come back…");
+  watchForReturn(returnWait());
+  if (conn) {
+    const old = conn;
+    conn = null;
+    try { old.close(); } catch (e) { /* already closed */ }
+  }
+  hasConnected = false;
+  destroyRetiredPeers();   // the old sign-in only carried the link that just ended
+  reconnectSignalling();
+}
 
 function handleDisconnection() {
   console.log("Handling disconnection");
@@ -2840,31 +3060,7 @@ function handleDisconnection() {
     // This is a mode switch, handle it appropriately
     if (isHost) {
       // Host should show reconnection overlay
-      connectionState = CONNECTION_STATES.CONNECTING;
-      showConnectingOverlay();
-      updateConnectingOverlay("Your opponent disconnected. Waiting for them to come back…");
-      watchForReturn(30000);
-      
-      // Reset connection state for reconnection
-      if (conn) {
-        conn.close();
-        conn = null;
-      }
-      
-      // Keep the host's peer connection active
-      if (peer) {
-        peer.on("connection", function(newConn) {
-          console.log("Received new connection attempt");
-          
-          conn = newConn;
-          conn.on("open", function() {
-            if (hasConnected) return;
-            hasConnected = true;
-            connectionState = CONNECTION_STATES.CONNECTED;
-            setupConnectionHandlers(conn);
-          });
-        });
-      }
+      hostWaitForReturn();
     } else {
       // Peer should show alert and reset state
       showNotice("Your opponent left the game. You're back in single player; pick Multiplayer to find a new match.");
@@ -2889,48 +3085,30 @@ function handleDisconnection() {
     
     if (isHost) {
       // Host should show reconnection overlay
-      connectionState = CONNECTION_STATES.CONNECTING;
-      showConnectingOverlay();
-      updateConnectingOverlay("Your opponent disconnected. Waiting for them to come back…");
-      watchForReturn(30000);
-      
-      // Reset connection state for reconnection
-      if (conn) {
-        conn.close();
-        conn = null;
-      }
-      
-      // Keep the host's peer connection active
-      if (peer) {
-        peer.on("connection", function(newConn) {
-          console.log("Received new connection attempt");
-          
-          conn = newConn;
-          conn.on("open", function() {
-            if (hasConnected) return;
-            hasConnected = true;
-            connectionState = CONNECTION_STATES.CONNECTED;
-            setupConnectionHandlers(conn);
-          });
-        });
-      }
+      hostWaitForReturn();
     } else {
       // Peer should attempt to reconnect
       connectionState = CONNECTION_STATES.CONNECTING;
+      showOpponentAway(false);
       showConnectingOverlay();
-      updateConnectingOverlay("Lost the connection to your opponent. Trying to reconnect…");
-      watchForReturn(15000);
-      
+      updateConnectingOverlay(opponentAway
+        ? "Your opponent switched away from the game. Reconnecting when they're back…"
+        : "Lost the connection to your opponent. Trying to reconnect…");
+      watchForReturn(returnWait());
+
       // Reset connection state for reconnection
       if (conn) {
-        conn.close();
+        const old = conn;
         conn = null;
+        try { old.close(); } catch (e) { /* already closed */ }
       }
-      
-      // Attempt to reconnect using saved session info
+      hasConnected = false;
+
+      // Attempt to reconnect using saved session info, continuing the same board
       const sessionInfo = getSessionInfo();
       if (sessionInfo) {
-        setupPeer(sessionInfo.slotNumber);
+        resumeMatch = true;
+        peerRetryLoop(sessionInfo.slotNumber);
       } else {
         // If no session info, show retry button
         showRetryButton();

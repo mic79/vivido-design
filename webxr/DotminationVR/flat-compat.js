@@ -494,7 +494,9 @@
   // so the other player is told immediately instead of after a network timeout.
   function closeNow() {
     if (!X.active) return;
-    try { if (X.isHost() && X.connected) send({ type: 'modeSwitch' }); } catch (e) { /* ignore */ }
+    // Host: the original "match over" message. Joined player: 'leaving' (newer 2D builds stop
+    // waiting for a return; older ones ignore it)
+    try { if (X.connected) send({ type: X.isHost() ? 'modeSwitch' : 'leaving' }); } catch (e) { /* ignore */ }
     try { if (X.conn) X.conn.close(); } catch (e2) { /* ignore */ }
     try { if (X.peer) X.peer.destroy(); } catch (e3) { /* ignore */ }
   }
