@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dotmination-cache-v14';
+const CACHE_NAME = 'dotmination-cache-v15';
 const urlsToCache = [
     './',
     './index.html',
@@ -62,6 +62,21 @@ self.addEventListener('activate', event => {
 
 // Fetch event: Serve cached content when offline
 self.addEventListener('fetch', event => {
+    // The page itself: network first, so a new version shows on the very next launch
+    // (Google Play app, home-screen app, browser); the cached copy is only for offline use.
+    // Its versioned scripts/styles (?v=…) can stay cache-first.
+    if (event.request.mode === 'navigate') {
+        event.respondWith(
+            fetch(event.request).then(response => {
+                if (response && response.status === 200 && response.type === 'basic') {
+                    const copy = response.clone();
+                    caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+                }
+                return response;
+            }).catch(() => caches.match(event.request).then(r => r || caches.match('./index.html')))
+        );
+        return;
+    }
     event.respondWith(
         caches.match(event.request)
             .then(response => {
