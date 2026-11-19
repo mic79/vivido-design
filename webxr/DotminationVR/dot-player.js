@@ -21,6 +21,7 @@
   var ASKED_KEY = 'dotminationvr-name-asked';
   var MAX_LEN = 12;
   var ROWS = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
+  var LEVELS = 200;   // every level's ranking is public, not only the ones you unlocked
 
   function store(k, v) {
     try {
@@ -60,6 +61,10 @@
     if (!this._uiReady) return;
     if (!this._nameCard) {
       this._nameCard = this._uiCard('name', 0.66, 0.52, this._drawNameCard.bind(this), this._onNameCard.bind(this));
+    }
+    if (!this._nameKbWatch) {
+      this._nameKbWatch = true;
+      watchSelectForKeyboard(this);
     }
     this._nameState = {
       text: currentNick(),
@@ -111,6 +116,29 @@
     try { input.focus(); } catch (e) { /* not allowed right now: the field on the card reopens it */ }
   };
 
+  function watchSelectForKeyboard(comp) {
+    var sc = comp.el.sceneEl;
+    function attach() {
+      var xr = sc.renderer && sc.renderer.xr;
+      var session = xr && xr.getSession && xr.getSession();
+      if (!session || session.__dvrKb) return;
+      session.__dvrKb = true;
+      session.addEventListener('selectstart', function (e) {
+        var st = comp._nameState;
+        if (!st || !comp._nameCard || !comp._nameCard.group.visible || !systemKeyboard(comp)) return;
+        var side = e.inputSource && e.inputSource.handedness;
+        var hand = document.getElementById(side === 'left' ? 'leftHand' : 'rightHand');
+        var pick = hand && comp._uiPickHand(hand);
+        if (pick && pick.card === comp._nameCard && pick.btn && pick.btn.id === 'field') {
+          st.sys = true;
+          comp._nameSysKeyboard();
+        }
+      });
+    }
+    attach();                                  // already in VR
+    sc.addEventListener('enter-vr', attach);   // or when VR starts later
+  }
+
   function blurNameInput() {
     var input = document.getElementById('dvr-name-input');
     if (input && document.activeElement === input) input.blur();
@@ -127,6 +155,7 @@
 
   C._drawNameCard = function (ctx, card) {
     var st = this._nameState || { text: '' };
+    if (this._nameState) st.sys = systemKeyboard(this);
     var W = card.cw, pink = this._sideColorCss('blue');
     this._uiPanel(ctx, card);
     ctx.fillStyle = '#ffffff';
@@ -160,10 +189,10 @@
     if (st.sys) {
       // Meta system keyboard does the typing; point at the field to bring it back
       card.buttons.push({ id: 'field', x: fx, y: fy, w: fw, h: fh });
-      ctx.font = '400 32px ' + FONT;
+      this._uiButton(ctx, card, { id: 'field', x: W / 2 - 200, y: 268, w: 400, h: 84, label: 'Open keyboard', size: 38 });
+      ctx.font = '400 28px ' + FONT;
       ctx.fillStyle = TEXT2;
-      ctx.fillText('Type with the Meta keyboard.', W / 2, 300);
-      ctx.fillText('No keyboard? Point at the name field above.', W / 2, 346);
+      ctx.fillText('Type with the Meta keyboard, then press Done.', W / 2, 382);
       this._uiButton(ctx, card, { id: 'cancel', x: 120, y: 420, w: 260, h: 80, label: st.first ? 'Skip' : 'Cancel', size: 36 });
       this._uiButton(ctx, card, { id: 'done', x: W - 380, y: 420, w: 260, h: 80, label: 'Done', primary: true, size: 38 });
       card.redrawAt = performance.now() + 500;
@@ -200,6 +229,7 @@
     var st = this._nameState;
     if (!st) return;
     st.msg = '';
+    if (st.sys && (id.indexOf('k:') === 0 || id === 'back' || id === 'space' || id === 'shift')) return;
     if (id.indexOf('k:') === 0) {
       if (st.text.length < MAX_LEN) {
         st.text += id.slice(2);
@@ -263,8 +293,8 @@
     }
     var info = this.levelInfo ? this.levelInfo() : { level: 1, max: 200 };
     this._rk = this._rk || { tab: 'level' };
-    this._rk.level = level || this._rk.level || Math.max(1, info.level || 1);
-    this._rk.max = Math.max(1, info.max || 200);
+    this._rk.level = Math.min(LEVELS, Math.max(1, level || (info.level > 0 ? info.level : this._rk.level) || 1));
+    this._rk.max = LEVELS;
     if (this._nameCard) this._uiHide(this._nameCard);
     this._uiShow(this._rkCard, this._uiFrontPos(0.08));
     this._rkLoad();
@@ -300,8 +330,9 @@
     this._uiButton(ctx, card, { id: 'tab-overall', x: W / 2 + 10, y: ty, w: tw, h: 64, label: 'Overall', primary: rk.tab === 'overall', size: 34 });
     var y = 236;
     if (rk.tab === 'level') {
-      this._uiButton(ctx, card, { id: 'prev', x: 150, y: y - 34, w: 76, h: 68, label: '<', size: 40 });
-      this._uiButton(ctx, card, { id: 'next', x: W - 226, y: y - 34, w: 76, h: 68, label: '>', size: 40 });
+      // Arrows stop at level 1 and level 200 (no wrap-around)
+      if (rk.level > 1) this._uiButton(ctx, card, { id: 'prev', x: 150, y: y - 34, w: 76, h: 68, label: '<', size: 40 });
+      if (rk.level < rk.max) this._uiButton(ctx, card, { id: 'next', x: W - 226, y: y - 34, w: 76, h: 68, label: '>', size: 40 });
       ctx.fillStyle = '#ffffff';
       ctx.font = '700 44px ' + FONT;
       ctx.fillText('Level ' + rk.level, W / 2, y);
@@ -391,11 +422,9 @@
       var t = id === 'tab-level' ? 'level' : 'overall';
       if (rk.tab !== t) { rk.tab = t; this._rkLoad(); }
     } else if (id === 'prev') {
-      rk.level = rk.level > 1 ? rk.level - 1 : rk.max;
-      this._rkLoad();
+      if (rk.level > 1) { rk.level--; this._rkLoad(); }
     } else if (id === 'next') {
-      rk.level = rk.level < rk.max ? rk.level + 1 : 1;
-      this._rkLoad();
+      if (rk.level < rk.max) { rk.level++; this._rkLoad(); }
     } else if (id === 'name') {
       var self = this, lvl = rk.level;
       this._nameOpen({ after: function () { self._rkOpen(lvl); } });
