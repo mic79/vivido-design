@@ -8,7 +8,9 @@
  *     calling until the next UTC day and keeps working exactly as without the service.
  *
  * API:  VividoHub.init(app)            app = 'dotmination' | 'dotminationvr'
- *       VividoHub.setState(state)      'menu' | 'solo' | 'lobby' | 'searching' | 'playing'
+ *       VividoHub.setState(state)      'menu' | 'solo' | 'lobby' | 'searching' | 'playing' | 'waiting:<startType>'
+ *       VividoHub.joinable(counts)     public matches you can join now, by start type
+ *       VividoHub.refresh()            fresh counts now (menu opened)
  *       VividoHub.onChange(cb)         cb(counts|null, hub) on every update
  *       VividoHub.submitScore(level, ms) → Promise<{best, rank, total}|null>
  *       VividoHub.top(level) / VividoHub.overall() → Promise<…|null>
@@ -129,6 +131,28 @@
     // Changes are sent quickly (1 s debounce) so "waiting for an opponent" shows up fast
     if (H._pendingState) clearTimeout(H._pendingState);
     H._pendingState = setTimeout(function () { H._pendingState = null; if (H.app) schedule(0); }, 1000);
+  };
+
+  /** Fresh counts now (e.g. when a menu opens); at most every 10 s. */
+  H.refresh = function () {
+    if (!H.app || pausedUntil()) return;
+    var now = Date.now();
+    if (H._lastRefresh && now - H._lastRefresh < 10000) return;
+    H._lastRefresh = now;
+    schedule(0);
+  };
+
+  /** Joinable public matches by start type, minus your own: { blank: n, 'half-filled': n } */
+  H.joinable = function (c) {
+    c = c || H.counts;
+    var out = {};
+    var w = (c && c.waiting) || {};
+    for (var t in w) {
+      var n = w[t] | 0;
+      if (H.state === 'waiting:' + t) n--;
+      if (n > 0) out[t] = n;
+    }
+    return out;
   };
 
   H.onChange = function (cb) {

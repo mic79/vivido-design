@@ -1504,6 +1504,10 @@ html.in-discord .dc-friends-only input { width: 1rem; height: 1rem; cursor: poin
 .multiplayer-start-options .hub-live { margin: 0 0 10px; }
 .hub-invite { margin: 0 0 12px; padding: 8px 12px; border-radius: 0.5rem; background: rgba(225, 17, 104, 0.12);
   color: #e11168; font-size: 0.9rem; text-align: center; }
+.hub-invite[hidden], .waiting-badge[hidden] { display: none; }
+.hub-join-btn { margin-left: 8px; padding: 5px 16px; border: 0; border-radius: 0.5rem; background: #e11168; color: #fff;
+  font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+.waiting-badge { display: block; margin-top: 4px; font-size: 0.75rem; font-weight: 600; color: #e11168; }
 .world-rank { margin: 6px 0 2px; font-size: 0.95rem; opacity: 0.85; }
 .rankings-modal .rank-tabs { display: flex; gap: 8px; justify-content: center; margin-bottom: 10px; }
 .rankings-modal .rank-tab { border: 0; border-radius: 999px; padding: 6px 12px; background: #e9ecef; color: #333; font-size: 0.85rem; cursor: pointer; }
@@ -1524,3 +1528,30 @@ html.in-discord .dc-friends-only input { width: 1rem; height: 1rem; cursor: poin
 .rankings-modal .rank-nick-row button { border: 0; border-radius: 0.5rem; padding: 7px 14px; background: #e11168; color: #fff; cursor: pointer; }
 .dark-mode .rankings-modal .rank-tab:not(.active) { background: #4a6262; color: #fff; }
 .dark-mode .rankings-modal .rank-list li { border-bottom-color: rgba(255, 255, 255, 0.1); }
+
+/* Play while you wait (hosting in the background) */
+.play-while-waiting { margin: 14px 0 8px; }
+.play-while-waiting-btn { padding: 10px 20px; border: 0; border-radius: 0.5rem; background: #e11168; color: #fff;
+  font-size: 1rem; font-weight: 600; cursor: pointer; }
+.play-while-waiting p { margin: 8px 0 0; font-size: 0.8rem; opacity: 0.75; }
+.bg-wait {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 8px 8px 8px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.bg-wait-text { overflow: hidden; text-overflow: ellipsis; }
+.bg-wait-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #12DACE; animation: bg-wait-pulse 1.4s ease-in-out infinite; }
+@keyframes bg-wait-pulse { 50% { opacity: 0.3; } }
+.bg-wait-cancel { flex: none; padding: 4px 12px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.18); color: #fff; font-size: 0.8rem; cursor: pointer; }

@@ -12,7 +12,7 @@
  *     self-limit caps all calls at 40,000/day. Counts are cached for 10 s to keep reads low.
  *
  * API (JSON, CORS):
- *   POST /v1/ping   { app, id, state, nick? }        → { counts }
+ *   POST /v1/ping   { app, id, state, nick? }        → { counts }  (state may be 'waiting:<startType>')
  *   POST /v1/score  { app, id, nick, level, ms }     → { best, rank, total }
  *   GET  /v1/top?level=N&id=…                        → { top: [...], me }
  *   GET  /v1/top?overall=1&id=…                      → { top: [...], me }
@@ -24,7 +24,9 @@
 const DAILY_LIMIT = 40000;
 const PRESENCE_TTL_MS = 100 * 1000;     // a client that stops pinging drops off after 100 s
 const APPS = ['dotmination', 'dotminationvr'];
-const STATES = ['menu', 'solo', 'lobby', 'searching', 'playing'];
+// 'waiting:<startType>' = hosting a public 2D-compatible match others can join right now
+const START_TYPES = ['blank', 'half-filled'];
+const STATES = ['menu', 'solo', 'lobby', 'searching', 'playing'].concat(START_TYPES.map((t) => 'waiting:' + t));
 const MAX_LEVEL = 200;
 
 const ALLOWED_ORIGINS = [
@@ -127,7 +129,8 @@ export class Hub {
 
   counts(now, fresh) {
     if (!fresh && this.countsCache && now - this.countsCache.at < 10000) return this.countsCache.value;
-    const out = { online: 0, searching: 0, playing: 0, lobby: 0, apps: {} };
+    const out = { online: 0, searching: 0, playing: 0, lobby: 0, waiting: {}, apps: {} };
+    for (const t of START_TYPES) out.waiting[t] = 0;
     for (const a of APPS) out.apps[a] = { online: 0, searching: 0, playing: 0, lobby: 0 };
     this.sql.exec('DELETE FROM presence WHERE seen < ?', now - PRESENCE_TTL_MS);
     const rows = this.sql.exec('SELECT app, state FROM presence').toArray();
@@ -135,7 +138,8 @@ export class Hub {
       const a = out.apps[p.app];
       if (!a) continue;
       out.online++; a.online++;
-      if (p.state === 'searching') { out.searching++; a.searching++; }
+      if (p.state.startsWith('waiting:')) { out.searching++; a.searching++; out.waiting[p.state.slice(8)]++; }
+      else if (p.state === 'searching') { out.searching++; a.searching++; }
       else if (p.state === 'playing') { out.playing++; a.playing++; }
       else if (p.state === 'lobby') { out.lobby++; a.lobby++; }
     }

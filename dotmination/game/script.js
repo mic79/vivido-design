@@ -137,6 +137,122 @@ setInterval(function () {
   if (hostSignal && peer && !peer.destroyed && peer.disconnected) reconnectSignalling();
 }, 5000);
 
+// ── Play while you wait: hosting keeps running in the background during a solo game ──
+var bgHosting = false;        // host is signed in and waiting, while the player plays solo
+var bgStartType = 'blank';
+var bgAsking = null;
+var hostDeclined = false;      // joiner: the host said "Not now"          // countdown timer of the "opponent joined" prompt
+
+function startTypeLabel(t) { return t === 'half-filled' ? 'Half-Filled' : 'Blank'; }
+
+// Shown in the waiting screen as soon as the host is signed in
+function offerPlayWhileWaiting() {
+  if (!isHost || hasConnected) return;
+  var $card = $('.connecting-overlay .connecting-card');
+  if (!$card.length || $card.find('.play-while-waiting').length) return;
+  var $box = $('<div class="play-while-waiting">' +
+    '<button type="button" class="play-while-waiting-btn">Play while you wait</button>' +
+    '<p>Play a level or against the bot. You\'ll be asked as soon as someone joins.</p></div>');
+  $box.find('button').on('click', startBgHosting);
+  $card.find('.cancel-connection-btn').before($box);
+}
+
+function startBgHosting() {
+  bgHosting = true;
+  bgStartType = multiplayerStartType;
+  isMultiplayer = false;          // the solo game runs as normal; the host link stays open
+  gameMode = 'regular';
+  $('.connecting-overlay').remove();
+  $('.turn-indicator').remove();
+  $('body').removeClass('mode-multiplayer mode-random mode-realTimeResource').addClass('mode-regular');
+  $('.mode-modal .card').removeClass('selected');
+  $('.mode-modal .card[data-mode="regular"]').addClass('selected');
+  try { window.history.replaceState({}, document.title, window.location.pathname + '?mode=regular'); } catch (e) { /* not allowed here */ }
+  showBgBanner();
+  startAnim();
+  // Let them pick a level or a bot game right away
+  $('.list--mode-regular').show();
+  $('.bot-difficulty, .multiplayer-start-options').hide();
+  try { updateLevelList(); } catch (e) { /* list not ready */ }
+  $('.mode-modal').addClass('active');
+  $('body').addClass('modal-open');
+}
+
+function showBgBanner() {
+  $('.bg-wait').remove();
+  var $b = $('<div class="bg-wait" role="status"><span class="bg-wait-dot"></span>' +
+    '<span class="bg-wait-text"></span><button type="button" class="bg-wait-cancel">Cancel</button></div>');
+  $b.find('.bg-wait-text').text('Waiting for an opponent · ' + startTypeLabel(bgStartType));
+  $b.find('.bg-wait-cancel').on('click', function () {
+    showNotice('Stop waiting for an opponent? Your current game continues.', {
+      confirm: true, yesLabel: 'Stop waiting', noLabel: 'Keep waiting', onYes: stopBgHosting
+    });
+  });
+  $('body').append($b);
+}
+
+function stopBgHosting() {
+  if (bgAsking) { clearInterval(bgAsking); bgAsking = null; }
+  bgHosting = false;
+  $('.bg-wait').remove();
+  cleanup();
+  clearSessionInfo();
+  isHost = false;
+}
+
+// Someone joined while the host plays solo: ask, with a short countdown that starts the match
+// (a joining player gives up after a few seconds without a board)
+function askToStartBgMatch() {
+  if (bgAsking) return;
+  var left = 6;
+  showNotice('An opponent joined your ' + startTypeLabel(bgStartType) + ' match! Your current game will end.', {
+    confirm: true,
+    yesLabel: 'Play now (' + left + ')',
+    noLabel: 'Not now',
+    onYes: acceptBgMatch,
+    onNo: declineBgMatch
+  });
+  bgAsking = setInterval(function () {
+    left--;
+    var $yes = $('.game-notice .game-notice-btn').last();
+    if (!$yes.length) { clearInterval(bgAsking); bgAsking = null; return; }
+    $yes.text('Play now (' + Math.max(0, left) + ')');
+    if (left <= 0) $yes.trigger('click');
+  }, 1000);
+}
+
+function acceptBgMatch() {
+  if (bgAsking) { clearInterval(bgAsking); bgAsking = null; }
+  bgHosting = false;
+  $('.bg-wait').remove();
+  if (!conn || !conn.open) { showNotice('The player who joined left again.', { autoClose: 4000 }); stopBgHosting(); return; }
+  if (gameMode === 'realTimeResource') { try { rtrMode.stopRealTimeResourceGame(); } catch (e) { /* ignore */ } }
+  // Stop the solo game cleanly
+  gsap.killTweensOf(incrementDotStage);
+  $('.dot.increment').removeClass('increment');
+  $('.field').removeClass('animating');
+  $('.end.overlay, .game-notice').remove();
+  $('.modal').removeClass('active');
+  $('body').removeClass('modal-open mode-regular mode-random mode-realTimeResource').addClass('mode-multiplayer');
+  isMultiplayer = true;
+  isHost = true;
+  gameMode = 'multiplayer';
+  multiplayerStartType = bgStartType;
+  try { window.history.replaceState({}, document.title, window.location.pathname + '?mode=multiplayer'); } catch (e) { /* ignore */ }
+  hostSendOpeningBoard();
+  try { updateTurnIndicator(); } catch (e) { /* ignore */ }
+}
+
+function declineBgMatch() {
+  if (bgAsking) { clearInterval(bgAsking); bgAsking = null; }
+  // 'declined' lets newer clients explain it; 'modeSwitch' ends the match on every client
+  try { if (conn && conn.open) { conn.send({ type: 'declined' }); conn.send({ type: 'modeSwitch' }); } } catch (e) { /* ignore */ }
+  setTimeout(function () {
+    stopBgHosting();
+    showNotice('Stopped waiting for opponents. Pick Multiplayer in Game Modes to host again.', { autoClose: 5000 });
+  }, 150);
+}
+
 function showOpponentAway(on) {
   $('.opponent-away').remove();
   if (on) $('body').append('<div class="opponent-away" role="status">Your opponent switched away from the game. Waiting for them to come back…</div>');
@@ -2602,6 +2718,7 @@ async function setupHost(slotNumber) { // Added async
 
     console.log("Host PeerJS object opened with ID:", sessionID);
     updateConnectingOverlay(`Waiting for opponent to join...`);
+    offerPlayWhileWaiting();
      if (!fetchSuccess) {
         console.warn("Using fallback STUN servers for P2P connection.");
     }
@@ -2683,11 +2800,15 @@ async function setupHost(slotNumber) { // Added async
 
 function cleanup() {
   hostSignal = null;
+  if (bgHosting) { bgHosting = false; $('.bg-wait').remove(); }
   if (signalPending) { try { signalPending.destroy(); } catch (e) {} signalPending = null; }
   destroyRetiredPeers();
   if (conn) {
-    conn.close();
+    // Forget the link before closing it, so its 'close' event isn't taken for a dropped
+    // opponent (which would start reconnecting in the background)
+    const c = conn;
     conn = null;
+    try { c.close(); } catch (e) { /* already closed */ }
   }
   if (peer) {
     peer.destroy();
@@ -2768,6 +2889,35 @@ function watchLink(c, onGone) {
   });
 }
 
+// Host: start the match by sending the opening board to the player who joined
+function hostSendOpeningBoard() {
+  console.log("Host sending initial game state to peer");
+  hasSentGameState = true; // Mark that initial state is sent
+
+  // Clear the host's board FIRST using the chosen start type
+  clearPlayfield(multiplayerStartType, matchStarter); // <<< PASS THE matchStarter (should be player--1 initially) >>>
+
+  // <<< Re-read global start type just in case >>>
+  const currentStartType = multiplayerStartType; 
+
+  // Send complete game state REFLECTING THE CLEARED BOARD and including startType
+  conn.send({
+    type: 'gameState',
+    currentPlayer: currentPlayer, 
+    moveAmount: moveAmount,     
+    mapString: generateMapString(), 
+    fieldClasses: $('.field').attr('class'),
+    startType: currentStartType, // <<< Send current start type
+    matchStarter: matchStarter // <<< Send who started this match
+  });
+
+  // Update host UI after clearing
+  updatePlayerScoresUI();
+
+  // Remove connecting overlay for host now that game state is sent
+  $('.connecting-overlay').remove();
+}
+
 function setupConnectionHandlers(connection) {
   clearDropWatch();
   opponentAway = false;
@@ -2843,32 +2993,10 @@ function setupConnectionHandlers(connection) {
       }
 
       // Only handle ready signal if we're the host and haven't sent game state yet
-      if (isHost && !hasSentGameState) {
-        console.log("Host sending initial game state to peer");
-        hasSentGameState = true; // Mark that initial state is sent
-
-        // Clear the host's board FIRST using the chosen start type
-        clearPlayfield(multiplayerStartType, matchStarter); // <<< PASS THE matchStarter (should be player--1 initially) >>>
-
-        // <<< Re-read global start type just in case >>>
-        const currentStartType = multiplayerStartType; 
-
-        // Send complete game state REFLECTING THE CLEARED BOARD and including startType
-        conn.send({
-          type: 'gameState',
-          currentPlayer: currentPlayer, 
-          moveAmount: moveAmount,     
-          mapString: generateMapString(), 
-          fieldClasses: $('.field').attr('class'),
-          startType: currentStartType, // <<< Send current start type
-          matchStarter: matchStarter // <<< Send who started this match
-        });
-
-        // Update host UI after clearing
-        updatePlayerScoresUI();
-
-        // Remove connecting overlay for host now that game state is sent
-        $('.connecting-overlay').remove();
+      if (isHost && !hasSentGameState && bgHosting) {
+        askToStartBgMatch();   // host is playing solo meanwhile: ask first
+      } else if (isHost && !hasSentGameState) {
+        hostSendOpeningBoard();
       }
     }
     // --- Handle Rematch Ready ---
@@ -2979,10 +3107,16 @@ function setupConnectionHandlers(connection) {
       } 
     }
     // Handle mode switch signal from host
+    else if (data.type === 'declined') {
+      hostDeclined = true;
+    }
     else if (data.type === 'modeSwitch') {
        console.log("Received modeSwitch signal");
        if (!isHost) {
-         showNotice("The host changed the game mode, so this match ended. You're back in single player.");
+         showNotice(hostDeclined
+           ? "That player can't start a match right now. You're back in single player; pick Multiplayer to find another opponent."
+           : "The host changed the game mode, so this match ended. You're back in single player.");
+         hostDeclined = false;
          resetMultiplayerState(); // Includes cleanup and clearing session
 
          // Reset the game mode to regular
@@ -3046,6 +3180,15 @@ function handleDisconnection() {
     return;
   }
   
+  // Host playing solo while waiting: the player who joined left before the match started
+  if (bgHosting) {
+    if (bgAsking) { clearInterval(bgAsking); bgAsking = null; $('.game-notice').remove(); }
+    conn = null;
+    hasConnected = false;
+    connectionState = CONNECTION_STATES.CONNECTING;
+    return;
+  }
+
   // If we're not in multiplayer mode, don't handle disconnection
   if (!isMultiplayer) {
     return;
@@ -3712,10 +3855,31 @@ try {
 // ========================================
 var Hub = window.VividoHub || null;
 
+// Only what's really happening: picking Multiplayer in the menu is not "waiting" yet
 function hubState() {
-  if (isMultiplayer && hasConnected) return 'playing';
-  if (isMultiplayer || $('.connecting-overlay:visible').length) return 'searching';
+  if (isMultiplayer && (hasConnected || reconnectingAfterDrop)) return 'playing';
+  if ((isMultiplayer || bgHosting) && isHost && hostSignal && !hasConnected) {
+    // Hosting and signed in (also while playing solo meanwhile): others can join,
+    // unless Discord "only people in this call" is on
+    const t = bgHosting ? bgStartType : multiplayerStartType;
+    const isPublic = !(window.DOT_DISCORD && dcFriendsOnly());
+    const known = t === 'blank' || t === 'half-filled';
+    return isPublic && known ? 'waiting:' + t : 'searching';
+  }
   return 'solo';
+}
+
+const START_TYPE_LABEL = { 'blank': 'Blank Start', 'half-filled': 'Half-Filled Start' };
+
+// Join the waiting player: the same steps as Game Modes → Multiplayer → start type
+function joinWaitingMatch(type) {
+  $('.main-menu-modal').removeClass('active');
+  $('.mode-modal').addClass('active');
+  $('body').addClass('modal-open');
+  $('.mode-modal div[data-mode="multiplayer"]').first().trigger('click');
+  setTimeout(function () {
+    $('.start-type-option[data-start-type="' + type + '"]').first().trigger('click');
+  }, 150);
 }
 
 function submitWorldTime(lvl, ms) {
@@ -3814,8 +3978,34 @@ if (Hub) {
   Hub.onChange(function (c) {
     var text = c ? Hub.liveText(c) : '';
     $('.hub-live').text(text).prop('hidden', !text);
-    var mine = 0;
-    try { mine = hubState() === 'searching' ? 1 : 0; } catch (e) { /* state not ready yet */ }
-    $('.hub-invite').prop('hidden', !(c && c.searching > mine));
+    // Someone is hosting a match you can join right now (and you're not in one yourself)
+    var open = c ? Hub.joinable(c) : {};
+    var free = false;
+    try { free = hubState() === 'solo' && !(window.DOT_DISCORD && dcFriendsOnly()); } catch (e) { /* state not ready yet */ }
+    var types = Object.keys(open).sort(function (a, b) { return open[b] - open[a]; });
+    var best = free ? types[0] : null;
+    if (best) {
+      var n = open[best];
+      $('.hub-invite-text').text((n === 1 ? 'A player is' : n + ' players are') + ' waiting for a ' +
+        (START_TYPE_LABEL[best] || best) + ' match.');
+      $('.hub-join-btn').data('start-type', best);
+    }
+    $('.hub-invite').prop('hidden', !best);
+    // Start Type cards: show where someone is waiting
+    $('.start-type-option').each(function () {
+      var t = $(this).data('start-type');
+      var $b = $(this).find('.waiting-badge');
+      if (!$b.length) $b = $('<span class="waiting-badge" hidden></span>').appendTo(this);
+      $b.text(open[t] ? (open[t] === 1 ? '1 player waiting' : open[t] + ' players waiting') : '').prop('hidden', !open[t]);
+    });
   });
+  // Bound on the button itself: the menu stops clicks from bubbling up to document
+  $('.hub-join-btn').on('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var t = $(this).data('start-type');
+    if (t) joinWaitingMatch(t);
+  });
+  // Opening the menu or Game Modes: get fresh numbers so the invite is current
+  $('#main-menu-btn, .main-menu-modal .btn-main-menu[data-action="mode"]').on('click', function () { Hub.refresh(); });
 }

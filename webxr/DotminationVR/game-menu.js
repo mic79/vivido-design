@@ -306,7 +306,12 @@
         var hubState = function () {
           var FC = window.FlatCompat;
           if (FC && FC.connected) return 'playing';
-          if (FC && FC.active) return 'searching';
+          // Cross-play host signed in: flatscreen players can join this one right now
+          if (FC && FC.active) {
+            var hostOpen = FC.isHost() && FC.peer && FC.peer.open && !FC.peer.disconnected;
+            var known = FC.startType === 'blank' || FC.startType === 'half-filled';
+            return hostOpen && known ? 'waiting:' + FC.startType : 'solo';
+          }
           var L = window.StacksLobby;
           if (window.isMultiplayer && L && L.lobbyState) {
             var ls = L.lobbyState, me = L.myPlayerId;
