@@ -67,7 +67,8 @@
       watchSelectForKeyboard(this);
     }
     this._nameState = {
-      text: currentNick(),
+      current: currentNick(),      // shown greyed until you type; kept if you type nothing
+      text: '',
       shift: false,                // the player decides the case (no auto-capital)
       sys: systemKeyboard(this),   // Meta Quest system keyboard available
       after: (opts && opts.after) || null,
@@ -88,6 +89,12 @@
   }
 
   /** Show the Meta system keyboard: focus a text field; its value is the name being typed. */
+  function kbLog(type, value) {
+    var log = global.__dvrKbLog = global.__dvrKbLog || [];
+    log.push({ t: Math.round(performance.now()), type: type, value: value });
+    if (log.length > 60) log.shift();
+  }
+
   C._nameSysKeyboard = function () {
     var self = this;
     var input = document.getElementById('dvr-name-input');
@@ -101,19 +108,31 @@
       input.setAttribute('aria-label', 'Player name');
       input.style.cssText = 'position:fixed;left:0;bottom:0;width:240px;opacity:0.01;z-index:-1';
       document.body.appendChild(input);
-      input.addEventListener('input', function () {
+      var sync = function (e) {
+        kbLog(e.type, input.value);
         var st = self._nameState;
         if (!st) return;
-        st.text = input.value.slice(0, MAX_LEN);
+        // An empty value after the keyboard closes is not a deliberate clear: keep what was typed
+        if (input.value || e.type === 'input') st.text = input.value.slice(0, MAX_LEN);
         st.msg = '';
         if (self._nameCard) self._nameCard.dirty = true;
-      });
+      };
+      ['input', 'change', 'keyup', 'compositionend', 'blur'].forEach(function (t) { input.addEventListener(t, sync); });
+      input.addEventListener('focus', function () { kbLog('focus', input.value); });
       input.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' && self._nameState) { e.preventDefault(); self._onNameCard('done'); }
+        kbLog('keydown:' + e.key, input.value);
+        if (e.key === 'Enter' && self._nameState) {
+          e.preventDefault();
+          if (input.value) self._nameState.text = input.value.slice(0, MAX_LEN);
+          self._onNameCard('done');
+        }
       });
     }
+    // Reopen reliably: a field that still has focus does not bring the keyboard back
+    if (document.activeElement === input) input.blur();
     input.value = (this._nameState && this._nameState.text) || '';
-    try { input.focus(); } catch (e) { /* not allowed right now: the field on the card reopens it */ }
+    kbLog('open', input.value);
+    try { input.focus(); } catch (e) { kbLog('focus-failed', String(e)); }
   };
 
   function watchSelectForKeyboard(comp) {
@@ -129,6 +148,7 @@
         var side = e.inputSource && e.inputSource.handedness;
         var hand = document.getElementById(side === 'left' ? 'leftHand' : 'rightHand');
         var pick = hand && comp._uiPickHand(hand);
+        kbLog('selectstart:' + (pick && pick.btn ? pick.btn.id : 'none'), '');
         if (pick && pick.card === comp._nameCard && pick.btn && pick.btn.id === 'field') {
           st.sys = true;
           comp._nameSysKeyboard();
@@ -175,7 +195,7 @@
     var shown = st.text || '';
     ctx.font = '700 46px ' + FONT;
     ctx.fillStyle = shown ? '#ffffff' : 'rgba(180,200,200,0.5)';
-    ctx.fillText(shown || 'Type a name', W / 2, fy + fh / 2 + 2);
+    ctx.fillText(shown || st.current || 'Type a name', W / 2, fy + fh / 2 + 2);
     if (shown && Math.floor(performance.now() / 500) % 2 === 0) {
       var tw = ctx.measureText(shown).width;
       ctx.fillStyle = pink;
@@ -230,6 +250,9 @@
     if (!st) return;
     st.msg = '';
     if (st.sys && (id.indexOf('k:') === 0 || id === 'back' || id === 'space' || id === 'shift')) return;
+    if (!st.sys && !st.text && st.current && (id.indexOf('k:') === 0 || id === 'back' || id === 'space')) {
+      st.text = st.current;   // on-screen keys edit the current name
+    }
     if (id.indexOf('k:') === 0) {
       if (st.text.length < MAX_LEN) {
         st.text += id.slice(2);
@@ -248,7 +271,10 @@
       this._nameClose(false);
       return;
     } else if (id === 'done') {
-      if (this.setPlayerName(st.text)) { this._nameClose(true); return; }
+      var input = document.getElementById('dvr-name-input');
+      if (st.sys && input && input.value) st.text = input.value.slice(0, MAX_LEN);
+      var name = st.text || st.current;
+      if (this.setPlayerName(name)) { this._nameClose(true); return; }
       st.msg = 'Use at least 2 letters or numbers';
     }
     if (this._nameCard) this._nameCard.dirty = true;
