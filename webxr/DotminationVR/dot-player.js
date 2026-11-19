@@ -1,5 +1,7 @@
 // dot-player.js — DotminationVR player name + World Rankings, inside VR.
-//   • Name card: an in-world keyboard (laser, finger poke, mouse; a real keyboard works too).
+//   • Name card: typing uses the Meta Quest system keyboard (Quest Browser 26.1+ shows it over a
+//     WebXR session when a text field gets focus). Elsewhere: a simple in-world keyboard
+//     (laser, finger poke, mouse; a real keyboard works too).
 //     The Meta Quest store app starts straight in VR (no 2D start screen), so this is where
 //     players set the name shown in lobbies, cross-play and the World Rankings. Asked once on
 //     first launch when no name is saved.
@@ -61,17 +63,62 @@
     }
     this._nameState = {
       text: currentNick(),
-      shift: !currentNick(),       // first letter capital
+      shift: false,                // the player decides the case (no auto-capital)
+      sys: systemKeyboard(this),   // Meta Quest system keyboard available
       after: (opts && opts.after) || null,
       first: !!(opts && opts.first),
       msg: ''
     };
     if (this._rkCard) this._uiHide(this._rkCard);
     this._uiShow(this._nameCard, this._uiFrontPos(0.03));
+    if (this._nameState.sys) this._nameSysKeyboard();
   };
+
+  /** XRSession.isSystemKeyboardSupported (Meta Quest Browser 26.1+). */
+  function systemKeyboard(comp) {
+    var sc = comp.el.sceneEl;
+    var xr = sc && sc.renderer && sc.renderer.xr;
+    var session = xr && xr.getSession && xr.getSession();
+    return !!(session && session.isSystemKeyboardSupported);
+  }
+
+  /** Show the Meta system keyboard: focus a text field; its value is the name being typed. */
+  C._nameSysKeyboard = function () {
+    var self = this;
+    var input = document.getElementById('dvr-name-input');
+    if (!input) {
+      input = document.createElement('input');
+      input.id = 'dvr-name-input';
+      input.type = 'text';
+      input.maxLength = MAX_LEN;
+      input.autocomplete = 'off';
+      input.setAttribute('autocapitalize', 'off');
+      input.setAttribute('aria-label', 'Player name');
+      input.style.cssText = 'position:fixed;left:0;bottom:0;width:240px;opacity:0.01;z-index:-1';
+      document.body.appendChild(input);
+      input.addEventListener('input', function () {
+        var st = self._nameState;
+        if (!st) return;
+        st.text = input.value.slice(0, MAX_LEN);
+        st.msg = '';
+        if (self._nameCard) self._nameCard.dirty = true;
+      });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && self._nameState) { e.preventDefault(); self._onNameCard('done'); }
+      });
+    }
+    input.value = (this._nameState && this._nameState.text) || '';
+    try { input.focus(); } catch (e) { /* not allowed right now: the field on the card reopens it */ }
+  };
+
+  function blurNameInput() {
+    var input = document.getElementById('dvr-name-input');
+    if (input && document.activeElement === input) input.blur();
+  }
 
   C._nameClose = function (saved) {
     var st = this._nameState;
+    blurNameInput();
     this._uiHide(this._nameCard);
     this._nameState = null;
     store(ASKED_KEY, '1');
@@ -110,6 +157,18 @@
     ctx.textAlign = 'right';
     ctx.fillText(shown.length + '/' + MAX_LEN, fx + fw - 14, fy + fh - 16);
     ctx.textAlign = 'center';
+    if (st.sys) {
+      // Meta system keyboard does the typing; point at the field to bring it back
+      card.buttons.push({ id: 'field', x: fx, y: fy, w: fw, h: fh });
+      ctx.font = '400 32px ' + FONT;
+      ctx.fillStyle = TEXT2;
+      ctx.fillText('Type with the Meta keyboard.', W / 2, 300);
+      ctx.fillText('No keyboard? Point at the name field above.', W / 2, 346);
+      this._uiButton(ctx, card, { id: 'cancel', x: 120, y: 420, w: 260, h: 80, label: st.first ? 'Skip' : 'Cancel', size: 36 });
+      this._uiButton(ctx, card, { id: 'done', x: W - 380, y: 420, w: 260, h: 80, label: 'Done', primary: true, size: 38 });
+      card.redrawAt = performance.now() + 500;
+      return;
+    }
     // Keys
     var kw = 74, kh = 64, gap = 8, y = 250;
     var self = this;
@@ -117,7 +176,7 @@
       var n = row.length + (ri === 3 ? 2 : 0);   // last row: shift + letters + backspace
       var x = (W - (n * kw + (n - 1) * gap)) / 2;
       if (ri === 3) {
-        self._uiButton(ctx, card, { id: 'shift', x: x, y: y, w: kw, h: kh, label: st.shift ? 'ABC' : 'abc', size: 26 });
+        self._uiButton(ctx, card, { id: 'shift', x: x, y: y, w: kw, h: kh, label: 'Shift', primary: st.shift, size: 24 });
         x += kw + gap;
       }
       for (var i = 0; i < row.length; i++) {
@@ -144,15 +203,17 @@
     if (id.indexOf('k:') === 0) {
       if (st.text.length < MAX_LEN) {
         st.text += id.slice(2);
-        if (st.shift && st.text.length === 1) st.shift = false;   // auto-lowercase after a capital
+        st.shift = false;   // Shift applies to one letter, like a phone keyboard
       }
     } else if (id === 'back') {
       st.text = st.text.slice(0, -1);
-      if (!st.text) st.shift = true;
     } else if (id === 'space') {
       if (st.text && st.text.length < MAX_LEN && st.text[st.text.length - 1] !== ' ') st.text += ' ';
     } else if (id === 'shift') {
       st.shift = !st.shift;
+    } else if (id === 'field') {
+      this._nameSysKeyboard();
+      return;
     } else if (id === 'cancel') {
       this._nameClose(false);
       return;
@@ -170,6 +231,7 @@
     if (!comp || !comp._nameState || !comp._nameCard || !comp._nameCard.group.visible) return;
     if (e.target && /input|textarea/i.test(e.target.tagName)) return;
     var st = comp._nameState;
+    if (st.sys) return;
     if (e.key === 'Enter') comp._onNameCard('done');
     else if (e.key === 'Escape') comp._onNameCard('cancel');
     else if (e.key === 'Backspace') comp._onNameCard('back');
