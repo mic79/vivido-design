@@ -27,9 +27,9 @@
     } catch (e) { /* storage blocked */ }
     return null;
   }
+  // Same fallback as the start screen: a StacksVR name on this site counts as your name too
   function currentNick() {
-    var n = (store(NICK_KEY) || '').trim();
-    return n;
+    return (store(NICK_KEY) || store('stacksvr-nickname') || '').trim().slice(0, MAX_LEN);
   }
   function fitText(ctx, text, weight, size, maxW) {
     var sz = size;
