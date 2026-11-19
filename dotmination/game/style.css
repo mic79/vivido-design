@@ -1446,3 +1446,11 @@ html.in-discord .dc-friends-only {
   user-select: none;
 }
 html.in-discord .dc-friends-only input { width: 1rem; height: 1rem; cursor: pointer; }
+
+/* Discord Activity: Discord overlays its own controls (leave, minimise, call buttons) on the
+   bottom of the Activity, which swallowed clicks on dialog buttons placed there (e.g. Quit
+   Tutorial, Start Level 1). Keep dialogs clear of that strip. */
+html.in-discord .modal {
+  box-sizing: border-box;
+  padding-bottom: max(88px, env(safe-area-inset-bottom, 0px));
+}
