@@ -5,7 +5,7 @@
 // Added experimental RTS mode.
 
 // Import Tutorial Module
-import * as tutorial from './modules/tutorial.js';
+import * as tutorial from './modules/tutorial.js?v=2026111901';
 // Import Timer Utilities and getStageNumber
 import { isEven, hexToRgb, showTimer, resetTimer, startTimer, stopTimer, getStageNumber } from './modules/utils.js';
 // Import Bot Logic
@@ -3250,7 +3250,12 @@ $(document).ready(function() {
 
   $('#btn-quit-tutorial').on('click', function() {
     console.log("Quit tutorial button clicked. Tutorial object:", tutorial);
-    tutorial.quitTutorial(); // This calls tutorial.endTutorial() internally
+    try {
+      tutorial.quitTutorial(); // This calls tutorial.endTutorial() internally
+    } catch (e) {
+      console.warn('Quit tutorial failed, closing it anyway', e);
+      try { tutorial.endTutorial(); } catch (e2) { /* already closed */ }
+    }
     transitionToLevel1AfterTutorial();
   });
   $('#btn-start-level-1').on('click', function() {
@@ -3268,8 +3273,11 @@ $(document).ready(function() {
 function transitionToLevel1AfterTutorial() {
     level = 1;
     gameMode = 'regular';
-    var newUrl = window.location.pathname + '?mode=regular&level=1';
-    window.history.replaceState({}, document.title, newUrl);
+    // Keep Discord's Activity params (frame_id, instance_id, …) in the URL when switching to Level 1
+    var params = new URLSearchParams(window.location.search);
+    params.set('mode', 'regular');
+    params.set('level', '1');
+    try { window.history.replaceState({}, document.title, window.location.pathname + '?' + params.toString()); } catch (e) { /* not allowed here */ }
     $('body').removeClass('mode-random mode-multiplayer').addClass('mode-regular');
     $('.level-value').html(level);
     $('.mode-modal .card').removeClass('selected');

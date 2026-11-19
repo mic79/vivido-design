@@ -502,8 +502,8 @@ export function endTutorial() {
 
 export function quitTutorial() {
     console.log("Quitting Tutorial (Module - Global Dep)");
-    // Use global localStorage, hasPlayedBefore
-    localStorage.setItem('hasPlayedBefore', 'true');
+    // Storage can be blocked in embedded frames (e.g. a Discord Activity): never let that stop quitting
+    try { localStorage.setItem('hasPlayedBefore', 'true'); } catch (e) { console.warn('Tutorial: could not save hasPlayedBefore', e); }
     window.hasPlayedBefore = true;
     endTutorial(); // Local call
 }
