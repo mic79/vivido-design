@@ -47,10 +47,34 @@ if (inDiscord) {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initFriendsToggle);
   else initFriendsToggle();
 
+  // The SDK forwards console output to Discord as text. Arguments that can't be turned into a
+  // string (e.g. an ES module namespace object, which has no prototype) made console.log THROW,
+  // which silently aborted whatever code was logging — the tutorial's Quit / Start Level 1
+  // buttons. Never let logging break the game: retry with safe text, else drop the line.
+  const safeText = (a) => {
+    if (a === null || a === undefined || typeof a !== 'object') {
+      try { return String(a); } catch (e) { return '[unprintable]'; }
+    }
+    if (a instanceof Error) return a.stack || a.message || 'Error';
+    try { return JSON.stringify(a); } catch (e) { /* cyclic / exotic */ }
+    try { return String(a); } catch (e) { return '[object]'; }
+  };
+  ['log', 'info', 'warn', 'error', 'debug'].forEach((m) => {
+    const orig = console[m];
+    if (typeof orig !== 'function') return;
+    console[m] = function (...args) {
+      try { return orig.apply(console, args); } catch (e) {
+        try { return orig.apply(console, args.map(safeText)); } catch (e2) { /* drop the line */ }
+      }
+    };
+  });
+
   sdk.ready()
     .then(() => {
       window.DOT_DISCORD.ready = true;
-      console.log('[Discord] Activity ready, room', room);
+      const b = document.getElementById('last-updated');
+      console.log('[Discord] Activity ready, room', room, '| build', b ? b.getAttribute('data-build') : '?',
+        '| page', document.lastModified);
     })
     .catch((err) => console.warn('[Discord] SDK ready failed', err));
 }

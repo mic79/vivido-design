@@ -6,6 +6,19 @@
 
 // Import Tutorial Module
 import * as tutorial from './modules/tutorial.js?v=2026111901';
+
+// "Last updated" in the menu: the date this page was actually published (its Last-Modified
+// header, via document.lastModified) plus the build number, so you can see which version runs.
+(function showLastUpdated() {
+  var el = document.getElementById('last-updated');
+  if (!el) { document.addEventListener('DOMContentLoaded', showLastUpdated, { once: true }); return; }
+  var d = new Date(document.lastModified);
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var when = isNaN(d.getTime()) ? '' : d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+    ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  var build = el.getAttribute('data-build') || '';
+  if (when) el.textContent = 'Last updated: ' + when + (build ? ' (build ' + build + ')' : '');
+})();
 // Import Timer Utilities and getStageNumber
 import { isEven, hexToRgb, showTimer, resetTimer, startTimer, stopTimer, getStageNumber } from './modules/utils.js';
 // Import Bot Logic
@@ -3249,7 +3262,7 @@ $(document).ready(function() {
   });
 
   $('#btn-quit-tutorial').on('click', function() {
-    console.log("Quit tutorial button clicked. Tutorial object:", tutorial);
+    console.log("Quit tutorial button clicked.");
     try {
       tutorial.quitTutorial(); // This calls tutorial.endTutorial() internally
     } catch (e) {
@@ -3260,7 +3273,6 @@ $(document).ready(function() {
   });
   $('#btn-start-level-1').on('click', function() {
     console.log("#btn-start-level-1 clicked. Attempting to end tutorial and transition to Level 1.");
-    console.log("Tutorial object before calling endTutorial:", tutorial); // <<< ADD THIS LOG
     tutorial.endTutorial(); // Module function to clean up tutorial state/UI
     transitionToLevel1AfterTutorial();
   });
