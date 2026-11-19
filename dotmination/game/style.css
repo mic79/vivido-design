@@ -1446,3 +1446,40 @@ html.in-discord .dc-friends-only {
   user-select: none;
 }
 html.in-discord .dc-friends-only input { width: 1rem; height: 1rem; cursor: pointer; }
+
+/* In-game notice (replaces alert/confirm, which Discord Activities block) */
+.game-notice {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.game-notice-card {
+  width: 100%;
+  max-width: 340px;
+  padding: 22px 20px 18px;
+  border-radius: 0.75rem;
+  background: white;
+  color: #333;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+  text-align: center;
+}
+.dark-mode .game-notice-card { background: darkslategrey; color: white; }
+.game-notice-text { margin: 0 0 16px; font-size: 1rem; line-height: 1.4; }
+.game-notice-actions { display: flex; gap: 10px; justify-content: center; }
+.game-notice-btn {
+  min-width: 110px;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 0.5rem;
+  background: #e11168;
+  color: white;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+.game-notice-btn.secondary { background: #e9ecef; color: #333; }
+.dark-mode .game-notice-btn.secondary { background: #4a6262; color: white; }

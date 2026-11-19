@@ -7,6 +7,108 @@
 // Import Tutorial Module
 import * as tutorial from './modules/tutorial.js?v=2026111901';
 
+// In-game notices instead of alert()/confirm(): browser popups are blocked inside a Discord
+// Activity (and interrupt play elsewhere), so players never saw e.g. "Opponent has left".
+function showNotice(message, opts) {
+  opts = opts || {};
+  $('.game-notice').remove();
+  var $n = $('<div class="game-notice" role="alertdialog" aria-live="assertive"><div class="game-notice-card">' +
+    '<p class="game-notice-text"></p><div class="game-notice-actions"></div></div></div>');
+  $n.find('.game-notice-text').text(message);
+  var $actions = $n.find('.game-notice-actions');
+  var close = function () { $n.remove(); };
+  if (opts.confirm) {
+    $('<button type="button" class="game-notice-btn secondary"></button>').text(opts.noLabel || 'No')
+      .on('click', function () { close(); if (opts.onNo) opts.onNo(); }).appendTo($actions);
+    $('<button type="button" class="game-notice-btn"></button>').text(opts.yesLabel || 'Yes')
+      .on('click', function () { close(); if (opts.onYes) opts.onYes(); }).appendTo($actions);
+  } else {
+    $('<button type="button" class="game-notice-btn"></button>').text(opts.okLabel || 'OK')
+      .on('click', function () { close(); if (opts.onClose) opts.onClose(); }).appendTo($actions);
+    if (opts.autoClose) setTimeout(function () { if ($.contains(document, $n[0])) close(); }, opts.autoClose);
+  }
+  $('body').append($n);
+  $n.find('.game-notice-btn').last().trigger('focus');
+}
+window.showNotice = showNotice;
+
+// ── Opponent disconnects: say what happened and offer clear next steps ──
+var dropTimer = null;
+var reconnectingAfterDrop = false;
+
+function friendlyConnectionError(type) {
+  switch (type) {
+    case 'peer-unavailable':
+      return "Couldn't reach the other player. They may have left.";
+    case 'network':
+    case 'server-error':
+    case 'socket-error':
+    case 'socket-closed':
+      return "Can't reach the matchmaking server. Check your internet connection and try again.";
+    case 'unavailable-id':
+      return 'That game slot was just taken. Please try again.';
+    case 'browser-incompatible':
+    case 'webrtc':
+      return "This browser can't connect directly to other players.";
+    default:
+      return 'Something went wrong while connecting. Please try again.';
+  }
+}
+
+function clearDropWatch() {
+  if (dropTimer) clearTimeout(dropTimer);
+  dropTimer = null;
+  reconnectingAfterDrop = false;
+}
+
+// Give the opponent `ms` to come back, then tell the player they left
+function watchForReturn(ms) {
+  if (dropTimer) clearTimeout(dropTimer);
+  reconnectingAfterDrop = true;
+  dropTimer = setTimeout(opponentGone, ms);
+}
+
+function opponentGone() {
+  if (!reconnectingAfterDrop) return;
+  var startType = multiplayerStartType;
+  clearDropWatch();
+  hasConnected = false;
+  resetMultiplayerState();
+  $('.connecting-overlay').remove();
+  showNotice('Your opponent left the game.', {
+    confirm: true,
+    yesLabel: 'Find a new opponent',
+    noLabel: 'Single player',
+    onYes: function () {
+      cleanup();
+      clearSessionInfo();
+      multiplayerStartType = startType;
+      gameMode = 'multiplayer';
+      showConnectingOverlay();
+      updateConnectingOverlay('Looking for a new opponent…');
+      startMultiplayerConnection();
+    },
+    onNo: goSinglePlayer
+  });
+}
+
+function goSinglePlayer() {
+  clearDropWatch();
+  hasConnected = false;
+  resetMultiplayerState();
+  $('.connecting-overlay').remove();
+  isMultiplayer = false;
+  isHost = false;
+  gameMode = 'regular';
+  $('body').removeClass('mode-multiplayer mode-random').addClass('mode-regular');
+  $('.mode-modal .card').removeClass('selected');
+  $('.mode-modal .card[data-mode="regular"]').addClass('selected');
+  var params = new URLSearchParams(window.location.search);
+  params.set('mode', 'regular');
+  try { window.history.replaceState({}, document.title, window.location.pathname + '?' + params.toString()); } catch (e) { /* not allowed here */ }
+  startAnim();
+}
+
 // "Last updated" in the menu: the date this page was actually published (its Last-Modified
 // header, via document.lastModified) plus the build number, so you can see which version runs.
 (function showLastUpdated() {
@@ -1788,7 +1890,7 @@ function addShareButton() {
         document.body.removeChild(tempInput);
         
         // Show a notification
-        alert('Map URL copied to clipboard!');
+        showNotice('Map link copied to the clipboard.', { autoClose: 2500 });
       }
     });
   }
@@ -1945,7 +2047,10 @@ function showWaitingOverlay() {
   
   // Add click handler for the cancel button
   $('.cancel-waiting-btn').on('click', function() {
-    if (confirm('Are you sure you want to cancel waiting for an opponent?')) {
+    showNotice('Stop waiting for an opponent?', { confirm: true, yesLabel: 'Stop waiting', noLabel: 'Keep waiting', onYes: cancelWaiting });
+  });
+  function cancelWaiting() {
+    {
       resetMultiplayer();
       
       // Reset the game mode to regular
@@ -1967,7 +2072,7 @@ function showWaitingOverlay() {
       // Start a new single player game
       startAnim();
     }
-  });
+  }
 }
 
 // Add function to start multiplayer animation
@@ -2306,7 +2411,8 @@ async function setupPeer(slotNumber) { // Added async
 
   peer.on("error", function(err) {
     console.error("Peer peer error:", err);
-    updateConnectingOverlay(`Connection error: ${err.type}. Please retry.`);
+    if (reconnectingAfterDrop && err && err.type === 'peer-unavailable') { opponentGone(); return; }
+    updateConnectingOverlay(friendlyConnectionError(err && err.type));
     cleanup();
     clearSessionInfo();
     showRetryButton();
@@ -2410,7 +2516,8 @@ async function setupHost(slotNumber) { // Added async
 
   peer.on("error", function(err) {
     console.error("Host peer error:", err);
-    updateConnectingOverlay(`Connection error: ${err.type}. Please retry.`);
+    if (reconnectingAfterDrop && err && err.type === 'peer-unavailable') { opponentGone(); return; }
+    updateConnectingOverlay(friendlyConnectionError(err && err.type));
     cleanup();
     clearSessionInfo();
     showRetryButton();
@@ -2470,6 +2577,7 @@ function handleOpponentMove(dotIndex) {
 }
 
 function setupConnectionHandlers(connection) {
+  clearDropWatch();
   console.log("Setting up connection handlers. isMultiplayer:", isMultiplayer, "isHost:", isHost);
   
   conn = connection;
@@ -2638,7 +2746,7 @@ function setupConnectionHandlers(connection) {
     else if (data.type === 'modeSwitch') {
        console.log("Received modeSwitch signal");
        if (!isHost) {
-         alert("Host changed game mode. Returning to menu.");
+         showNotice("The host changed the game mode, so this match ended. You're back in single player.");
          resetMultiplayerState(); // Includes cleanup and clearing session
 
          // Reset the game mode to regular
@@ -2697,7 +2805,8 @@ function handleDisconnection() {
       // Host should show reconnection overlay
       connectionState = CONNECTION_STATES.CONNECTING;
       showConnectingOverlay();
-      updateConnectingOverlay("Peer disconnected, awaiting reconnect...");
+      updateConnectingOverlay("Your opponent disconnected. Waiting for them to come back…");
+      watchForReturn(30000);
       
       // Reset connection state for reconnection
       if (conn) {
@@ -2721,7 +2830,7 @@ function handleDisconnection() {
       }
     } else {
       // Peer should show alert and reset state
-      alert("Opponent has left the game. Click OK to return to menu.");
+      showNotice("Your opponent left the game. You're back in single player; pick Multiplayer to find a new match.");
       resetMultiplayerState();
       
       // Reset the game mode to regular
@@ -2745,7 +2854,8 @@ function handleDisconnection() {
       // Host should show reconnection overlay
       connectionState = CONNECTION_STATES.CONNECTING;
       showConnectingOverlay();
-      updateConnectingOverlay("Peer disconnected, awaiting reconnect...");
+      updateConnectingOverlay("Your opponent disconnected. Waiting for them to come back…");
+      watchForReturn(30000);
       
       // Reset connection state for reconnection
       if (conn) {
@@ -2771,7 +2881,8 @@ function handleDisconnection() {
       // Peer should attempt to reconnect
       connectionState = CONNECTION_STATES.CONNECTING;
       showConnectingOverlay();
-      updateConnectingOverlay("Reconnecting to host...");
+      updateConnectingOverlay("Lost the connection to your opponent. Trying to reconnect…");
+      watchForReturn(15000);
       
       // Reset connection state for reconnection
       if (conn) {
