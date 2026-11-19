@@ -1555,3 +1555,23 @@ html.in-discord .dc-friends-only input { width: 1rem; height: 1rem; cursor: poin
 .bg-wait-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #12DACE; animation: bg-wait-pulse 1.4s ease-in-out infinite; }
 @keyframes bg-wait-pulse { 50% { opacity: 0.3; } }
 .bg-wait-cancel { flex: none; padding: 4px 12px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.18); color: #fff; font-size: 0.8rem; cursor: pointer; }
+
+/* Rematch messages */
+.rematch-invite { margin: 0 0 6px; font-size: 0.95rem; font-weight: 600; color: #e11168; cursor: default; }
+.end .card p.retry.rematch-wanted { animation: rematch-pulse 1.2s ease-in-out infinite; }
+@keyframes rematch-pulse { 50% { transform: scale(1.08); } }
+.rematch-status {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9000;
+  max-width: calc(100% - 32px);
+  padding: 8px 14px;
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 0.85rem;
+  text-align: center;
+  pointer-events: none;
+}

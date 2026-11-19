@@ -521,9 +521,10 @@ $("body").on("click", ".end .card p", function(e) {
           peerReadyForRematch = true;
         }
         
-        // 3. Visually clear overlay and show waiting state (optional)
+        // 3. Clear the overlay and say what happens next
         $(".end").remove();
-        // TODO: Optionally add a "Waiting for opponent..." message here
+        const oppReady = isHost ? peerReadyForRematch : hostReadyForRematch;
+        if (!oppReady) showRematchStatus('Rematch requested. Waiting for your opponent to accept…');
 
         // 4. Check if opponent is already ready
         if (isHost && peerReadyForRematch) {
@@ -2800,6 +2801,9 @@ async function setupHost(slotNumber) { // Added async
 
 function cleanup() {
   hostSignal = null;
+  clearRematchStatus();
+  hostReadyForRematch = false;
+  peerReadyForRematch = false;
   if (bgHosting) { bgHosting = false; $('.bg-wait').remove(); }
   if (signalPending) { try { signalPending.destroy(); } catch (e) {} signalPending = null; }
   destroyRetiredPeers();
@@ -3002,6 +3006,8 @@ function setupConnectionHandlers(connection) {
     // --- Handle Rematch Ready ---
     else if (data.type === 'rematchReady') {
       console.log("Received rematchReady signal");
+      const iAmReady = isHost ? hostReadyForRematch : peerReadyForRematch;
+      if (!iAmReady) showRematchInvite();
       if (isHost) {
         peerReadyForRematch = true;
         if (hostReadyForRematch) {
@@ -3022,6 +3028,7 @@ function setupConnectionHandlers(connection) {
     // --- End Handle Rematch Ready ---
     else if (data.type === 'gameState') {
       console.log("Received game state");
+      clearRematchStatus();
 
       // --- FIX: Stop any ongoing client-side simulation before applying authoritative state ---
       console.log("Stopping client-side simulation due to incoming gameState");
@@ -3491,13 +3498,39 @@ function showMultiplayerGameOverOverlay(winner) {
   $(".end.overlay").remove(); 
   $("body .container").append(overlayHtml);
 
+  // The opponent may already have asked for a rematch
+  if (isHost ? peerReadyForRematch : hostReadyForRematch) showRematchInvite();
+
   // Animation
   TweenMax.fromTo($('.overlay > .card'), 2, { alpha: 0, scale: 0 }, { alpha: 1, scale: 1, ease: Elastic.easeOut });
+}
+
+// ── Rematch messages ──
+function showRematchStatus(text) {
+  $('.rematch-status').remove();
+  $('<div class="rematch-status" role="status"></div>').text(text).appendTo('body');
+}
+function clearRematchStatus() {
+  $('.rematch-status, .rematch-invite').remove();
+  $('.end .retry').removeClass('rematch-wanted');
+}
+// The other player asked for a rematch: show it on the end card (or as a status line)
+function showRematchInvite() {
+  const $card = $('.end.overlay > .card').last();
+  if ($card.length) {
+    if (!$card.find('.rematch-invite').length) {
+      $('<div class="rematch-invite"></div>').text('Your opponent wants a rematch!').insertBefore($card.find('.retry').first());
+    }
+    $card.find('.retry').addClass('rematch-wanted');
+  } else {
+    showRematchStatus('Your opponent wants a rematch!');
+  }
 }
 
 // Add new function for host to start the rematch
 function hostInitiateRematchStart() {
   console.log("Host initiating rematch start");
+  clearRematchStatus();
   // Determine who starts the *next* match
   const nextStarter = (matchStarter === playerArray[0]) ? playerArray[1] : playerArray[0];
   matchStarter = nextStarter; // Update the global starter for the *new* match
