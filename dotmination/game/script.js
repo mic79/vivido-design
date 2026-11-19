@@ -2542,6 +2542,8 @@ function cleanup() {
 }
 
 // Add window unload handler
+// iOS often skips beforeunload: also close on pagehide so the opponent is told right away
+window.addEventListener('pagehide', () => { try { cleanup(); } catch (e) { /* ignore */ } });
 window.addEventListener('beforeunload', () => {
   // Don't clear session info on page reload
   cleanup();
@@ -2576,8 +2578,39 @@ function handleOpponentMove(dotIndex) {
   }
 }
 
+// A peer that vanishes without closing (tab killed, phone asleep, network gone) never sends
+// 'close'. Watch the WebRTC link itself: 'failed', or 'disconnected' for 8 s, counts as gone.
+// Works with any client version (no extra messages on the wire).
+function watchLink(c, onGone) {
+  var pc = c && c.peerConnection;
+  if (!pc || pc.__dotWatch) return;
+  pc.__dotWatch = true;
+  var timer = null;
+  var fired = false;
+  function gone() {
+    if (fired) return;
+    fired = true;
+    if (timer) clearTimeout(timer);
+    onGone();
+  }
+  pc.addEventListener('iceconnectionstatechange', function () {
+    var st = pc.iceConnectionState;
+    if (st === 'failed' || st === 'closed') gone();
+    else if (st === 'disconnected') {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () { if (pc.iceConnectionState === 'disconnected') gone(); }, 8000);
+    } else if (timer) { clearTimeout(timer); timer = null; }
+  });
+}
+
 function setupConnectionHandlers(connection) {
   clearDropWatch();
+  watchLink(connection, function () {
+    if (conn !== connection) return;
+    try { connection.close(); } catch (e) { /* ignore */ }
+    // close() normally fires 'close' → handleDisconnection; make sure it happens once
+    setTimeout(function () { if (conn === connection) handleDisconnection(); }, 300);
+  });
   console.log("Setting up connection handlers. isMultiplayer:", isMultiplayer, "isHost:", isHost);
   
   conn = connection;
