@@ -823,8 +823,9 @@
           var dot = new THREE.Mesh(dotGeo, new THREE.MeshBasicMaterial({
             color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false
           }));
-          beam.renderOrder = 12;
-          dot.renderOrder = 13;
+          // Drawn after the UI cards (30): the beam ends on a card, so it must show in front of it
+          beam.renderOrder = 40;
+          dot.renderOrder = 41;
           beam.visible = dot.visible = false;
           self._sceneRoot.add(beam);
           self._sceneRoot.add(dot);
