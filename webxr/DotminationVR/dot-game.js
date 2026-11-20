@@ -3111,11 +3111,8 @@
       var hint = document.getElementById('control-hint');
       if (hint) {
         var msg = '';
-        if (this._myActionBoard()) {
-          msg = !this._isPresenting() ? 'Click a dot'
-            : (global.HandInput && global.HandInput.anyHand()) ? 'Point + pinch, or poke a dot'
-            : 'Point + trigger, or poke a dot';
-        }
+        // Desktop only; in VR that spot under the board holds the Menu / mode footer (dot-start.js)
+        if (this._myActionBoard() && !this._isPresenting()) msg = 'Click a dot';
         hint.setAttribute('text', 'value', msg);
       }
     },

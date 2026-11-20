@@ -84,6 +84,14 @@
         ctx.moveTo(cx - s * 0.45, y); ctx.lineTo(cx, y + s * 0.2); ctx.lineTo(cx + s * 0.45, y);
       }
       ctx.stroke();
+    } else if (kind === 'menu') {
+      for (var m = -1; m <= 1; m++) { ctx.moveTo(cx - s * 0.42, cy + m * s * 0.3); ctx.lineTo(cx + s * 0.42, cy + m * s * 0.3); }
+      ctx.stroke();
+    } else if (kind === 'users') {
+      ctx.arc(cx - s * 0.16, cy - s * 0.2, s * 0.17, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx + s * 0.24, cy - s * 0.24, s * 0.13, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx - s * 0.16, cy + s * 0.42, s * 0.32, Math.PI, 0); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx + s * 0.26, cy + s * 0.3, s * 0.24, Math.PI, 0); ctx.fill();
     } else if (kind === 'x') {
       ctx.moveTo(cx - s * 0.3, cy - s * 0.3); ctx.lineTo(cx + s * 0.3, cy + s * 0.3);
       ctx.moveTo(cx + s * 0.3, cy - s * 0.3); ctx.lineTo(cx - s * 0.3, cy + s * 0.3);
@@ -417,8 +425,9 @@
       if (!c.group.visible) continue;
       var hv = hovers[c.id] || null;
       if (hv !== c.hover) { c.hover = hv; c.dirty = true; }
-      // Face the viewer (yaw only), like the name labels
-      c.group.rotation.set(0, Math.atan2(camPos.x - c.group.position.x, camPos.z - c.group.position.z), 0);
+      // Face the viewer (yaw only), like the name labels; fixed cards stay parallel to the board
+      if (c.fixedYaw != null) c.group.rotation.set(0, c.fixedYaw, 0);
+      else c.group.rotation.set(0, Math.atan2(camPos.x - c.group.position.x, camPos.z - c.group.position.z), 0);
       // Original end-card entrance: scale 0 → 1, elastic.out(1, 0.3) over ~2 s
       var age = (now - c.shownAt) / 1000;
       var sc = c.round ? elasticOut(Math.min(1, age / 1.6)) : Math.min(1, 0.85 + age * 2.5);
