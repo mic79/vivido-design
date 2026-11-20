@@ -1455,6 +1455,34 @@
           hand.parent.getWorldQuaternion(parentQ);
           hand.quaternion.copy(parentQ.invert().multiply(delta.multiply(worldQ)));
           hand.updateMatrixWorld(true);
+          this._rollPalmDown(side, w);
+        },
+
+        /** Roll the hand around its hand->index-tip line (tip stays put) so the palm faces down and a
+         *  little inward, with the curled fingers under the pointing index (a natural point). */
+        _rollPalmDown: function (side, w) {
+          var hand = this.bones[side + 'HandBone'], i3 = this.bones[side + 'HandIndex3'];
+          var m1 = this.bones[side + 'HandMiddle1'], m3 = this.bones[side + 'HandMiddle3'];
+          if (!hand || !i3 || !m1 || !m3 || !hand.parent) return;
+          var hp = new THREE.Vector3(), tp = new THREE.Vector3(), a = new THREE.Vector3(), c = new THREE.Vector3();
+          hand.getWorldPosition(hp); i3.getWorldPosition(tp); m1.getWorldPosition(a); m3.getWorldPosition(c);
+          var axis = tp.sub(hp).normalize();
+          // palm side = where the curled middle finger goes, perpendicular to the pointing axis
+          var palm = c.sub(a); palm.addScaledVector(axis, -palm.dot(axis));
+          if (palm.lengthSq() < 1e-8) return;
+          palm.normalize();
+          // want: palm facing down, tilted toward the body's midline
+          var mid = new THREE.Vector3(); this.el.object3D.getWorldPosition(mid);
+          var want = new THREE.Vector3(Math.sign(mid.x - hp.x) * 0.45, -1, 0);
+          want.addScaledVector(axis, -want.dot(axis));
+          if (want.lengthSq() < 1e-8) return;
+          want.normalize();
+          var ang = Math.atan2(new THREE.Vector3().crossVectors(palm, want).dot(axis), palm.dot(want));
+          var roll = new THREE.Quaternion().setFromAxisAngle(axis, ang * Math.max(0, Math.min(1, w)));
+          var worldQ = new THREE.Quaternion(); hand.getWorldQuaternion(worldQ);
+          var parentQ = new THREE.Quaternion(); hand.parent.getWorldQuaternion(parentQ);
+          hand.quaternion.copy(parentQ.invert().multiply(roll.multiply(worldQ)));
+          hand.updateMatrixWorld(true);
         },
 
         /** World position of the index fingertip (just past the last index bone). */
