@@ -236,7 +236,7 @@
       var cb = document.getElementById('cup-bot');
       // Bots stand within arm's reach of the board (like someone at a whiteboard), so a poke is a
       // lean and a reach, not a lunge
-      var BOT_STAND = 0.30;
+      var BOT_STAND = 0.42;
       if (cb) cb.setAttribute('position', lay.seats.red.x + ' 1.45 ' + (-BOT_STAND));
       var sb = document.getElementById('spec-blue-anchor');
       if (sb) sb.setAttribute('position', lay.seats.blue.x + ' 1.45 ' + BOT_STAND); // mirror of cup-bot

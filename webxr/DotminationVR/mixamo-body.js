@@ -1310,30 +1310,41 @@
             pe = pr * pr * (3 - 2 * pr);   // smoothstep
             pokeTarget = new THREE.Vector3(poke.handTarget.x, poke.handTarget.y, poke.handTarget.z);
             pokeSide = (pokeTarget.x - bodyCenter.x) * fsPoke >= 0 ? 'left' : 'right';
-            var shoulder = this.bones[pokeSide + 'Shoulder'];
-            if (shoulder) {
-              // Residual step (only for far corners): from the shoulder as it would be without any step
-              var sh = new THREE.Vector3();
-              shoulder.getWorldPosition(sh);
-              sh.z -= fsPoke * (this._pokeApplied || 0);
-              sh.y += this._crouchApplied || 0;
-              // Low dots: bend the knees (crouch) rather than reaching down and hooking back
-              this._crouchTarget = Math.max(0, Math.min(0.2, (sh.y - pokeTarget.y) - 0.2));   // feet start 0.2 above the floor
+            // Neutral shoulder (idle stance, recorded below) -> how far the dot is out of reach
+            var rel = this._shRel && this._shRel[pokeSide];
+            if (rel) {
+              var sh = bodyCenter.clone().add(rel);
+              // Low dots: bend the knees rather than reaching down and hooking back (feet start 0.2 m up)
+              this._crouchTarget = Math.max(0, Math.min(0.2, (sh.y - pokeTarget.y) - 0.2));
               sh.y -= this._crouchTarget;
               this._pokeShoulder = (this._pokeShoulder || new THREE.Vector3()).copy(sh);
+              // The wrist comes in level with the dot, a hand's length in front of it
+              var wristPt = pokeTarget.clone(); wristPt.z -= fsPoke * 0.15;
               var reach = (this.config.upperArmLength + this.config.lowerArmLength) * 0.92;
-              var horiz = Math.abs(pokeTarget.z - sh.z);
-              var rest = Math.sqrt(Math.max(0, sh.distanceToSquared(pokeTarget) - horiz * horiz));
-              var reachZ = Math.sqrt(Math.max(0, reach * reach - rest * rest));
-              this._pokeStepTarget = Math.max(0, Math.min(0.3, horiz - reachZ));
-              this._pokeDrop = Math.max(0, Math.min(1, (sh.y - pokeTarget.y) / 0.6));   // how low the dot is
+              var horiz = Math.abs(wristPt.z - sh.z);
+              var rest = Math.sqrt(Math.max(0, sh.distanceToSquared(wristPt) - horiz * horiz));
+              var need = Math.max(0, horiz - Math.sqrt(Math.max(0, reach * reach - rest * rest)));
+              // Cover it mostly by bending forward at the waist; step only for what's left
+              var leanRad = Math.min(0.45, need * 2.2);
+              this._pokeLeanTarget = 0.06 + leanRad;
+              this._pokeStepTarget = Math.max(0, Math.min(0.25, need - 0.45 * Math.sin(leanRad)));
             }
             this._pokeStep = (this._pokeStep || 0) + ((this._pokeStepTarget || 0) - (this._pokeStep || 0)) * 0.08;
             this._crouch = (this._crouch || 0) + ((this._crouchTarget || 0) - (this._crouch || 0)) * 0.08;
+            this._pokeLeanS = (this._pokeLeanS || 0) + ((this._pokeLeanTarget || 0) - (this._pokeLeanS || 0)) * 0.08;
           } else {
             this._pokeStep = 0;
             this._crouch = 0;
+            this._pokeLeanS = 0;
             this._pokeCorr.multiplyScalar(0.9);
+            // Idle stance: remember where the shoulders sit relative to the body centre
+            if (!(this._pokeApplied > 0.002) && !(this._crouchApplied > 0.002)) {
+              this._shRel = this._shRel || {};
+              ['left', 'right'].forEach(function (side) {
+                var sb = this.bones[side + 'Shoulder'];
+                if (sb) this._shRel[side] = sb.getWorldPosition(new THREE.Vector3()).sub(bodyCenter);
+              }, this);
+            }
           }
           // Offsets actually applied: follow the step / crouch while poking, ease back out afterwards
           this._pokeApplied = poke ? this._pokeStep * pe : (this._pokeApplied || 0) * 0.85;
@@ -1381,9 +1392,14 @@
             // Reach direction: from the shoulder to the dot, blended with straight ahead so the
             // finger always comes at the board from the front
             var from = this._pokeShoulder || basePos;
-            var dir = pokeTarget.clone().sub(from).normalize()
-              .add(new THREE.Vector3(0, 0, fsPoke * 2.5)).normalize();
-            var wristT = pokeTarget.clone().addScaledVector(dir, -fingerLen).add(this._pokeCorr);
+            var dir = pokeTarget.clone().sub(from);
+            dir.y = 0;                                    // level: the wrist comes in at the dot's height
+            dir.normalize().add(new THREE.Vector3(0, 0, fsPoke * 1.5)).normalize();
+            this._pokeDir = (this._pokeDir || new THREE.Vector3()).copy(dir);
+            if (!(this._pokeLen > 0.05)) this._pokeLen = fingerLen;
+            // Where the wrist should be: level with the dot, one hand-length in front of it
+            this._pokeWrist = (this._pokeWrist || new THREE.Vector3()).copy(pokeTarget).addScaledVector(dir, -this._pokeLen);
+            var wristT = this._pokeWrist.clone().add(this._pokeCorr);
             basePos.lerp(wristT, pe);
             // Hand points along the reach (-Z forward, like a controller)
             // Base hand orientation for the IK (the model's hand axis runs opposite to a controller's);
@@ -1395,7 +1411,7 @@
             // Look at the dot
             var lookQuat = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(headPos, pokeTarget, new THREE.Vector3(0, 1, 0)));
             headQuat.slerp(lookQuat, 0.4 * pe);
-            this._pokeLean = (0.12 + 0.22 * (this._pokeDrop || 0)) * pe;   // gentle bend, more for low dots
+            this._pokeLean = (this._pokeLeanS || 0) * pe;   // bend forward as far as the reach needs
           } else {
             this._pokeLean = 0;
           }
@@ -1443,7 +1459,14 @@
           if (poke && pe > 0.25) {
             var tip = this._indexTip(pokeSide);
             if (tip) {
-              this._pokeCorr.addScaledVector(pokeTarget.clone().sub(tip), 0.35 * pe);
+              // (a) the wrist bone goes where it should (absorbs the IK's own hand offset / clamping)
+              var hb = this.bones[pokeSide + 'HandBone'];
+              if (hb && this._pokeWrist) {
+                this._pokeCorr.addScaledVector(this._pokeWrist.clone().sub(hb.getWorldPosition(new THREE.Vector3())), 0.35 * pe);
+              }
+              // (b) the hand-to-fingertip length, so the tip lands on the dot (only along the reach)
+              var errAlong = pokeTarget.clone().sub(tip).dot(this._pokeDir || new THREE.Vector3(0, 0, 1));
+              this._pokeLen = Math.max(0.08, Math.min(0.3, this._pokeLen - errAlong * 0.35 * pe));
               if (this._pokeCorr.length() > 0.2) this._pokeCorr.setLength(0.2);
               this._pokeTip = tip;
             }
