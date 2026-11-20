@@ -1169,7 +1169,7 @@
       var p = 1 - Math.max(0, Math.min(1, (board._dueAt - now) / span));
       // Fingertip stops just in front of the glass on the bot's own side
       global[blueBot ? 'botReactionTargetBlue' : 'botReactionTarget'] = {
-        handTarget: { x: w.x, y: w.y, z: w.z + (blueBot ? 0.03 : -0.03) },
+        handTarget: { x: w.x, y: w.y, z: w.z + (blueBot ? 0.012 : -0.012) },   // fingertip on the glass
         progress: p,
         _releaseAt: board._dueAt + 120
       };

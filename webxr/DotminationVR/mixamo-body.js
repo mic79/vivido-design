@@ -1297,6 +1297,36 @@
           // Use the bot entity position as the body's anchor point
           const bodyCenter = botWorldPos.clone();
 
+          // Poking a dot (window[reactionKey] = { handTarget, progress }): step up to the board as
+          // far as the arm needs (measured from the real shoulder), lean in, look at the dot,
+          // point the index finger and put the fingertip on it
+          var rt = window[this.data.reactionKey];
+          var poke = rt && rt.handTarget && rt.progress > 0 ? rt : null;
+          var pe = 0, pokeSide = null, pokeTarget = null;
+          var fsPoke = this.data.facing === '-z' ? -1 : 1;
+          if (!this._pokeCorr) this._pokeCorr = new THREE.Vector3();
+          if (poke) {
+            var pr = Math.min(1, poke.progress);
+            pe = pr * pr * (3 - 2 * pr);   // smoothstep
+            pokeTarget = new THREE.Vector3(poke.handTarget.x, poke.handTarget.y, poke.handTarget.z);
+            pokeSide = (pokeTarget.x - bodyCenter.x) * fsPoke >= 0 ? 'left' : 'right';
+            var shoulder = this.bones[pokeSide + 'Shoulder'];
+            if (shoulder) {
+              var sh = new THREE.Vector3();
+              shoulder.getWorldPosition(sh);
+              var reach = (this.config.upperArmLength + this.config.lowerArmLength) * 0.9;
+              var need = (this._pokeStep || 0) * pe + sh.distanceTo(pokeTarget) - reach;   // step that makes it reachable
+              this._pokeStepTarget = Math.max(0, Math.min(0.7, need / Math.max(0.3, pe)));
+            }
+            this._pokeStep = (this._pokeStep || 0) + ((this._pokeStepTarget || 0) - (this._pokeStep || 0)) * 0.15;
+          } else {
+            this._pokeStep = 0;
+            this._pokeCorr.multiplyScalar(0.9);
+          }
+          // Offset actually applied: follows the step while poking, eases back out afterwards
+          this._pokeApplied = poke ? this._pokeStep * pe : (this._pokeApplied || 0) * 0.85;
+          if (this._pokeApplied > 0.001) bodyCenter.z += fsPoke * this._pokeApplied;
+
           // Head is ~0.3m above the body center
           headPos = new THREE.Vector3(bodyCenter.x, bodyCenter.y + 0.3, bodyCenter.z);
 
@@ -1328,15 +1358,28 @@
           leftHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, faceYaw, 0));
           rightHandQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, faceYaw, 0));
 
-          var rt = window[this.data.reactionKey];
-          if (rt && rt.handTarget && rt.progress > 0) {
-            var ht = rt.handTarget;
-            var p = rt.progress;
-            if ((ht.x - bodyCenter.x) * fs >= 0) {
-              leftHandPos.lerp(new THREE.Vector3(ht.x, ht.y, ht.z), p);
-            } else {
-              rightHandPos.lerp(new THREE.Vector3(ht.x, ht.y, ht.z), p);
-            }
+          if (poke) {
+            // The other hand relaxes back beside the body instead of hovering at the board
+            var restHand = pokeSide === 'left' ? rightHandPos : leftHandPos;
+            restHand.lerp(new THREE.Vector3(restHand.x, bodyCenter.y - 0.42, bodyCenter.z + fs * 0.08), pe);
+            var fingerLen = 0.17;   // wrist -> fingertip, before the measured correction
+            var basePos = pokeSide === 'left' ? leftHandPos : rightHandPos;
+            var dir = pokeTarget.clone().sub(basePos).normalize();
+            var wristT = pokeTarget.clone().addScaledVector(dir, -fingerLen).add(this._pokeCorr);
+            basePos.lerp(wristT, pe);
+            // Hand points along the reach (-Z forward, like a controller)
+            // Base hand orientation for the IK (the model's hand axis runs opposite to a controller's);
+            // the exact aim is done on the bones afterwards (_aimIndexAt)
+            var aimAt = basePos.clone().multiplyScalar(2).sub(pokeTarget);
+            var m = new THREE.Matrix4().lookAt(basePos, aimAt, new THREE.Vector3(0, 1, 0));
+            var pointQuat = new THREE.Quaternion().setFromRotationMatrix(m);
+            (pokeSide === 'left' ? leftHandQuat : rightHandQuat).slerp(pointQuat, pe);
+            // Look at the dot
+            var lookQuat = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(headPos, pokeTarget, new THREE.Vector3(0, 1, 0)));
+            headQuat.slerp(lookQuat, 0.7 * pe);
+            this._pokeLean = 0.28 * pe;   // extra forward bend of the spine
+          } else {
+            this._pokeLean = 0;
           }
 
           if (rt && rt.progress > 0) {
@@ -1370,10 +1413,62 @@
 
           this._storePose(headPos, headQuat, leftHandPos, rightHandPos, leftHandQuat, rightHandQuat);
 
-          // Apply relaxed finger curls for bot
+          // Relaxed fingers; the poking hand blends into a pointing index finger
           const botCurls = { thumb: 0.15, index: 0.2, middle: 0.25, ring: 0.3, pinky: 0.3 };
-          this.applyFingerCurls('left', botCurls);
-          this.applyFingerCurls('right', botCurls);
+          const pointCurls = { thumb: 0.55, index: 0.0, middle: 0.95, ring: 0.95, pinky: 0.95 };
+          const mix = {};
+          Object.keys(botCurls).forEach(function (k) { mix[k] = botCurls[k] + (pointCurls[k] - botCurls[k]) * pe; });
+          this.applyFingerCurls('left', pokeSide === 'left' ? mix : botCurls);
+          this.applyFingerCurls('right', pokeSide === 'right' ? mix : botCurls);
+
+          // Aim: turn the hand bone so the (straight) index finger points at the dot. Done on the
+          // real bones after the IK, so it doesn't depend on the model's axis conventions.
+          if (poke) this._aimIndexAt(pokeSide, pokeTarget, pe);
+
+          // Fingertip correction: measure where the index tip really is and steer the wrist so it
+          // lands on the dot (absorbs the model's bone offsets / mirroring)
+          if (poke && pe > 0.25) {
+            var tip = this._indexTip(pokeSide);
+            if (tip) {
+              this._pokeCorr.addScaledVector(pokeTarget.clone().sub(tip), 0.35 * pe);
+              if (this._pokeCorr.length() > 0.2) this._pokeCorr.setLength(0.2);
+              this._pokeTip = tip;
+            }
+          }
+        },
+
+        /** Rotate the hand bone (world space) so the index finger points from the hand at target. */
+        _aimIndexAt: function (side, target, w) {
+          var hand = this.bones[side + 'HandBone'], i1 = this.bones[side + 'HandIndex1'], i3 = this.bones[side + 'HandIndex3'];
+          if (!hand || !i1 || !i3 || !hand.parent) return;
+          this.el.object3D.updateMatrixWorld(true);
+          var hp = new THREE.Vector3(), p1 = new THREE.Vector3(), p3 = new THREE.Vector3();
+          hand.getWorldPosition(hp); i1.getWorldPosition(p1); i3.getWorldPosition(p3);
+          var cur = p3.sub(hp).normalize();                 // hand -> index tip, as posed now
+          var want = target.clone().sub(hp).normalize();    // hand -> dot
+          if (cur.lengthSq() < 1e-6 || want.lengthSq() < 1e-6) return;
+          var delta = new THREE.Quaternion().setFromUnitVectors(cur, want);
+          delta.slerp(new THREE.Quaternion(), 1 - Math.max(0, Math.min(1, w)));
+          var worldQ = new THREE.Quaternion();
+          hand.getWorldQuaternion(worldQ);
+          var parentQ = new THREE.Quaternion();
+          hand.parent.getWorldQuaternion(parentQ);
+          hand.quaternion.copy(parentQ.invert().multiply(delta.multiply(worldQ)));
+          hand.updateMatrixWorld(true);
+        },
+
+        /** World position of the index fingertip (just past the last index bone). */
+        _indexTip: function (side) {
+          var b3 = this.bones[side + 'HandIndex3'], b2 = this.bones[side + 'HandIndex2'];
+          if (!b3 || !b2) return null;
+          this.el.object3D.updateMatrixWorld(true);
+          var p3 = new THREE.Vector3(), p2 = new THREE.Vector3();
+          b3.getWorldPosition(p3);
+          b2.getWorldPosition(p2);
+          var seg = p3.clone().sub(p2);
+          var len = seg.length();
+          if (!(len > 0.002)) return p3;
+          return p3.addScaledVector(seg.normalize(), Math.min(0.026, len * 0.9));
         },
 
         // ---- Pose blending (idle <-> serve transitions) ----
@@ -1496,7 +1591,7 @@
           );
           this.torsoLean.lerp(targetLean, this.torsoLeanVelocity);
 
-          const totalForwardLean = handForwardLean + this.torsoLean.x;
+          const totalForwardLean = handForwardLean + this.torsoLean.x + (this._pokeLean || 0);
           const totalSideLean = handSideLean + this.torsoLean.z;
 
           // Breathing
