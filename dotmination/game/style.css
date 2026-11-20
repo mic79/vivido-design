@@ -1553,8 +1553,12 @@ html.in-discord .dc-friends-only input { width: 1rem; height: 1rem; cursor: poin
 .dark-mode .rankings-modal .rank-back { background: #4a6262; color: #fff; }
 .dark-mode .rankings-modal .rank-lv { border-bottom-color: rgba(255, 255, 255, 0.1); }
 .time-modal .world-best[hidden] { display: none; }
-.time-modal .row:has(.world-best:not([hidden])) { align-items: flex-start; }
-.time-modal .world-best .wb-holder { display: block; font-size: 0.75rem; opacity: 0.6; margin-top: 0.1rem; max-width: 8em; margin-left: auto; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Holder name under World best; Best time gets an equal empty line so both times line up,
+   and the pair stays centred on the Restart card */
+.time-modal .world-best .wb-holder,
+.time-modal .row:has(.world-best:not([hidden])) .best-time::after { display: block; font-size: 0.75rem; line-height: 1.2; height: 1.2em; margin-top: 0.1rem; max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.time-modal .world-best .wb-holder { opacity: 0.6; }
+.time-modal .row:has(.world-best:not([hidden])) .best-time::after { content: ''; }
 
 /* Play while you wait (hosting in the background) */
 .play-while-waiting { margin: 14px 0 8px; }
