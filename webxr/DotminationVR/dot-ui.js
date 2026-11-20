@@ -758,7 +758,8 @@
         e.sub = info.time ? (info.time + (info.isBest ? '  ·  best!' : '  ·  best ' + info.best)) : '';
         e._level = info.level;
         if (this._worldRank && this._worldRank.level === info.level) e.sub += '  ·  World #' + this._worldRank.rank;
-        e.buttons = [{ id: 'next-level', label: 'Next Level', icon: 'arrow', primary: true }];
+        // Retry the same level (e.g. for a better time / 3 stars), or go on
+        e.buttons = [{ id: 'retry', label: 'Retry', icon: 'undo' }, { id: 'next-level', label: 'Next Level', icon: 'arrow', primary: true }];
       } else {
         e.stars = 0;
         e.buttons = [{ id: 'retry', label: 'Retry', icon: 'undo', primary: true }];
@@ -884,7 +885,7 @@
       ctx.fillText(e.sub, cx, cy + (hasStars ? 14 : -10));
     }
     var n = e.buttons.length;
-    var bw = n > 1 ? 184 : 250, bh = 70, gap = 20;
+    var bw = n > 1 ? 226 : 250, bh = 70, gap = 20;
     var y0 = cy + (hasStars ? 58 : 40);
     for (var i = 0; i < n; i++) {
       var bx = cx - (n * bw + (n - 1) * gap) / 2 + i * (bw + gap);
