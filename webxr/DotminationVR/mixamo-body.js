@@ -1471,9 +1471,11 @@
           var palm = c.sub(a); palm.addScaledVector(axis, -palm.dot(axis));
           if (palm.lengthSq() < 1e-8) return;
           palm.normalize();
-          // want: palm facing down, tilted toward the body's midline
+          // want: palm facing down, tilted toward the body's midline; when pointing steeply down
+          // (low dots) "down" lies along the finger, so the palm turns toward the body instead
           var mid = new THREE.Vector3(); this.el.object3D.getWorldPosition(mid);
-          var want = new THREE.Vector3(Math.sign(mid.x - hp.x) * 0.45, -1, 0);
+          var fsRoll = this.data.facing === '-z' ? -1 : 1;
+          var want = new THREE.Vector3(Math.sign(mid.x - hp.x) * 0.45, -1, -fsRoll * 0.7);
           want.addScaledVector(axis, -want.dot(axis));
           if (want.lengthSq() < 1e-8) return;
           want.normalize();
