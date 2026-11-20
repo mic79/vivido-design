@@ -127,7 +127,17 @@
     input.addEventListener('focus', function () { kbLog('focus', input.value); });
     input.addEventListener('keydown', function (e) {
       kbLog('keydown:' + e.key, input.value);
-      if (e.key !== 'Enter') { st.kbKeys++; return; }
+      if (e.key !== 'Enter') {
+        st.kbKeys++;
+        // Keys but no text a moment later: the Meta keyboard isn't reaching the field here
+        clearTimeout(st.kbCheck);
+        st.kbCheck = setTimeout(function () {
+          if (self._nameState !== st || !st.sys || input.value) return;
+          kbLog('no-text-fallback', '');
+          self._nameKbFallback(st, input);
+        }, 1200);
+        return;
+      }
       e.preventDefault();
       take();
       setTimeout(function () { self._nameKbClosed(st, input); }, 0);
@@ -138,8 +148,11 @@
       take();
       setTimeout(function () { self._nameKbClosed(st, input); }, 50);
     });
-    kbLog('open', '');
+    // The app window may not have focus while in VR; without it typed text is dropped
+    kbLog('open hasFocus=' + document.hasFocus(), '');
+    try { global.focus(); } catch (e) { /* ignore */ }
     try { input.focus(); } catch (e) { kbLog('focus-failed', String(e)); }
+    kbLog('opened hasFocus=' + document.hasFocus() + ' active=' + (document.activeElement === input), '');
   };
 
   /** The Meta keyboard closed (its Done key, or dismissed). */
@@ -148,12 +161,20 @@
     st._closedFor = input;
     if (input.value) st.text = input.value.slice(0, MAX_LEN);
     if (st.text.trim().length >= 2) { this._onNameCard('done'); return; }
-    if (st.kbKeys > 0) {
-      // Keys were pressed but no text arrived: switch this card to the in-game keys
-      st.forceKeys = true;
-      st.sys = false;
-      st.msg = "The Meta keyboard sent no text: type with these keys";
-    }
+    if (st.kbKeys > 0) { this._nameKbFallback(st, input); return; }
+    if (this._nameCard) this._nameCard.dirty = true;
+  };
+
+  /** Keys were pressed but no text arrived: close the Meta keyboard and use the in-game keys. */
+  C._nameKbFallback = function (st, input) {
+    st.forceKeys = true;
+    st.sys = false;
+    st.text = '';
+    st._closedFor = input;
+    st.msg = 'Type your name with these keys';
+    this._nameReopening = true;
+    try { input.blur(); } catch (e) { /* ignore */ }
+    this._nameReopening = false;
     if (this._nameCard) this._nameCard.dirty = true;
   };
 
@@ -291,6 +312,7 @@
       return;
     } else if (id === 'done') {
       var input = document.getElementById('dvr-name-input');
+      if (st.sys && st.kbKeys > 0 && !(input && input.value) && !st.text) { this._nameKbFallback(st, input || document.body); return; }
       if (st.sys && input && input.value) st.text = input.value.slice(0, MAX_LEN);
       var name = st.text || st.current;
       if (this.setPlayerName(name)) { this._nameClose(true); return; }
