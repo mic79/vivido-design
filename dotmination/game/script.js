@@ -5,7 +5,7 @@
 // Added experimental RTS mode.
 
 // Import Tutorial Module
-import * as tutorial from './modules/tutorial.js?v=2026111901';
+import * as tutorial from './modules/tutorial.js?v=2026112001';
 
 // In-game notices instead of alert()/confirm(): browser popups are blocked inside a Discord
 // Activity (and interrupt play elsewhere), so players never saw e.g. "Opponent has left".
@@ -359,9 +359,9 @@ function goSinglePlayer() {
   if (when) el.textContent = 'Last updated: ' + when + (build ? ' (build ' + build + ')' : '');
 })();
 // Import Timer Utilities and getStageNumber
-import { isEven, hexToRgb, showTimer, resetTimer, startTimer, stopTimer, getStageNumber } from './modules/utils.js';
+import { isEven, hexToRgb, showTimer, resetTimer, startTimer, stopTimer, getStageNumber, recordMove, lastMoveMs, freezeTimerAtLastMove } from './modules/utils.js?v=2026112001';
 // Import Bot Logic
-import { getBotMove } from './modules/botLogic.js';
+import { getBotMove } from './modules/botLogic.js?v=2026112001';
 // Import Real-Time Resource Mode Module
 import * as rtrMode from './modules/realTimeResourceMode.js';
 
@@ -371,7 +371,7 @@ import * as rtrMode from './modules/realTimeResourceMode.js';
 // import * as gameLogic from './modules/gameLogic.js';
 // import * as storage from './modules/storage.js';
 // import * as audio from './modules/audio.js';
-// import { isEven, resetTimer, stopTimer, startTimer, showTimer } from './modules/utils.js';
+// import { isEven, resetTimer, stopTimer, startTimer, showTimer } from './modules/utils.js?v=2026112001';
 
 // Dark Mode
 function screenTest(e) {
@@ -597,8 +597,14 @@ $("body").on("click", ".end, .end .card", function(e) {
   }
 });
 
-$(".field").off("click", ".dot").on("click", ".dot", function() {
+$(".field").off("click", ".dot").on("click", ".dot", function(e) {
   let clickedDot = $(this);
+  // Solo vs the bot: a real click during the bot's turn (it "thinks" for 1 s) must not play
+  // the bot's move. The bot's own moves are synthetic clicks (isTrusted false).
+  if (!isMultiplayer && gameMode !== 'realTimeResource' && !tutorial.isTutorialActive() &&
+      currentPlayer === playerArray[0] && e && e.originalEvent && e.originalEvent.isTrusted) {
+    return;
+  }
   let clickedIndex = clickedDot.index();
 
   // <<< TUTORIAL CHECK: Call module function >>>
@@ -636,6 +642,7 @@ $(".field").off("click", ".dot").on("click", ".dot", function() {
     
     // Reset the pitch counter at the start of a new move/chain
     chainReactionCounter = 0;
+    if (!isMultiplayer && gameMode !== 'realTimeResource') recordMove(); // match time = last move
     
     // If it's multiplayer, send the move to opponent before processing it
     if (isMultiplayer && conn) {
@@ -927,6 +934,7 @@ function checkDotmination() {
         return;
       }
       stopTimer(); 
+      freezeTimerAtLastMove(); // time of the winning move, not the end of its animation
       sound.play();
       
       console.log("CHECKDOTMINATION: Game Over. Current Player:", currentPlayer, "Game Mode:", gameMode, "Level:", level);
@@ -1025,7 +1033,7 @@ function checkDotmination() {
                 '</div>';
               console.log("Appending overlay HTML...");
               $("body .container").append(overlayHTML);
-              submitWorldTime(level, moment.duration('00:' + $('#time').html()).asMilliseconds());
+              submitWorldTime(level, lastMoveMs() != null ? lastMoveMs() : moment.duration('00:' + $('#time').html()).asMilliseconds());
               console.log("Overlay HTML appended. Overlay card count:", $('.overlay > .card').length);
               
               // Use gsap for animation if TweenMax is being phased out, otherwise ensure TweenMax is loaded and working
@@ -1230,9 +1238,11 @@ function startAnim() {
   if (gameMode === 'regular') {
     botDifficulty = 'random';
     console.log("startAnim: Regular mode detected. Bot difficulty set to 'random'.");
-    currentPlayer = "player--2"; // User starts in regular mode
+    // User starts (as in DotminationVR): the board fills with the bot "on turn", then the
+    // delayed nextPlayer() after populate hands the first move to the user
+    currentPlayer = "player--1";
   } else if (gameMode === 'random') {
-    currentPlayer = "player--2"; // User starts in random mode
+    currentPlayer = "player--1"; // User starts, see above
   } else if (gameMode === 'multiplayer') {
     // currentPlayer is determined by host/peer logic and game state sync
     // For a fresh multiplayer game start (before connection), P1 might be default.
@@ -1378,12 +1388,12 @@ function fieldPopulateRandom() {
     window.history.replaceState({}, document.title, newUrl);
   }
   if (gameMode !== 'realTimeResource') { // nextPlayer not used in RTR
-    gsap.delayedCall(1,nextPlayer);
+    // The clock starts when the user can make the first move (as in DotminationVR)
+    gsap.delayedCall(1, function () { nextPlayer(); startTimer(); });
   }
   // <<< FIX: Use imported timer functions >>>
   showTimer();
   resetTimer();
-  startTimer();
   updatePlayerScoresUI(); // <<< Update scores after random population
 }
 
@@ -1440,12 +1450,12 @@ function fieldPopulateByLevel() {
   dots = $(".dot");
 
   if (gameMode !== 'realTimeResource') { // nextPlayer not used in RTR
-    gsap.delayedCall(1,nextPlayer);
+    // The clock starts when the user can make the first move (as in DotminationVR)
+    gsap.delayedCall(1, function () { nextPlayer(); startTimer(); });
   }
   // <<< FIX: Use imported timer functions >>>
   showTimer();
   resetTimer();
-  startTimer();
   updatePlayerScoresUI(); // <<< Update scores after level population
 }
 

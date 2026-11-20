@@ -111,8 +111,26 @@ export function stopTimer() {
     clocktimer = null; // Clear interval ID
 }
 
+// Match time = when the last move was made (as in DotminationVR), not when the last
+// explosion finished animating. recordMove() on every move; freezeTimerAtLastMove() at the end.
+var lastMoveAt = null;
+export function recordMove() {
+	lastMoveAt = x.time();
+}
+export function lastMoveMs() {
+	return lastMoveAt;
+}
+export function freezeTimerAtLastMove() {
+	stopTimer();
+	if (lastMoveAt == null) return null;
+	if (!$time) $time = document.getElementById('time');
+	if ($time) $time.innerHTML = formatTime(lastMoveAt);
+	return lastMoveAt;
+}
+
 export function resetTimer() {
 	stopTimer(); // Ensure timer is stopped before resetting
+	lastMoveAt = null;
 	x.reset();
     if ($time) { // Update display only if element exists
 	    update();

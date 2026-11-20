@@ -7,7 +7,7 @@
 // REMOVED: import * as gameLogic from './gameLogic.js';
 // REMOVED: import * as storage from './storage.js';
 // REMOVED: import * as audio from './audio.js';
-import { resetTimer, stopTimer, showTimer, startTimer } from './utils.js'; // Keeping showTimer and startTimer. Removing only isEven.
+import { resetTimer, stopTimer, showTimer, startTimer } from './utils.js?v=2026112001'; // Keeping showTimer and startTimer. Removing only isEven.
 // Note: Assuming gsap, jQuery, Howl (sound, incrementSound), global functions (buildMapFromString, etc.),
 // and global variables (isTutorialMode, tutorialStep, etc.) are available from script.js
 

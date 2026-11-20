@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dotmination-cache-v16';
+const CACHE_NAME = 'dotmination-cache-v17';
 const urlsToCache = [
     './',
     './index.html',

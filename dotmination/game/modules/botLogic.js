@@ -1,5 +1,5 @@
 // botLogic.js - Module for Dotmination bot decision-making
-import { getStageNumber } from './utils.js'; // Import from utils
+import { getStageNumber } from './utils.js?v=2026112001'; // Import from utils
 
 const BOT_CONSTANTS = {
     SCORE_THRESHOLD: 5,
