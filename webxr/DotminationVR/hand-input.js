@@ -98,11 +98,13 @@
       var s = this.sides[side];
       return !!(s && s.active);
     },
-    /** True while this hand's laser pointer should be hidden (grip / pointing pose). */
+    /** True while this hand's laser pointer should be hidden: grip / pointing pose with hands,
+     *  grip button held with controllers. */
     pointerHidden: function (side) {
       side = side === 'leftHand' ? 'left' : side === 'rightHand' ? 'right' : side;
       var s = this.sides[side];
-      return !!(s && s.active && s.grab);
+      if (!s) return false;
+      return s.active ? !!s.grab : !!s.ctrlGrip;
     },
     /** Any hand-only input active. */
     anyHand: function () { return this.sides.left.active || this.sides.right.active; },
@@ -201,16 +203,17 @@
           hand.addEventListener('gripdown', function (e) {
             if (e && e.detail && e.detail.handInput) return;
             api.sides[side].ctrlGrip = true;
+            self.updatePointer(side);   // no laser while the grip is held
           });
           hand.addEventListener('gripup', function (e) {
             if (e && e.detail && e.detail.handInput) return;
             api.sides[side].ctrlGrip = false;
+            self.updatePointer(side);
           });
         })();
       });
       this.el.addEventListener('exit-vr', function () {
-        SIDES.forEach(function (side) { api.sides[side].ctrlGrip = false; });
-        void self;
+        SIDES.forEach(function (side) { api.sides[side].ctrlGrip = false; self.updatePointer(side); });
       });
     },
 
@@ -244,7 +247,7 @@
       }
     },
 
-    // Menu: in hands-only mode it opens as a panel in front of you
+    // Menu: opens as a panel in front of you, with hands and with controllers alike
     patchMenu: function () {
       var menuEl = document.querySelector('[vr-menu]');
       var comp = menuEl && menuEl.components && menuEl.components['vr-menu'];
@@ -253,15 +256,7 @@
       comp._handInputPatched = true;
       this.menu = comp;
       var self = this;
-      var orig = comp._attachMenuToLeftHand;
-      comp._attachMenuToLeftHand = function () {
-        if (api.anyHand()) return self.placeMenuInFront();
-        // Back on controllers: put the 3D object back on the left hand before the normal attach
-        var root = document.getElementById('vr-menu-root');
-        var left = document.getElementById('leftHand');
-        if (root && left && root.object3D && root.object3D.parent !== left.object3D) left.object3D.add(root.object3D);
-        return orig.apply(this, arguments);
-      };
+      comp._attachMenuToLeftHand = function () { return self.placeMenuInFront(); };
     },
 
     placeMenuInFront: function () {
