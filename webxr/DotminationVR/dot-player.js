@@ -97,53 +97,64 @@
   }
 
   C._nameSysKeyboard = function () {
-    var self = this;
-    var input = document.getElementById('dvr-name-input');
-    if (!input) {
-      input = document.createElement('input');
-      input.id = 'dvr-name-input';
-      input.type = 'text';
-      input.maxLength = MAX_LEN;
-      input.autocomplete = 'off';
-      input.setAttribute('autocapitalize', 'off');
-      input.setAttribute('aria-label', 'Player name');
-      input.style.cssText = 'position:fixed;left:0;bottom:0;width:240px;opacity:0.01;z-index:-1';
-      document.body.appendChild(input);
-      var sync = function (e) {
-        kbLog(e.type, input.value);
-        var st = self._nameState;
-        if (!st) return;
-        // An empty value after the keyboard closes is not a deliberate clear: keep what was typed
-        if (input.value || e.type === 'input') st.text = input.value.slice(0, MAX_LEN);
-        st.msg = '';
-        if (self._nameCard) self._nameCard.dirty = true;
-        // Meta keyboard's Done (or closing it) blurs the field: a typed name is saved right away
-        if (e.type === 'blur' && !self._nameReopening && st.sys && st.text.trim().length >= 2) {
-          setTimeout(function () {
-            if (self._nameState === st) self._onNameCard('done');
-          }, 0);
-        }
-      };
-      ['input', 'change', 'keyup', 'compositionend', 'blur'].forEach(function (t) { input.addEventListener(t, sync); });
-      input.addEventListener('focus', function () { kbLog('focus', input.value); });
-      input.addEventListener('keydown', function (e) {
-        kbLog('keydown:' + e.key, input.value);
-        if (e.key === 'Enter' && self._nameState) {
-          e.preventDefault();
-          if (input.value) self._nameState.text = input.value.slice(0, MAX_LEN);
-          self._onNameCard('done');
-        }
-      });
-    }
-    // Reopen reliably: a field that still has focus does not bring the keyboard back
-    var sc = this.el.sceneEl, xs = sc.renderer && sc.renderer.xr && sc.renderer.xr.getSession && sc.renderer.xr.getSession();
-    if (document.activeElement === input && xs && xs.visibilityState === 'visible-blurred') { kbLog('open-skip', input.value); return; }
-    this._nameReopening = true;
-    if (document.activeElement === input) input.blur();
-    this._nameReopening = false;
-    input.value = (this._nameState && this._nameState.text) || '';
-    kbLog('open', input.value);
+    var self = this, st = this._nameState;
+    if (!st) return;
+    // One open per press (the headset's select and the game's trigger both arrive for one click)
+    var now = performance.now();
+    if (this._nameKbFor === st && now - (this._nameKbOpenedAt || 0) < 400) return;
+    this._nameKbOpenedAt = now;
+    this._nameKbFor = st;
+    // A fresh, plain, visible text field each time, as in Meta's WebXR keyboard sample
+    var old = document.getElementById('dvr-name-input');
+    if (old) { this._nameReopening = true; old.blur(); old.remove(); this._nameReopening = false; }
+    var input = document.createElement('input');
+    input.id = 'dvr-name-input';
+    input.type = 'text';
+    input.maxLength = MAX_LEN;
+    input.setAttribute('autocomplete', 'off');
+    input.setAttribute('aria-label', 'Player name');
+    input.style.cssText = 'position:fixed;left:8px;top:8px;width:260px;height:36px;font-size:20px;z-index:2147483647';
+    document.body.appendChild(input);
+    st.kbKeys = 0;
+    var take = function () {
+      if (self._nameState !== st) return;
+      if (input.value) { st.text = input.value.slice(0, MAX_LEN); st.msg = ''; }
+      if (self._nameCard) self._nameCard.dirty = true;
+    };
+    ['input', 'change', 'keyup', 'compositionend', 'beforeinput', 'compositionupdate'].forEach(function (t) {
+      input.addEventListener(t, function (e) { kbLog(t + (e.data ? ':' + e.data : ''), input.value); setTimeout(take, 0); take(); });
+    });
+    input.addEventListener('focus', function () { kbLog('focus', input.value); });
+    input.addEventListener('keydown', function (e) {
+      kbLog('keydown:' + e.key, input.value);
+      if (e.key !== 'Enter') { st.kbKeys++; return; }
+      e.preventDefault();
+      take();
+      setTimeout(function () { self._nameKbClosed(st, input); }, 0);
+    });
+    input.addEventListener('blur', function () {
+      kbLog('blur', input.value);
+      if (self._nameReopening) return;
+      take();
+      setTimeout(function () { self._nameKbClosed(st, input); }, 50);
+    });
+    kbLog('open', '');
     try { input.focus(); } catch (e) { kbLog('focus-failed', String(e)); }
+  };
+
+  /** The Meta keyboard closed (its Done key, or dismissed). */
+  C._nameKbClosed = function (st, input) {
+    if (this._nameState !== st || st._closedFor === input) return;
+    st._closedFor = input;
+    if (input.value) st.text = input.value.slice(0, MAX_LEN);
+    if (st.text.trim().length >= 2) { this._onNameCard('done'); return; }
+    if (st.kbKeys > 0) {
+      // Keys were pressed but no text arrived: switch this card to the in-game keys
+      st.forceKeys = true;
+      st.sys = false;
+      st.msg = "The Meta keyboard sent no text: type with these keys";
+    }
+    if (this._nameCard) this._nameCard.dirty = true;
   };
 
   function watchSelectForKeyboard(comp) {
@@ -155,7 +166,7 @@
       session.__dvrKb = true;
       session.addEventListener('selectstart', function (e) {
         var st = comp._nameState;
-        if (!st || !comp._nameCard || !comp._nameCard.group.visible || !systemKeyboard(comp)) return;
+        if (!st || st.forceKeys || !comp._nameCard || !comp._nameCard.group.visible || !systemKeyboard(comp)) return;
         var side = e.inputSource && e.inputSource.handedness;
         var hand = document.getElementById(side === 'left' ? 'leftHand' : 'rightHand');
         var pick = hand && comp._uiPickHand(hand);
@@ -186,7 +197,7 @@
 
   C._drawNameCard = function (ctx, card) {
     var st = this._nameState || { text: '' };
-    if (this._nameState) st.sys = systemKeyboard(this);
+    if (this._nameState) st.sys = !st.forceKeys && systemKeyboard(this);
     var W = card.cw, pink = this._sideColorCss('blue');
     this._uiPanel(ctx, card);
     ctx.fillStyle = '#ffffff';
@@ -261,9 +272,6 @@
     if (!st) return;
     st.msg = '';
     if (st.sys && (id.indexOf('k:') === 0 || id === 'back' || id === 'space' || id === 'shift')) return;
-    if (!st.sys && !st.text && st.current && (id.indexOf('k:') === 0 || id === 'back' || id === 'space')) {
-      st.text = st.current;   // on-screen keys edit the current name
-    }
     if (id.indexOf('k:') === 0) {
       if (st.text.length < MAX_LEN) {
         st.text += id.slice(2);
