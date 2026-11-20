@@ -1131,7 +1131,9 @@ body.no-backdrop header {
 }
 
 .modal.time-modal .best-time h1,
-.modal.time-modal .best-time p {
+.modal.time-modal .best-time p,
+.modal.time-modal .world-best h1,
+.modal.time-modal .world-best p {
   margin: 0;
 }
 
@@ -1528,6 +1530,31 @@ html.in-discord .dc-friends-only input { width: 1rem; height: 1rem; cursor: poin
 .rankings-modal .rank-nick-row button { border: 0; border-radius: 0.5rem; padding: 7px 14px; background: #e11168; color: #fff; cursor: pointer; }
 .dark-mode .rankings-modal .rank-tab:not(.active) { background: #4a6262; color: #fff; }
 .dark-mode .rankings-modal .rank-list li { border-bottom-color: rgba(255, 255, 255, 0.1); }
+/* Levels with world times: level · world best (holder) · your time + rank · play */
+.rankings-modal .rank-level-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.rankings-modal .rank-level-head[hidden], .rankings-modal .rank-levels-head[hidden] { display: none; }
+.rankings-modal .rank-level-label { font-weight: 700; }
+.rankings-modal .rank-back, .rankings-modal .rank-play { border: 0; border-radius: 999px; padding: 6px 12px; font-size: 0.85rem; cursor: pointer; background: #e9ecef; color: #333; min-width: 5.5em; }
+.rankings-modal button.rank-play { background: #e11168; color: #fff; }
+.rankings-modal span.rank-play { background: none; opacity: 0.6; text-align: right; }
+.rankings-modal .rank-levels-head, .rankings-modal .rank-lv { display: grid; grid-template-columns: 2.4em 1fr 6.2em 2.4em; align-items: center; gap: 8px; }
+.rankings-modal .rank-levels-head { font-size: 0.75rem; opacity: 0.6; padding: 0 6px 4px; }
+.rankings-modal .rank-levels { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+.rankings-modal .rank-lv { padding: 7px 6px; border-bottom: 1px solid rgba(0, 0, 0, 0.06); cursor: pointer; border-radius: 0.5rem; }
+.rankings-modal .rank-lv:hover, .rankings-modal .rank-lv.selected { background: rgba(225, 17, 104, 0.08); }
+.rankings-modal .rank-lv-num { font-weight: 700; font-variant-numeric: tabular-nums; }
+.rankings-modal .rank-lv-best { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.rankings-modal .rank-lv-best b { color: #12bdb3; font-variant-numeric: tabular-nums; margin-right: 6px; }
+.rankings-modal .rank-lv-best small { opacity: 0.7; }
+.rankings-modal .rank-lv-you { font-variant-numeric: tabular-nums; opacity: 0.6; text-align: right; }
+.rankings-modal .rank-lv-you.me { color: #e11168; opacity: 1; font-weight: 700; }
+.rankings-modal .rank-lv-play { justify-self: end; width: 2.1em; height: 2.1em; border: 0; border-radius: 50%; background: #e11168; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; }
+.rankings-modal span.rank-lv-play { background: none; color: inherit; opacity: 0.35; cursor: default; }
+.dark-mode .rankings-modal .rank-back { background: #4a6262; color: #fff; }
+.dark-mode .rankings-modal .rank-lv { border-bottom-color: rgba(255, 255, 255, 0.1); }
+.time-modal .world-best[hidden] { display: none; }
+.time-modal .row:has(.world-best:not([hidden])) { align-items: flex-start; }
+.time-modal .world-best .wb-holder { display: block; font-size: 0.75rem; opacity: 0.6; margin-top: 0.1rem; max-width: 8em; margin-left: auto; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Play while you wait (hosting in the background) */
 .play-while-waiting { margin: 14px 0 8px; }

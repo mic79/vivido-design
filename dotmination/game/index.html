@@ -18,7 +18,7 @@
   <link rel="stylesheet" href="./lib/normalize.css">
   <link rel='stylesheet' href='./fonts/roboto.css' type='text/css'>
   <link rel='stylesheet' href='./lib/all.min.css'>
-  <link rel="stylesheet" href="./style.css?v=2026111910">
+  <link rel="stylesheet" href="./style.css?v=2026112004">
 
 </head>
 
@@ -242,6 +242,12 @@
             <p>Best time</p>
           </div>
 
+          <div class="col cardX btnX world-best" hidden>
+            <h1>–</h1>
+            <p>World best</p>
+            <small class="wb-holder"></small>
+          </div>
+
           <div class="col card btn restart selected">
             <h1><i class="fas fa-undo"></i></h1>
             <p>Restart</p>
@@ -301,14 +307,17 @@
       <div class="modal-close"><i class="fas fa-times"></i></div>
       <h2>World Rankings</h2>
       <div class="rank-tabs">
-        <button type="button" class="rank-tab active" data-tab="level">Fastest per level</button>
+        <button type="button" class="rank-tab active" data-tab="level">Levels</button>
         <button type="button" class="rank-tab" data-tab="all">Most levels</button>
       </div>
-      <div class="rank-level-nav">
-        <button type="button" class="rank-prev" aria-label="Previous level"><i class="fas fa-chevron-left"></i></button>
+      <!-- One level's top 10: back to the list, or play it -->
+      <div class="rank-level-head" hidden>
+        <button type="button" class="rank-back"><i class="fas fa-chevron-left"></i> Levels</button>
         <span class="rank-level-label">Level 1</span>
-        <button type="button" class="rank-next" aria-label="Next level"><i class="fas fa-chevron-right"></i></button>
+        <button type="button" class="rank-play">Play <i class="fas fa-arrow-right"></i></button>
       </div>
+      <div class="rank-levels-head" hidden><span>Level</span><span>World best</span><span>You</span><span></span></div>
+      <ul class="rank-levels"></ul>
       <ol class="rank-list"></ol>
       <p class="rank-status smaller"></p>
       <div class="rank-nick">
@@ -363,10 +372,10 @@
   <script src='./lib/shake.js'></script>
   <script src='./lib/moment.js'></script>
   <script src='./lib/howler.min.js'></script>
-  <script src="./lib/vivido-hub.js?v=2"></script>
+  <script src="./lib/vivido-hub.js?v=3"></script>
   <script type="module" src="./modules/discord.js?v=2026111910"></script>
   <script type="module" src="./modules/utils.js?v=2026112001"></script>
-  <script type="module" src="./script.js?v=2026112001"></script>
+  <script type="module" src="./script.js?v=2026112003"></script>
   <script src="./lib/peerjs.min.js"></script>
 
 </body>

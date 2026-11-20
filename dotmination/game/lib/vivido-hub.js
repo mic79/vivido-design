@@ -176,6 +176,7 @@
   };
 
   H.top = function (level) { return call('GET', '/v1/top?level=' + (level | 0) + '&id=' + encodeURIComponent(H.id || '')); };
+  H.levels = function () { return call('GET', '/v1/levels?id=' + encodeURIComponent(H.id || '')); };
   H.overall = function () { return call('GET', '/v1/top?overall=1&id=' + encodeURIComponent(H.id || '')); };
 
   /** Short human line for the live counts, or '' when there's nothing to say. */

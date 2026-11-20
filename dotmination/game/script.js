@@ -1809,6 +1809,19 @@ $('.time, .time-modal .backdrop').on('click', function(e) {
   } else {
     $('.time-modal .best-time h1').html(timeBest);
   }
+  // World best for this level (Levels mode only), from the world rankings
+  var $wb = $('.time-modal .world-best').prop('hidden', true);
+  if (gameMode === 'regular' && level > 0 && typeof loadWorldLevels === 'function') {
+    var lvlNow = level;
+    loadWorldLevels().then(function (levels) {
+      if (!levels || lvlNow !== level) return;
+      var r = levels.filter(function (x) { return x.level === lvlNow; })[0];
+      var secs = r ? Math.round(r.best / 1000) : 0;   // same 00:44 style as your best time
+      $wb.find('h1').text(r ? ('0' + Math.floor(secs / 60)).slice(-2) + ':' + ('0' + (secs % 60)).slice(-2) : 'None');
+      $wb.find('.wb-holder').text(r ? (r.meBest ? 'you' : (r.nick || 'Player')) : '');
+      $wb.prop('hidden', false);
+    });
+  }
 });
 
 $('.time-modal .wrapper').on('click', '.card', function(e) {
@@ -3940,6 +3953,7 @@ function submitWorldTime(lvl, ms) {
   if (!Hub || !(ms > 0)) return;
   Hub.submitScore(lvl, ms).then(function (r) {
     if (!r || !r.rank) return;
+    loadWorldLevels(true);   // a new world best shows right away in the Time panel / rankings
     var $card = $('.end.overlay > .card').last();
     if (!$card.length) return;
     $card.find('.world-rank').remove();
@@ -3949,8 +3963,45 @@ function submitWorldTime(lvl, ms) {
   });
 }
 
-var rankTab = 'level';
-var rankLevel = 1;
+var rankTab = 'level';      // 'level' (list of levels / one level) or 'all' (most levels)
+var rankLevel = 0;          // 0 = the list of levels, N = level N's top 10
+
+// World best per level (only levels somebody has finished), cached 2 min; also used by the Time panel
+var worldLevels = null, worldLevelsAt = 0, worldLevelsReq = null;
+function loadWorldLevels(force) {
+  if (!Hub || !Hub.levels) return Promise.resolve(null);
+  if (!force && worldLevels && Date.now() - worldLevelsAt < 120000) return Promise.resolve(worldLevels);
+  if (worldLevelsReq) return worldLevelsReq;
+  worldLevelsReq = Hub.levels().then(function (j) {
+    worldLevelsReq = null;
+    if (j && j.levels) { worldLevels = j.levels; worldLevelsAt = Date.now(); }
+    return j && j.levels ? worldLevels : null;
+  });
+  return worldLevelsReq;
+}
+
+// A level you can play now: every level up to your furthest unlocked one (as in the level list)
+function levelUnlocked(n) {
+  return n === 1 || !!(levelsArray && levelsArray['level' + n] !== undefined);
+}
+
+function playLevelFromRankings(n) {
+  if (isMultiplayer || !levelUnlocked(n)) return;
+  $('.rankings-modal').removeClass('active');
+  gameMode = 'regular';
+  level = n;
+  $('.level-value').html(level);
+  window.history.replaceState({}, document.title, window.location.pathname + '?mode=regular&level=' + level);
+  $('body').removeClass('mode-random mode-multiplayer modal-open').addClass('mode-regular');
+  startAnim();
+}
+
+function playButton(n) {
+  if (isMultiplayer) return $('<span class="rank-lv-play"></span>');
+  if (!levelUnlocked(n)) return $('<span class="rank-lv-play rank-locked"><i class="fas fa-lock"></i></span>');
+  return $('<button type="button" class="rank-lv-play" aria-label="Play level ' + n + '"><i class="fas fa-play"></i></button>')
+    .on('click', function (e) { e.stopPropagation(); playLevelFromRankings(n); });
+}
 
 function renderRankList(rows, mine, fmtRow) {
   var $list = $('.rankings-modal .rank-list').empty();
@@ -3970,13 +4021,36 @@ function renderRankList(rows, mine, fmtRow) {
   }
 }
 
+function renderLevelsList(levels) {
+  var $ul = $('.rankings-modal .rank-levels').empty();
+  levels.forEach(function (r) {
+    var $li = $('<li class="rank-lv"></li>').toggleClass('selected', gameMode === 'regular' && r.level === level)
+      .append($('<span class="rank-lv-num"></span>').text(r.level))
+      .append($('<span class="rank-lv-best"></span>')
+        .append($('<b></b>').text(Hub.fmtMs(r.best)))
+        .append($('<small></small>').text(r.meBest ? 'you' : (r.nick || 'Player'))))
+      .append($('<span class="rank-lv-you"></span>').toggleClass('me', r.mine != null)
+        .text(r.mine != null ? Hub.fmtMs(r.mine) + ' #' + r.rank : '–'))
+      .append(playButton(r.level))
+      .on('click', function () { rankLevel = r.level; loadRankings(); });
+    $ul.append($li);
+  });
+}
+
 function loadRankings() {
-  var $status = $('.rankings-modal .rank-status').text('Loading…');
-  $('.rankings-modal .rank-list').empty();
-  $('.rankings-modal .rank-level-nav').toggle(rankTab === 'level');
-  $('.rankings-modal .rank-level-label').text('Level ' + rankLevel);
+  var $m = $('.rankings-modal');
+  var $status = $m.find('.rank-status').text('Loading…');
+  var list = rankTab === 'level' && !rankLevel;
+  $m.find('.rank-list, .rank-levels').empty();
+  $m.find('.rank-levels-head').prop('hidden', true);
+  $m.find('.rank-level-head').prop('hidden', !(rankTab === 'level' && rankLevel));
+  $m.find('.rank-level-label').text('Level ' + rankLevel);
+  $m.find('.rank-play').replaceWith(rankLevel && !isMultiplayer && levelUnlocked(rankLevel)
+    ? $('<button type="button" class="rank-play">Play <i class="fas fa-arrow-right"></i></button>')
+        .on('click', function () { playLevelFromRankings(rankLevel); })
+    : $('<span class="rank-play"></span>').text(rankLevel && !isMultiplayer ? 'Locked' : ''));
   if (!Hub) { $status.text("World rankings aren't available right now."); return; }
-  var req = rankTab === 'level' ? Hub.top(rankLevel) : Hub.overall();
+  var req = list ? loadWorldLevels(true) : rankTab === 'level' ? Hub.top(rankLevel) : Hub.overall();
   req.then(function (j) {
     if (!j) {
       $status.text(Hub.paused
@@ -3984,7 +4058,11 @@ function loadRankings() {
         : "World rankings aren't available right now. Try again later.");
       return;
     }
-    if (rankTab === 'level') {
+    if (list) {
+      renderLevelsList(j);
+      $m.find('.rank-levels-head').prop('hidden', !j.length);
+      $status.text(j.length ? 'Tap a level for its top 10.' : 'No times yet. Win a level to be the first!');
+    } else if (rankTab === 'level') {
       renderRankList(j.top || [], j.me, function (r) { return Hub.fmtMs(r.ms); });
       $status.text(j.total ? (j.total + (j.total === 1 ? ' player has' : ' players have') + ' finished this level')
         : 'No times yet for this level. Be the first!');
@@ -3997,7 +4075,7 @@ function loadRankings() {
 
 function openRankings() {
   $('.modal').removeClass('active');
-  rankLevel = Math.max(1, Math.min(200, (typeof level === 'number' && level) || 1));
+  rankLevel = 0;
   $('#rank-nick-input').val(Hub ? Hub.getNick() : '');
   $('.rankings-modal').addClass('active');
   $('body').addClass('modal-open');
@@ -4006,12 +4084,12 @@ function openRankings() {
 
 $('.rankings-modal .rank-tab').on('click', function () {
   rankTab = $(this).data('tab');
+  rankLevel = 0;
   $('.rankings-modal .rank-tab').removeClass('active');
   $(this).addClass('active');
   loadRankings();
 });
-$('.rankings-modal .rank-prev').on('click', function () { if (rankLevel > 1) { rankLevel--; loadRankings(); } });
-$('.rankings-modal .rank-next').on('click', function () { if (rankLevel < 200) { rankLevel++; loadRankings(); } });
+$('.rankings-modal .rank-back').on('click', function () { rankLevel = 0; loadRankings(); });
 $('.rankings-modal .rank-nick-save').on('click', function () {
   if (!Hub) return;
   var n = String($('#rank-nick-input').val() || '').trim();
