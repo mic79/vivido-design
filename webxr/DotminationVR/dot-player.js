@@ -1,7 +1,7 @@
 // dot-player.js — DotminationVR player name + World Rankings, inside VR.
-//   • Name card: typing uses the Meta Quest system keyboard (Quest Browser 26.1+ shows it over a
-//     WebXR session when a text field gets focus). Elsewhere: a simple in-world keyboard
-//     (laser, finger poke, mouse; a real keyboard works too).
+//   • Name card: an in-world keyboard (laser, finger poke, mouse; a real keyboard works too).
+//     Not the Meta system keyboard: in the Quest store app its key presses reach the page but
+//     the typed text never does.
 //     The Meta Quest store app starts straight in VR (no 2D start screen), so this is where
 //     players set the name shown in lobbies, cross-play and the World Rankings. Asked once on
 //     first launch when no name is saved.
@@ -62,154 +62,20 @@
     if (!this._nameCard) {
       this._nameCard = this._uiCard('name', 0.66, 0.52, this._drawNameCard.bind(this), this._onNameCard.bind(this));
     }
-    if (!this._nameKbWatch) {
-      this._nameKbWatch = true;
-      watchSelectForKeyboard(this);
-    }
     this._nameState = {
       current: currentNick(),      // shown greyed until you type; kept if you type nothing
       text: '',
       shift: false,                // the player decides the case (no auto-capital)
-      sys: systemKeyboard(this),   // Meta Quest system keyboard available
       after: (opts && opts.after) || null,
       first: !!(opts && opts.first),
       msg: ''
     };
     if (this._rkCard) this._uiHide(this._rkCard);
     this._uiShow(this._nameCard, this._uiFrontPos(0.03));
-    if (this._nameState.sys) this._nameSysKeyboard();
   };
-
-  /** XRSession.isSystemKeyboardSupported (Meta Quest Browser 26.1+). */
-  function systemKeyboard(comp) {
-    var sc = comp.el.sceneEl;
-    var xr = sc && sc.renderer && sc.renderer.xr;
-    var session = xr && xr.getSession && xr.getSession();
-    return !!(session && session.isSystemKeyboardSupported);
-  }
-
-  /** Show the Meta system keyboard: focus a text field; its value is the name being typed. */
-  function kbLog(type, value) {
-    var log = global.__dvrKbLog = global.__dvrKbLog || [];
-    log.push({ t: Math.round(performance.now()), type: type, value: value });
-    if (log.length > 60) log.shift();
-    try { localStorage.setItem('dvr-kb-log', JSON.stringify(log)); } catch (e) { /* storage off */ }
-  }
-
-  C._nameSysKeyboard = function () {
-    var self = this, st = this._nameState;
-    if (!st) return;
-    // One open per press (the headset's select and the game's trigger both arrive for one click)
-    var now = performance.now();
-    if (this._nameKbFor === st && now - (this._nameKbOpenedAt || 0) < 400) return;
-    this._nameKbOpenedAt = now;
-    this._nameKbFor = st;
-    // A fresh, plain, visible text field each time, as in Meta's WebXR keyboard sample
-    var old = document.getElementById('dvr-name-input');
-    if (old) { this._nameReopening = true; old.blur(); old.remove(); this._nameReopening = false; }
-    var input = document.createElement('input');
-    input.id = 'dvr-name-input';
-    input.type = 'text';
-    input.maxLength = MAX_LEN;
-    input.setAttribute('autocomplete', 'off');
-    input.setAttribute('aria-label', 'Player name');
-    input.style.cssText = 'position:fixed;left:8px;top:8px;width:260px;height:36px;font-size:20px;z-index:2147483647';
-    document.body.appendChild(input);
-    st.kbKeys = 0;
-    var take = function () {
-      if (self._nameState !== st) return;
-      if (input.value) { st.text = input.value.slice(0, MAX_LEN); st.msg = ''; }
-      if (self._nameCard) self._nameCard.dirty = true;
-    };
-    ['input', 'change', 'keyup', 'compositionend', 'beforeinput', 'compositionupdate'].forEach(function (t) {
-      input.addEventListener(t, function (e) { kbLog(t + (e.data ? ':' + e.data : ''), input.value); setTimeout(take, 0); take(); });
-    });
-    input.addEventListener('focus', function () { kbLog('focus', input.value); });
-    input.addEventListener('keydown', function (e) {
-      kbLog('keydown:' + e.key, input.value);
-      if (e.key !== 'Enter') {
-        st.kbKeys++;
-        // Keys but no text a moment later: the Meta keyboard isn't reaching the field here
-        clearTimeout(st.kbCheck);
-        st.kbCheck = setTimeout(function () {
-          if (self._nameState !== st || !st.sys || input.value) return;
-          kbLog('no-text-fallback', '');
-          self._nameKbFallback(st, input);
-        }, 1200);
-        return;
-      }
-      e.preventDefault();
-      take();
-      setTimeout(function () { self._nameKbClosed(st, input); }, 0);
-    });
-    input.addEventListener('blur', function () {
-      kbLog('blur', input.value);
-      if (self._nameReopening) return;
-      take();
-      setTimeout(function () { self._nameKbClosed(st, input); }, 50);
-    });
-    // The app window may not have focus while in VR; without it typed text is dropped
-    kbLog('open hasFocus=' + document.hasFocus(), '');
-    try { global.focus(); } catch (e) { /* ignore */ }
-    try { input.focus(); } catch (e) { kbLog('focus-failed', String(e)); }
-    kbLog('opened hasFocus=' + document.hasFocus() + ' active=' + (document.activeElement === input), '');
-  };
-
-  /** The Meta keyboard closed (its Done key, or dismissed). */
-  C._nameKbClosed = function (st, input) {
-    if (this._nameState !== st || st._closedFor === input) return;
-    st._closedFor = input;
-    if (input.value) st.text = input.value.slice(0, MAX_LEN);
-    if (st.text.trim().length >= 2) { this._onNameCard('done'); return; }
-    if (st.kbKeys > 0) { this._nameKbFallback(st, input); return; }
-    if (this._nameCard) this._nameCard.dirty = true;
-  };
-
-  /** Keys were pressed but no text arrived: close the Meta keyboard and use the in-game keys. */
-  C._nameKbFallback = function (st, input) {
-    st.forceKeys = true;
-    st.sys = false;
-    st.text = '';
-    st._closedFor = input;
-    st.msg = 'Type your name with these keys';
-    this._nameReopening = true;
-    try { input.blur(); } catch (e) { /* ignore */ }
-    this._nameReopening = false;
-    if (this._nameCard) this._nameCard.dirty = true;
-  };
-
-  function watchSelectForKeyboard(comp) {
-    var sc = comp.el.sceneEl;
-    function attach() {
-      var xr = sc.renderer && sc.renderer.xr;
-      var session = xr && xr.getSession && xr.getSession();
-      if (!session || session.__dvrKb) return;
-      session.__dvrKb = true;
-      session.addEventListener('selectstart', function (e) {
-        var st = comp._nameState;
-        if (!st || st.forceKeys || !comp._nameCard || !comp._nameCard.group.visible || !systemKeyboard(comp)) return;
-        var side = e.inputSource && e.inputSource.handedness;
-        var hand = document.getElementById(side === 'left' ? 'leftHand' : 'rightHand');
-        var pick = hand && comp._uiPickHand(hand);
-        kbLog('selectstart:' + (pick && pick.btn ? pick.btn.id : 'none'), '');
-        if (pick && pick.card === comp._nameCard && pick.btn && pick.btn.id === 'field') {
-          st.sys = true;
-          comp._nameSysKeyboard();
-        }
-      });
-    }
-    attach();                                  // already in VR
-    sc.addEventListener('enter-vr', attach);   // or when VR starts later
-  }
-
-  function blurNameInput() {
-    var input = document.getElementById('dvr-name-input');
-    if (input && document.activeElement === input) input.blur();
-  }
 
   C._nameClose = function (saved) {
     var st = this._nameState;
-    blurNameInput();
     this._uiHide(this._nameCard);
     this._nameState = null;
     store(ASKED_KEY, '1');
@@ -218,7 +84,6 @@
 
   C._drawNameCard = function (ctx, card) {
     var st = this._nameState || { text: '' };
-    if (this._nameState) st.sys = !st.forceKeys && systemKeyboard(this);
     var W = card.cw, pink = this._sideColorCss('blue');
     this._uiPanel(ctx, card);
     ctx.fillStyle = '#ffffff';
@@ -249,18 +114,6 @@
     ctx.textAlign = 'right';
     ctx.fillText(shown.length + '/' + MAX_LEN, fx + fw - 14, fy + fh - 16);
     ctx.textAlign = 'center';
-    if (st.sys) {
-      // Meta system keyboard does the typing; point at the field to bring it back
-      card.buttons.push({ id: 'field', x: fx, y: fy, w: fw, h: fh });
-      this._uiButton(ctx, card, { id: 'field', x: W / 2 - 200, y: 268, w: 400, h: 84, label: 'Open keyboard', size: 38 });
-      ctx.font = '400 28px ' + FONT;
-      ctx.fillStyle = TEXT2;
-      ctx.fillText('Type with the Meta keyboard and press its Done key.', W / 2, 382);
-      this._uiButton(ctx, card, { id: 'cancel', x: 120, y: 420, w: 260, h: 80, label: st.first ? 'Skip' : 'Cancel', size: 36 });
-      this._uiButton(ctx, card, { id: 'done', x: W - 380, y: 420, w: 260, h: 80, label: 'Done', primary: true, size: 38 });
-      card.redrawAt = performance.now() + 500;
-      return;
-    }
     // Keys
     var kw = 74, kh = 64, gap = 8, y = 250;
     var self = this;
@@ -292,7 +145,6 @@
     var st = this._nameState;
     if (!st) return;
     st.msg = '';
-    if (st.sys && (id.indexOf('k:') === 0 || id === 'back' || id === 'space' || id === 'shift')) return;
     if (id.indexOf('k:') === 0) {
       if (st.text.length < MAX_LEN) {
         st.text += id.slice(2);
@@ -304,16 +156,10 @@
       if (st.text && st.text.length < MAX_LEN && st.text[st.text.length - 1] !== ' ') st.text += ' ';
     } else if (id === 'shift') {
       st.shift = !st.shift;
-    } else if (id === 'field') {
-      this._nameSysKeyboard();
-      return;
     } else if (id === 'cancel') {
       this._nameClose(false);
       return;
     } else if (id === 'done') {
-      var input = document.getElementById('dvr-name-input');
-      if (st.sys && st.kbKeys > 0 && !(input && input.value) && !st.text) { this._nameKbFallback(st, input || document.body); return; }
-      if (st.sys && input && input.value) st.text = input.value.slice(0, MAX_LEN);
       var name = st.text || st.current;
       if (this.setPlayerName(name)) { this._nameClose(true); return; }
       st.msg = 'Use at least 2 letters or numbers';
@@ -328,7 +174,6 @@
     if (!comp || !comp._nameState || !comp._nameCard || !comp._nameCard.group.visible) return;
     if (e.target && /input|textarea/i.test(e.target.tagName)) return;
     var st = comp._nameState;
-    if (st.sys) return;
     if (e.key === 'Enter') comp._onNameCard('done');
     else if (e.key === 'Escape') comp._onNameCard('cancel');
     else if (e.key === 'Backspace') comp._onNameCard('back');
@@ -503,12 +348,6 @@
   // Caret blink: redraw the name card twice a second while it's open
   var origTick = C._uiTick;
   C._uiTick = function (now) {
-    var st = this._nameState;
-    if (st && st.sys && this._nameCard && this._nameCard.group.visible) {
-      var inp = document.getElementById('dvr-name-input');
-      var v = inp ? inp.value.slice(0, MAX_LEN) : '';
-      if (v && v !== st.text) { st.text = v; this._nameCard.dirty = true; if (v !== st._polled) kbLog('poll', v); st._polled = v; }
-    }
     if (this._nameCard && this._nameCard.group.visible && this._nameCard.redrawAt && now > this._nameCard.redrawAt) {
       this._nameCard.dirty = true;
     }
