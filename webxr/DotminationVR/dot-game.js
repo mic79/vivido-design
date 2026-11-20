@@ -458,7 +458,7 @@
     _ensureStationCard: function (side) {
       if (!this._stationCards) this._stationCards = {};
       if (this._stationCards[side]) return this._stationCards[side];
-      var card = this._makeCanvasPlane(0.34, 0.40, 480, 560);
+      var card = this._makeCanvasPlane(0.34, 0.47, 480, 658);
       card.group.children[1].visible = false; // one-sided: faces its own seat
       card.side = side;
       this._sceneRoot.add(card.group);
@@ -472,7 +472,8 @@
       if (!card || !stats) return;
       var f = stats.cardFields(now);
       var nick = this._sideNickname(side);
-      var key = [nick, f.blocks, f.blockRate, f.attacks, f.attackRate, f.time.slice(0, -3)].join('|');
+      var mode = this._modeText();
+      var key = [nick, mode, f.blocks, f.blockRate, f.attacks, f.attackRate, f.time.slice(0, -3)].join('|');
       if (card.last === key) return;
       card.last = key;
       var ctx = card.ctx;
@@ -503,6 +504,7 @@
         }
         y += 78;
       }
+      block('Mode', mode, null);   // as in the 2D footer: Level N / Random / Multiplayer
       block('Moves', f.blocks, null); // no per-minute rate: StacksVR speed stat, meaningless turn-based
       block('Chains', stats.chains | 0, null);
       block('Time', f.time, null);
@@ -529,6 +531,15 @@
         return null;
       }
       return 'blue';
+    },
+
+    /** Mode line for the station cards (2D footer: layers + level, shuffle, users). */
+    _modeText: function () {
+      if (this._tutorial) return 'How to play';
+      if (this._dualBotPreview) return 'Demo';
+      if (global.isMultiplayer) return 'Multiplayer';
+      var lvl = this.matchActive ? this._levelMatch : (this.level || 0);
+      return lvl > 0 ? 'Level ' + lvl : 'Random';
     },
 
     _modeTitle: function () {

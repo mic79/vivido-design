@@ -2,11 +2,9 @@
 //   • Returning players start straight in a match against the bot (index.html enter-vr).
 //   • First-time players get the name + welcome cards over the bot demo; closing the welcome
 //     card also starts a match, so nobody is left watching the demo without a way in.
-//   • A footer under the board, like the 2D game's footer under the field:
-//       [☰ Menu (X)]  ……  [mode: Level 12 / Random / Multiplayer]
-//     Both are buttons (point + trigger, pinch or poke): Menu opens the menu, the mode opens
-//     the menu on that mode's page. X on the left controller still opens the menu too.
-//     The footer stays parallel to the board on your side; it doesn't turn with your head.
+//   • A "☰ Menu (X)" button under the board (point + trigger, pinch or poke; X on the left
+//     controller still works). It stays parallel to the board on your side and doesn't turn
+//     with your head. The mode / level is on the station card next to the time (dot-game.js).
 // Uses the dot-ui.js card system; loaded after dot-ui.js / dot-player.js.
 (function (global) {
   'use strict';
@@ -17,7 +15,7 @@
   var C = AFRAME.components['dot-game'].Component.prototype;
   var UI = global.DotUI;
   var FONT = UI.FONT;
-  var FOOT_W = 0.74, FOOT_H = 0.085;          // ≈ board width; 1400 px/m canvas
+  var FOOT_W = 0.3, FOOT_H = 0.085;           // 1400 px/m canvas
 
   function menuComp() {
     var m = document.querySelector('[vr-menu]');
@@ -31,16 +29,6 @@
     if (!this._isPresenting || !this._isPresenting()) return false;
     if (global.isMobileSpectator) return false;
     return true;
-  };
-
-  // What's being played, as in the 2D footer (layers + level number, shuffle, users)
-  C._footMode = function () {
-    if (this._tutorial) return { icon: 'cap', text: 'How to play' };
-    if (this._dualBotPreview) return { icon: 'shuffle', text: 'Bot demo' };
-    if (global.isMultiplayer) return { icon: 'users', text: 'Multiplayer' };
-    var lvl = this.matchActive ? this._levelMatch : (this.level || 0);
-    if (lvl > 0) return { icon: 'layers', text: 'Level ' + lvl };
-    return { icon: 'shuffle', text: 'Random' };
   };
 
   // Which side of the board you're on: your seat, else where your head is
@@ -65,7 +53,7 @@
   };
 
   // Rounded pill with generous padding; returns its width
-  function pill(ctx, card, id, x, H, parts, alignRight, pink) {
+  function pill(ctx, card, id, W, H, parts, pink) {
     var hov = card.hover === id;
     var padX = 46, gap = 22, iconS = 46, h = 88, r = h / 2;
     ctx.font = '700 46px ' + FONT;
@@ -73,7 +61,7 @@
     parts.forEach(function (pt, i) {
       w += (pt.icon ? iconS : pt.badge ? 52 : ctx.measureText(pt.text).width) + (i ? gap : 0);
     });
-    var x0 = alignRight ? x - w : x, y0 = (H - h) / 2;
+    var x0 = (W - w) / 2, y0 = (H - h) / 2;
     UI.roundRect(ctx, x0, y0, w, h, r);
     ctx.fillStyle = hov ? '#466f6f' : 'rgba(28,48,48,0.94)';
     ctx.fill();
@@ -113,16 +101,12 @@
     var W = card.cw, H = card.ch, pink = this._sideColorCss('blue');
     var menuParts = [{ icon: 'menu' }, { text: 'Menu' }];
     if (!usingHands()) menuParts.push({ badge: 'X' });
-    pill(ctx, card, 'menu', 6, H, menuParts, false, pink);
-    var m = this._footMode();
-    pill(ctx, card, 'mode', W - 6, H, [{ icon: m.icon }, { text: m.text }], true, pink);
+    pill(ctx, card, 'menu', W, H, menuParts, pink);
   };
 
-  C._onFoot = function (id) {
+  C._onFoot = function () {
     var menu = menuComp();
-    if (!menu) return;
-    if (!menu.menuVisible) menu.toggleMenu();
-    if (id === 'mode') menu.handleAction(global.isMultiplayer ? 'mode-multi' : 'mode-single');
+    if (menu && !menu.menuVisible) menu.toggleMenu();
   };
 
   // Closing the welcome card (✕) leaves you in a match, as in the 2D game
@@ -149,8 +133,8 @@
     f.fixedYaw = side > 0 ? 0 : Math.PI;
     if (f.group.visible) f.group.position.set(p.x, p.y, p.z);
     else this._uiShow(f, p);
-    var key = JSON.stringify(this._footMode()) + usingHands();
-    if (key !== f.key) { f.key = key; f.dirty = true; }
+    var hands = usingHands();
+    if (hands !== f.hands) { f.hands = hands; f.dirty = true; }
   };
 
   var origTick = C._uiTick;
