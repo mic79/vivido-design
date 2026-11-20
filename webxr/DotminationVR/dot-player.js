@@ -93,6 +93,7 @@
     var log = global.__dvrKbLog = global.__dvrKbLog || [];
     log.push({ t: Math.round(performance.now()), type: type, value: value });
     if (log.length > 60) log.shift();
+    try { localStorage.setItem('dvr-kb-log', JSON.stringify(log)); } catch (e) { /* storage off */ }
   }
 
   C._nameSysKeyboard = function () {
@@ -116,6 +117,12 @@
         if (input.value || e.type === 'input') st.text = input.value.slice(0, MAX_LEN);
         st.msg = '';
         if (self._nameCard) self._nameCard.dirty = true;
+        // Meta keyboard's Done (or closing it) blurs the field: a typed name is saved right away
+        if (e.type === 'blur' && !self._nameReopening && st.sys && st.text.trim().length >= 2) {
+          setTimeout(function () {
+            if (self._nameState === st) self._onNameCard('done');
+          }, 0);
+        }
       };
       ['input', 'change', 'keyup', 'compositionend', 'blur'].forEach(function (t) { input.addEventListener(t, sync); });
       input.addEventListener('focus', function () { kbLog('focus', input.value); });
@@ -129,7 +136,9 @@
       });
     }
     // Reopen reliably: a field that still has focus does not bring the keyboard back
+    this._nameReopening = true;
     if (document.activeElement === input) input.blur();
+    this._nameReopening = false;
     input.value = (this._nameState && this._nameState.text) || '';
     kbLog('open', input.value);
     try { input.focus(); } catch (e) { kbLog('focus-failed', String(e)); }
@@ -212,7 +221,7 @@
       this._uiButton(ctx, card, { id: 'field', x: W / 2 - 200, y: 268, w: 400, h: 84, label: 'Open keyboard', size: 38 });
       ctx.font = '400 28px ' + FONT;
       ctx.fillStyle = TEXT2;
-      ctx.fillText('Type with the Meta keyboard, then press Done.', W / 2, 382);
+      ctx.fillText('Type with the Meta keyboard and press its Done key.', W / 2, 382);
       this._uiButton(ctx, card, { id: 'cancel', x: 120, y: 420, w: 260, h: 80, label: st.first ? 'Skip' : 'Cancel', size: 36 });
       this._uiButton(ctx, card, { id: 'done', x: W - 380, y: 420, w: 260, h: 80, label: 'Done', primary: true, size: 38 });
       card.redrawAt = performance.now() + 500;
@@ -462,6 +471,12 @@
   // Caret blink: redraw the name card twice a second while it's open
   var origTick = C._uiTick;
   C._uiTick = function (now) {
+    var st = this._nameState;
+    if (st && st.sys && this._nameCard && this._nameCard.group.visible) {
+      var inp = document.getElementById('dvr-name-input');
+      var v = inp ? inp.value.slice(0, MAX_LEN) : '';
+      if (v && v !== st.text) { st.text = v; this._nameCard.dirty = true; if (v !== st._polled) kbLog('poll', v); st._polled = v; }
+    }
     if (this._nameCard && this._nameCard.group.visible && this._nameCard.redrawAt && now > this._nameCard.redrawAt) {
       this._nameCard.dirty = true;
     }
