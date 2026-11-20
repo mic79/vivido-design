@@ -109,6 +109,24 @@
     if (menu && !menu.menuVisible) menu.toggleMenu();
   };
 
+  // Restart (2D: Time panel → Restart): same level, or the same Random map, from the start
+  C.canRestartMatch = function () {
+    if (global.isMultiplayer || global.isMobileSpectator) return false;
+    if (!this.matchActive || this._dualBotPreview || this._tutorial) return false;
+    if (global.FlatCompat && global.FlatCompat.connected) return false;   // cross-play opponent
+    return true;
+  };
+  C.restartMatch = function () {
+    if (!this.canRestartMatch()) return false;
+    var seed = this.bagSeed, lvl = this._levelMatch | 0;
+    this.onMatchEnded({ cancelled: true, voluntary: true });
+    if (this._endCard) this._uiHide(this._endCard);
+    if (lvl > 0 && this.level !== lvl) this.setLevel(lvl);
+    global.isLobbyBotMatch = true;
+    this.onMatchStarted({ blue: 'local', red: '__BOT__' }, Date.now(), true, seed);
+    return true;
+  };
+
   // Closing the welcome card (✕) leaves you in a match, as in the 2D game
   var origOnWelcome = C._onWelcome;
   C._onWelcome = function (id) {

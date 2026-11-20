@@ -753,9 +753,9 @@
               this.refreshLobbyUI();
               break;
             }
+            // Menu stays open: the button turns back into START so you can pick what's next
             if (comp) comp.endMatch();
             this.refreshLobbyUI();
-            this.closeMenu();
             break;
           }
           // Non-host clients must not see a working Start — host owns seating/bot fill
@@ -800,6 +800,10 @@
           }
           this.refreshLobbyUI();
           this.closeMenu();
+          break;
+        case 'restart-match':
+          if (comp && comp.restartMatch && comp.restartMatch()) this.closeMenu();
+          this.refreshLobbyUI();
           break;
         case 'end-match':
           if (this._canControlMatch() && comp) comp.endMatch();
@@ -1347,6 +1351,19 @@
       btn.dataset.baseColor = color;
       btn.dataset.hoverColor = lightenHex(color, 0.42);
       btn.setAttribute('data-action', action);
+      // Solo match running: RESTART | END MATCH side by side (2D: Time panel → Restart)
+      var rs = document.getElementById('menu-restart-match');
+      var ge = document.querySelector('[dot-game]');
+      var comp = ge && ge.components && ge.components['dot-game'];
+      var restart = !!(playing && canControl && comp && comp.canRestartMatch && comp.canRestartMatch());
+      if (rs) {
+        rs.setAttribute('visible', restart);
+        if (rs.object3D) rs.object3D.visible = restart;
+      }
+      var half = restart ? 0.155 : 0.32;
+      btn.setAttribute('geometry', 'width', half);
+      btn.setAttribute('position', { x: restart ? 0.0825 : 0, y: -0.22, z: 0.002 });
+      if (txt) txt.setAttribute('width', restart ? 0.36 : 0.48);
     },
 
     _nickForLobby: function (ls, id) {

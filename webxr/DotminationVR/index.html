@@ -10,7 +10,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below).
        Meta name kept from StacksVR so the shared modules read window.STACKS_VERSION. -->
-  <meta name="stacks-version" content="0.2.28" />
+  <meta name="stacks-version" content="0.2.29" />
   <title>DotminationVR</title>
   <!-- Installable web app; also the base of the Meta Quest store package (Bubblewrap / TWA) -->
   <link rel="manifest" href="manifest.webmanifest" />
@@ -48,7 +48,7 @@
   <script src="lobby.js?v=20"></script>
   <script src="match-replay.js?v=20"></script>
   <script src="stacks-audio.js?v=20"></script>
-  <script src="game-menu.js?v=23"></script>
+  <script src="game-menu.js?v=24"></script>
   <script src="mixamo-body.js?v=20"></script>
   <script src="locomotion.js?v=20"></script>
   <script src="hand-input.js?v=6"></script>
@@ -57,7 +57,7 @@
   <script src="dot-game.js?v=27"></script>
   <script src="dot-ui.js?v=21"></script>
   <script src="dot-player.js?v=11"></script>
-  <script src="dot-start.js?v=4"></script>
+  <script src="dot-start.js?v=5"></script>
   <script src="flat-compat.js?v=22"></script>
   <script src="mobile-spectator.js?v=20"></script>
 
@@ -852,6 +852,12 @@
               geometry="primitive: box; width: 0.32; height: 0.07; depth: 0.01"
               material="color: #E11168; shader: flat">
               <a-text id="menu-start-match-text" value="START vs BOT" align="center" width="0.48" color="#ffffff" position="0 0 0.007"></a-text>
+            </a-entity>
+            <!-- RESTART: shown left of END MATCH during a solo match (2D: Time panel → Restart) -->
+            <a-entity class="menu-btn clickable" data-action="restart-match" id="menu-restart-match" visible="false" position="-0.0825 -0.22 0.002"
+              geometry="primitive: box; width: 0.155; height: 0.07; depth: 0.01"
+              material="color: #3b6161; shader: flat">
+              <a-text value="RESTART" align="center" width="0.36" color="#ffffff" position="0 0 0.007"></a-text>
             </a-entity>
             <a-text id="menu-live-text" value="" position="0 -0.262 0.002" align="center" width="0.5" color="#12DACE"></a-text>
             <!-- JOIN: someone hosts a match you can join now (vivido-hub live activity) -->
