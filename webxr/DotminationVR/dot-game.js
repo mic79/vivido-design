@@ -234,9 +234,12 @@
     _placeBotAnchors: function () {
       var lay = this._layout;
       var cb = document.getElementById('cup-bot');
-      if (cb) cb.setAttribute('position', lay.seats.red.x + ' 1.45 ' + (lay.seats.red.z - 0.22));
+      // Bots stand within arm's reach of the board (like someone at a whiteboard), so a poke is a
+      // lean and a reach, not a lunge
+      var BOT_STAND = 0.30;
+      if (cb) cb.setAttribute('position', lay.seats.red.x + ' 1.45 ' + (-BOT_STAND));
       var sb = document.getElementById('spec-blue-anchor');
-      if (sb) sb.setAttribute('position', lay.seats.blue.x + ' 1.45 ' + (lay.seats.blue.z + 0.22)); // mirror of cup-bot
+      if (sb) sb.setAttribute('position', lay.seats.blue.x + ' 1.45 ' + BOT_STAND); // mirror of cup-bot
     },
 
     _placeOfflinePlayer: function () {
@@ -1130,7 +1133,7 @@
         b._botPick = null;
       }
       // Pick a little early so the bot avatar can reach toward the dot
-      if (b._botPick == null && now >= b._dueAt - 650) {
+      if (b._botPick == null && now >= b._dueAt - 900) {
         b._botPick = global.DotBot.chooseMove(b.state, actor, otherSide(actor), this._botDifficulty(),
           { recent: this._recent[actor] });
         b.view.setBotChoice(b._botPick); // original bot-choice highlight
@@ -1165,7 +1168,7 @@
       var body = document.getElementById(blueBot ? 'spec-blue-body' : 'bot-body');
       if (!body || !body.object3D || !body.object3D.visible) return;
       var w = board.view.cellWorld(idx, new THREE.Vector3());
-      var span = 650;
+      var span = 900;   // most of the bot's 1 s "thinking" time, so the reach is unhurried
       var p = 1 - Math.max(0, Math.min(1, (board._dueAt - now) / span));
       // Fingertip stops just in front of the glass on the bot's own side
       global[blueBot ? 'botReactionTargetBlue' : 'botReactionTarget'] = {

@@ -1312,20 +1312,34 @@
             pokeSide = (pokeTarget.x - bodyCenter.x) * fsPoke >= 0 ? 'left' : 'right';
             var shoulder = this.bones[pokeSide + 'Shoulder'];
             if (shoulder) {
+              // Residual step (only for far corners): from the shoulder as it would be without any step
               var sh = new THREE.Vector3();
               shoulder.getWorldPosition(sh);
-              var reach = (this.config.upperArmLength + this.config.lowerArmLength) * 0.9;
-              var need = (this._pokeStep || 0) * pe + sh.distanceTo(pokeTarget) - reach;   // step that makes it reachable
-              this._pokeStepTarget = Math.max(0, Math.min(0.7, need / Math.max(0.3, pe)));
+              sh.z -= fsPoke * (this._pokeApplied || 0);
+              sh.y += this._crouchApplied || 0;
+              // Low dots: bend the knees (crouch) rather than reaching down and hooking back
+              this._crouchTarget = Math.max(0, Math.min(0.2, (sh.y - pokeTarget.y) - 0.2));   // feet start 0.2 above the floor
+              sh.y -= this._crouchTarget;
+              this._pokeShoulder = (this._pokeShoulder || new THREE.Vector3()).copy(sh);
+              var reach = (this.config.upperArmLength + this.config.lowerArmLength) * 0.92;
+              var horiz = Math.abs(pokeTarget.z - sh.z);
+              var rest = Math.sqrt(Math.max(0, sh.distanceToSquared(pokeTarget) - horiz * horiz));
+              var reachZ = Math.sqrt(Math.max(0, reach * reach - rest * rest));
+              this._pokeStepTarget = Math.max(0, Math.min(0.3, horiz - reachZ));
+              this._pokeDrop = Math.max(0, Math.min(1, (sh.y - pokeTarget.y) / 0.6));   // how low the dot is
             }
-            this._pokeStep = (this._pokeStep || 0) + ((this._pokeStepTarget || 0) - (this._pokeStep || 0)) * 0.15;
+            this._pokeStep = (this._pokeStep || 0) + ((this._pokeStepTarget || 0) - (this._pokeStep || 0)) * 0.08;
+            this._crouch = (this._crouch || 0) + ((this._crouchTarget || 0) - (this._crouch || 0)) * 0.08;
           } else {
             this._pokeStep = 0;
+            this._crouch = 0;
             this._pokeCorr.multiplyScalar(0.9);
           }
-          // Offset actually applied: follows the step while poking, eases back out afterwards
+          // Offsets actually applied: follow the step / crouch while poking, ease back out afterwards
           this._pokeApplied = poke ? this._pokeStep * pe : (this._pokeApplied || 0) * 0.85;
+          this._crouchApplied = poke ? this._crouch * pe : (this._crouchApplied || 0) * 0.85;
           if (this._pokeApplied > 0.001) bodyCenter.z += fsPoke * this._pokeApplied;
+          if (this._crouchApplied > 0.001) bodyCenter.y -= this._crouchApplied;
 
           // Head is ~0.3m above the body center
           headPos = new THREE.Vector3(bodyCenter.x, bodyCenter.y + 0.3, bodyCenter.z);
@@ -1364,7 +1378,11 @@
             restHand.lerp(new THREE.Vector3(restHand.x, bodyCenter.y - 0.42, bodyCenter.z + fs * 0.08), pe);
             var fingerLen = 0.17;   // wrist -> fingertip, before the measured correction
             var basePos = pokeSide === 'left' ? leftHandPos : rightHandPos;
-            var dir = pokeTarget.clone().sub(basePos).normalize();
+            // Reach direction: from the shoulder to the dot, blended with straight ahead so the
+            // finger always comes at the board from the front
+            var from = this._pokeShoulder || basePos;
+            var dir = pokeTarget.clone().sub(from).normalize()
+              .add(new THREE.Vector3(0, 0, fsPoke * 2.5)).normalize();
             var wristT = pokeTarget.clone().addScaledVector(dir, -fingerLen).add(this._pokeCorr);
             basePos.lerp(wristT, pe);
             // Hand points along the reach (-Z forward, like a controller)
@@ -1376,19 +1394,14 @@
             (pokeSide === 'left' ? leftHandQuat : rightHandQuat).slerp(pointQuat, pe);
             // Look at the dot
             var lookQuat = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(headPos, pokeTarget, new THREE.Vector3(0, 1, 0)));
-            headQuat.slerp(lookQuat, 0.7 * pe);
-            this._pokeLean = 0.28 * pe;   // extra forward bend of the spine
+            headQuat.slerp(lookQuat, 0.4 * pe);
+            this._pokeLean = (0.12 + 0.22 * (this._pokeDrop || 0)) * pe;   // gentle bend, more for low dots
           } else {
             this._pokeLean = 0;
           }
 
-          if (rt && rt.progress > 0) {
-            if (this.previousHeadPosInitialized) {
-              this.headVelocity.subVectors(headPos, this.previousHeadPos).multiplyScalar(1 / dt);
-            }
-          } else {
-            this.headVelocity.set(0, 0, 0);
-          }
+          // No "walking" lean for the bot: its poke step must not throw the torso/head around
+          this.headVelocity.set(0, 0, 0);
           if (!this.previousHeadPosInitialized) this.previousHeadPosInitialized = true;
           this.previousHeadPos.copy(headPos);
 
