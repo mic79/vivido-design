@@ -289,6 +289,7 @@
       global.VividoHub.submitScore(level, elapsedMs).then(function (r) {
         if (!r || !r.rank) return;
         self._worldRank = { level: level, rank: r.rank, total: r.total };
+        self._loadWorldBests(performance.now(), true);   // a new world best shows right away
         var e = self._endInfo;
         if (e && e._level === level && String(e.sub || '').indexOf('World #') < 0) {
           e.sub = (e.sub || '') + '  ·  World #' + r.rank;
@@ -458,7 +459,7 @@
     _ensureStationCard: function (side) {
       if (!this._stationCards) this._stationCards = {};
       if (this._stationCards[side]) return this._stationCards[side];
-      var card = this._makeCanvasPlane(0.34, 0.47, 480, 658);
+      var card = this._makeCanvasPlane(0.34, 0.5, 480, 702);
       card.group.children[1].visible = false; // one-sided: faces its own seat
       card.side = side;
       this._sceneRoot.add(card.group);
@@ -473,7 +474,8 @@
       var f = stats.cardFields(now);
       var nick = this._sideNickname(side);
       var mode = this._modeText();
-      var key = [nick, mode, f.blocks, f.blockRate, f.attacks, f.attackRate, f.time.slice(0, -3)].join('|');
+      var bestLine = this._bestLine(now);
+      var key = [nick, mode, bestLine, f.blocks, f.blockRate, f.attacks, f.attackRate, f.time.slice(0, -3)].join('|');
       if (card.last === key) return;
       card.last = key;
       var ctx = card.ctx;
@@ -505,6 +507,13 @@
         y += 78;
       }
       block('Mode', mode, null);   // as in the 2D footer: Level N / Random / Multiplayer
+      if (bestLine) {                // Level mode: your best · world best
+        ctx.font = "400 34px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
+        ctx.fillStyle = '#b4c8c8';
+        ctx.fillText(bestLine, left, y - 18);
+        ctx.fillStyle = '#ffffff';
+        y += 46;
+      }
       block('Moves', f.blocks, null); // no per-minute rate: StacksVR speed stat, meaningless turn-based
       block('Chains', stats.chains | 0, null);
       block('Time', f.time, null);
@@ -531,6 +540,43 @@
         return null;
       }
       return 'blue';
+    },
+
+    /** "Best 0:42.10 · World 0:38" for the level being played (stats card). */
+    _bestLine: function (now) {
+      var lvl = this.matchActive && !this._dualBotPreview && !this._tutorial ? this._levelMatch : 0;
+      if (!(lvl > 0)) return '';
+      var e = this.progress && this.progress.levels['level' + lvl];
+      function short(secs) { secs = Math.round(secs); return Math.floor(secs / 60) + ':' + ('0' + (secs % 60)).slice(-2); }
+      var mine = e && e.time ? timeSecs(e.time) : Infinity;
+      var parts = ['Best ' + (isFinite(mine) ? short(mine) : '–')];
+      this._loadWorldBests(now);
+      var w = this._worldBests && this._worldBests[lvl];
+      if (w) parts.push('World ' + short(w.best / 1000));
+      return parts.join('  ·  ');
+    },
+
+    /** World best per level from vivido-hub (only levels somebody finished). Cached 2 min. */
+    _loadWorldBests: function (now, force) {
+      var H = global.VividoHub;
+      if (!H || !H.app || !H.levels || this._wbLoading) return;
+      now = now || performance.now();
+      if (!force && this._wbAt && now - this._wbAt < 120000) return;
+      var self = this;
+      this._wbLoading = true;
+      this._wbAt = now;
+      H.levels().then(function (d) {
+        self._wbLoading = false;
+        if (d && d.levels) self._setWorldLevels(d.levels);
+      });
+    },
+
+    _setWorldLevels: function (levels) {
+      var m = {};
+      levels.forEach(function (r) { m[r.level] = r; });
+      this._worldBests = m;
+      this._worldLevels = levels;
+      if (this._stationCards) for (var k in this._stationCards) this._stationCards[k].last = '';
     },
 
     /** Mode line for the station cards (2D footer: layers + level, shuffle, users). */

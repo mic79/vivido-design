@@ -16,6 +16,8 @@
  *   POST /v1/score  { app, id, nick, level, ms }     → { best, rank, total }
  *   GET  /v1/top?level=N&id=…                        → { top: [...], me }
  *   GET  /v1/top?overall=1&id=…                      → { top: [...], me }
+ *   GET  /v1/levels?id=…                             → { levels: [{ level, best, nick, players, mine, rank }] }
+ *                                                       (only levels somebody has finished)
  *   POST /v1/nick   { id, nick }                     → { nick }
  */
 
@@ -235,6 +237,33 @@ export class Hub {
       }
       const total = this.sql.exec('SELECT COUNT(*) AS c FROM scores WHERE level = ?', level).toArray()[0].c;
       return Response.json({ level, top: top.map((r) => ({ nick: r.nick, ms: r.ms, app: r.app, me: r.id === me })), me: mine, total });
+    }
+
+    if (url.pathname === '/v1/levels' && request.method === 'GET') {
+      // One row per level that has times: world best (+ holder), player count, your best + rank
+      const me = cleanId(url.searchParams.get('id') || '') || '';
+      const rows = this.sql.exec(`SELECT level, MIN(ms) AS best, COUNT(*) AS players,
+        MAX(CASE WHEN id = ? THEN ms END) AS mine FROM scores GROUP BY level ORDER BY level`, me).toArray();
+      const holders = {};
+      for (const h of this.sql.exec(`SELECT s.level, COALESCE(p.nick, 'Player') AS nick, s.id FROM scores s
+        JOIN (SELECT level, MIN(ms) AS m FROM scores GROUP BY level) b ON b.level = s.level AND b.m = s.ms
+        LEFT JOIN players p ON p.id = s.id ORDER BY s.at ASC`).toArray()) {
+        if (!holders[h.level]) holders[h.level] = h;
+      }
+      const ranks = {};
+      if (me) {
+        for (const r of this.sql.exec(`SELECT s.level, COUNT(*) AS c FROM scores s
+          JOIN scores m ON m.level = s.level AND m.id = ? WHERE s.ms < m.ms GROUP BY s.level`, me).toArray()) {
+          ranks[r.level] = r.c;
+        }
+      }
+      return Response.json({ levels: rows.map((r) => ({
+        level: r.level, best: r.best, players: r.players,
+        nick: holders[r.level] ? holders[r.level].nick : 'Player',
+        meBest: !!(holders[r.level] && holders[r.level].id === me),
+        mine: r.mine == null ? null : r.mine,
+        rank: r.mine == null ? null : (ranks[r.level] || 0) + 1,
+      })) });
     }
 
     if (url.pathname === '/v1/nick' && request.method === 'POST') {

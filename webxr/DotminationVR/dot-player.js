@@ -197,16 +197,20 @@
   };
 
   // ── World Rankings ───────────────────────────────────────────────────────
+  // Levels tab: only levels somebody has finished, 6 per page, each with Play.
+  // Tap a row for that level's top 10. Overall tab: most levels, then fastest total.
+  var RK_PER_PAGE = 6;
+
   C._rkOpen = function (level) {
     if (!this._uiReady) this._uiInit();
     if (!this._uiReady) return;
     if (!this._rkCard) {
       this._rkCard = this._uiCard('rankings', 0.66, 0.8, this._drawRkCard.bind(this), this._onRkCard.bind(this));
     }
-    var info = this.levelInfo ? this.levelInfo() : { level: 1, max: 200 };
-    this._rk = this._rk || { tab: 'level' };
-    this._rk.level = Math.min(LEVELS, Math.max(1, level || (info.level > 0 ? info.level : this._rk.level) || 1));
-    this._rk.max = LEVELS;
+    this._rk = this._rk || { tab: 'levels', view: 'list', page: 0 };
+    this._rk.tab = 'levels';
+    if (level > 0) { this._rk.view = 'level'; this._rk.level = Math.min(LEVELS, level | 0); }
+    else this._rk.view = 'list';
     if (this._nameCard) this._uiHide(this._nameCard);
     this._uiShow(this._rkCard, this._uiFrontPos(0.08));
     this._rkLoad();
@@ -220,125 +224,214 @@
     if (!H || !H.app) { rk.state = 'off'; this._rkCard.dirty = true; return; }
     var req = ++rk.req || (rk.req = 1);
     this._rkCard.dirty = true;
-    var p = rk.tab === 'overall' ? H.overall() : H.top(rk.level);
+    var p = rk.tab === 'overall' ? H.overall()
+      : rk.view === 'level' ? H.top(rk.level)
+      : (H.levels ? H.levels() : Promise.resolve(null));
     p.then(function (d) {
       if (rk.req !== req) return;
       rk.data = d;
       rk.state = d ? 'ok' : 'off';
+      if (d && d.levels) {
+        rk.list = d.levels;
+        if (self._setWorldLevels) self._setWorldLevels(d.levels);
+        rk.page = Math.min(rk.page || 0, Math.max(0, Math.ceil(d.levels.length / RK_PER_PAGE) - 1));
+      }
       if (self._rkCard) self._rkCard.dirty = true;
     });
   };
 
+  C._rkUnlocked = function (n) {
+    var info = this.levelInfo ? this.levelInfo() : { max: 1 };
+    return n >= 1 && n <= (info.max || 1);
+  };
+
+  // Play / lock in a row or header (no Play while in a multiplayer lobby)
+  C._rkPlayBtn = function (ctx, card, n, x, y, w, h) {
+    if (global.isMultiplayer) return;
+    if (this._rkUnlocked(n)) {
+      this._uiButton(ctx, card, { id: 'play:' + n, x: x, y: y, w: w, h: h, label: 'Play', icon: 'arrow', primary: true, size: 32 });
+    } else {
+      ctx.font = '400 28px ' + FONT;
+      ctx.fillStyle = TEXT2;
+      ctx.fillText('Locked', x + w / 2, y + h / 2 + 2);
+    }
+  };
+
   C._drawRkCard = function (ctx, card) {
     var W = card.cw, rk = this._rk || {}, pink = this._sideColorCss('blue'), teal = '#12DACE';
+    var fmt = global.VividoHub ? global.VividoHub.fmtMs : function (ms) { return String(ms); };
     this._uiPanel(ctx, card);
     ctx.fillStyle = '#ffffff';
     ctx.font = '700 56px ' + FONT;
     ctx.fillText('World Rankings', W / 2, 80);
     this._uiButton(ctx, card, { id: 'close', x: W - 104, y: 44, w: 60, h: 60, label: '', icon: 'x', size: 40 });
-    // Tabs
     var tw = 250, ty = 128;
-    this._uiButton(ctx, card, { id: 'tab-level', x: W / 2 - tw - 10, y: ty, w: tw, h: 64, label: 'This level', primary: rk.tab === 'level', size: 34 });
+    this._uiButton(ctx, card, { id: 'tab-levels', x: W / 2 - tw - 10, y: ty, w: tw, h: 64, label: 'Levels', primary: rk.tab === 'levels', size: 34 });
     this._uiButton(ctx, card, { id: 'tab-overall', x: W / 2 + 10, y: ty, w: tw, h: 64, label: 'Overall', primary: rk.tab === 'overall', size: 34 });
-    var y = 236;
-    if (rk.tab === 'level') {
-      // Arrows stop at level 1 and level 200 (no wrap-around)
-      if (rk.level > 1) this._uiButton(ctx, card, { id: 'prev', x: 150, y: y - 34, w: 76, h: 68, label: '<', size: 40 });
-      if (rk.level < rk.max) this._uiButton(ctx, card, { id: 'next', x: W - 226, y: y - 34, w: 76, h: 68, label: '>', size: 40 });
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '700 44px ' + FONT;
-      ctx.fillText('Level ' + rk.level, W / 2, y);
-    } else {
-      ctx.fillStyle = TEXT2;
-      ctx.font = '400 32px ' + FONT;
-      ctx.fillText('Most levels finished, then the fastest total time', W / 2, y);
-    }
-    // List
-    var top = 300, rowH = 58, x0 = 90, x1 = W - 90;
-    ctx.font = '400 26px ' + FONT;
-    ctx.fillStyle = TEXT2;
-    ctx.textAlign = 'left';
-    ctx.fillText('#', x0, top);
-    ctx.fillText('Player', x0 + 80, top);
-    ctx.textAlign = 'right';
-    ctx.fillText(rk.tab === 'overall' ? 'Levels · total time' : 'Time', x1, top);
-    ctx.textAlign = 'center';
+    var x0 = 70, x1 = W - 70, y = 236;
     var d = rk.data;
-    var rows = (d && d.top) || [];
-    var ly = top + 50;
-    if (rk.state === 'loading') {
+
+    function message(a, b) {
       ctx.fillStyle = TEXT2; ctx.font = '400 34px ' + FONT;
-      ctx.fillText('Loading…', W / 2, ly + 120);
-    } else if (rk.state === 'off') {
-      ctx.fillStyle = TEXT2; ctx.font = '400 32px ' + FONT;
-      ctx.fillText('The rankings are not available right now.', W / 2, ly + 100);
-      ctx.fillText('Your times are saved on this headset.', W / 2, ly + 146);
-    } else if (!rows.length) {
-      ctx.fillStyle = TEXT2; ctx.font = '400 34px ' + FONT;
-      ctx.fillText(rk.tab === 'overall' ? 'No rankings yet.' : 'Nobody has finished this level yet.', W / 2, ly + 100);
-      if (rk.tab === 'level') ctx.fillText('Be the first!', W / 2, ly + 148);
-    } else {
-      var fmt = global.VividoHub.fmtMs;
-      rows.forEach(function (r, i) {
-        var yy = ly + i * rowH;
-        if (r.me) {
-          UI.roundRect(ctx, x0 - 24, yy - rowH / 2 + 4, x1 - x0 + 48, rowH - 8, 12);
-          ctx.fillStyle = 'rgba(225,17,104,0.22)';
-          ctx.fill();
-        }
-        var col = r.me ? pink : '#ffffff';
-        ctx.textAlign = 'left';
-        ctx.font = '700 34px ' + FONT;
-        ctx.fillStyle = i < 3 ? UI.STAR_ON : TEXT2;
-        ctx.fillText(String(i + 1), x0, yy);
-        ctx.fillStyle = col;
-        var name = String(r.nick || 'Player') + (r.me ? ' (you)' : '');
-        fitText(ctx, name, '700', 34, x1 - x0 - 330);
-        ctx.fillText(name, x0 + 80, yy);
-        ctx.textAlign = 'right';
-        ctx.font = '700 34px ' + FONT;
-        ctx.fillStyle = r.me ? pink : teal;
-        var val = rk.tab === 'overall'
-          ? r.levels + (r.levels === 1 ? ' level · ' : ' levels · ') + fmt(r.totalMs)
-          : fmt(r.ms);
-        ctx.fillText(val, x1, yy);
-        ctx.textAlign = 'center';
-      });
+      ctx.fillText(a, W / 2, 470);
+      if (b) ctx.fillText(b, W / 2, 518);
     }
-    // Your position
-    var my = ly + 10 * rowH + 12;
-    ctx.font = '700 34px ' + FONT;
-    ctx.fillStyle = '#ffffff';
-    var me = d && d.me;
-    var line = '';
-    if (rk.state === 'ok') {
-      if (me && me.rank) {
-        line = rk.tab === 'overall'
-          ? 'You: #' + me.rank + '  ·  ' + me.levels + ' levels  ·  ' + global.VividoHub.fmtMs(me.totalMs)
-          : 'You: #' + me.rank + (d.total ? ' of ' + d.total : '') + '  ·  ' + global.VividoHub.fmtMs(me.ms);
+    function status() {
+      if (rk.state === 'loading') { message('Loading…'); return true; }
+      if (rk.state === 'off') { message('The rankings are not available right now.', 'Your times are saved on this headset.'); return true; }
+      return false;
+    }
+
+    if (rk.tab === 'levels' && rk.view === 'list') {
+      // ── All levels with times ──
+      var list = rk.list || [];
+      if (!status()) {
+        if (!list.length) message('Nobody has finished a level yet.', 'Be the first!');
+        else {
+          ctx.font = '400 26px ' + FONT;
+          ctx.fillStyle = TEXT2;
+          ctx.textAlign = 'left';
+          ctx.fillText('Level', x0, y);
+          ctx.fillText('World best', x0 + 180, y);
+          ctx.fillText('You', x0 + 470, y);
+          ctx.textAlign = 'center';
+          var pages = Math.ceil(list.length / RK_PER_PAGE);
+          var page = Math.min(rk.page || 0, pages - 1);
+          var rowH = 92, top = 300, playW = 150, playX = x1 - playW;
+          list.slice(page * RK_PER_PAGE, (page + 1) * RK_PER_PAGE).forEach(function (r, i) {
+            var yy = top + i * rowH, id = 'lv:' + r.level, hov = card.hover === id;
+            var rx = x0 - 24, rw = playX - 16 - rx;
+            UI.roundRect(ctx, rx, yy - rowH / 2 + 6, rw, rowH - 12, 14);
+            ctx.fillStyle = hov ? 'rgba(70,111,111,0.9)' : 'rgba(255,255,255,0.05)';
+            ctx.fill();
+            card.buttons.push({ id: id, x: rx, y: yy - rowH / 2 + 6, w: rw, h: rowH - 12 });
+            ctx.textAlign = 'left';
+            ctx.font = '700 36px ' + FONT;
+            ctx.fillStyle = hov ? pink : '#ffffff';
+            ctx.fillText(String(r.level), x0, yy);
+            ctx.fillStyle = teal;
+            ctx.font = '700 34px ' + FONT;
+            var bt = fmt(r.best);
+            ctx.fillText(bt, x0 + 180, yy);
+            var bw = ctx.measureText(bt).width;
+            ctx.fillStyle = r.meBest ? pink : TEXT2;
+            var who = r.meBest ? 'you' : String(r.nick || 'Player');
+            fitText(ctx, who, '400', 28, 280 - bw - 16);
+            ctx.fillText(who, x0 + 180 + bw + 14, yy + 1);
+            ctx.font = '700 34px ' + FONT;
+            if (r.mine != null) {
+              ctx.fillStyle = pink;
+              ctx.fillText(fmt(r.mine) + '  #' + r.rank, x0 + 470, yy);
+            } else {
+              ctx.fillStyle = TEXT2;
+              ctx.fillText('–', x0 + 470, yy);
+            }
+            ctx.textAlign = 'center';
+            this._rkPlayBtn(ctx, card, r.level, playX, yy - 32, playW, 64);
+          }, this);
+          if (pages > 1) {
+            var py = top + RK_PER_PAGE * rowH - 6;
+            if (page > 0) this._uiButton(ctx, card, { id: 'page-prev', x: W / 2 - 170, y: py - 32, w: 76, h: 64, label: '<', size: 38 });
+            if (page < pages - 1) this._uiButton(ctx, card, { id: 'page-next', x: W / 2 + 94, y: py - 32, w: 76, h: 64, label: '>', size: 38 });
+            ctx.font = '400 30px ' + FONT;
+            ctx.fillStyle = TEXT2;
+            ctx.fillText((page + 1) + ' / ' + pages, W / 2, py);
+          }
+        }
+      }
+    } else {
+      // ── One level's top 10, or Overall ──
+      var lvl = rk.tab === 'levels';
+      if (lvl) {
+        this._uiButton(ctx, card, { id: 'back', x: x0 - 10, y: y - 32, w: 150, h: 64, label: '< Levels', size: 30 });
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '700 44px ' + FONT;
+        ctx.fillText('Level ' + rk.level, W / 2, y);
+        this._rkPlayBtn(ctx, card, rk.level, x1 - 150 + 10, y - 32, 150, 64);
       } else {
-        line = rk.tab === 'overall' ? 'Finish a level to join the rankings' : 'Finish this level to get ranked';
+        ctx.fillStyle = TEXT2;
+        ctx.font = '400 32px ' + FONT;
+        ctx.fillText('Most levels finished, then the fastest total time', W / 2, y);
+      }
+      var top2 = 300, rowH2 = 58, ly = top2 + 50;
+      ctx.font = '400 26px ' + FONT;
+      ctx.fillStyle = TEXT2;
+      ctx.textAlign = 'left';
+      ctx.fillText('#', x0 + 20, top2);
+      ctx.fillText('Player', x0 + 100, top2);
+      ctx.textAlign = 'right';
+      ctx.fillText(lvl ? 'Time' : 'Levels · total time', x1 - 20, top2);
+      ctx.textAlign = 'center';
+      var rows = (d && d.top) || [];
+      if (!status()) {
+        if (!rows.length) message(lvl ? 'Nobody has finished this level yet.' : 'No rankings yet.', lvl ? 'Be the first!' : '');
+        rows.forEach(function (r, i) {
+          var yy = ly + i * rowH2;
+          if (r.me) {
+            UI.roundRect(ctx, x0 - 4, yy - rowH2 / 2 + 4, x1 - x0 + 8, rowH2 - 8, 12);
+            ctx.fillStyle = 'rgba(225,17,104,0.22)';
+            ctx.fill();
+          }
+          ctx.textAlign = 'left';
+          ctx.font = '700 34px ' + FONT;
+          ctx.fillStyle = i < 3 ? UI.STAR_ON : TEXT2;
+          ctx.fillText(String(i + 1), x0 + 20, yy);
+          ctx.fillStyle = r.me ? pink : '#ffffff';
+          var name = String(r.nick || 'Player') + (r.me ? ' (you)' : '');
+          fitText(ctx, name, '700', 34, x1 - x0 - 370);
+          ctx.fillText(name, x0 + 100, yy);
+          ctx.textAlign = 'right';
+          ctx.font = '700 34px ' + FONT;
+          ctx.fillStyle = r.me ? pink : teal;
+          ctx.fillText(lvl ? fmt(r.ms) : r.levels + (r.levels === 1 ? ' level · ' : ' levels · ') + fmt(r.totalMs), x1 - 20, yy);
+          ctx.textAlign = 'center';
+        });
+        var me = d && d.me, line = '';
+        if (me && me.rank) {
+          line = lvl ? 'You: #' + me.rank + (d.total ? ' of ' + d.total : '') + '  ·  ' + fmt(me.ms)
+            : 'You: #' + me.rank + '  ·  ' + me.levels + ' levels  ·  ' + fmt(me.totalMs);
+        } else if (rk.state === 'ok') {
+          line = lvl ? 'Finish this level to get ranked' : 'Finish a level to join the rankings';
+        }
+        ctx.font = '700 34px ' + FONT;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(line, W / 2, ly + 10 * rowH2 + 12);
       }
     }
-    ctx.fillText(line, W / 2, my);
-    // Name
     var nick = currentNick() || 'Player';
     this._uiButton(ctx, card, { id: 'name', x: W / 2 - 230, y: card.ch - 132, w: 460, h: 74, label: 'Your name: ' + nick, size: 32 });
+  };
+
+  // Play a level straight from the rankings: ends whatever is running, starts that level vs the bot
+  C._rkPlay = function (n) {
+    if (global.isMultiplayer || !this._rkUnlocked(n)) return;
+    this._uiHide(this._rkCard);
+    var menu = document.querySelector('[vr-menu]');
+    menu = menu && menu.components && menu.components['vr-menu'];
+    if (menu && menu.menuVisible) menu.toggleMenu();
+    if (this._dualBotPreview && this.stopLocalPreview) this.stopLocalPreview();
+    else if (this.matchActive && this.onMatchEnded) this.onMatchEnded({ cancelled: true });
+    if (this._endCard) this._uiHide(this._endCard);
+    this.setLevel(n);
+    this.startOfflineBotMatch();
   };
 
   C._onRkCard = function (id) {
     var rk = this._rk;
     if (!rk) return;
     if (id === 'close') { this._uiHide(this._rkCard); return; }
-    if (id === 'tab-level' || id === 'tab-overall') {
-      var t = id === 'tab-level' ? 'level' : 'overall';
-      if (rk.tab !== t) { rk.tab = t; this._rkLoad(); }
-    } else if (id === 'prev') {
-      if (rk.level > 1) { rk.level--; this._rkLoad(); }
-    } else if (id === 'next') {
-      if (rk.level < rk.max) { rk.level++; this._rkLoad(); }
+    if (id.indexOf('play:') === 0) { this._rkPlay(parseInt(id.slice(5), 10)); return; }
+    if (id.indexOf('lv:') === 0) { rk.view = 'level'; rk.level = parseInt(id.slice(3), 10); this._rkLoad(); return; }
+    if (id === 'back') { rk.view = 'list'; this._rkLoad(); return; }
+    if (id === 'tab-levels' || id === 'tab-overall') {
+      var t = id === 'tab-levels' ? 'levels' : 'overall';
+      if (rk.tab !== t || (t === 'levels' && rk.view !== 'list')) { rk.tab = t; rk.view = 'list'; this._rkLoad(); }
+    } else if (id === 'page-prev') {
+      rk.page = Math.max(0, (rk.page || 0) - 1);
+    } else if (id === 'page-next') {
+      rk.page = (rk.page || 0) + 1;
     } else if (id === 'name') {
-      var self = this, lvl = rk.level;
+      var self = this, lvl = rk.view === 'level' ? rk.level : 0;
       this._nameOpen({ after: function () { self._rkOpen(lvl); } });
       return;
     }
