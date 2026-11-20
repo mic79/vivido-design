@@ -670,6 +670,7 @@
       });
       window.addEventListener('keydown', function (e) {
         if (e.repeat) return;
+        if (e.target && /input|textarea/i.test(e.target.tagName)) return;   // typing a name
         if (e.key === 'c' || e.key === 'C') self.cycleColors(); // original "Change Colors"
         if (e.key === '[' || e.key === ']') self.setLevel(self.level + (e.key === ']' ? 1 : -1));
       });

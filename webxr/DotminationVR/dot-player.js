@@ -136,6 +136,8 @@
       });
     }
     // Reopen reliably: a field that still has focus does not bring the keyboard back
+    var sc = this.el.sceneEl, xs = sc.renderer && sc.renderer.xr && sc.renderer.xr.getSession && sc.renderer.xr.getSession();
+    if (document.activeElement === input && xs && xs.visibilityState === 'visible-blurred') { kbLog('open-skip', input.value); return; }
     this._nameReopening = true;
     if (document.activeElement === input) input.blur();
     this._nameReopening = false;
