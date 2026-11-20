@@ -10,7 +10,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below).
        Meta name kept from StacksVR so the shared modules read window.STACKS_VERSION. -->
-  <meta name="stacks-version" content="0.2.22" />
+  <meta name="stacks-version" content="0.2.23" />
   <title>DotminationVR</title>
   <!-- Installable web app; also the base of the Meta Quest store package (Bubblewrap / TWA) -->
   <link rel="manifest" href="manifest.webmanifest" />
@@ -57,7 +57,7 @@
   <script src="dot-game.js?v=23"></script>
   <script src="dot-ui.js?v=20"></script>
   <script src="dot-player.js?v=10"></script>
-  <script src="dot-start.js?v=1"></script>
+  <script src="dot-start.js?v=2"></script>
   <script src="flat-compat.js?v=22"></script>
   <script src="mobile-spectator.js?v=20"></script>
 
@@ -922,7 +922,14 @@
         if (window.lobbyState && window.lobbyState.matchState === 'PLAYING') return;
         var el = document.querySelector('[dot-game]');
         var g = el && el.components && el.components['dot-game'];
-        if (g && !g.matchActive && typeof g.startOfflinePreviewMatch === 'function') {
+        if (!g || g.matchActive) return;
+        // Like the 2D game: returning players start right in a match vs the bot. First-timers
+        // see the bot demo behind the name / welcome cards (closing those starts a match).
+        var seen = false;
+        try { seen = localStorage.getItem('dotminationvr-tutorial-seen') === 'true'; } catch (e) {}
+        if (seen && !window.isMultiplayer && typeof g.startOfflineBotMatch === 'function') {
+          g.startOfflineBotMatch();
+        } else if (typeof g.startOfflinePreviewMatch === 'function') {
           g.startOfflinePreviewMatch();
         }
       }
