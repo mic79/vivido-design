@@ -208,8 +208,18 @@
     this._tutCard = this._uiCard('tutorial', 0.34, 0.5, this._drawTutorialCard.bind(this), this._onTutorial.bind(this));
     this._endCard = this._uiCard('end', 0.58, 0.58, this._drawEndCard.bind(this), this._onEndCard.bind(this));
     this._endCard.round = true;
-    // First visit (original checkStartTutorial): welcome card, solo only
-    setTimeout(function () { self._maybeWelcome(); }, 1500);
+    // First visit (original checkStartTutorial): welcome card, solo only. Only inside VR: the
+    // desktop/phone offline preview is a spectator view with no way to type or press the cards.
+    var sceneEl = this.el.sceneEl;
+    var inVr = function () { return sceneEl.is('vr-mode') || sceneEl.is('ar-mode'); };
+    if (inVr()) setTimeout(function () { self._maybeWelcome(); }, 1500);
+    sceneEl.addEventListener('enter-vr', function () {
+      setTimeout(function () { if (inVr()) self._maybeWelcome(); }, 1500);
+    });
+    sceneEl.addEventListener('exit-vr', function () {
+      if (self._nameCard && self._nameState) { self._uiHide(self._nameCard); self._nameState = null; }
+      if (self._welcomeCard) self._uiHide(self._welcomeCard);
+    });
   };
 
   C._uiCard = function (id, wM, hM, drawFn, onPress) {
