@@ -507,16 +507,14 @@
         y += 78;
       }
       block('Mode', mode, null);   // as in the 2D footer: Level N / Random / Multiplayer
-      if (bestLine) {                // Level mode: your best · world best
-        ctx.font = "400 34px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
-        ctx.fillStyle = '#b4c8c8';
-        ctx.fillText(bestLine, left, y - 18);
-        ctx.fillStyle = '#ffffff';
-        y += 46;
-      }
       block('Moves', f.blocks, null); // no per-minute rate: StacksVR speed stat, meaningless turn-based
       block('Chains', stats.chains | 0, null);
       block('Time', f.time, null);
+      if (bestLine) {                // Level mode: your best · world best, under the match time
+        ctx.font = "400 34px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
+        ctx.fillStyle = '#b4c8c8';
+        ctx.fillText(bestLine, left, y - 18);
+      }
       card.tex.needsUpdate = true;
     },
 
