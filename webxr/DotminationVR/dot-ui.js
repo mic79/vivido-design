@@ -392,6 +392,7 @@
   // Called every frame from dot-game tick
   C._uiTick = function (now) {
     if (!this._uiReady) { this._uiInit(); if (!this._uiReady) return; }
+    if (this._confetti) this._tickConfetti(now || performance.now());
     // The welcome card is for a solo player only (never spectators / lobbies)
     if (this._welcomeCard && this._welcomeCard.group.visible && (global.isMobileSpectator || global.isMultiplayer)) {
       this._uiHide(this._welcomeCard);
@@ -790,6 +791,63 @@
     this._uiShow(this._endCard, this._uiFrontPos(0.04));
     this._endCard.shownAt = performance.now();
     this._sfx('win', { volume: 0.5 });
+    if (winner !== 'draw' && (!mySide || winner === mySide)) this._celebrate(winner);
+  };
+
+  // ── Win celebration (StacksVR-style confetti): two poppers either side of the end card ──
+  C._celebrate = function (winner) {
+    this._clearConfetti();
+    if (!this._sceneRoot || !THREE) return;
+    var accent = parseInt(String(this._sideColorCss(winner)).replace('#', ''), 16) || 0xffd56a;
+    var colors = [accent, 0xffffff, 0xffd56a, 0x66ffcc, accent, 0x88aaff];
+    var mats = colors.map(function (c) {
+      return new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 1, side: THREE.DoubleSide, depthWrite: false, toneMapped: false });
+    });
+    var geo = new THREE.PlaneGeometry(0.028, 0.016);
+    var root = new THREE.Group();
+    root.name = 'dot-confetti';
+    var fp = this._uiFrontPos(0.04);
+    root.position.set(fp.x, fp.y, fp.z + (fp.z >= this.boards.shared.view.root.position.z ? 0.03 : -0.03));
+    var side = fp.z >= this.boards.shared.view.root.position.z ? 1 : -1;
+    this._sceneRoot.add(root);
+    var bits = [];
+    for (var i = 0; i < 56; i++) {
+      var L = i % 2 ? 1 : -1;                         // left / right popper
+      var m = new THREE.Mesh(geo, mats[i % mats.length]);
+      m.position.set(L * 0.24, -0.12, 0);
+      m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+      m.renderOrder = 12;
+      root.add(m);
+      bits.push({ mesh: m, delay: (i % 4 === 3) ? 0.45 : 0,    // a smaller second pop
+        vx: L * (0.15 + Math.random() * 0.55), vy: 1.4 + Math.random() * 1.3,
+        vz: side * (0.1 + Math.random() * 0.45), spin: (Math.random() - 0.5) * 14 });
+    }
+    this._confetti = { root: root, bits: bits, mats: mats, geo: geo, t0: performance.now(), last: performance.now() };
+  };
+  C._tickConfetti = function (now) {
+    var c = this._confetti; if (!c) return;
+    var t = (now - c.t0) / 1000, dt = Math.min(0.05, Math.max(0, (now - c.last) / 1000)); c.last = now;
+    for (var i = 0; i < c.bits.length; i++) {
+      var b = c.bits[i], m = b.mesh;
+      if (t < b.delay) { m.visible = false; continue; }
+      m.visible = true;
+      b.vy -= 2.6 * dt;                                // gravity
+      b.vx *= (1 - 1.2 * dt); b.vz *= (1 - 1.2 * dt);  // paper drag
+      if (b.vy < -0.35) b.vy = -0.35 + Math.sin(t * 7 + i) * 0.05; // flutter down
+      m.position.x += (b.vx + Math.sin(t * 5 + i) * 0.04) * dt;
+      m.position.y += b.vy * dt;
+      m.position.z += b.vz * dt;
+      m.rotation.x += b.spin * dt; m.rotation.y += b.spin * 0.6 * dt;
+    }
+    var fade = Math.max(0, Math.min(1, 1 - (t - 2.6) / 0.9));
+    for (var k = 0; k < c.mats.length; k++) c.mats[k].opacity = fade;
+    if (t > 3.6) this._clearConfetti();
+  };
+  C._clearConfetti = function () {
+    var c = this._confetti; if (!c) return;
+    if (c.root.parent) c.root.parent.remove(c.root);
+    c.geo.dispose(); c.mats.forEach(function (m) { m.dispose(); });
+    this._confetti = null;
   };
 
   // ── Quick rematch (lobby.js rematchInfo) ───────────────────────────────────
@@ -855,6 +913,7 @@
   C._placeVictory = function () { /* the end card places itself (_uiFrontPos) */ };
   C._tickVictory = function () { /* animation handled in _uiTick */ };
   C._clearVictory = function () {
+    this._clearConfetti();
     if (this._endCard) this._uiHide(this._endCard);
     this._endInfo = null;
     this._victory = null;
