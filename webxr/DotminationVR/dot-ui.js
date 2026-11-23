@@ -26,6 +26,17 @@
   var POKE_UI = 0.025;
 
   // ── Small drawing helpers ───────────────────────────────────────────────
+  // Cheap soft glow: a few widening translucent rounded rects (canvas shadowBlur is very slow on Quest)
+  function softGlow(ctx, x, y, w, h, r, color, size, strength) {
+    ctx.save(); ctx.fillStyle = color;
+    for (var i = 3; i >= 1; i--) {
+      var e = size * i / 3;
+      ctx.globalAlpha = (strength || 0.5) / 3;
+      roundRect(ctx, x - e, y - e, w + 2 * e, h + 2 * e, r + e); ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x + r, y);
@@ -275,9 +286,8 @@
   // Brand card background (rounded darkslategrey, soft glow like the app's box-shadow)
   C._uiPanel = function (ctx, card, glowColor) {
     var m = 24, r = 34;
+    softGlow(ctx, m, m, card.cw - 2 * m, card.ch - 2 * m, r, glowColor || 'rgba(0,0,0,0.6)', 16, 0.55);
     ctx.save();
-    ctx.shadowColor = glowColor || 'rgba(0,0,0,0.6)';
-    ctx.shadowBlur = 24;
     roundRect(ctx, m, m, card.cw - 2 * m, card.ch - 2 * m, r);
     ctx.fillStyle = 'rgba(47,79,79,0.96)';
     ctx.fill();
@@ -288,9 +298,8 @@
   C._uiButton = function (ctx, card, b) {
     var hov = card.hover === b.id;
     var pink = this._sideColorCss('blue');
+    softGlow(ctx, b.x, b.y, b.w, b.h, 18, hov ? pink : 'rgba(0,0,0,0.45)', hov ? 18 : 8, hov ? 0.6 : 0.45);
     ctx.save();
-    ctx.shadowColor = hov ? pink : 'rgba(0,0,0,0.45)';
-    ctx.shadowBlur = hov ? 28 : 12;
     roundRect(ctx, b.x, b.y, b.w, b.h, 18);
     ctx.fillStyle = b.primary ? (hov ? lighten(pink, 0.18) : pink) : (hov ? '#466f6f' : SLATE_BTN);
     ctx.fill();
@@ -500,9 +509,8 @@
   // Original mode card: big icon over a caption, ".selected" pink on hover
   C._uiTile = function (ctx, card, b) {
     var hov = card.hover === b.id, pink = this._sideColorCss('blue');
+    softGlow(ctx, b.x, b.y, b.w, b.h, 20, hov ? pink : 'rgba(0,0,0,0.45)', hov ? 20 : 8, hov ? 0.6 : 0.45);
     ctx.save();
-    ctx.shadowColor = hov ? pink : 'rgba(0,0,0,0.45)';
-    ctx.shadowBlur = hov ? 30 : 12;
     roundRect(ctx, b.x, b.y, b.w, b.h, 20);
     ctx.fillStyle = hov ? '#466f6f' : SLATE_BTN;
     ctx.fill();
@@ -792,6 +800,11 @@
     this._endCard.shownAt = performance.now();
     this._sfx('win', { volume: 0.5 });
     if (winner !== 'draw' && (!mySide || winner === mySide)) this._celebrate(winner);
+    if (winner !== 'draw' && this._envGroup && this._envGroup.visible && this._envGroup.userData.onWin) {
+      var wb = this.boards && this.boards.shared;
+      var wc = wb && wb.view && wb.view.colors ? wb.view.colors[winner === 'blue' ? 1 : 2] : '#ffffff';
+      try { this._envGroup.userData.onWin(wc); } catch (e) { /* ignore */ }
+    }
   };
 
   // ── Win celebration (StacksVR-style confetti): two poppers either side of the end card ──

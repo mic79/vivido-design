@@ -419,13 +419,15 @@
       ctx.clearRect(0, 0, W, H);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 18;
-      ctx.fillStyle = '#ffffff';
       ctx.font = "700 82px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
-      ctx.fillText(lines[0] || '', W / 2, lines[1] ? 58 : H / 2);
+      // Glow from layered outlines (this redraws every second for the clock; shadowBlur was slow)
+      var ty = lines[1] ? 58 : H / 2;
+      ctx.lineJoin = 'round'; ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.2; ctx.lineWidth = 20; ctx.strokeText(lines[0] || '', W / 2, ty);
+      ctx.globalAlpha = 0.4; ctx.lineWidth = 9; ctx.strokeText(lines[0] || '', W / 2, ty);
+      ctx.globalAlpha = 1; ctx.fillStyle = '#ffffff';
+      ctx.fillText(lines[0] || '', W / 2, ty);
       if (lines[1]) {
-        ctx.shadowBlur = 0;
         ctx.font = "700 50px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
         if (typeof lines[1] === 'string') {
           ctx.fillStyle = color;
@@ -1015,8 +1017,7 @@
     },
 
     _onViewStep: function (board, kind, step) {
-      this._refreshScores();
-      this._updateBoardLabels(performance.now());
+      this._refreshScores();   // label redraws on its own 200 ms tick, not on every step
       // Original incrementSound: sonar ping, pitch 1.0 + 0.05 per increment of the move, vol 0.25
       if (global.StacksAudio && global.StacksAudio.ping) {
         board._pitch = (board._pitch || 0) + 1;
@@ -1024,6 +1025,10 @@
       }
       if (kind === 'burst' && this._mySeatSide()) {
         this._pulseHaptic(document.getElementById('rightHand'), 0.35, 25); // original navigator.vibrate
+      }
+      if (kind === 'burst' && this._envGroup && this._envGroup.visible && this._envGroup.userData.onBurst) {
+        var owner = step && (step.by || step.o);
+        try { this._envGroup.userData.onBurst((board.view.colors && board.view.colors[owner]) || '#ffffff'); } catch (e) { /* ignore */ }
       }
     },
 
@@ -1072,15 +1077,25 @@
 
     _showChainPopup: function (board, text, color) {
       if (!this._sceneRoot) return;
-      var lab = this._makeCanvasPlane(0.6, 0.12, 900, 180);
+      // Reuse one plane: creating a canvas, texture, material and geometry per chain stalled frames
+      for (var pi = this._popups.length - 1; pi >= 0; pi--) {
+        if (this._popups[pi].lab === this._chainLab) this._popups.splice(pi, 1);
+      }
+      if (!this._chainLab) this._chainLab = this._makeCanvasPlane(0.6, 0.12, 900, 180);
+      var lab = this._chainLab;
+      lab.group.scale.setScalar(1);
+      lab.group.children[0].material.opacity = 1;
       var ctx = lab.ctx;
+      ctx.clearRect(0, 0, lab.canvas.width, lab.canvas.height);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 24;
-      ctx.fillStyle = '#ffffff';
       ctx.font = "700 112px 'Roboto Condensed', 'Arial Narrow', Arial, sans-serif";
-      ctx.fillText(text, 450, 95);
+      // Glow from layered outlines (a 24 px canvas shadowBlur took tens of ms on Quest)
+      ctx.lineJoin = 'round'; ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.18; ctx.lineWidth = 30; ctx.strokeText(text, 450, 95);
+      ctx.globalAlpha = 0.32; ctx.lineWidth = 18; ctx.strokeText(text, 450, 95);
+      ctx.globalAlpha = 0.6; ctx.lineWidth = 8; ctx.strokeText(text, 450, 95);
+      ctx.globalAlpha = 1; ctx.fillStyle = '#ffffff'; ctx.fillText(text, 450, 95);
       lab.tex.needsUpdate = true;
       var p = board.view.root;
       lab.group.position.copy(p.position);
@@ -1102,8 +1117,11 @@
         p.lab.group.scale.setScalar(s);
         if (t > 1.4) {
           if (p.lab.group.parent) p.lab.group.parent.remove(p.lab.group);
-          p.lab.tex.dispose();
-          p.lab.group.children[0].material.dispose();
+          if (p.lab !== this._chainLab) {
+            p.lab.tex.dispose();
+            p.lab.group.children[0].material.dispose();
+            p.lab.group.children.forEach(function (m) { if (m.geometry) m.geometry.dispose(); });
+          }
           this._popups.splice(i, 1);
         }
       }
@@ -2877,7 +2895,7 @@
     _refreshVersionDisplay: function (extra) {
       var ver = 'v' + this._appVersion();
       var parts = [ver];
-      if (this._fpsValue > 0) parts.push(this._fpsValue + ' FPS');
+      if (this._fpsValue > 0) parts.push(this._fpsValue + ' FPS' + (this._fpsMaxMs ? ' · max ' + this._fpsMaxMs + ' ms' : ''));
       if (extra) parts.push(extra);
       var label = parts.join(' | ');
       var el = document.getElementById('version-display');
@@ -2891,9 +2909,14 @@
     _tickVersionFps: function () {
       this._fpsFrames = (this._fpsFrames || 0) + 1;
       var now = performance.now();
+      // Slowest frame in the window: an average FPS hides single hitches
+      if (this._fpsPrev) this._fpsWorst = Math.max(this._fpsWorst || 0, now - this._fpsPrev);
+      this._fpsPrev = now;
       if (!this._fpsLast) this._fpsLast = now;
       if (now - this._fpsLast < 500) return;
       this._fpsValue = Math.round((this._fpsFrames * 1000) / (now - this._fpsLast));
+      this._fpsMaxMs = Math.round(this._fpsWorst || 0);
+      this._fpsWorst = 0;
       this._fpsFrames = 0;
       this._fpsLast = now;
       var status = '';
@@ -3084,6 +3107,12 @@
       root.add(haze);
       this._arenaHaze = haze;
 
+      // Optional surrounding environment (prototype; ?env=void keeps the plain arena)
+      if (global.DotEnvironments) {
+        try { this._envGroup = global.DotEnvironments.buildObservatory(root, sceneEl); } catch (e) { console.warn('[env] observatory failed', e); }
+        if (this._envGroup) { horizon.visible = false; haze.visible = false; }
+      }
+
       // Honor passthrough preference if already set before arena boot
       if (global.StacksPassthrough && global.StacksPassthrough.enabled) {
         this.applyPassthroughVisuals(true);
@@ -3121,8 +3150,9 @@
 
       if (this._arenaGround) this._arenaGround.visible = showShell;
       if (this._arenaUnderGlow) this._arenaUnderGlow.visible = showShell;
-      if (this._arenaHorizon) this._arenaHorizon.visible = showShell;
-      if (this._arenaHaze) this._arenaHaze.visible = showShell;
+      if (this._arenaHorizon) this._arenaHorizon.visible = showShell && !this._envGroup;
+      if (this._arenaHaze) this._arenaHaze.visible = showShell && !this._envGroup;
+      if (this._envGroup) this._envGroup.visible = showShell;
 
       // Full-sphere veil so AR alpha-blend can't leak room when PASS is off
       if (root && THREE && !this._arenaPassVeil) {
@@ -3141,7 +3171,8 @@
         root.add(veil);
         this._arenaPassVeil = veil;
       }
-      if (this._arenaPassVeil) this._arenaPassVeil.visible = showShell;
+      // The observatory's own sky (r=400) is the backdrop; the r=12 veil would hide it
+      if (this._arenaPassVeil) this._arenaPassVeil.visible = showShell && !this._envGroup;
 
       if (!sceneEl || !scene3d) return;
 

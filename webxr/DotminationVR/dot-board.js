@@ -78,9 +78,11 @@
     this.ctx = this.canvas.getContext('2d');
     this.tex = new THREE.CanvasTexture(this.canvas);
     // Mipmaps: the board is seen from far away by spectators; plain linear filtering shimmers
-    this.tex.minFilter = THREE.LinearMipmapLinearFilter;
-    this.tex.generateMipmaps = true;
+    // Dynamic texture: no mipmaps (regenerating them on every upload cost several ms per frame on Quest)
+    this.tex.minFilter = THREE.LinearFilter;
+    this.tex.generateMipmaps = false;
     this.tex.anisotropy = 4;
+    this._lastCanvasDraw = 0;
     if ('colorSpace' in this.tex && THREE.SRGBColorSpace) this.tex.colorSpace = THREE.SRGBColorSpace;
     else if (THREE.sRGBEncoding) this.tex.encoding = THREE.sRGBEncoding;
     this.width = this.pxW * METERS_PER_PX;
@@ -154,6 +156,63 @@
     this.sideSign = { 1: 1, 2: -1 };
     this.root.add(this._coreMesh);
     for (var m = 0; m < MAX_RINGS; m++) this.root.add(this._ringMeshes[m]);
+  };
+
+  // ── Ripples + floating "+1" as pooled 3D quads (animate every frame, no canvas uploads) ──
+  var PLUS_TEX = null;
+  function plusTexture() {
+    if (PLUS_TEX) return PLUS_TEX;
+    var c = document.createElement('canvas'); c.width = 128; c.height = 80;
+    var g = c.getContext('2d');
+    g.font = 'bold 60px Roboto, Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = 'rgba(0,0,0,0.7)'; g.fillText('+1', 66, 43);    // baked offset shadow
+    g.fillStyle = '#ffffff'; g.fillText('+1', 63, 40);            // white: tinted per owner by the material
+    PLUS_TEX = new THREE.CanvasTexture(c);
+    if ('colorSpace' in PLUS_TEX && THREE.SRGBColorSpace) PLUS_TEX.colorSpace = THREE.SRGBColorSpace;
+    return PLUS_TEX;
+  }
+  View.prototype._fxPool = function (kind) {
+    var pool = kind === 'plus' ? (this._plusPool = this._plusPool || []) : (this._ripplePool = this._ripplePool || []);
+    for (var i = 0; i < pool.length; i++) if (!pool[i].visible) return pool[i];
+    if (pool.length >= (kind === 'plus' ? 64 : 24)) return null;
+    var m;
+    if (kind === 'plus') {
+      var h = 24 * 1.4 * METERS_PER_PX;
+      m = new THREE.Mesh(this._plusGeo || (this._plusGeo = new THREE.PlaneGeometry(h * 1.6, h)), new THREE.MeshBasicMaterial({
+        map: plusTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+      m.renderOrder = 5;
+    } else {
+      m = new THREE.Mesh(this._rippleGeo || (this._rippleGeo = new THREE.CircleGeometry(1, 40)), new THREE.MeshBasicMaterial({
+        color: 0xc8c8c8, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+      m.renderOrder = 2;
+    }
+    m.visible = false; m.frustumCulled = false;
+    this.root.add(m); pool.push(m);
+    return m;
+  };
+  View.prototype._tickFx3D = function (now) {
+    var keep = [], v = this._fxV || (this._fxV = new THREE.Vector3());
+    for (var i = 0; i < this._fx.length; i++) {
+      var e = this._fx[i], age = now - e.t0;
+      var life = e.kind === 'plus' ? 800 : 400;
+      if (age > life) { if (e.mesh) { e.mesh.visible = false; e.mesh = null; } continue; }
+      if (!e.mesh) { e.mesh = this._fxPool(e.kind); if (!e.mesh) continue; e.mesh.visible = true; }
+      this.cellLocal(e.i, v);
+      var u = Math.max(0, age / life);
+      if (e.kind === 'plus') {
+        var ease = 1 - (1 - u) * (1 - u);
+        e.mesh.position.set(v.x, v.y + 40 * METERS_PER_PX * ease, 0.0015);
+        e.mesh.material.color.set(this.colors[e.o] || '#ffffff');
+        e.mesh.material.opacity = 1 - ease;
+      } else {
+        var rr = Math.max(1e-4, 50 * 1.5 * u * METERS_PER_PX);
+        e.mesh.position.set(v.x, v.y, 0.0005); e.mesh.scale.set(rr, rr, 1);
+        e.mesh.material.color.set(e.warn ? 0xffb300 : 0xc8c8c8);
+        e.mesh.material.opacity = 0.5 * (1 - u);
+      }
+      keep.push(e);
+    }
+    this._fx = keep;
   };
 
   View.prototype._place = function (mesh, idx, x, y, z, r) {
@@ -323,7 +382,9 @@
 
   View.prototype._float = function (i, owner, now) {
     this._fx.push({ kind: 'plus', i: i, o: owner, t0: now });
-    if (this._fx.length > 120) this._fx.splice(0, this._fx.length - 120);
+    if (this._fx.length > 120) {
+      this._fx.splice(0, this._fx.length - 120).forEach(function (e) { if (e.mesh) e.mesh.visible = false; });
+    }
   };
 
   View.prototype.busy = function () { return this._queue.length > 0; };
@@ -386,18 +447,28 @@
         animating = true;
       }
     }
-    if (this._fx.length || this._highlights.length) animating = true;
-    if (this._threat > 0) animating = true;
-    if (animating || this._dirty) this._draw(now);
+    this._tickFx3D(now);
+    var canvasAnim = this._highlights.length || this._threat > 0;   // tutorial pulse / RUSH warning only
+    if (this._dirty || (canvasAnim && now - this._lastCanvasDraw >= 33)) this._draw(now);
+    else if (animating) this._update3D();
     return this.busy();
   };
 
   View.prototype._draw = function (now) {
     var ctx = this.ctx, W = this.canvas.width, H = this.canvas.height;
     ctx.clearRect(0, 0, W, H);
+    var r = 22 * K;
+    // Field card + grid never change: drawn once into a cached canvas, then blitted
+    if (!this._bg || this._bg.width !== W || this._bg.height !== H) this._bg = this._buildBg(W, H, r);
+    ctx.drawImage(this._bg, 0, 0);
+    this._drawRest(now, ctx, W, H, r);
+  };
+
+  View.prototype._buildBg = function (W, H, r) {
+    var bg = document.createElement('canvas'); bg.width = W; bg.height = H;
+    var ctx = bg.getContext('2d');
     // Field card: dark glass (original dark mode) instead of the app's white body, so it
     // doesn't glare in a headset; faint diagonal grid from the svg kept as a hint of the surface.
-    var r = 22 * K;
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(r, 0); ctx.arcTo(W, 0, W, H, r); ctx.arcTo(W, H, 0, H, r); ctx.arcTo(0, H, 0, 0, r); ctx.arcTo(0, 0, W, 0, r);
@@ -412,6 +483,10 @@
       ctx.beginPath(); ctx.moveTo(g, H); ctx.lineTo(g + H * 0.577, 0); ctx.stroke();
     }
     ctx.restore();
+    return bg;
+  };
+
+  View.prototype._drawRest = function (now, ctx, W, H, r) {
     // Rim in turn colour (pulses amber when a RUSH infection is incoming)
     var rim = this._rimTarget;
     ctx.lineWidth = 7 * K;
@@ -427,21 +502,8 @@
     ctx.closePath();
     ctx.stroke();
 
-    // Ripples under the dots
-    var keep = [];
-    for (var f = 0; f < this._fx.length; f++) {
-      var fx = this._fx[f];
-      var age = now - fx.t0;
-      if (fx.kind === 'ripple') {
-        if (age > 400) continue;
-        var p = this._px(fx.i), u = Math.max(0, age / 400);
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 50 * K * 1.5 * u, 0, Math.PI * 2);
-        ctx.fillStyle = fx.warn ? 'rgba(255,179,0,' + (0.5 * (1 - u)) + ')' : 'rgba(200,200,200,' + (0.5 * (1 - u)) + ')';
-        ctx.fill();
-      }
-      keep.push(fx);
-    }
+    // Ripples and floating "+1"s are 3D objects now (_tickFx3D): animating them on this canvas
+    // forced a full redraw + texture upload every frame, which dropped frames on Quest.
 
     // Dots
     for (var i = 0; i < this.layout.count; i++) {
@@ -487,34 +549,9 @@
       ctx.setLineDash([]);
     }
 
-    // Floating "+1" (original .increment-animation: bold 1.5rem, rises 40px over 0.8s)
-    ctx.font = 'bold ' + Math.round(24 * K) + 'px Roboto, Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    var keep2 = [];
-    for (var q = 0; q < keep.length; q++) {
-      var e = keep[q];
-      if (e.kind !== 'plus') { keep2.push(e); continue; }
-      var a = now - e.t0;
-      if (a > 800) continue;
-      var t = a / 800;
-      var ep = this._px(e.i);
-      var ease = 1 - (1 - t) * (1 - t);
-      ctx.globalAlpha = 1 - ease;
-      ctx.shadowColor = 'rgba(0,0,0,0.7)';
-      ctx.shadowBlur = 2 * K;
-      ctx.shadowOffsetX = ctx.shadowOffsetY = K;
-      ctx.fillStyle = this.colors[e.o] || '#ffffff';
-      ctx.fillText('+1', ep.x, ep.y - 40 * K * ease);
-      ctx.globalAlpha = 1;
-      ctx.shadowColor = 'transparent';
-      ctx.shadowBlur = 0;
-      ctx.shadowOffsetX = ctx.shadowOffsetY = 0;
-      keep2.push(e);
-    }
-    this._fx = keep2;
     this.tex.needsUpdate = true;
     this._dirty = false;
+    this._lastCanvasDraw = now;
     this._update3D();
   };
 

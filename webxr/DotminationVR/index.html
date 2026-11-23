@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
+  <!-- Start the avatar download with the page itself (the body component picks it up from the cache) -->
+  <link rel="preload" href="assets/YBot.glb" as="fetch" type="model/gltf-binary" crossorigin="anonymous">
   <script src="more-games.js?v=1"></script>
     <!-- Brand font of the original app (Roboto Condensed) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -10,7 +12,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <!-- Bump this whenever shipping a visible build (also bump script ?v= below).
        Meta name kept from StacksVR so the shared modules read window.STACKS_VERSION. -->
-  <meta name="stacks-version" content="0.2.37" />
+  <meta name="stacks-version" content="0.2.38" />
   <title>DotminationVR</title>
   <!-- Installable web app; also the base of the Meta Quest store package (Bubblewrap / TWA) -->
   <link rel="manifest" href="manifest.webmanifest" />
@@ -40,7 +42,7 @@
 
   <!-- Dotmination rules + view, AI -->
   <script src="dot-rules.js?v=20"></script>
-  <script src="dot-board.js?v=20"></script>
+  <script src="dot-board.js?v=21"></script>
   <script src="dot-bot.js?v=20"></script>
   <!-- Shared with StacksVR (copied; only namespacing/labels changed) -->
     <script src="stats.js?v=20"></script>
@@ -49,13 +51,13 @@
   <script src="match-replay.js?v=20"></script>
   <script src="stacks-audio.js?v=20"></script>
   <script src="game-menu.js?v=24"></script>
-  <script src="mixamo-body.js?v=25"></script>
-  <script src="locomotion.js?v=20"></script>
+  <script src="mixamo-body.js?v=27"></script>
+  <script src="locomotion.js?v=21"></script>
   <script src="hand-input.js?v=6"></script>
   <script src="vivido-hub.js?v=3"></script>
   <!-- Match component (StacksVR stacks-game.js structure, Dotmination gameplay) -->
-  <script src="dot-game.js?v=30"></script>
-  <script src="dot-ui.js?v=24"></script>
+  <script src="dot-game.js?v=31"></script>
+  <script src="dot-ui.js?v=25"></script>
   <script src="dot-player.js?v=11"></script>
   <script src="dot-start.js?v=5"></script>
   <script src="flat-compat.js?v=22"></script>
@@ -348,13 +350,7 @@
 
       function syncStartBtn() {
         if (!startBtn) return;
-        // Never enter VR before the local body is parsed — that hitch is unrecoverable UX
-        if (!_bodyReady) {
-          startBtn.disabled = true;
-          startBtn.textContent = 'Loading avatar…';
-          startBtn.setAttribute('aria-busy', 'true');
-          return;
-        }
+        // The avatar (small GLB, parsed in a few ms) loads silently in the background: never block the start
         startBtn.disabled = !_vrSupported;
         startBtn.textContent = _vrSupported ? _startLabel : 'No VR headset';
         startBtn.removeAttribute('aria-busy');
@@ -387,10 +383,6 @@
       }
 
       function enterVr() {
-        if (!_bodyReady) {
-          syncStartBtn();
-          return;
-        }
         var scene = document.querySelector('a-scene');
         // Prefer A-Frame's own button (handles permissions / session opts)
         var afBtn = document.querySelector('.a-enter-vr-button');
@@ -445,7 +437,7 @@
         (document.referrer || '').indexOf('android-app://') === 0;
       var autoTried = false;
       function maybeAutoEnter() {
-        if (!launchedAsApp || autoTried || !_bodyReady || !_vrSupported) return;
+        if (!launchedAsApp || autoTried || !_vrSupported) return;
         autoTried = true;
         if (startBtn) startBtn.textContent = 'Starting VR…';
         setTimeout(enterVr, 50);
@@ -878,24 +870,24 @@
       </a-entity>
 
     <a-entity id="player-body"
-      mixamo-body="mode: player; color: #E11168; modelPath: assets/YBot.fbx"></a-entity>
+      mixamo-body="mode: player; color: #E11168; modelPath: assets/YBot.glb"></a-entity>
 
     <!-- Bot avatar anchor = red seat (dot-game repositions per DUEL/RUSH layout) -->
     <a-entity id="cup-bot" position="0 1.45 -0.7"></a-entity>
     <a-entity id="spec-blue-anchor" position="0 1.6 0.62"></a-entity>
     <a-entity id="bot-body" position="0 0 -0.7" rotation="0 180 0"
-      mixamo-body="mode: bot; color: #12DACE; modelPath: assets/YBot.fbx; botEntitySelector: #cup-bot"></a-entity>
+      mixamo-body="mode: bot; color: #12DACE; modelPath: assets/YBot.glb; botEntitySelector: #cup-bot"></a-entity>
     <a-entity id="spec-blue-body" visible="false"
-      mixamo-body="mode: bot; color: #E11168; modelPath: assets/YBot.fbx; botEntitySelector: #spec-blue-anchor; facing: -z; reactionKey: botReactionTargetBlue"></a-entity>
+      mixamo-body="mode: bot; color: #E11168; modelPath: assets/YBot.glb; botEntitySelector: #spec-blue-anchor; facing: -z; reactionKey: botReactionTargetBlue"></a-entity>
     <!-- Lobby / spectator remotes — always stream poses so joiners see who is already here -->
     <a-entity id="remote-body-0" visible="false"
-      mixamo-body="mode: bot; color: #6BCB77; modelPath: assets/YBot.fbx"></a-entity>
+      mixamo-body="mode: bot; color: #6BCB77; modelPath: assets/YBot.glb"></a-entity>
     <a-entity id="remote-body-1" visible="false"
-      mixamo-body="mode: bot; color: #FFD93D; modelPath: assets/YBot.fbx"></a-entity>
+      mixamo-body="mode: bot; color: #FFD93D; modelPath: assets/YBot.glb"></a-entity>
     <a-entity id="remote-body-2" visible="false"
-      mixamo-body="mode: bot; color: #C77DFF; modelPath: assets/YBot.fbx"></a-entity>
+      mixamo-body="mode: bot; color: #C77DFF; modelPath: assets/YBot.glb"></a-entity>
     <a-entity id="remote-body-3" visible="false"
-      mixamo-body="mode: bot; color: #4D96FF; modelPath: assets/YBot.fbx"></a-entity>
+      mixamo-body="mode: bot; color: #4D96FF; modelPath: assets/YBot.glb"></a-entity>
 
     <!-- Audio: lobby ambient + match action + one-shot SFX (project-local) -->
     <a-entity id="sfx-bg-music" sound="src: url(audio/bg-music.mp3); autoplay: false; loop: true; volume: 0.06; positional: false"></a-entity>

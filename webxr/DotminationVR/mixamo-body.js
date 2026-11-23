@@ -8,7 +8,15 @@
 
   function loadSharedFbx(path) {
     if (_fbxShared[path]) return _fbxShared[path];
-    _fbxShared[path] = new Promise(function (resolve, reject) {
+    var pr = _fbxShared[path] = new Promise(function (resolve, reject) {
+      // GLB (converted from YBot.fbx by _environments/fbx2glb.mjs, same scene graph): parses in a few ms
+      // instead of ~1 s of FBX parsing on Quest, and has 5x fewer vertices to skin every frame.
+      if (/\.glb$/i.test(path) && THREE.GLTFLoader) {
+        new THREE.GLTFLoader().load(path, function (gltf) {
+          resolve(gltf.scene.children.length === 1 ? gltf.scene.children[0] : gltf.scene);
+        }, undefined, function (err) { reject(err || new Error('GLB load failed: ' + path)); });
+        return;
+      }
       if (typeof THREE === 'undefined' || !THREE.FBXLoader) {
         reject(new Error('FBXLoader missing'));
         return;
@@ -21,7 +29,22 @@
         function (err) { reject(err || new Error('FBX load failed: ' + path)); }
       );
     });
-    return _fbxShared[path];
+    pr.catch(function () { if (_fbxShared[path] === pr) delete _fbxShared[path]; });
+    return pr;
+  }
+
+  // Load in the background and keep retrying quietly (2 s, 4 s, 8 s … up to 30 s apart) on a
+  // flaky network, instead of leaving the avatar missing for the whole session after one failure.
+  function loadWithRetry(path, onDone, isAlive) {
+    var attempt = 0;
+    (function go() {
+      loadSharedFbx(path).then(onDone).catch(function (err) {
+        attempt++;
+        var wait = Math.min(30000, 2000 * Math.pow(2, attempt - 1));
+        console.warn('[Mixamo Body] load failed (attempt ' + attempt + '), retrying in ' + (wait / 1000) + ' s', err && err.message);
+        setTimeout(function () { if (isAlive()) go(); }, wait);
+      });
+    })();
   }
 
   function cloneFbx(root) {
@@ -36,7 +59,7 @@
         schema: {
           mode: { type: 'string', default: 'player' },
           color: { type: 'color', default: '#4A90E2' },
-          modelPath: { type: 'string', default: 'assets/YBot.fbx' },
+          modelPath: { type: 'string', default: 'assets/YBot.glb' },
           botEntitySelector: { type: 'string', default: '#cup-bot' },
           // DotminationVR: a bot can sit on either side of the board ('+z' = StacksVR default)
           facing: { type: 'string', default: '+z' },
@@ -210,13 +233,11 @@
           // Shared FBX: player (and first claimant) parses once; others clone.
           var self = this;
           var path = this.data.modelPath;
-          loadSharedFbx(path).then(function (root) {
-            if (!self.el || !self.el.isConnected) return;
+          loadWithRetry(path, function (root) {
+            if (!self.el || !self.el.isConnected || self.modelLoaded) return;
             // Always clone so materials/skeleton state stay per-instance
             self.onModelLoaded(cloneFbx(root));
-          }).catch(function (error) {
-            console.error('[Mixamo Body] Load error:', error);
-          });
+          }, function () { return !!(self.el && self.el.isConnected && !self.modelLoaded); });
         },
 
         onModelLoaded: function(fbx) {
