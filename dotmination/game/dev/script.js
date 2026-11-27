@@ -131,6 +131,11 @@ let recentBotMoves = []; // Array to keep track of recent bot moves
 
 // Variables for sound pitch progression
 let chainReactionCounter = 0;
+// Scheduled neighbor hits that have not run yet. A new blast staggers them
+// outward from that cell (GSAP power2.inOut), instead of scanning the board
+// from the first cell.
+let chainJobs = 0;
+let schedulingDepth = 0;
 const basePitch = 1.0;
 const pitchStep = 0.05; // Increase pitch by 5% each time
 
@@ -365,7 +370,94 @@ function playerClassClear() {
   return playerArray.join(" ");
 }
 
-function incrementDotStage(trgt, player = currentPlayer) {
+// Same grid as setDots: even rows are shifted half a cell. Angle is deterministic
+// across clients, so a chain stays in sync in multiplayer.
+function hexPosition(index) {
+  let remaining = index;
+  const rows = maxRows;
+  const cols = maxCols;
+  for (let row = 0; row < rows; row++) {
+    const colsInRow = (row % 2 === 0) ? cols - 1 : cols;
+    if (remaining < colsInRow) {
+      return {
+        x: (row % 2 === 0) ? remaining + 0.5 : remaining,
+        y: row
+      };
+    }
+    remaining -= colsInRow;
+  }
+  return { x: index, y: 0 };
+}
+
+function sortNeighborsFromBlast(originIndex, neighbors) {
+  const origin = hexPosition(originIndex);
+  neighbors.sort((a, b) => {
+    const pa = hexPosition(a.index);
+    const pb = hexPosition(b.index);
+    const angleA = Math.atan2(pa.y - origin.y, pa.x - origin.x);
+    const angleB = Math.atan2(pb.y - origin.y, pb.x - origin.x);
+    if (angleA !== angleB) return angleA - angleB;
+    return a.index - b.index;
+  });
+  return neighbors;
+}
+
+// One hop is long enough that the next ring starts after this ring finishes.
+// The extra spread eases around the blast the way a GSAP stagger does.
+function rippleDelay(indexInRing, ringSize) {
+  if (gameMode === "realTimeResource" || ringSize === 0) return 0;
+  const ease = gsap.parseEase("power2.inOut");
+  const t = ringSize === 1 ? 0 : indexInRing / (ringSize - 1);
+  return 0.16 + ease(t) * 0.08;
+}
+
+function enqueueExplosionNeighbors(trgt, effectivePlayer) {
+  const originIndex = trgt.index();
+  const hitarea = trgt.find(".hitarea");
+  const neighbors = [];
+  for (let k = 0; k < dots.length; k++) {
+    if (k === originIndex) continue;
+    if (Draggable.hitTest(dots[k], hitarea)) {
+      neighbors.push({ index: k, dot: $(dots[k]) });
+    }
+  }
+  sortNeighborsFromBlast(originIndex, neighbors);
+  neighbors.forEach((neighbor) => {
+    const pending = parseInt(neighbor.dot.attr("data-increment"), 10);
+    neighbor.dot.attr("data-increment", (Number.isFinite(pending) ? pending : 0) + 1);
+    neighbor.dot.addClass("increment");
+    showIncrementAnimation(neighbor.dot, 1, effectivePlayer);
+  });
+
+  schedulingDepth++;
+  neighbors.forEach((neighbor, i) => {
+    chainJobs++;
+    gsap.delayedCall(
+      rippleDelay(i, neighbors.length),
+      incrementDotStage,
+      [neighbor.dot, effectivePlayer, true]
+    );
+  });
+  schedulingDepth--;
+}
+
+function resetChainProgress() {
+  gsap.killTweensOf(incrementDotStage);
+  chainJobs = 0;
+  schedulingDepth = 0;
+  $(".dot").attr("data-increment", "0").removeClass("increment");
+  $(".field").removeClass("animating");
+}
+
+function incrementDotStage(trgt, player = currentPlayer, fromQueue = false) {
+  if (!fromQueue) {
+    gsap.killTweensOf(incrementDotStage);
+    chainJobs = 0;
+    $(".dot.increment").not(trgt).attr("data-increment", "0").removeClass("increment");
+  } else if (chainJobs > 0) {
+    chainJobs--;
+  }
+
   const dotIndex = trgt.index();
   let isStage4 = trgt.hasClass('stage--4');
 
@@ -414,23 +506,7 @@ function incrementDotStage(trgt, player = currentPlayer) {
         if ("vibrate" in navigator) {
           window.navigator.vibrate([10, 10, 10]);
         }
-        let k = dots.length;
-        while (--k > -1) {
-          if (
-            Draggable.hitTest(dots[k], trgt.find(".hitarea")) &&
-            k != trgt.index()
-          ) {
-            var neighborDot = $(dots[k]); // Store neighbor dot in variable
-            neighborDot.addClass("increment");
-            neighborDot.filter(function () {
-              $(this).attr(
-                "data-increment",
-                parseInt($(this).attr("data-increment")) + 1
-              );
-            });
-            showIncrementAnimation(neighborDot, 1, effectivePlayer); 
-          }
-        }
+        enqueueExplosionNeighbors(trgt, effectivePlayer);
       }
     }
   }
@@ -442,18 +518,10 @@ function incrementDotStage(trgt, player = currentPlayer) {
 }
 
 function animateNextDot(player = currentPlayer, justCompletedStep2) {
-  const effectivePlayer = player;
-
-  if ($(".dot.increment").length > 0) {
-    var next = $(".dot.increment").eq(0);
-    // For RTS mode, resolve chain instantly (no delay). For other modes, keep original delay.
-    if (gameMode === 'realTimeResource') {
-      gsap.delayedCall(0, incrementDotStage, [next, effectivePlayer]); 
-    } else {
-      gsap.delayedCall(0.1, incrementDotStage, [next]); 
-    }
-  } else {
-    $(".field").removeClass("animating");
+  if (schedulingDepth > 0 || chainJobs > 0) {
+    return;
+  }
+  $(".field").removeClass("animating");
 
     // --- RTS MODE: Clear chain lock when chain is finished ---
     if (gameMode === 'realTimeResource' && typeof rtrMode.clearActiveChainPlayerLock === 'function') {
@@ -491,7 +559,6 @@ function animateNextDot(player = currentPlayer, justCompletedStep2) {
     if (processingOpponentMove) {
       processingOpponentMove = false;
     }
-  }
 }
 
 function showIncrementAnimation(targetDot, incrementValue = 1, player = currentPlayer) {
@@ -768,6 +835,11 @@ function checkDotmination() {
 }
 
 function setDots() {
+  if (typeof gsap !== "undefined") {
+    gsap.killTweensOf(incrementDotStage);
+  }
+  chainJobs = 0;
+  schedulingDepth = 0;
   /*winW = $(window).width();
   winH = $(window).height();
   dotRows = Math.floor(winH / (dot_size / 1.25));
@@ -2479,9 +2551,7 @@ function setupConnectionHandlers(connection) {
       // --- FIX: Stop any ongoing client-side simulation before applying authoritative state ---
       console.log("Stopping client-side simulation due to incoming gameState");
       // Use gsap.killTweensOf instead of TweenMax.killDelayedCallsTo
-      gsap.killTweensOf(incrementDotStage); 
-      $(".dot.increment").removeClass("increment");
-      $(".field").removeClass("animating");
+      resetChainProgress();
       // --- End Fix ---
 
       // <<< ADD EXPLICIT VISUAL RESET >>>
@@ -2542,9 +2612,7 @@ function setupConnectionHandlers(connection) {
         updatePlayerScoresUI(); // <<< MOVED HERE
 
         // Stop any ongoing dot animations
-        gsap.killTweensOf(incrementDotStage);
-        $(".dot.increment").removeClass("increment");
-        $(".field").removeClass("animating");
+        resetChainProgress();
 
         // Peer shows overlay based on received winner
         showMultiplayerGameOverOverlay(data.winner);
@@ -2552,9 +2620,7 @@ function setupConnectionHandlers(connection) {
       // Host also stops local animations if they were running (e.g., simultaneous game end)
       else { 
         console.log("Host stopping animations on game over...");
-        gsap.killTweensOf(incrementDotStage);
-        $(".dot.increment").removeClass("increment");
-        $(".field").removeClass("animating");
+        resetChainProgress();
         // Host overlay is shown earlier in checkDotmination
       } 
     }
