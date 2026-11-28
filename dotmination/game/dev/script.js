@@ -967,8 +967,6 @@ function setDots() {
 // Rippled
 $("body").on("click", ".rippled", function (e) {
     if (!$(this).hasClass("disabled")) {
-      // Cells buzz from the move itself. A second call here would cancel that pulse.
-      if (!$(this).hasClass("dot")) haptic(HAPTIC_TAP);
       const blobClick = cellStyle === "blob" && $(this).hasClass("dot");
     const host = blobClick ? $(".blob-layer") : $(this);
     if (!host.length) return;
@@ -1356,6 +1354,14 @@ function haptic(pattern) {
 // Pixel motor does not respond to a few dozen milliseconds.
 const HAPTIC_TAP = 150;
 const HAPTIC_BURST = [180, 70, 220];
+const HAPTIC_CONTROLS = "button, .btn, .modal-close, .menu-back, .header-icon-btn, .setting-switch, .color-swatch, .cell-preview, footer > div, .player, .share-map, .copy-id-btn, .cancel-waiting-btn, .cancel-connection-btn, .retry-connection-btn";
+
+document.addEventListener("click", function (e) {
+  if (e.target.closest(".field")) return;
+  const control = e.target.closest(HAPTIC_CONTROLS);
+  if (!control || control.classList.contains("disabled") || control.disabled) return;
+  haptic(HAPTIC_TAP);
+}, true);
 
 function markSettingsSelection() {
   $(".color-swatch").removeClass("selected").attr("aria-pressed", "false");
