@@ -105,6 +105,7 @@ let level = (myDotmination !== null) ? myDotmination.level : 1,
     stage_amount = 5,
     dot_size = 64,
     dots, // This will be our main jQuery collection of all dot elements
+    dotNeighbors = [],
     winW,
     winH,
     dotRows,
@@ -131,9 +132,9 @@ let recentBotMoves = []; // Array to keep track of recent bot moves
 
 // Variables for sound pitch progression
 let chainReactionCounter = 0;
-// Scheduled neighbor hits that have not run yet. A new blast staggers them
-// outward from that cell (GSAP power2.inOut), instead of scanning the board
-// from the first cell.
+// Distance from the cell that started the chain. One step farther waits
+// 0.1s, the old gap between cells. Cells at the same distance share that time.
+let chainAnchor = 0;
 let chainJobs = 0;
 let schedulingDepth = 0;
 const basePitch = 1.0;
@@ -370,93 +371,101 @@ function playerClassClear() {
   return playerArray.join(" ");
 }
 
-// Same grid as setDots: even rows are shifted half a cell. Angle is deterministic
-// across clients, so a chain stays in sync in multiplayer.
-function hexPosition(index) {
-  let remaining = index;
-  const rows = maxRows;
-  const cols = maxCols;
-  for (let row = 0; row < rows; row++) {
-    const colsInRow = (row % 2 === 0) ? cols - 1 : cols;
-    if (remaining < colsInRow) {
-      return {
-        x: (row % 2 === 0) ? remaining + 0.5 : remaining,
-        y: row
-      };
+function rippleBounce(dot) {
+  if (typeof gsap === "undefined" || gameMode === "realTimeResource") return;
+  const el = dot.get(0);
+  if (!el) return;
+  gsap.killTweensOf(el);
+  // Scale the pip only. Scaling the dot shrinks its hit box, and same-row
+  // neighbors overlap by a fraction of a pixel, so those hits would be lost.
+  el.classList.add("pip-bounce");
+  gsap.fromTo(el, { "--pip-scale": 1 }, {
+    "--pip-scale": 0.9,
+    duration: 0.2,
+    ease: "power2.inOut",
+    yoyo: true,
+    repeat: 1,
+    overwrite: true,
+    onComplete: function () {
+      el.classList.remove("pip-bounce");
+      el.style.removeProperty("--pip-scale");
     }
-    remaining -= colsInRow;
-  }
-  return { x: index, y: 0 };
-}
-
-function sortNeighborsFromBlast(originIndex, neighbors) {
-  const origin = hexPosition(originIndex);
-  neighbors.sort((a, b) => {
-    const pa = hexPosition(a.index);
-    const pb = hexPosition(b.index);
-    const angleA = Math.atan2(pa.y - origin.y, pa.x - origin.x);
-    const angleB = Math.atan2(pb.y - origin.y, pb.x - origin.x);
-    if (angleA !== angleB) return angleA - angleB;
-    return a.index - b.index;
   });
-  return neighbors;
 }
 
-// One hop is long enough that the next ring starts after this ring finishes.
-// The extra spread eases around the blast the way a GSAP stagger does.
-function rippleDelay(indexInRing, ringSize) {
-  if (gameMode === "realTimeResource" || ringSize === 0) return 0;
-  const ease = gsap.parseEase("power2.inOut");
-  const t = ringSize === 1 ? 0 : indexInRing / (ringSize - 1);
-  return 0.16 + ease(t) * 0.08;
+function clearChainSchedule() {
+  if (typeof gsap !== "undefined") {
+    gsap.killTweensOf(incrementDotStage);
+    $(".dot").each(function () {
+      gsap.killTweensOf(this);
+      this.classList.remove("pip-bounce");
+      this.style.removeProperty("--pip-scale");
+    });
+  }
+  chainAnchor = 0;
+  chainJobs = 0;
+  schedulingDepth = 0;
 }
 
-function enqueueExplosionNeighbors(trgt, effectivePlayer) {
+function delayForDistance(distance) {
+  if (gameMode === "realTimeResource" || distance <= 0) return 0;
+  const elapsed = chainAnchor ? gsap.globalTimeline.time() - chainAnchor : 0;
+  return Math.max(0, 0.1 * distance - elapsed);
+}
+
+function buildDotNeighbors() {
+  const boxes = [];
+  dots.each(function () {
+    const left = parseFloat(this.style.left);
+    const top = parseFloat(this.style.top);
+    boxes.push({ l: left, r: left + dot_size, t: top, b: top + dot_size });
+  });
+  const inset = dot_size * 0.005;
+  dotNeighbors = boxes.map((origin, index) => {
+    const hit = { l: origin.l - inset, r: origin.r + inset, t: origin.t - inset, b: origin.b + inset };
+    const list = [];
+    for (let k = 0; k < boxes.length; k++) {
+      if (k === index) continue;
+      const box = boxes[k];
+      if (!(box.r < hit.l || box.l > hit.r || box.b < hit.t || box.t > hit.b)) list.push(k);
+    }
+    return list;
+  });
+}
+
+function enqueueExplosionNeighbors(trgt, effectivePlayer, distanceFromStart) {
   const originIndex = trgt.index();
-  const hitarea = trgt.find(".hitarea");
-  const neighbors = [];
-  for (let k = 0; k < dots.length; k++) {
-    if (k === originIndex) continue;
-    if (Draggable.hitTest(dots[k], hitarea)) {
-      neighbors.push({ index: k, dot: $(dots[k]) });
-    }
-  }
-  sortNeighborsFromBlast(originIndex, neighbors);
-  neighbors.forEach((neighbor) => {
-    const pending = parseInt(neighbor.dot.attr("data-increment"), 10);
-    neighbor.dot.attr("data-increment", (Number.isFinite(pending) ? pending : 0) + 1);
-    neighbor.dot.addClass("increment");
-    showIncrementAnimation(neighbor.dot, 1, effectivePlayer);
-  });
-
+  const nextDistance = distanceFromStart + 1;
+  const delay = delayForDistance(nextDistance);
+  if (dotNeighbors.length !== dots.length) buildDotNeighbors();
+  const neighbors = (dotNeighbors[originIndex] || []).map((index) => $(dots[index]));
   schedulingDepth++;
-  neighbors.forEach((neighbor, i) => {
+  neighbors.forEach((neighbor) => {
+    const pending = parseInt(neighbor.attr("data-increment"), 10);
+    neighbor.attr("data-increment", (Number.isFinite(pending) ? pending : 0) + 1);
+    neighbor.addClass("increment");
+    showIncrementAnimation(neighbor, 1, effectivePlayer);
     chainJobs++;
-    gsap.delayedCall(
-      rippleDelay(i, neighbors.length),
-      incrementDotStage,
-      [neighbor.dot, effectivePlayer, true]
-    );
+    gsap.delayedCall(delay, incrementDotStage, [neighbor, effectivePlayer, true, nextDistance]);
   });
   schedulingDepth--;
 }
 
 function resetChainProgress() {
-  gsap.killTweensOf(incrementDotStage);
-  chainJobs = 0;
-  schedulingDepth = 0;
+  clearChainSchedule();
   $(".dot").attr("data-increment", "0").removeClass("increment");
   $(".field").removeClass("animating");
 }
 
-function incrementDotStage(trgt, player = currentPlayer, fromQueue = false) {
+function incrementDotStage(trgt, player = currentPlayer, fromQueue = false, distance = 0) {
   if (!fromQueue) {
-    gsap.killTweensOf(incrementDotStage);
-    chainJobs = 0;
+    clearChainSchedule();
+    chainAnchor = (typeof gsap !== "undefined") ? gsap.globalTimeline.time() : 0;
     $(".dot.increment").not(trgt).attr("data-increment", "0").removeClass("increment");
   } else if (chainJobs > 0) {
     chainJobs--;
   }
+  rippleBounce(trgt);
 
   const dotIndex = trgt.index();
   let isStage4 = trgt.hasClass('stage--4');
@@ -506,7 +515,7 @@ function incrementDotStage(trgt, player = currentPlayer, fromQueue = false) {
         if ("vibrate" in navigator) {
           window.navigator.vibrate([10, 10, 10]);
         }
-        enqueueExplosionNeighbors(trgt, effectivePlayer);
+        enqueueExplosionNeighbors(trgt, effectivePlayer, distance);
       }
     }
   }
@@ -521,6 +530,7 @@ function animateNextDot(player = currentPlayer, justCompletedStep2) {
   if (schedulingDepth > 0 || chainJobs > 0) {
     return;
   }
+
   $(".field").removeClass("animating");
 
     // --- RTS MODE: Clear chain lock when chain is finished ---
@@ -835,11 +845,7 @@ function checkDotmination() {
 }
 
 function setDots() {
-  if (typeof gsap !== "undefined") {
-    gsap.killTweensOf(incrementDotStage);
-  }
-  chainJobs = 0;
-  schedulingDepth = 0;
+  clearChainSchedule();
   /*winW = $(window).width();
   winH = $(window).height();
   dotRows = Math.floor(winH / (dot_size / 1.25));
@@ -888,6 +894,7 @@ function setDots() {
     }
   }
   dots = $(".dot"); // Assign to global dots variable
+  buildDotNeighbors();
 }
 //setDots();
 

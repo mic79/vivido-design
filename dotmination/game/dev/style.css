@@ -765,11 +765,15 @@ footer .multiplayer {
   width: 5%;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--pip-scale, 1));
   background: black;
   border-radius: 50%;
   box-shadow: 0 0 1rem 0.25rem #e6e6e6;
   transition: 0.3s all cubic-bezier(0, 1.4, 1, 1);
+}
+
+.dot.pip-bounce:before {
+  transition: none;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -803,6 +807,21 @@ footer .multiplayer {
 
   .dot[class*="stage--"]:hover .hitarea {
     transform: translate(-50%, -50%) scale(0.8);
+  }
+
+  .field.animating .dot {
+    transition: none;
+  }
+
+  .field.animating .dot[class*="stage--"]:hover {
+    height: 64px;
+    width: 64px;
+    margin-top: 0;
+    margin-left: 0;
+  }
+
+  .field.animating .dot[class*="stage--"]:hover .hitarea {
+    transform: translate(-50%, -50%);
   }
 }
 
