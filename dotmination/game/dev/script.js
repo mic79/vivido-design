@@ -112,7 +112,7 @@ let level = (myDotmination !== null) ? myDotmination.level : 1,
     dotCols;
 
 $('body').addClass('mode-'+gameMode);
-$('.mode-modal .card[data-mode="' + gameMode + '"]').addClass('selected');
+$('.main-menu-modal [data-mode="' + gameMode + '"]').addClass('selected');
 
 $('.level-value').html(level);
 
@@ -132,11 +132,13 @@ let recentBotMoves = []; // Array to keep track of recent bot moves
 
 // Variables for sound pitch progression
 let chainReactionCounter = 0;
-// Distance from the cell that started the chain. One step farther waits
-// 0.1s, the old gap between cells. Cells at the same distance share that time.
+// One step farther waits 0.2s after the explosion that caused it. The wait is
+// never skipped, so a late step cannot pull later steps into the same moment.
 let chainAnchor = 0;
 let chainJobs = 0;
 let schedulingDepth = 0;
+let chainStepShown = 0;
+let lastChainStepEl = null;
 const basePitch = 1.0;
 const pitchStep = 0.05; // Increase pitch by 5% each time
 
@@ -375,11 +377,13 @@ function rippleBounce(dot) {
   if (typeof gsap === "undefined" || gameMode === "realTimeResource") return;
   const el = dot.get(0);
   if (!el) return;
-  gsap.killTweensOf(el);
+  const target = (cellStyle === "blob") ? blobPipFor(el) : el;
+  if (!target) return;
+  gsap.killTweensOf(target);
   // Scale the pip only. Scaling the dot shrinks its hit box, and same-row
   // neighbors overlap by a fraction of a pixel, so those hits would be lost.
-  el.classList.add("pip-bounce");
-  gsap.fromTo(el, { "--pip-scale": 1 }, {
+  target.classList.add("pip-bounce");
+  gsap.fromTo(target, { "--pip-scale": 1 }, {
     "--pip-scale": 0.9,
     duration: 0.2,
     ease: "power2.inOut",
@@ -387,8 +391,51 @@ function rippleBounce(dot) {
     repeat: 1,
     overwrite: true,
     onComplete: function () {
-      el.classList.remove("pip-bounce");
-      el.style.removeProperty("--pip-scale");
+      target.classList.remove("pip-bounce");
+      target.style.removeProperty("--pip-scale");
+    }
+  });
+}
+
+function showChainStep(step, player) {
+  if (gameMode === "realTimeResource" || typeof gsap === "undefined") return;
+  const field = document.querySelector(".field");
+  if (!field) return;
+  const el = document.createElement("div");
+  el.className = "chain-step";
+  el.textContent = "Chain x" + step;
+  el.style.color = player === "player--1" ? "var(--color-1)" : "var(--color-2)";
+  field.appendChild(el);
+  lastChainStepEl = el;
+  gsap.fromTo(el, { xPercent: -50, y: 0, opacity: 1 }, {
+    xPercent: -50,
+    y: -220,
+    opacity: 0,
+    duration: 1.4,
+    ease: "power1.out",
+    onComplete: function () {
+      el.remove();
+      if (lastChainStepEl === el) lastChainStepEl = null;
+    }
+  });
+}
+
+// The step that ends the chain keeps its label readable, then fades.
+function holdLastChainStep() {
+  const el = lastChainStepEl;
+  if (!el || !el.isConnected || typeof gsap === "undefined") return;
+  const y = Number(gsap.getProperty(el, "y")) || 0;
+  gsap.killTweensOf(el);
+  gsap.set(el, { opacity: 1 });
+  gsap.to(el, { y: y - 80, duration: 2.2, ease: "power1.out" });
+  gsap.to(el, {
+    opacity: 0,
+    duration: 0.8,
+    delay: 1.2,
+    ease: "power1.in",
+    onComplete: function () {
+      el.remove();
+      if (lastChainStepEl === el) lastChainStepEl = null;
     }
   });
 }
@@ -401,16 +448,19 @@ function clearChainSchedule() {
       this.classList.remove("pip-bounce");
       this.style.removeProperty("--pip-scale");
     });
+    gsap.killTweensOf(".chain-step");
   }
+  $(".chain-step").remove();
   chainAnchor = 0;
   chainJobs = 0;
   schedulingDepth = 0;
+  chainStepShown = 0;
+  lastChainStepEl = null;
 }
 
 function delayForDistance(distance) {
   if (gameMode === "realTimeResource" || distance <= 0) return 0;
-  const elapsed = chainAnchor ? gsap.globalTimeline.time() - chainAnchor : 0;
-  return Math.max(0, 0.1 * distance - elapsed);
+  return 0.2;
 }
 
 function buildDotNeighbors() {
@@ -482,6 +532,13 @@ function incrementDotStage(trgt, player = currentPlayer, fromQueue = false, dist
   // If a player is explicitly passed (for handling opponent moves),
   // use that player. Otherwise, use the global currentPlayer.
   const effectivePlayer = player;
+  // Distance 1 is the blast from the click. A chain starts when that blast
+  // sets off the next explosion.
+  const chainStep = distance - 1;
+  if (fromQueue && chainStep > chainStepShown) {
+    chainStepShown = chainStep;
+    showChainStep(chainStep, effectivePlayer);
+  }
   console.log(`incrementDotStage called for index: ${trgt.index()} by effectivePlayer: ${effectivePlayer}`);
 
   // console.log('>> index: ' + trgt.index());
@@ -512,8 +569,9 @@ function incrementDotStage(trgt, player = currentPlayer, fromQueue = false, dist
       } else if (currStage && i == stage_amount) {
         trgt.removeClass("stage--" + i).removeClass(playerClassClear);
         updatePlayerScoresUI(); // <<< Update score here (dot became neutral)
-        if ("vibrate" in navigator) {
-          window.navigator.vibrate([10, 10, 10]);
+        haptic([0, 40, 35, 50]);
+        if (cellStyle === "blob" && blobSplat) {
+          blobSplat.play();
         }
         enqueueExplosionNeighbors(trgt, effectivePlayer, distance);
       }
@@ -532,6 +590,7 @@ function animateNextDot(player = currentPlayer, justCompletedStep2) {
   }
 
   $(".field").removeClass("animating");
+  holdLastChainStep();
 
     // --- RTS MODE: Clear chain lock when chain is finished ---
     if (gameMode === 'realTimeResource' && typeof rtrMode.clearActiveChainPlayerLock === 'function') {
@@ -886,7 +945,7 @@ function setDots() {
         $(".field").append(
           '<div class="dot rippled" data-index="' +
             dotIndex +
-            '" data-increment="0"><div class="hitarea"></div></div>'
+            '" data-increment="0"><div class="atom" aria-hidden="true"><div class="blob"></div><div class="blob"></div><div class="blob"></div><div class="blob"></div><div class="blob"></div><div class="blob"></div></div><span class="stage-num"></span><div class="hitarea"></div></div>'
         );
         $(".dot:last").css({ top: newY, left: newX });
         dotIndex++;
@@ -895,22 +954,25 @@ function setDots() {
   }
   dots = $(".dot"); // Assign to global dots variable
   buildDotNeighbors();
+  syncBlobLayer();
 }
 //setDots();
 
 // Rippled
 $("body").on("click", ".rippled", function (e) {
-  if (!$(this).hasClass("disabled")) {
-    if ("vibrate" in navigator) {
-      window.navigator.vibrate(10);
+    if (!$(this).hasClass("disabled")) {
+      haptic(40);
+      const blobClick = cellStyle === "blob" && $(this).hasClass("dot");
+    const host = blobClick ? $(".blob-layer") : $(this);
+    if (!host.length) return;
+    const ripple = $('<div class="ripple ripple-animate"></div>');
+    if (blobClick) {
+      ripple.css({ left: this.style.left, top: this.style.top });
     }
-    $(this).append('<div class="ripple ripple-animate"></div>');
-    var ripple = $(this).find(".ripple").last();
-    ripple.removeClass("ripple-animate");
-    ripple.addClass("ripple-animate");
+    host.append(ripple);
     setTimeout(function () {
       ripple.remove();
-    }, 400);
+    }, blobClick ? 1400 : 400);
   }
 });
 // END Rippled
@@ -1186,45 +1248,41 @@ function incrementColorsIndex() {
   }
 }
 
-function changeColors() {
-  incrementColorsIndex();
-
-  // Get the HEX colors
+function paintColorGroup() {
   const hex1 = colorsArr[colorsIndex][0];
   const hex2 = colorsArr[colorsIndex][1];
-
-  // Convert HEX to RGB using the utility function
-  const rgb1 = hexToRgb(hex1); 
+  const rgb1 = hexToRgb(hex1);
   const rgb2 = hexToRgb(hex2);
 
-  // Update main colors
   gsap.to("html", {duration: 0, "--color-1": hex1});
   gsap.to("html", {duration: 0, "--color-2": hex2});
-
-  // Update RGBA variables for color 1 using RGB values
   gsap.to("html", {duration: 0, "--color-1-rgba-0": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0.75)`});
   gsap.to("html", {duration: 0, "--color-1-rgba-1": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0.4)`});
   gsap.to("html", {duration: 0, "--color-1-rgba-2": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0.3)`});
   gsap.to("html", {duration: 0, "--color-1-rgba-3": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0.2)`});
   gsap.to("html", {duration: 0, "--color-1-rgba-4": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0.1)`});
   gsap.to("html", {duration: 0, "--color-1-rgba-5": `rgba(${rgb1[0]},${rgb1[1]},${rgb1[2]},0)`});
-
-  // Update RGBA variables for color 2 using RGB values
   gsap.to("html", {duration: 0, "--color-2-rgba-0": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.75)`});
   gsap.to("html", {duration: 0, "--color-2-rgba-1": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.4)`});
   gsap.to("html", {duration: 0, "--color-2-rgba-2": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.3)`});
   gsap.to("html", {duration: 0, "--color-2-rgba-3": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.2)`});
   gsap.to("html", {duration: 0, "--color-2-rgba-4": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.1)`});
   gsap.to("html", {duration: 0, "--color-2-rgba-5": `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0)`});
-  
-  var currentColor;
-  if($('.field').hasClass('player--1')) {
-    currentColor = 1;
-  } else {
-    currentColor = 2;
-  }
-  // Update the current color (use original HEX)
+
+  var currentColor = $('.field').hasClass('player--1') ? 1 : 2;
   gsap.to("html", {duration: 0, "--color-current": colorsArr[colorsIndex][currentColor - 1]});
+  markSettingsSelection();
+}
+
+function changeColors() {
+  incrementColorsIndex();
+  paintColorGroup();
+}
+
+function selectColorGroup(index) {
+  if (index === colorsIndex || index < 0 || index >= colorsArr.length) return;
+  colorsIndex = index;
+  paintColorGroup();
 }
 
 //listen to shake event
@@ -1260,10 +1318,204 @@ $('.modal-close').on('click', function() {
 // END Modal
 
 // --- Main Menu Modal Logic ---
+const cellStyleOrder = ["dot", "atom", "blob"];
+let cellStyle = "dot";
+let showStageNumbers = false;
+let hapticEnabled = true;
+
+try {
+  const savedCells = localStorage.getItem("dotmination-cells");
+  if (cellStyleOrder.indexOf(savedCells) !== -1) cellStyle = savedCells;
+  showStageNumbers = localStorage.getItem("dotmination-numbers") === "1";
+  hapticEnabled = localStorage.getItem("dotmination-haptics") !== "0";
+} catch (e) {}
+
+function haptic(pattern) {
+  if (!hapticEnabled || pattern == null) return false;
+  try {
+    if (typeof navigator.vibrate === "function" && navigator.vibrate(pattern)) return true;
+  } catch (e) {}
+  try {
+    const native = navigator.notification && navigator.notification.vibrate;
+    if (typeof native === "function") {
+      native.call(navigator.notification, pattern);
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function markSettingsSelection() {
+  $(".color-swatch").removeClass("selected").attr("aria-pressed", "false");
+  $(".color-swatch[data-colors='" + colorsIndex + "']").addClass("selected").attr("aria-pressed", "true");
+  $(".cell-preview").removeClass("selected").attr("aria-pressed", "false");
+  $(".cell-preview[data-cells='" + cellStyle + "']").addClass("selected").attr("aria-pressed", "true");
+  $(".setting-switch[data-action='numbers']").toggleClass("on", showStageNumbers).attr("aria-pressed", showStageNumbers ? "true" : "false");
+  $(".setting-switch[data-action='haptics']").toggleClass("on", hapticEnabled).attr("aria-pressed", hapticEnabled ? "true" : "false");
+}
+
+function buildColorSwatches() {
+  const row = document.querySelector(".setting-colors");
+  if (!row || row.childElementCount) return;
+  colorsArr.forEach(function (pair, index) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "color-swatch";
+    button.dataset.colors = String(index);
+    button.style.setProperty("--swatch-1", pair[0]);
+    button.style.setProperty("--swatch-2", pair[1]);
+    button.setAttribute("aria-label", "Color set " + (index + 1));
+    row.appendChild(button);
+  });
+}
+
+function applyCellSettings() {
+  $("body").toggleClass("cells-atom", cellStyle === "atom");
+  $("body").toggleClass("cells-blob", cellStyle === "blob");
+  $("body").toggleClass("show-stage-numbers", showStageNumbers);
+  markSettingsSelection();
+  syncBlobLayer();
+}
+
+function blobPipFor(dotEl) {
+  if (!dotEl) return null;
+  const dotsNow = document.querySelectorAll(".field > .dot");
+  const index = Array.prototype.indexOf.call(dotsNow, dotEl);
+  if (index < 0) return null;
+  const pips = document.querySelectorAll(".blob-layer > .blob-pip");
+  return pips[index] || null;
+}
+
+let blobSyncing = false;
+function syncBlobLayer() {
+  if (blobSyncing) return;
+  const field = document.querySelector(".field");
+  if (!field) return;
+  blobSyncing = true;
+  try {
+    let layer = field.querySelector(":scope > .blob-layer");
+    if (cellStyle !== "blob") {
+      if (layer) layer.remove();
+      return;
+    }
+    if (!layer) {
+      layer = document.createElement("div");
+      layer.className = "blob-layer";
+      field.appendChild(layer);
+    }
+    const dotEls = field.querySelectorAll(":scope > .dot");
+    let pips = layer.querySelectorAll(":scope > .blob-pip");
+    if (pips.length !== dotEls.length) {
+      layer.replaceChildren();
+      dotEls.forEach(function () {
+        const pip = document.createElement("div");
+        pip.className = "blob-pip";
+        pip.appendChild(document.createElement("i"));
+        layer.appendChild(pip);
+      });
+      pips = layer.querySelectorAll(":scope > .blob-pip");
+    }
+    dotEls.forEach(function (dot, i) {
+      const pip = pips[i];
+      if (pip.style.left !== dot.style.left) pip.style.left = dot.style.left;
+      if (pip.style.top !== dot.style.top) pip.style.top = dot.style.top;
+      let stage = "0";
+      for (let n = 1; n <= 5; n++) {
+        if (dot.classList.contains("stage--" + n)) stage = String(n);
+      }
+      if (pip.dataset.stage !== stage) pip.dataset.stage = stage;
+      const p1 = dot.classList.contains("player--1");
+      const p2 = dot.classList.contains("player--2");
+      if (pip.classList.contains("player--1") !== p1) pip.classList.toggle("player--1", p1);
+      if (pip.classList.contains("player--2") !== p2) pip.classList.toggle("player--2", p2);
+    });
+  } finally {
+    blobSyncing = false;
+  }
+}
+
+const blobObserver = new MutationObserver(function () {
+  if (cellStyle === "blob") syncBlobLayer();
+});
+const blobField = document.querySelector(".field");
+if (blobField) {
+  blobObserver.observe(blobField, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ["class"]
+  });
+}
+
+function showMenuView(view) {
+  const titles = {
+    main: "Menu",
+    settings: "Settings",
+    "mode-regular": "Levels",
+    "mode-random": "Random",
+    "mode-multiplayer": "Multiplayer"
+  };
+  $(".main-menu-modal .menu-view").removeClass("active");
+  const viewEl = $(".main-menu-modal .menu-view-" + view);
+  viewEl.addClass("active");
+  viewEl.find(".bot-difficulty, .list--mode-regular, .multiplayer-start-options").css("display", "");
+  $(".main-menu-modal h2").text(titles[view] || "Menu");
+  $(".main-menu-modal").toggleClass("submenu", view !== "main");
+}
+
+function openMainMenu(view) {
+  const modal = $(".main-menu-modal");
+  const next = view || "main";
+  const already = modal.hasClass("active") && $(".menu-view-" + next).hasClass("active");
+  $(".modal").removeClass("active");
+  if (already) {
+    $("body").removeClass("modal-open");
+    return;
+  }
+  showMenuView(next);
+  modal.addClass("active");
+  $("body").addClass("modal-open");
+  if (next === "mode-regular") updateLevelList();
+}
+
+buildColorSwatches();
+applyCellSettings();
+
+$('.main-menu-modal .menu-back').on('click', function() {
+  showMenuView("main");
+});
+
+$('.menu-view-settings').on('click', '.color-swatch', function() {
+  selectColorGroup(Number($(this).data('colors')));
+});
+
+$('.menu-view-settings').on('click', '.cell-preview', function() {
+  const next = $(this).data('cells');
+  if (cellStyleOrder.indexOf(next) === -1 || next === cellStyle) return;
+  cellStyle = next;
+  try { localStorage.setItem("dotmination-cells", cellStyle); } catch (e) {}
+  applyCellSettings();
+});
+
+$('.menu-view-settings').on('click', '.setting-switch', function() {
+  const action = $(this).data('action');
+  if (action === 'numbers') {
+    showStageNumbers = !showStageNumbers;
+    try { localStorage.setItem("dotmination-numbers", showStageNumbers ? "1" : "0"); } catch (e) {}
+    applyCellSettings();
+  } else if (action === 'haptics') {
+    hapticEnabled = !hapticEnabled;
+    try { localStorage.setItem("dotmination-haptics", hapticEnabled ? "1" : "0"); } catch (e) {}
+    applyCellSettings();
+    if (hapticEnabled) haptic(40);
+  }
+});
+
 // Open main menu modal
 $('#main-menu-btn').on('click', function(e) {
   e.stopPropagation(); // Prevent header clicks if any
   $('.modal').removeClass('active'); // Close any other open modals
+  showMenuView("main");
   $('.main-menu-modal').addClass('active');
   $('body').addClass('modal-open');
   // <<< ADD CHECK >>>
@@ -1278,34 +1530,21 @@ $('.main-menu-modal .btn-main-menu').on('click', function() {
   // <<< MODIFIED: Call Tutorial Module for "how-to-play" >>>
   if (action === 'how-to-play') {
     $('.main-menu-modal').removeClass('active');
-    // <<< REMOVE this line: $('body').removeClass('modal-open'); >>>
-    tutorial.startTutorialFlow(); // Call module function
-  } else if (action === 'mode' || action === 'profile') {
-    // Close the main menu modal first for mode/profile actions
+    tutorial.startTutorialFlow();
+  } else if (action === 'profile') {
     $('.main-menu-modal').removeClass('active');
     $('body').removeClass('modal-open');
-    
-    // Perform action after a short delay to allow closing animation
     setTimeout(() => {
-      if (action === 'mode') {
-        // Open the mode selection modal
-        $('.mode-modal').addClass('active');
-        $('body').addClass('modal-open');
-        if($('body').hasClass('modal-open')) { // Re-check just in case
-          updateLevelList(); // Ensure level list is updated if switching to regular
-        }
-      } else if (action === 'profile') {
-        // Open the profile modal
-        $('.profile-modal').addClass('active');
-        $('body').addClass('modal-open');
-        if($('body').hasClass('modal-open')) { // Re-check
-          updateBestTime(); // Update profile times
-        }
+      $('.profile-modal').addClass('active');
+      $('body').addClass('modal-open');
+      if ($('body').hasClass('modal-open')) {
+        updateBestTime();
       }
-    }, 100); // Adjust delay if needed
-  } else if (action === 'colors') {
-    // Trigger color change directly without closing the modal
-    changeColors();
+    }, 100);
+  } else if (action === 'settings') {
+    showMenuView("settings");
+  } else if (action === 'menu-back') {
+    showMenuView("main");
   }
 });
 
@@ -1404,42 +1643,18 @@ function updateBestTime() {
 
 // Mode Modal
 // Include .multiplayer footer button in this selector
-$('.level, .random, .multiplayer, .rts, .mode-modal .backdrop').on('click', function(e) { 
-  // Prevent propagation if it's one of the footer buttons to avoid immediate closing
-  if ($(this).hasClass('level') || $(this).hasClass('random') || $(this).hasClass('multiplayer') || $(this).hasClass('rts')) {
-    e.stopPropagation(); 
+$('.level, .random, .multiplayer, .rts, .mode-modal .backdrop').on('click', function(e) {
+  if ($(this).hasClass('mode-modal') || $(this).hasClass('backdrop')) {
+    $('body').removeClass('modal-open');
+    return;
   }
-  $('body').toggleClass('modal-open');
-  
-  if($('body').hasClass('modal-open')) {
-    // Ensure the correct mode button is highlighted when modal opens
-    $('.mode-modal .card[data-mode]').removeClass('selected');
-    $('.mode-modal .card[data-mode="' + gameMode + '"]').addClass('selected');
-    
-    // Existing logic for regular mode level list
-    if (gameMode === 'regular') {
-        updateLevelList();
-    }
-    // Show/hide sections based on current gameMode when modal opens
-    if (gameMode === 'random') {
-        $('.mode-modal .list--mode-regular, .mode-modal .multiplayer-start-options').hide();
-        $('.mode-modal .bot-difficulty').show();
-        // Also ensure correct difficulty is selected if random mode is active
-        $('.mode-modal .difficulty-option').removeClass('selected');
-        $('.mode-modal .difficulty-option[data-difficulty="' + botDifficulty + '"]').addClass('selected');
-    } else if (gameMode === 'regular') {
-        $('.mode-modal .bot-difficulty, .mode-modal .multiplayer-start-options').hide();
-        $('.mode-modal .list--mode-regular').show();
-    } else if (gameMode === 'multiplayer') {
-        $('.mode-modal .list--mode-regular, .mode-modal .bot-difficulty').hide();
-        $('.mode-modal .multiplayer-start-options').show();
-        // Potentially select the current multiplayerStartType if applicable
-    }
-
-  } else {
-    // Modal is closing, ensure body class is consistent if mode changed inside modal but not applied
-    // This might need more robust state management if changes can be abandoned in modal
-  }
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+  const view = $(this).hasClass('level') ? 'mode-regular'
+    : $(this).hasClass('random') ? 'mode-random'
+    : $(this).hasClass('multiplayer') ? 'mode-multiplayer'
+    : 'main';
+  openMainMenu(view);
 });
 
 // Update difficulty option handler to match level selection pattern
@@ -1453,9 +1668,9 @@ $('body').on('click', '.difficulty-option', function(e) {
   
   // Update bot difficulty setting
   botDifficulty = $(this).data('difficulty');
-  
-  // Close the modal and update game mode
+
   $('body').removeClass('modal-open');
+  $('.main-menu-modal, .mode-modal').removeClass('active');
   gameMode = 'random';
   
   // Update body classes
@@ -1569,6 +1784,13 @@ var incrementSound = new Howl({
   volume: 0.25 // Adjust volume as needed
 });
 
+var blobSplat = new Howl({
+  src: [
+    "./sounds/blob-splat.mp3"
+  ],
+  volume: 0.55
+});
+
 var logoRings = CSSRulePlugin.getRule(".intro .logo:before");
 
 $(".intro").on("click", ".logo:not(.disabled)", function() {
@@ -1638,8 +1860,8 @@ function signinAnim() {
         if (map) {
           console.log("Intro onComplete: mode=random with map. Relying on document.ready map load.");
           $('body').removeClass('mode-regular mode-multiplayer').addClass('mode-random');
-          $('.mode-modal .card').removeClass('selected');
-          $('.mode-modal .card[data-mode="random"]').addClass('selected');
+          $('.main-menu-modal [data-mode]').removeClass('selected');
+          $('.main-menu-modal [data-mode="random"]').addClass('selected');
         } else {
           startAnim(); // New random game
         }
@@ -1652,8 +1874,8 @@ function signinAnim() {
         $('body')
           .removeClass('mode-regular mode-multiplayer mode-random')
           .addClass('mode-realTimeResource');
-        $('.mode-modal .card').removeClass('selected');
-        $('.mode-modal .card[data-mode="realTimeResource"]').addClass('selected');
+        $('.main-menu-modal [data-mode]').removeClass('selected');
+        $('.main-menu-modal [data-mode="realTimeResource"]').addClass('selected');
         startAnim();
         console.log("Intro onComplete: mode=realTimeResource from URL. Started RTS mode.");
       } else if (mode === 'regular') { // Explicit regular mode from URL
@@ -1729,8 +1951,8 @@ $(document).ready(function() {
       .removeClass('mode-regular mode-multiplayer') 
       .addClass('mode-random');
     
-    $('.mode-modal .card').removeClass('selected');
-    $('.mode-modal .card[data-mode="random"]').addClass('selected');
+    $('.main-menu-modal [data-mode]').removeClass('selected');
+    $('.main-menu-modal [data-mode="random"]').addClass('selected');
     $('.difficulty-option').removeClass('selected');
     $('.difficulty-option[data-difficulty="' + botDifficulty + '"]').addClass('selected');
 
@@ -1750,8 +1972,8 @@ $(document).ready(function() {
     $('body')
       .removeClass('mode-regular mode-multiplayer mode-random')
       .addClass('mode-realTimeResource');
-    $('.mode-modal .card').removeClass('selected');
-    $('.mode-modal .card[data-mode="realTimeResource"]').addClass('selected');
+    $('.main-menu-modal [data-mode]').removeClass('selected');
+    $('.main-menu-modal [data-mode="realTimeResource"]').addClass('selected');
     startAnim();
   } else {
     // Tutorial.checkStartTutorial() handles other startup scenarios including calling startAnim if needed
@@ -1777,8 +1999,8 @@ function checkUrlParameters() {
     $('body')
       .removeClass('mode-random mode-regular mode-multiplayer')
       .addClass('mode-'+gameMode);
-    $('.mode-modal .card').removeClass('selected');
-    $('.mode-modal .card[data-mode="' + gameMode + '"]').addClass('selected');
+    $('.main-menu-modal [data-mode]').removeClass('selected');
+    $('.main-menu-modal [data-mode="' + gameMode + '"]').addClass('selected');
     console.log("-------------------------------> set selected.");
     
     if (mode === 'regular') {
@@ -1803,14 +2025,7 @@ function checkUrlParameters() {
       if (connectionState === CONNECTION_STATES.DISCONNECTED) {
         isHost = true; // Assume hosting if loading directly into MP mode
         
-        // Open the mode modal and show start options
-        $('.mode-modal').addClass('active');
-        $('body').addClass('modal-open');
-        
-        // Hide other irrelevant sections
-        $('.mode-modal .list--mode-regular, .mode-modal .bot-difficulty, .mode-modal .game-id-display, .mode-modal .game-id-input').hide();
-        // Show multiplayer relevant sections
-        $('.mode-modal .multiplayer-start-options').show();
+        openMainMenu('mode-multiplayer');
          
         // Deprecated joining via URL ID - The UI for starting/joining a multiplayer game 
         // is now primarily driven by user interaction with the modal after 
@@ -1889,21 +2104,14 @@ $(document).ready(function() {
   checkUrlParameters();
   
   // Add the multiplayer button and options to the modal
-  if ($('.mode-modal .card[data-mode="multiplayer"]').length === 0) {
+  if ($('.main-menu-modal [data-mode="multiplayer"]').length === 0) {
     console.log("Adding multiplayer button to modal");
-    
-    // Get styling from an existing button
-    var $existingButton = $('.mode-modal .card[data-mode="random"]');
+    var $existingButton = $('.main-menu-modal [data-mode="random"]');
     var buttonClass = $existingButton.attr('class');
-    
-    // Create the button with matching styling
-    var $newButton = $('<div class="' + buttonClass + '" data-mode="multiplayer"><h1><i class="fas fa-users"></i></h1><p class="text-center">Multiplayer<br><!--<span class="x-small" style="position: absolute; transform: translateX(-50%);">on same WIFI</span>--></p></div>');
-    
-    // Add it after the random button
-    $('.mode-modal .card[data-mode="random"]').after($newButton);
-
-    if(gameMode === 'multiplayer') {
-      $('.mode-modal .card[data-mode="multiplayer"]').addClass('selected');
+    var $newButton = $('<div class="' + buttonClass + '" data-mode="multiplayer"><h1><i class="fas fa-users"></i></h1><p class="text-center">Multiplayer<br></p></div>');
+    $existingButton.after($newButton);
+    if (gameMode === 'multiplayer') {
+      $('.main-menu-modal [data-mode="multiplayer"]').addClass('selected');
     }
   }
 
@@ -1922,7 +2130,7 @@ $(document).ready(function() {
     console.log("Start type selected:", multiplayerStartType);
 
     // <<< CLOSE THE MODAL >>>
-    $('.mode-modal').removeClass('active');
+    $('.main-menu-modal, .mode-modal').removeClass('active');
     $('body').removeClass('modal-open');
 
     // Set state *after* cleanup and type selection
@@ -2016,8 +2224,8 @@ function showWaitingOverlay() {
       gameMode = 'regular';
       
       // Update the UI to reflect the mode change - ensure proper selection in modal
-      $('.mode-modal .card').removeClass('selected');
-      $('.mode-modal .card[data-mode="regular"]').addClass('selected');
+      $('.main-menu-modal [data-mode]').removeClass('selected');
+      $('.main-menu-modal [data-mode="regular"]').addClass('selected');
       
       // Update body classes
       $('body')
@@ -2643,8 +2851,8 @@ function setupConnectionHandlers(connection) {
 
          // Update the UI to reflect the mode change
          $('body').removeClass('mode-multiplayer mode-random').addClass('mode-regular');
-         $('.mode-modal .card').removeClass('selected');
-         $('.mode-modal .card[data-mode="regular"]').addClass('selected');
+         $('.main-menu-modal [data-mode]').removeClass('selected');
+         $('.main-menu-modal [data-mode="regular"]').addClass('selected');
          $('.list--mode-regular').show(); // Ensure level list is visible if modal opens
          $('.bot-difficulty, .multiplayer-options, .game-id-display, .game-id-input').hide(); // Hide other mode sections
          $('.turn-indicator').remove(); // Remove turn indicator
@@ -2890,18 +3098,9 @@ function showConnectingOverlay() {
       .removeClass('mode-random mode-multiplayer')
       .addClass('mode-regular');
     
-    // Update mode selection in modal
-    $('.mode-modal .card').removeClass('selected');
-    $('.mode-modal .card[data-mode="regular"]').addClass('selected');
-    
-    // Show the mode modal with levels list
-    $('.mode-modal').addClass('active');
-    $('body').addClass('modal-open');
-    $('.list--mode-regular').show();
-    updateLevelList(); // <<< ADD THIS CALL
-    
-    // Hide bot difficulty section
-    $('.bot-difficulty').hide();
+    $('.main-menu-modal [data-mode]').removeClass('selected');
+    $('.main-menu-modal [data-mode="regular"]').addClass('selected');
+    openMainMenu('mode-regular');
     
     // Update URL
     window.history.replaceState({}, '', window.location.pathname);
@@ -3068,8 +3267,8 @@ $('.difficulty-option[data-difficulty="random"], .difficulty-option[data-difficu
   // Update bot difficulty setting
   botDifficulty = $(this).data('difficulty');
 
-  // Close the modal and update game mode
   $('body').removeClass('modal-open');
+  $('.main-menu-modal, .mode-modal').removeClass('active');
   gameMode = 'random';
 
   // Update body classes
@@ -3088,7 +3287,7 @@ $('.difficulty-option[data-difficulty="random"], .difficulty-option[data-difficu
 // --- REFACTORED MODE MODAL HANDLERS --- 
 
 // Handler specifically for Mode Selection Buttons (Regular, Random, Multiplayer, RealTimeResource)
-$('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
+$('.main-menu-modal .menu-view').on('click', '[data-mode]', function(e) {
   // If we're currently in multiplayer mode, notify the other player before cleaning up
   if (isMultiplayer && conn && $(this).data('mode') !== 'multiplayer') {
     conn.send({ type: 'modeSwitch' });
@@ -3109,9 +3308,6 @@ $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
 
   gameMode = newMode;
 
-  // General cleanup: hide all specific sections first
-  $('.list--mode-regular, .bot-difficulty, .multiplayer-start-options, .game-id-display, .game-id-input').hide();
-
   if (isMultiplayer && gameMode !== 'multiplayer') { 
     multiplayerStartType = 'blank'; 
     $('.turn-indicator').remove();
@@ -3127,10 +3323,9 @@ $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
     var newUrl = window.location.pathname + '?mode=multiplayer';
     window.history.replaceState({}, document.title, newUrl);
     
-    $('.multiplayer-start-options').show();
-    
-    $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
+    $('.main-menu-modal [data-mode]').removeClass('selected');
     $(this).addClass('selected');
+    showMenuView('mode-multiplayer');
     
     $('body')
       .removeClass('mode-random mode-regular mode-realTimeResource modal-open') // Added mode-realTimeResource
@@ -3138,34 +3333,32 @@ $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
     
     return false;
   } else if (gameMode === 'regular') {
-    $('.list--mode-regular').show();
+    showMenuView('mode-regular');
     $('body')
-      .removeClass('mode-random mode-multiplayer mode-realTimeResource modal-open') // Added mode-realTimeResource
+      .removeClass('mode-random mode-multiplayer mode-realTimeResource')
       .addClass('mode-regular modal-open'); 
-    $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
+    $('.main-menu-modal [data-mode]').removeClass('selected');
     $(this).addClass('selected');
     updateLevelList(); 
     return; 
   } else if (gameMode === 'random') {
-    $('.bot-difficulty').show();
+    showMenuView('mode-random');
     botDifficulty = 'random'; 
     $('.difficulty-option').removeClass('selected');
     $('.difficulty-option[data-difficulty="random"]').addClass('selected');
     $('body')
-      .removeClass('mode-regular mode-multiplayer mode-realTimeResource modal-open') // Added mode-realTimeResource
+      .removeClass('mode-regular mode-multiplayer mode-realTimeResource')
       .addClass('mode-random modal-open'); 
-    $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
+    $('.main-menu-modal [data-mode]').removeClass('selected');
     $(this).addClass('selected');
   } else if (gameMode === 'realTimeResource') {
-    // No specific sub-options for RTR mode in the modal currently
-    // Close modal and start game
     $('body')
       .removeClass('mode-regular mode-random mode-multiplayer modal-open')
       .addClass('mode-realTimeResource'); 
-    $('.mode-modal .wrapper div[data-mode]').removeClass('selected');
+    $('.main-menu-modal [data-mode]').removeClass('selected');
     $(this).addClass('selected');
-    $('.mode-modal').removeClass('active'); // Close modal
-    $('body').removeClass('modal-open');   // Remove modal-open class
+    $('.main-menu-modal, .mode-modal').removeClass('active');
+    $('body').removeClass('modal-open');
     var newUrl = window.location.pathname + '?mode=realTimeResource';
     window.history.replaceState({}, document.title, newUrl);
     startAnim(); // This will trigger rtrMode.startRealTimeResourceGame()
@@ -3174,7 +3367,7 @@ $('.mode-modal .wrapper').on('click', 'div[data-mode]', function(e) {
 });
 
 // Handler specifically for Level Selection Buttons
-$('.mode-modal .wrapper').on('click', '.btn-level', function(e) {
+$('.main-menu-modal .menu-view').on('click', '.btn-level', function(e) {
   console.log("Level button clicked:", $(this).data('level'));
   gameMode = 'regular';
   level = $(this).data('level');
@@ -3183,11 +3376,11 @@ $('.mode-modal .wrapper').on('click', '.btn-level', function(e) {
   var newUrl = window.location.pathname + '?mode=regular&level=' + level;
   window.history.replaceState({}, document.title, newUrl);
   
-  $('.mode-modal .wrapper .btn-level').removeClass('selected'); 
+  $('.btn-level').removeClass('selected'); 
   $(this).addClass('selected');
 
-  // Set correct body class for regular mode
   $('body').removeClass('mode-random mode-multiplayer modal-open').addClass('mode-regular');
+  $('.main-menu-modal, .mode-modal').removeClass('active');
   
   startAnim();
 });
@@ -3282,8 +3475,8 @@ function transitionToLevel1AfterTutorial() {
     window.history.replaceState({}, document.title, newUrl);
     $('body').removeClass('mode-random mode-multiplayer').addClass('mode-regular');
     $('.level-value').html(level);
-    $('.mode-modal .card').removeClass('selected');
-    $('.mode-modal .card[data-mode="regular"]').addClass('selected');
+    $('.main-menu-modal [data-mode]').removeClass('selected');
+    $('.main-menu-modal [data-mode="regular"]').addClass('selected');
     startAnim();
     console.log("Transitioned to Level 1 after tutorial action.");
 }

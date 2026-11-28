@@ -16,10 +16,24 @@
   <link rel="stylesheet" href="./lib/normalize.css">
   <link rel='stylesheet' href='./fonts/roboto.css' type='text/css'>
   <link rel='stylesheet' href='./lib/all.min.css'>
-  <link rel="stylesheet" href="./style.css?v=20261128n">
+  <link rel="stylesheet" href="./style.css?v=20261129d">
 
 </head>
 <body>
+<svg class="cell-filters" aria-hidden="true" focusable="false" width="0" height="0">
+  <defs>
+    <filter id="cell-goo" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="12" result="blur" />
+      <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 19 -9" result="goo" />
+      <feComposite in="SourceGraphic" in2="goo" operator="atop" />
+    </filter>
+    <filter id="blob-goo" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
+      <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 19 -9" result="goo" />
+      <feComposite in="SourceGraphic" in2="goo" operator="atop" />
+    </filter>
+  </defs>
+</svg>
 <div class="intro noselect">
   <div class="logo-wrapper">
     <div class="colors-overlay">
@@ -158,54 +172,6 @@
     <div class="wrapper">
       <div class="modal-close"><i class="fas fa-times"></i></div>
       <h2>Mode</h2>
-      <div class="row">
-        <div class="col card btn" data-mode="regular">
-          <h1><i class="fas fa-layer-group"></i></h1>
-          <p>Levels</p>
-        </div>
-        
-        <div class="col card btn" data-mode="random">
-          <h1><i class="fas fa-random"></i></h1>
-          <p>Random</p>
-        </div>
-        <div class="col card btn" data-mode="realTimeResource">
-          <h1><i class="fas fa-bolt"></i></h1>
-          <p>Real-Time</p>
-        </div>
-      </div>
-      
-      <div class="bot-difficulty">
-        <h3>Bot Difficulty</h3>
-        <div class="row">
-          <div class="col card btn difficulty-option selected" data-difficulty="random">
-            <h1><i class="fas fa-robot"></i></h1>
-            <p>Normal</p>
-          </div>
-          
-          <div class="col card btn difficulty-option" data-difficulty="smart">
-            <h1><i class="fas fa-brain"></i></h1>
-            <p>Harder</p>
-          </div>
-        </div>
-      </div>
-      
-      <div class="list list--mode-regular">
-        <ul></ul>
-      </div>
-
-      <div class="multiplayer-start-options" style="display: none;">
-        <h3>Start Type</h3>
-        <div class="row">
-          <div class="col card btn btn-start-type start-type-option" data-start-type="blank">
-            <h1><i class="far fa-circle"></i></h1>
-            <p>Blank Start</p>
-          </div>
-          <div class="col card btn btn-start-type start-type-option" data-start-type="half-filled">
-            <h1><i class="fas fa-adjust"></i></h1>
-            <p>Half-Filled Start</p>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
   
@@ -234,31 +200,109 @@
   <div class="backdrop"></div>
   <div class="wrapper">
     <div class="modal-close"><i class="fas fa-times"></i></div>
-    <h2>Menu</h2>
-    <div class="row">
-      <div class="col card btn btn-main-menu" data-action="mode">
-        <h1>Game Modes</h1>
+    <div class="menu-head">
+      <button type="button" class="menu-back" data-action="menu-back" aria-label="Back"><i class="fas fa-arrow-left"></i></button>
+      <h2>Menu</h2>
+    </div>
+    <div class="menu-view menu-view-main active">
+      <div class="row mode-choices">
+        <div class="col card btn" data-mode="regular">
+          <h1><i class="fas fa-layer-group"></i></h1>
+          <p>Levels</p>
+        </div>
+        <div class="col card btn" data-mode="random">
+          <h1><i class="fas fa-random"></i></h1>
+          <p>Random</p>
+        </div>
+        <div class="col card btn" data-mode="realTimeResource">
+          <h1><i class="fas fa-bolt"></i></h1>
+          <p>Real-Time</p>
+        </div>
+        <div class="col card btn" data-mode="multiplayer">
+          <h1><i class="fas fa-users"></i></h1>
+          <p>Multiplayer</p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col card btn btn-main-menu" data-action="how-to-play">
+          <p>How to Play</p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col card btn btn-main-menu" data-action="profile">
+          <p>View Stats</p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col card btn btn-main-menu" data-action="settings">
+          <p>Settings</p>
+        </div>
       </div>
     </div>
-    <div class="row">
-      <div class="col card btn btn-main-menu" data-action="how-to-play">
-        <p>How to Play</p>
+    <div class="menu-view menu-view-settings">
+      <div class="setting-colors" role="group" aria-label="Colors"></div>
+      <div class="setting-cells" role="group" aria-label="Cells">
+        <button type="button" class="cell-preview" data-cells="dot" aria-label="Dot">
+          <span class="preview-dot"></span>
+          <span class="preview-num">3</span>
+        </button>
+        <button type="button" class="cell-preview" data-cells="atom" aria-label="Atom">
+          <span class="preview-clip"><span class="preview-atom" aria-hidden="true"><i></i><i></i><i></i></span></span>
+          <span class="preview-num">3</span>
+        </button>
+        <button type="button" class="cell-preview" data-cells="blob" aria-label="Blob">
+          <span class="preview-blob"></span>
+          <span class="preview-num">3</span>
+        </button>
+      </div>
+      <div class="setting-line">
+        <span>Show numbers</span>
+        <button type="button" class="setting-switch" data-action="numbers" aria-label="Show numbers"><i></i></button>
+      </div>
+      <div class="setting-line">
+        <span>Haptics</span>
+        <button type="button" class="setting-switch" data-action="haptics" aria-label="Haptics"><i></i></button>
       </div>
     </div>
-    <div class="row">
-      <div class="col card btn btn-main-menu" data-action="profile">
-        <p>View Stats</p>
+    <div class="menu-view menu-view-mode-regular">
+      <div class="list list--mode-regular">
+        <ul></ul>
       </div>
     </div>
-    <div class="row">
-      <div class="col card btn btn-main-menu" data-action="colors">
-        <p>Change Colors</p>
+    <div class="menu-view menu-view-mode-random">
+      <div class="bot-difficulty">
+        <h3>Bot Difficulty</h3>
+        <div class="row">
+          <div class="col card btn difficulty-option selected" data-difficulty="random">
+            <h1><i class="fas fa-robot"></i></h1>
+            <p>Normal</p>
+          </div>
+          <div class="col card btn difficulty-option" data-difficulty="smart">
+            <h1><i class="fas fa-brain"></i></h1>
+            <p>Harder</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="menu-view menu-view-mode-multiplayer">
+      <div class="multiplayer-start-options">
+        <h3>Start Type</h3>
+        <div class="row">
+          <div class="col card btn btn-start-type start-type-option" data-start-type="blank">
+            <h1><i class="far fa-circle"></i></h1>
+            <p>Blank Start</p>
+          </div>
+          <div class="col card btn btn-start-type start-type-option" data-start-type="half-filled">
+            <h1><i class="fas fa-adjust"></i></h1>
+            <p>Half-Filled Start</p>
+          </div>
+        </div>
       </div>
     </div>
     <div class="row justify-content-center">
       <div class="col">
         <p class="text-center">For info and feedback, please visit<br><a href="https://discord.gg/vvuzWnTWKE" target="_blank" onclick="window.open('https://discord.gg/vvuzWnTWKE', '_system'); return false;">Dotmination Discord</a></p>
-        <p class="smaller">Last updated: 2026-11-28</p>
+        <p class="smaller">Last updated: 2026-11-29</p>
       </div>
     </div>
   </div>
@@ -305,7 +349,7 @@
 <script src='./lib/moment.js'></script>
 <script src='./lib/howler.min.js'></script>
 <script type="module" src="./modules/utils.js?v=2024051604"></script>
-<script type="module" src="./script.js?v=20261128n"></script>
+<script type="module" src="./script.js?v=20261129d"></script>
 <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
 
 </body>

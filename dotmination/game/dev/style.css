@@ -776,53 +776,35 @@ footer .multiplayer {
   transition: none;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  .dot:not([class*="stage--"]):hover:before {
-    height: 15%;
-    width: 15%;
-  }
-}
-
 .dot[class*="stage--"] {
   opacity: 1;
 }
 
+/* Dashed ring from DotminationVR's bot-choice mark: radius 30, dash 6 / gap 5, 2.5px, turn colour. */
+.dot::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 64px;
+  height: 64px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 4;
+  opacity: 0;
+  background: var(--color-current, #243038);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='none' stroke='black' stroke-width='2.5' stroke-dasharray='6 5'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='none' stroke='black' stroke-width='2.5' stroke-dasharray='6 5'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+}
+
 @media (hover: hover) and (pointer: fine) {
-  .dot[class*="stage--"] {
-    margin-top: 0;
-    margin-left: 0;
+  .dot:hover::after {
+    opacity: 0.9;
   }
+}
 
-  .dot[class*="stage--"]:hover {
-    height: 96px;
-    width: 96px;
-    margin-top: -16px;
-    margin-left: -16px;
-    z-index: 2;
-  }
-
-  .dot[class*="stage--"]:hover:before {
-    transform: translate(-50%, -50%) scale(0.8);
-  }
-
-  .dot[class*="stage--"]:hover .hitarea {
-    transform: translate(-50%, -50%) scale(0.8);
-  }
-
-  .field.animating .dot {
-    transition: none;
-  }
-
-  .field.animating .dot[class*="stage--"]:hover {
-    height: 64px;
-    width: 64px;
-    margin-top: 0;
-    margin-left: 0;
-  }
-
-  .field.animating .dot[class*="stage--"]:hover .hitarea {
-    transform: translate(-50%, -50%);
-  }
+.field.animating .dot {
+  transition: none;
 }
 
 .dot.stage--1:before {
@@ -865,6 +847,190 @@ footer .multiplayer {
   pointer-events: none;
 }
 
+.cell-filters {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.dot .atom,
+.dot .stage-num {
+  position: absolute;
+  pointer-events: none;
+}
+
+.dot .atom {
+  display: none;
+  left: 50%;
+  top: 50%;
+  width: 200px;
+  height: 200px;
+  z-index: 1;
+  /* Pen field is 200px and its circle center sits at 32,32. Pin that point to the cell center. */
+  transform-origin: 32px 32px;
+  transform: translate(-32px, -32px) scale(calc(0.32 * var(--pip-scale, 1)));
+}
+
+.atom .blob {
+  position: absolute;
+  display: block;
+  width: 64px;
+  height: 64px;
+  top: 0;
+  left: 0;
+  border-radius: 50%;
+  background: #243038;
+  z-index: 2;
+  transform: scale(0);
+  transform-origin: center center;
+  transition:
+    top 0.3s cubic-bezier(0, 1.4, 1, 1),
+    left 0.3s cubic-bezier(0, 1.4, 1, 1),
+    transform 0.3s cubic-bezier(0, 1.4, 1, 1);
+}
+
+/* Positions are the pen's 64px circles. Stage 3 includes its -30deg wrapper. */
+body.cells-atom .dot.stage--1 .blob:nth-child(1) { top: 0; left: 0; transform: none; }
+
+body.cells-atom .dot.stage--2 .blob:nth-child(1) { top: -32px; left: 0; transform: none; }
+body.cells-atom .dot.stage--2 .blob:nth-child(2) { top: 32px; left: 0; transform: none; }
+
+body.cells-atom .dot.stage--3 .blob:nth-child(1) { top: -34px; left: 1.11px; transform: none; }
+body.cells-atom .dot.stage--3 .blob:nth-child(2) { top: 21.43px; left: 33.11px; transform: none; }
+body.cells-atom .dot.stage--3 .blob:nth-child(3) { top: 21.71px; left: -31.39px; transform: none; }
+
+body.cells-atom .dot.stage--4 .blob:nth-child(1) { top: 0; left: 0; transform: none; }
+body.cells-atom .dot.stage--4 .blob:nth-child(2) { top: -32px; left: -32px; transform: none; }
+body.cells-atom .dot.stage--4 .blob:nth-child(3) { top: 32px; left: -32px; transform: none; }
+body.cells-atom .dot.stage--4 .blob:nth-child(4) { top: -32px; left: 32px; transform: none; }
+body.cells-atom .dot.stage--4 .blob:nth-child(5) { top: 32px; left: 32px; transform: none; }
+
+body.cells-atom .dot.stage--5 .blob:nth-child(1) { top: 0; left: 0; transform: none; }
+body.cells-atom .dot.stage--5 .blob:nth-child(2) { top: -48px; left: 0; transform: none; }
+body.cells-atom .dot.stage--5 .blob:nth-child(3) { top: -16px; left: -56px; transform: none; }
+body.cells-atom .dot.stage--5 .blob:nth-child(4) { top: -16px; left: 56px; transform: none; }
+body.cells-atom .dot.stage--5 .blob:nth-child(5) { top: 44px; left: -32px; transform: none; }
+body.cells-atom .dot.stage--5 .blob:nth-child(6) { top: 44px; left: 32px; transform: none; }
+
+.field.player--1 .dot.player--2 .atom .blob,
+.field.player--2 .dot:not(.player--1) .atom .blob {
+  background: var(--color-2);
+}
+
+.field.player--1 .dot:not(.player--2) .atom .blob,
+.field.player--2 .dot.player--1 .atom .blob {
+  background: var(--color-1);
+}
+
+body.cells-atom .dot .atom {
+  display: block;
+  filter: url(#cell-goo);
+}
+
+body.cells-atom .dot[class*="stage--"]:before {
+  opacity: 0;
+  box-shadow: none;
+  transition: none;
+}
+
+/* Blob cells: the pen's goo on the whole field, so neighbors melt together.
+   Pips live in .blob-layer (appended after the dots) so .dot sibling indexes stay put. */
+.blob-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  filter: url(#blob-goo);
+}
+
+.blob-pip {
+  position: absolute;
+  width: 64px;
+  height: 64px;
+}
+
+.blob-pip i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5%;
+  height: 5%;
+  border-radius: 50%;
+  background: #000;
+  opacity: 0.4;
+  transform: translate(-50%, -50%) scale(var(--pip-scale, 1));
+  transition:
+    width 0.3s cubic-bezier(0, 1.4, 1, 1),
+    height 0.3s cubic-bezier(0, 1.4, 1, 1),
+    background 0.3s cubic-bezier(0, 1.4, 1, 1),
+    opacity 0.3s cubic-bezier(0, 1.4, 1, 1);
+}
+
+.blob-pip.pip-bounce i {
+  transition: none;
+}
+
+.blob-pip[data-stage="1"] i { width: 47.5%; height: 47.5%; opacity: 1; }
+.blob-pip[data-stage="2"] i { width: 57%; height: 57%; opacity: 1; }
+.blob-pip[data-stage="3"] i { width: 66.5%; height: 66.5%; opacity: 1; }
+.blob-pip[data-stage="4"] i { width: 76%; height: 76%; opacity: 1; }
+.blob-pip[data-stage="5"] i { width: 85.5%; height: 85.5%; opacity: 1; }
+
+.blob-pip.player--1 i { background: var(--color-1); }
+.blob-pip.player--2 i { background: var(--color-2); }
+
+body.cells-blob .dot {
+  z-index: 2;
+}
+
+body.cells-blob .dot:before,
+body.cells-blob .dot[class*="stage--"]:before {
+  opacity: 0;
+  box-shadow: none;
+  transition: none;
+}
+
+.blob-layer .ripple {
+  transform: translate(-18%, -18%) scale(0);
+}
+
+.blob-layer .ripple.ripple-animate {
+  animation: blob-ripple 1.4s linear;
+}
+
+@keyframes blob-ripple {
+  100% {
+    transform: translate(-18%, -18%) scale(2.5);
+    background-color: transparent;
+  }
+}
+
+
+.dot .stage-num {
+  display: none;
+  left: 50%;
+  top: 50%;
+  z-index: 3;
+  transform: translate(-50%, -50%);
+  font-family: "Roboto Condensed", sans-serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #243038;
+  text-shadow: 0 0 3px #fff, 0 1px 0 #fff;
+}
+
+body.show-stage-numbers .dot[class*="stage--"] .stage-num {
+  display: block;
+}
+
+body.show-stage-numbers .dot.stage--1 .stage-num::before { content: "1"; }
+body.show-stage-numbers .dot.stage--2 .stage-num::before { content: "2"; }
+body.show-stage-numbers .dot.stage--3 .stage-num::before { content: "3"; }
+body.show-stage-numbers .dot.stage--4 .stage-num::before { content: "4"; }
+body.show-stage-numbers .dot.stage--5 .stage-num::before { content: "5"; }
+
 /* Add styles for the increment animation */
 .increment-animation {
   position: absolute; /* Position relative to the .field */
@@ -876,6 +1042,20 @@ footer .multiplayer {
   z-index: 10; /* Above dots */
   opacity: 1;
   white-space: nowrap; /* Prevent wrapping if we use +N later */
+}
+
+.chain-step {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 12;
+  pointer-events: none;
+  font-family: "Roboto Condensed", sans-serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  text-shadow: 0 1px 0 #fff, 0 6px 14px rgba(0, 0, 0, 0.2);
 }
 
 .level-goals i {
@@ -968,9 +1148,15 @@ footer .multiplayer {
 
 .modal .modal-close {
   position: absolute;
-  right: 1rem;
-  padding: 0.5rem;
-  display: table;
+  top: 0.55rem;
+  right: 0.35rem;
+  z-index: 5;
+  width: 2.75rem;
+  height: 2.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   cursor: pointer;
 }
 
@@ -1318,6 +1504,229 @@ div[data-modal] {
 .main-menu-modal .btn-main-menu p {
   margin: 0.5rem 0; /* Add some vertical spacing */
 }
+.main-menu-modal .menu-view {
+  display: none;
+}
+.main-menu-modal .menu-view.active {
+  display: block;
+}
+.main-menu-modal .menu-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.5rem;
+  margin-bottom: 0.75rem;
+}
+.main-menu-modal .menu-head h2 {
+  margin: 0;
+  line-height: 1.2;
+}
+.main-menu-modal .menu-back {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.main-menu-modal.submenu .menu-back {
+  display: flex;
+}
+.main-menu-modal .modal-close {
+  top: calc(20px + 1.25rem - 1.375rem);
+}
+.main-menu-modal .mode-choices {
+  margin-bottom: 0.35rem;
+}
+.main-menu-modal .mode-choices .card {
+  min-width: 0;
+}
+.main-menu-modal .mode-choices .card h1 {
+  font-size: 1.35rem;
+}
+.main-menu-modal .mode-choices .card p {
+  font-size: 0.75rem;
+}
+.main-menu-modal .mode-choices .col {
+  width: auto;
+  flex: 1;
+  padding: 0.45rem 0.1rem;
+}
+.main-menu-modal .menu-view-mode-regular .list.list--mode-regular {
+  display: flex;
+}
+.main-menu-modal .menu-view-mode-random .bot-difficulty,
+.main-menu-modal .menu-view-mode-multiplayer .multiplayer-start-options {
+  display: block;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.setting-colors,
+.setting-cells {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin: 0.4rem 0 1.15rem;
+}
+
+.color-swatch,
+.cell-preview,
+.setting-switch {
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.color-swatch {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(90deg, var(--swatch-1) 50%, var(--swatch-2) 50%);
+  box-shadow: 0 0 0 0 transparent;
+}
+
+.color-swatch.selected,
+.cell-preview.selected {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--color-2);
+}
+
+.cell-preview {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(36, 48, 56, 0.04);
+}
+
+.preview-dot,
+.preview-blob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  background: var(--color-2);
+  transform: translate(-50%, -50%);
+}
+
+.preview-dot {
+  width: 48%;
+  height: 48%;
+  box-shadow: 0 0 0 0.22rem var(--color-2-rgba-3), 0 0 0 0.44rem var(--color-2-rgba-4);
+}
+
+.preview-blob {
+  width: 66.5%;
+  height: 66.5%;
+  filter: url(#blob-goo);
+}
+
+.preview-clip {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+.preview-atom {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 200px;
+  height: 200px;
+  transform-origin: 32px 32px;
+  transform: translate(-32px, -32px) scale(0.32);
+  filter: url(#cell-goo);
+}
+
+.preview-atom i {
+  position: absolute;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--color-2);
+}
+
+.preview-atom i:nth-child(1) { top: -34px; left: 1.11px; }
+.preview-atom i:nth-child(2) { top: 21.43px; left: 33.11px; }
+.preview-atom i:nth-child(3) { top: 21.71px; left: -31.39px; }
+
+.preview-num {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  font-family: "Roboto Condensed", sans-serif;
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #243038;
+  text-shadow: 0 0 3px #fff, 0 1px 0 #fff;
+  pointer-events: none;
+}
+
+body.show-stage-numbers .cell-preview .preview-num {
+  display: block;
+}
+
+.setting-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0.15rem 0.85rem;
+  font-size: 1.05rem;
+}
+
+.setting-switch {
+  position: relative;
+  width: 48px;
+  height: 28px;
+  border-radius: 999px;
+  background: #d5d8da;
+}
+
+.setting-switch i {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s ease;
+}
+
+.setting-switch.on {
+  background: var(--color-2);
+}
+
+.setting-switch.on i {
+  transform: translateX(20px);
+}
+
+.dark-mode .cell-preview {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.dark-mode .setting-switch {
+  background: #4a5c5c;
+}
+
 /* End Styles for Main Menu Modal Buttons */
 
 /* Styles for Multiplayer Start Options (mimicking Bot Difficulty) */
