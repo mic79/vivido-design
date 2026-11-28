@@ -269,11 +269,9 @@ $(".field").off("click", ".dot").on("click", ".dot", function() {
   // <<< END TUTORIAL CHECK >>>
 
   if (gameMode === 'realTimeResource') {
-    // For RTR mode, the human player is always playerArray[1] ("player--2")
-    // The bot (playerArray[0]) actions are triggered by rtrMode's internal timer.
-    // Ensure current player is set correctly if it affects any shared UI updates, though rtrMode handles most.
-    // currentPlayer = playerArray[1]; // This might be better set at the start of RTR game.
-    rtrMode.handleRealTimeDotClick(clickedDot, playerArray[1]); 
+    localHapticClick = true;
+    rtrMode.handleRealTimeDotClick(clickedDot, playerArray[1]);
+    localHapticClick = false;
     return; // RTR mode handles its own logic post-click
   }
 
@@ -282,6 +280,7 @@ $(".field").off("click", ".dot").on("click", ".dot", function() {
     const isMyTurn = (isHost && currentPlayer === "player--1") || (!isHost && currentPlayer === "player--2");
     if (!isMyTurn) {
       console.log("Not your turn");
+      haptic(HAPTIC_TAP);
       return;
     }
   }
@@ -305,7 +304,11 @@ $(".field").off("click", ".dot").on("click", ".dot", function() {
       .attr("data-increment", parseInt($(this).attr("data-increment")) + 1)
       .addClass("increment");
     // Pass the initiating player (currentPlayer) to incrementDotStage
+    localHapticClick = true;
     incrementDotStage($(this), currentPlayer);
+    localHapticClick = false;
+  } else {
+    haptic(HAPTIC_TAP);
   }
 });
 
@@ -560,6 +563,7 @@ function incrementDotStage(trgt, player = currentPlayer, fromQueue = false, dist
           .addClass("stage--" + (i + 1) + " " + effectivePlayer);
         showIncrementAnimation(trgt, 1, effectivePlayer); // <<< Pass effectivePlayer to animation
         updatePlayerScoresUI(); // <<< Update score here
+        if (!fromQueue && localHapticClick) haptic(HAPTIC_TAP);
         if (gameMode === 'realTimeResource') {
           animateNextDot(effectivePlayer); // Always pass effectivePlayer in RTR mode
         } else {
@@ -569,7 +573,7 @@ function incrementDotStage(trgt, player = currentPlayer, fromQueue = false, dist
       } else if (currStage && i == stage_amount) {
         trgt.removeClass("stage--" + i).removeClass(playerClassClear);
         updatePlayerScoresUI(); // <<< Update score here (dot became neutral)
-        haptic([0, 40, 35, 50]);
+        haptic(HAPTIC_BURST);
         if (cellStyle === "blob" && blobSplat) {
           blobSplat.play();
         }
@@ -577,6 +581,8 @@ function incrementDotStage(trgt, player = currentPlayer, fromQueue = false, dist
       }
     }
   }
+  // A click on an empty cell falls through to here. An explosion already buzzed.
+  if (!fromQueue && localHapticClick && trgt.is('[class*="stage--"]')) haptic(HAPTIC_TAP);
   if (gameMode === 'realTimeResource') {
     animateNextDot(effectivePlayer, justCompletedStep2); // Always pass effectivePlayer in RTR mode
   } else {
@@ -961,7 +967,8 @@ function setDots() {
 // Rippled
 $("body").on("click", ".rippled", function (e) {
     if (!$(this).hasClass("disabled")) {
-      haptic(40);
+      // Cells buzz from the move itself. A second call here would cancel that pulse.
+      if (!$(this).hasClass("dot")) haptic(HAPTIC_TAP);
       const blobClick = cellStyle === "blob" && $(this).hasClass("dot");
     const host = blobClick ? $(".blob-layer") : $(this);
     if (!host.length) return;
@@ -1322,6 +1329,7 @@ const cellStyleOrder = ["dot", "atom", "blob"];
 let cellStyle = "dot";
 let showStageNumbers = false;
 let hapticEnabled = true;
+let localHapticClick = false;
 
 try {
   const savedCells = localStorage.getItem("dotmination-cells");
@@ -1333,17 +1341,21 @@ try {
 function haptic(pattern) {
   if (!hapticEnabled || pattern == null) return false;
   try {
-    if (typeof navigator.vibrate === "function" && navigator.vibrate(pattern)) return true;
-  } catch (e) {}
-  try {
     const native = navigator.notification && navigator.notification.vibrate;
     if (typeof native === "function") {
       native.call(navigator.notification, pattern);
       return true;
     }
   } catch (e) {}
+  try {
+    if (typeof navigator.vibrate === "function") return navigator.vibrate(pattern);
+  } catch (e) {}
   return false;
 }
+// Chrome plays the first number as the buzz. A leading 0 is silence, and a
+// Pixel motor does not respond to a few dozen milliseconds.
+const HAPTIC_TAP = 150;
+const HAPTIC_BURST = [180, 70, 220];
 
 function markSettingsSelection() {
   $(".color-swatch").removeClass("selected").attr("aria-pressed", "false");
@@ -1507,7 +1519,7 @@ $('.menu-view-settings').on('click', '.setting-switch', function() {
     hapticEnabled = !hapticEnabled;
     try { localStorage.setItem("dotmination-haptics", hapticEnabled ? "1" : "0"); } catch (e) {}
     applyCellSettings();
-    if (hapticEnabled) haptic(40);
+    if (hapticEnabled) haptic(HAPTIC_TAP);
   }
 });
 
