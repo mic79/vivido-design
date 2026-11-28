@@ -1354,13 +1354,23 @@ function haptic(pattern) {
 // Pixel motor does not respond to a few dozen milliseconds.
 const HAPTIC_TAP = 150;
 const HAPTIC_BURST = [180, 70, 220];
-const HAPTIC_CONTROLS = "button, .btn, .intro .logo, .modal-close, .menu-back, .header-icon-btn, .setting-switch, .color-swatch, .cell-preview, footer > div, .player, .share-map, .copy-id-btn, .cancel-waiting-btn, .cancel-connection-btn, .retry-connection-btn";
 
 document.addEventListener("click", function (e) {
   if (e.target.closest(".field")) return;
-  const control = e.target.closest(HAPTIC_CONTROLS);
-  if (!control || control.classList.contains("disabled") || control.disabled) return;
-  haptic(HAPTIC_TAP);
+  let el = e.target.nodeType === 1 ? e.target : e.target.parentElement;
+  while (el && el !== document.documentElement) {
+    if (el.classList.contains("disabled") || el.disabled) return;
+    const style = getComputedStyle(el);
+    const before = getComputedStyle(el, "::before");
+    const pressed = el.tagName === "BUTTON" || el.tagName === "A" || el.getAttribute("role") === "button"
+      || style.cursor === "pointer"
+      || (before.cursor === "pointer" && before.pointerEvents !== "none");
+    if (pressed) {
+      haptic(HAPTIC_TAP);
+      return;
+    }
+    el = el.parentElement;
+  }
 }, true);
 
 function markSettingsSelection() {
